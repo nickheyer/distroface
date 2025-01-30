@@ -1,0 +1,9 @@
+{
+    "files.associations": {
+      "*.css": "tailwindcss"
+    },
+    "[svelte]": {
+      "editor.defaultFormatter": "svelte.svelte-vscode"
+    },
+
+}

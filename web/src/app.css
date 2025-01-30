@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+:root {
+  --background: hsl(224 71% 4%);
+  --foreground: hsl(213 31% 91%);
+
+  --muted: hsl(223 47% 11%);
+  --muted-foreground: hsl(215.4 16.3% 56.9%);
+
+  --accent: hsl(216 34% 17%);
+  --accent-foreground: hsl(210 40% 98%);
+
+  --popover: hsl(224 71% 4%);
+  --popover-foreground: hsl(215 20.2% 65.1%);
+
+  --border: hsl(216 34% 17%);
+  --input: hsl(216 34% 17%);
+
+  --card: hsl(224 71% 4%);
+  --card-foreground: hsl(213 31% 91%);
+
+  --primary: hsl(210 40% 98%);
+  --primary-foreground: hsl(222.2 47.4% 1.2%);
+
+  --secondary: hsl(222.2 47.4% 11.2%);
+  --secondary-foreground: hsl(210 40% 98%);
+
+  --destructive: hsl(0 63% 31%);
+  --destructive-foreground: hsl(210 40% 98%);
+
+  --ring: hsl(216 34% 17%);
+}
+
+
+@theme {
+  /* REGISTRY THEME COLORS */
+  --color-registry-50: oklch(0.98 0.01 240);   /* #f5f7ff */
+  --color-registry-100: oklch(0.96 0.02 240);  /* #ebf0fe */
+  --color-registry-200: oklch(0.92 0.04 240);  /* #d7e0fd */
+  --color-registry-300: oklch(0.85 0.08 240);  /* #b3c7fb */
+  --color-registry-400: oklch(0.75 0.12 240);  /* #89a7f7 */
+  --color-registry-500: oklch(0.65 0.15 240);  /* #6687f2 */
+  --color-registry-600: oklch(0.55 0.18 240);  /* #4665e8 */
+  --color-registry-700: oklch(0.45 0.15 240);  /* #3750d2 */
+  --color-registry-800: oklch(0.35 0.12 240);  /* #2f43ab */
+  --color-registry-900: oklch(0.25 0.10 240);  /* #2b3c87 */
+  
+  --color-mint-green: oklch(83.66% 0.125 176.45);
+  --color-baby-blue: oklch(85.61% 0.094 225.87);
+  --color-mint-green: oklch(83.66% 0.125 176.45);
+  --color-baby-blue: oklch(85.61% 0.094 225.87);
+  --radius: 0.5rem;
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+
+  --font-family-poppins: var(--font-poppins);
+  --font-family-inter: var(--font-inter);
+
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+
+  @keyframes accordion-down {
+    from {
+      height: 0;
+    }
+
+    to {
+      height: var(--radix-accordion-content-height);
+    }
+  }
+
+  @keyframes accordion-up {
+    from {
+      height: var(--radix-accordion-content-height);
+    }
+
+    to {
+      height: "0";
+    }
+  }
+}
+
+@layer theme, base, components, utilities;
+@layer utilities {
+  html {
+    @apply antialiased;
+  }
+  
+  body {
+    @apply bg-gray-50;
+  }
+  
+  .btn {
+    @apply px-4 py-2 rounded-md font-medium transition-colors;
+  }
+  
+  .btn-primary {
+    @apply bg-registry-600 text-white hover:bg-registry-700;
+  }
+  
+  .btn-secondary {
+    @apply bg-gray-200 text-gray-800 hover:bg-gray-300;
+  }
+  
+  .input {
+    @apply block w-full rounded-md border-gray-300 shadow-sm focus:border-registry-500 focus:ring-registry-500;
+  }
+
+  /* FORM INPUTS */
+  .form-input {
+    @apply mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-registry-500 focus:border-registry-500 sm:text-sm;
+  }
+
+  /* GROUP ROLE LIST */
+  .role-list {
+    @apply space-y-2 max-h-48 overflow-y-auto p-4 border rounded-md bg-white;
+  }
+
+  .role-item {
+    @apply flex items-center space-x-3 p-2 hover:bg-gray-50 rounded-md;
+  }
+
+  /* MODAL CONTENT */
+  .modal-form {
+    @apply space-y-6 p-6;
+  }
+
+  .modal-section {
+    @apply space-y-4;
+  }
+}

@@ -1,0 +1,16 @@
+server:
+  port: "8668"
+  domain: "registry.localdomain"
+  rsa_key_file: "/tmp/registry_auth.key"
+  cert_bundle: "/tmp/registry_auth.crt"
+
+storage:
+  root_directory: "/tmp/registry"
+
+database:
+  path: "./registry.db"
+
+auth:
+  realm: "http://registry.localdomain:8668/auth/token"
+  service: "registry.localdomain:8668"  # MATCH DOCKER SERVICE NAME
+  issuer: "registry-auth-server"

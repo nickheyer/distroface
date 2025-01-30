@@ -1,0 +1,18 @@
+server:
+  port: "8668"
+  domain: "0.0.0.0"
+  rsa_key_file: "/data/certs/registry_auth.key"
+  cert_bundle: "/data/certs/registry_auth.crt"
+  #tls_certificate: "/data/certs/registry.crt"
+  #tls_key: "/data/certs/registry.key"
+
+storage:
+  root_directory: "/data/registry/registry"
+
+database:
+  path: "/data/db/registry.db"
+
+auth:
+  realm: "http://0.0.0.0:8668/auth/token"
+  service: "registry"
+  issuer: "registry-auth-server"
