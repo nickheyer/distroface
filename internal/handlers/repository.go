@@ -1129,7 +1129,7 @@ func (h *RepositoryHandler) ListGlobalRepositories(w http.ResponseWriter, r *htt
 		}
 	}
 
-	// ADD USER'S PRIVATE IMAGES
+	// ADD USER PRIVATE IMAGES
 	for _, img := range userMeta {
 		if !seen[img.ID] && img.Private {
 			seen[img.ID] = true
