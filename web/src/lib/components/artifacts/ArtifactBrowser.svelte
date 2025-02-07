@@ -1,56 +1,52 @@
 <script lang="ts">
   import { artifacts } from "$lib/stores/artifacts.svelte";
-  import { AlertCircle, Package, Search, Upload, Loader2 } from "lucide-svelte";
   import { formatDistance } from "date-fns";
+  import {
+    AlertCircle,
+    Package,
+    Search,
+    Upload,
+    Loader2,
+    Download,
+    Trash2,
+    Edit,
+    PlusCircle,
+  } from "lucide-svelte";
+  import CreateRepositoryModal from "./CreateRepositoryModal.svelte";
+  import DeleteRepositoryModal from "./DeleteRepositoryModal.svelte";
+  import UploadArtifactModal from "./UploadArtifactModal.svelte";
+  import MetadataEditor from "./MetadataEditor.svelte";
+  import type {
+    Artifact,
+    ArtifactRepository,
+  } from "$lib/types/artifacts.svelte";
 
-  let { initialRepo = null } = $props();
+  let { initialRepo = null } = $props<{
+    initialRepo?: ArtifactRepository | null;
+  }>();
 
+  // MODAL STATES
+  let createModalOpen = $state(false);
   let uploadModalOpen = $state(false);
-  let currentFile = $state<File | null>(null);
-  let uploadVersion = $state("");
-  let uploadPath = $state("");
-  let error = $state<string | null>(null);
+  let deleteModalOpen = $state(false);
+  let metadataModalOpen = $state(false);
+  let selectedArtifact = $state<Artifact | null>(null);
+  let selectedRepo = $state<ArtifactRepository | null>(null);
+  let selectedUploadRepo = $state<ArtifactRepository | null>(null);
+  let uploadFiles = $state<FileList | null>(null);
 
-  const filteredRepos = $derived(artifacts.filtered);
-  const isLoading = $derived(artifacts.loading);
-  const hasUploadInProgress = $derived(Object.keys(artifacts.uploadProgress).length > 0);
+  // Get current artifacts for selected repo
+  let currentArtifacts = $state<Artifact[]>([]);
 
-  // FILE SELECTION
-  function handleFileChange(event: Event) {
-    const input = event.target as HTMLInputElement;
-    if (input.files && input.files.length > 0) {
-      currentFile = input.files[0];
-      // DEFAULT VERSION TO FILE NAME WITHOUT EXTENSION
-      uploadVersion = currentFile.name.replace(/\.[^/.]+$/, "");
-      uploadPath = currentFile.name;
+  $effect(() => {
+    if (artifacts.currentRepo) {
+      currentArtifacts = artifacts.artifacts[artifacts.currentRepo.id] || [];
+    } else {
+      currentArtifacts = [];
     }
-  }
+  });
 
-  // HANDLE UPLOAD
-  async function handleUpload() {
-    if (!currentFile || !uploadVersion || !uploadPath || !artifacts.currentRepo) {
-      error = "Please fill in all required fields";
-      return;
-    }
-
-    try {
-      await artifacts.uploadArtifact(
-        artifacts.currentRepo.name,
-        currentFile,
-        uploadVersion,
-        uploadPath
-      );
-      uploadModalOpen = false;
-      currentFile = null;
-      uploadVersion = "";
-      uploadPath = "";
-      error = null;
-    } catch (err) {
-      error = err instanceof Error ? err.message : "Failed to upload artifact";
-    }
-  }
-
-  // INITIAL LOAD
+  // INITIALIZE
   $effect(() => {
     artifacts.fetchRepositories().catch(console.error);
     if (initialRepo) {
@@ -64,200 +60,279 @@
       artifacts.fetchArtifacts(artifacts.currentRepo.name).catch(console.error);
     }
   });
+
+  function handleDrop(e: DragEvent, repo: ArtifactRepository) {
+    e.preventDefault();
+
+    if (e.dataTransfer?.files) {
+      uploadFiles = e.dataTransfer.files;
+      selectedUploadRepo = repo;
+      uploadModalOpen = true;
+    }
+  }
+
+  function handleDelete(repo: ArtifactRepository, e: Event) {
+    e.preventDefault();
+    e.stopPropagation();
+    selectedRepo = repo;
+    deleteModalOpen = true;
+  }
+
+  function handleUpload(repo: ArtifactRepository, e: Event) {
+    e.preventDefault();
+    e.stopPropagation();
+    selectedUploadRepo = repo;
+    uploadModalOpen = true;
+  }
+
+  function selectRepository(repo: ArtifactRepository) {
+    artifacts.currentRepo = repo;
+  }
+
+  async function downloadArtifact(artifact: Artifact) {
+    if (!artifacts.currentRepo) return;
+    const url = `/api/v1/artifacts/${artifacts.currentRepo.name}/${artifact.version}/${artifact.name}`;
+    window.open(url, "_blank");
+  }
+
+  async function deleteArtifact(artifact: Artifact) {
+    if (!artifacts.currentRepo) return;
+
+    if (confirm(`Are you sure you want to delete ${artifact.name}?`)) {
+      try {
+        await artifacts.deleteArtifact(
+          artifacts.currentRepo.name,
+          artifact.version,
+          encodeURIComponent(artifact.name),
+        );
+        await artifacts.fetchArtifacts(artifacts.currentRepo.name);
+      } catch (err) {
+        console.error("Failed to delete artifact:", err);
+      }
+    }
+  }
 </script>
 
-<div class="space-y-6">
+<div class="space-y-8">
   <!-- HEADER -->
-  <div class="sm:flex sm:items-center sm:justify-between">
+  <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-semibold text-gray-900">Artifact Repository</h1>
       <p class="mt-2 text-sm text-gray-700">
         Store and manage your build artifacts
       </p>
     </div>
-
-    <!-- SEARCH AND UPLOAD -->
-    <div class="mt-4 sm:mt-0 sm:flex sm:space-x-4">
-      <div class="relative">
-        <input
-          type="text"
-          placeholder="Search repositories..."
-          bind:value={artifacts.searchTerm}
-          class="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 text-sm"
-        />
-        <Search class="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-      </div>
-
-      <button
-        onclick={() => uploadModalOpen = true}
-        disabled={!artifacts.currentRepo || hasUploadInProgress}
-        class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400"
-      >
-        <Upload class="h-4 w-4 mr-2" />
-        Upload Artifact
-      </button>
-    </div>
+    <button
+      type="button"
+      onclick={() => (createModalOpen = true)}
+      class="inline-flex items-center px-4 py-2 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700"
+    >
+      <PlusCircle class="h-4 w-4 mr-2" />
+      New Repository
+    </button>
   </div>
 
-  <!-- ERROR MESSAGE -->
-  {#if error}
-    <div class="rounded-md bg-red-50 p-4">
-      <div class="flex">
-        <AlertCircle class="h-5 w-5 text-red-400" />
-        <div class="ml-3">
-          <h3 class="text-sm font-medium text-red-800">Error</h3>
-          <div class="mt-2 text-sm text-red-700">
-            <p>{error}</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <!-- SEARCH AND FILTERS -->
+  <div class="relative">
+    <input
+      type="text"
+      placeholder="Search repositories..."
+      bind:value={artifacts.searchTerm}
+      class="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+    />
+    <Search class="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+  </div>
 
-  <!-- LOADING STATE -->
-  {#if isLoading}
+  <!-- REPOSITORY GRID -->
+  {#if artifacts.loading}
     <div class="flex justify-center py-12">
       <Loader2 class="h-8 w-8 animate-spin text-blue-500" />
     </div>
-  <!-- EMPTY STATE -->
-  {:else if filteredRepos.length === 0}
+  {:else if artifacts.filtered.length === 0}
     <div class="text-center py-12">
       <Package class="mx-auto h-12 w-12 text-gray-400" />
-      <h3 class="mt-2 text-sm font-medium text-gray-900">No repositories found</h3>
+      <h3 class="mt-2 text-sm font-medium text-gray-900">
+        No repositories found
+      </h3>
       <p class="mt-1 text-sm text-gray-500">
-        {artifacts.searchTerm ? "Try adjusting your search terms" : "Create a repository to get started"}
+        {artifacts.searchTerm
+          ? "Try adjusting your search terms"
+          : "Create a repository to get started"}
       </p>
     </div>
-  <!-- REPOSITORY LIST -->
   {:else}
-    <div class="bg-white shadow overflow-hidden sm:rounded-md">
-      <ul class="divide-y divide-gray-200">
-        {#each filteredRepos as repo}
-          <li>
-            <div class="px-4 py-4 flex items-center sm:px-6">
-              <div class="min-w-0 flex-1 sm:flex sm:items-center sm:justify-between">
-                <div>
-                  <div class="flex text-sm">
-                    <p class="font-medium text-blue-600 truncate">{repo.name}</p>
-                    <p class="ml-1 flex-shrink-0 font-normal text-gray-500">
-                      {repo.description}
-                    </p>
-                  </div>
-                  <div class="mt-2 flex">
-                    <div class="flex items-center text-sm text-gray-500">
-                      <p>Created {formatDistance(new Date(repo.created_at), new Date(), { addSuffix: true })}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div class="ml-5 flex-shrink-0">
-                <button
-                  onclick={() => artifacts.currentRepo = repo}
-                  class={`px-3 py-2 text-sm font-medium rounded-md ${
-                    artifacts.currentRepo?.id === repo.id
-                      ? 'bg-blue-100 text-blue-700'
-                      : 'text-gray-700 hover:bg-gray-50'
-                  }`}
+    <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      {#each artifacts.filtered as repo}
+        <div
+          class="relative group rounded-lg border border-gray-200 bg-white p-6 hover:border-blue-300 transition-all duration-150"
+          ondragover={(e) => e.preventDefault()}
+          ondrop={(e) => handleDrop(e, repo)}
+          role="application"
+        >
+          <div class="flex flex-col h-full">
+            <div class="flex items-center space-x-3">
+              <Package class="h-6 w-6 text-gray-400" />
+              <div class="flex-1 min-w-0">
+                <a
+                  href={`/artifacts/${repo.name}`}
+                  class="block"
+                  onclick={(e) => {
+                    e.preventDefault();
+                    selectRepository(repo);
+                  }}
                 >
-                  {artifacts.currentRepo?.id === repo.id ? 'Selected' : 'Select'}
+                  <h3 class="text-sm font-medium text-gray-900 truncate">
+                    {repo.name}
+                  </h3>
+                  <p class="text-sm text-gray-500 truncate">
+                    {repo.description || "No description"}
+                  </p>
+                </a>
+              </div>
+            </div>
+
+            <div class="mt-4 flex items-center justify-between text-sm">
+              <span class="text-gray-500">
+                {artifacts.artifacts[repo.id]?.length || 0} artifacts
+              </span>
+              <div class="flex space-x-2">
+                <button
+                  type="button"
+                  onclick={(e) => handleUpload(repo, e)}
+                  class="inline-flex items-center p-2 rounded-md text-gray-500 hover:text-blue-600 hover:bg-blue-50"
+                >
+                  <Upload class="h-4 w-4" />
+                </button>
+                <button
+                  type="button"
+                  onclick={(e) => handleDelete(repo, e)}
+                  class="inline-flex items-center p-2 rounded-md text-gray-500 hover:text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 class="h-4 w-4" />
                 </button>
               </div>
             </div>
-          </li>
-        {/each}
-      </ul>
-    </div>
-  {/if}
-</div>
 
-<!-- UPLOAD MODAL -->
-{#if uploadModalOpen}
-  <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity z-50">
-    <div class="fixed inset-0 z-10 overflow-y-auto">
-      <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
-        <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6">
-          <div class="sm:flex sm:items-start">
-            <div class="mt-3 text-center sm:mt-0 sm:text-left w-full">
-              <h3 class="text-base font-semibold leading-6 text-gray-900">
-                Upload Artifact
-              </h3>
-              <div class="mt-2">
-                <div class="space-y-4">
-                  <div>
-                    <label for="artifact-file-input" class="block text-sm font-medium text-gray-700">
-                      File
-                    </label>
-                    <input
-                      id="artifact-file-input"
-                      type="file"
-                      onchange={handleFileChange}
-                      class="mt-1 block w-full text-sm text-gray-500
-                        file:mr-4 file:py-2 file:px-4
-                        file:rounded-md file:border-0
-                        file:text-sm file:font-semibold
-                        file:bg-blue-50 file:text-blue-700
-                        hover:file:bg-blue-100"
-                    />
-                  </div>
-                  <div>
-                    <label for="artifact-version-input" class="block text-sm font-medium text-gray-700">
-                      Version
-                    </label>
-                    <input
-                      type="text"
-                      id="artifact-version-input"
-                      bind:value={uploadVersion}
-                      class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                      placeholder="e.g., 1.0.0"
-                    />
-                  </div>
-                  <div>
-                    <label for="artifact-path" class="block text-sm font-medium text-gray-700">
-                      Path
-                    </label>
-                    <input
-                      type="text"
-                      id="artifact-path"
-                      bind:value={uploadPath}
-                      class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                      placeholder="path/to/artifact"
-                    />
-                  </div>
-                </div>
-              </div>
+            <div class="mt-2 text-xs text-gray-500">
+              Updated {formatDistance(new Date(repo.updated_at), new Date(), {
+                addSuffix: true,
+              })}
             </div>
           </div>
-          {#if hasUploadInProgress}
-            <div class="mt-4">
-              <div class="w-full bg-gray-200 rounded-full h-2.5">
-                {#each Object.entries(artifacts.uploadProgress) as [id, progress]}
+        </div>
+      {/each}
+    </div>
+
+    <!-- Artifact List Section -->
+    {#if artifacts.currentRepo}
+      <div class="mt-8">
+        <div class="bg-white shadow rounded-lg">
+          <div class="px-4 py-5 sm:p-6">
+            <h3 class="text-lg font-medium text-gray-900">
+              Artifacts in {artifacts.currentRepo.name}
+            </h3>
+
+            {#if currentArtifacts.length === 0}
+              <div class="text-center py-8">
+                <p class="text-gray-500">
+                  No artifacts found in this repository.
+                </p>
+              </div>
+            {:else}
+              <div class="mt-4 space-y-4">
+                {#each currentArtifacts as artifact}
                   <div
-                    class="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
-                    style="width: {progress}%"
-                  ></div>
+                    class="flex items-center justify-between p-4 bg-gray-50 rounded-lg"
+                  >
+                    <div class="flex items-center space-x-4">
+                      <Package class="h-5 w-5 text-gray-400" />
+                      <div>
+                        <h4 class="text-sm font-medium text-gray-900">
+                          {artifact.name}
+                        </h4>
+                        <p class="text-sm text-gray-500">
+                          Version {artifact.version}
+                        </p>
+                      </div>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                      <span class="text-sm text-gray-500">
+                        {artifacts.formatSize(artifact.size)}
+                      </span>
+                      <div class="flex space-x-2">
+                        <button
+                          onclick={() => downloadArtifact(artifact)}
+                          class="p-1 text-gray-400 hover:text-blue-600"
+                          title="Download"
+                        >
+                          <Download class="h-4 w-4" />
+                        </button>
+                        <button
+                          onclick={() => {
+                            selectedArtifact = artifact;
+                            metadataModalOpen = true;
+                          }}
+                          class="p-1 text-gray-400 hover:text-gray-600"
+                          title="Edit metadata"
+                        >
+                          <Edit class="h-4 w-4" />
+                        </button>
+                        <button
+                          onclick={() => deleteArtifact(artifact)}
+                          class="p-1 text-gray-400 hover:text-red-600"
+                          title="Delete"
+                        >
+                          <Trash2 class="h-4 w-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 {/each}
               </div>
-            </div>
-          {/if}
-          <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
-            <button
-              type="button"
-              onclick={handleUpload}
-              disabled={hasUploadInProgress}
-              class="inline-flex w-full justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 sm:ml-3 sm:w-auto disabled:bg-gray-400"
-            >
-              Upload
-            </button>
-            <button
-              type="button"
-              onclick={() => uploadModalOpen = false}
-              class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto"
-            >
-              Cancel
-            </button>
+            {/if}
           </div>
         </div>
       </div>
-    </div>
-  </div>
-{/if}
+    {/if}
+  {/if}
+
+  <!-- MODALS -->
+
+  <!-- MODALS -->
+  {#if createModalOpen}
+    <CreateRepositoryModal onclose={() => (createModalOpen = false)} />
+  {/if}
+
+  {#if uploadModalOpen && selectedUploadRepo}
+    <UploadArtifactModal
+      repository={selectedUploadRepo}
+      initialFiles={uploadFiles}
+      onclose={() => {
+        uploadModalOpen = false;
+        selectedUploadRepo = null;
+        uploadFiles = null;
+      }}
+    />
+  {/if}
+
+  {#if deleteModalOpen && selectedRepo}
+    <DeleteRepositoryModal
+      repository={selectedRepo}
+      onclose={() => {
+        deleteModalOpen = false;
+        selectedRepo = null;
+      }}
+    />
+  {/if}
+
+  {#if metadataModalOpen && selectedArtifact && artifacts.currentRepo}
+    <MetadataEditor
+      artifact={selectedArtifact}
+      repository={artifacts.currentRepo}
+      onclose={() => {
+        metadataModalOpen = false;
+        selectedArtifact = null;
+      }}
+    />
+  {/if}
+</div>

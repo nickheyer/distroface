@@ -134,6 +134,10 @@ func initDB(dbPath string) (*sql.DB, error) {
 		return nil, fmt.Errorf("DB PING FAILED: %v", err)
 	}
 
+	// WAL MODE FOR CONCURRENCY, SETTING TIMEOUT TO REDUCE LOCK-UPS
+	_, _ = db.Exec("PRAGMA journal_mode=WAL;")
+	_, _ = db.Exec("PRAGMA busy_timeout=5000;")
+
 	return db, nil
 }
 
@@ -224,6 +228,8 @@ func (s *Server) setupRoutes() error {
 		http.HandlerFunc(artifactHandler.CompleteUpload))).Methods("PUT")
 	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact)(
 		http.HandlerFunc(artifactHandler.DownloadArtifact))).Methods("GET")
+	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDelete, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.DeleteArtifact))).Methods("DELETE")
 	api.Handle("/artifacts/{repo}/versions", requirePermission(s.authService, models.ActionView, models.ResourceArtifact)(
 		http.HandlerFunc(artifactHandler.ListVersions))).Methods("GET")
 	api.Handle("/artifacts/{repo}/{id}/metadata", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact)(

@@ -104,18 +104,24 @@ function logout(): void {
 
 async function handleResponse(response: Response) {
     if (response.status === 401) {
-        // TOKEN EXPIRED
-        logout();
-        throw new Error("Your session has expired. Please log in again.");
-    }
-    
-    if (response.status === 403) {
-        throw new Error("You don't have permission to perform this action.");
+        authState.token = null;
+        authState.user = null;
+        authState.isAuthenticated = false;
+        if (window) {
+            window.location.href = '/login';
+        }
+        throw new Error("Session expired. Please log in again.");
     }
     
     if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || 'An error occurred');
+        let errorMessage = `Error: ${response.status}`;
+        try {
+            const errorData = await response.text();
+            errorMessage = errorData || errorMessage;
+        } catch (e) {
+            // SKIP FOR DEFAULT
+        }
+        throw new Error(errorMessage);
     }
     
     return response;
@@ -150,7 +156,7 @@ export const auth = {
 
 export const api = {
     async get(url: string) {
-        const response = await fetch(`${authState.baseUrl}${url}`, {
+        const response = await fetch(url, {
             headers: {
                 Authorization: `Bearer ${authState.token}`
             }
@@ -165,7 +171,7 @@ export const api = {
                 Authorization: `Bearer ${authState.token}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(data)
+            body: data ? JSON.stringify(data) : undefined
         });
         return handleResponse(response);
     },
@@ -177,7 +183,7 @@ export const api = {
                 Authorization: `Bearer ${authState.token}`,
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify(data)
+            body: data ? JSON.stringify(data) : undefined
         });
         return handleResponse(response);
     },
@@ -191,15 +197,22 @@ export const api = {
         });
         return handleResponse(response);
     },
-    async patch(url: string, data: any) {
-      const response = await fetch(url, {
-          method: 'PATCH',
-          headers: {
-              Authorization: `Bearer ${authState.token}`,
-              'Content-Type': 'application/json'
-          },
-          body: data instanceof Blob ? data : JSON.stringify(data)
-      });
-      return handleResponse(response);
-  },
+
+    async patch(url: string, data: any, isBlob = false) {
+        const headers: Record<string, string> = {
+            Authorization: `Bearer ${authState.token}`
+        };
+        
+        if (!isBlob) {
+            headers['Content-Type'] = 'application/json';
+        }
+
+        const response = await fetch(url, {
+            method: 'PATCH',
+            headers,
+            body: isBlob ? data : JSON.stringify(data)
+        });
+        return handleResponse(response);
+    },
 };
+

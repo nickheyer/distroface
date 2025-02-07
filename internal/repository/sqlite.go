@@ -786,17 +786,20 @@ func (r *SQLiteRepository) DeleteArtifactRepository(name string) error {
 }
 
 func (r *SQLiteRepository) CreateArtifact(artifact *models.Artifact) error {
+	if artifact.ID == "" {
+		artifact.ID = uuid.New().String()
+	}
 	_, err := r.db.Exec(
-		`INSERT INTO artifacts (repo_id, name, version, size, mime_type, metadata) 
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		artifact.RepoID, artifact.Name, artifact.Version, artifact.Size,
-		artifact.MimeType, artifact.Metadata,
+		`INSERT INTO artifacts (id, repo_id, name, version, size, mime_type, metadata)
+		     VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		artifact.ID, artifact.RepoID, artifact.Name,
+		artifact.Version, artifact.Size, artifact.MimeType, artifact.Metadata,
 	)
 	return err
 }
 
 func (r *SQLiteRepository) ListArtifacts(repoID int) ([]models.Artifact, error) {
-	rows, err := r.db.Query(
+	rows, err := r.db.Query( // GOOGLE TOLD ME THIS WAS OK
 		`SELECT COALESCE(id, ''), repo_id, name, version, size, 
 			 COALESCE(mime_type, ''), COALESCE(metadata, '{}'), created_at, updated_at 
 			 FROM artifacts WHERE repo_id = ?`,

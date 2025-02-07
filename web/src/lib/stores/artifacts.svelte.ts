@@ -71,50 +71,50 @@ async function deleteRepository(name: string) {
 }
 
 async function uploadArtifact(repo: string, file: File, version: string, path: string) {
-  const uploadId = uuidv4();
-  state.uploadProgress[uploadId] = 0;
-
-  try {
+    const uploadId = uuidv4();
+    state.uploadProgress[uploadId] = 0;
+  
+    try {
       // INIT UPLOAD
       const initResponse = await api.post(`/api/v1/artifacts/${repo}/upload`, {});
       if (!initResponse.ok) throw new Error('Failed to initialize upload');
       
       const location = initResponse.headers.get('Location');
-      const uploadEndpoint = `/api/v1${location?.split('/api/v1')[1]}`;
+      const uploadEndpoint = location;
       if (!uploadEndpoint) throw new Error('Invalid upload location');
-
-      // UPLOADING 5MB CHUNKS
-      const chunkSize = 5 * 1024 * 1024;
+  
+      // UPLOADING 10MB CHUNKS FOR BETTER STABILITY
+      const chunkSize = 10 * 1024 * 1024;
       const totalChunks = Math.ceil(file.size / chunkSize);
       let uploadedChunks = 0;
-
+  
       for (let start = 0; start < file.size; start += chunkSize) {
-          const chunk = file.slice(start, start + chunkSize);
-          const response = await api.patch(uploadEndpoint, chunk);
-          if (!response.ok) throw new Error('Failed to upload chunk');
-          
-          uploadedChunks++;
-          state.uploadProgress[uploadId] = (uploadedChunks / totalChunks) * 100;
+        const chunk = file.slice(start, Math.min(start + chunkSize, file.size));
+        const response = await api.patch(uploadEndpoint, chunk, true); // Added flag for blob data
+        if (!response.ok) throw new Error('Failed to upload chunk');
+        
+        uploadedChunks++;
+        state.uploadProgress[uploadId] = (uploadedChunks / totalChunks) * 100;
       }
-
-      // COMPLETE UPLOAD WITH NEW UUID IN PATH
-      const artifactId = uuidv4();
-      const completePath = path.includes(artifactId) ? path : `${artifactId}/${path}`;
-      
+  
+      // COMPLETE UPLOAD
       const completeResponse = await api.put(
-          `${uploadEndpoint}?version=${encodeURIComponent(version)}&path=${encodeURIComponent(completePath)}`,
-          null
+        `${uploadEndpoint}?version=${encodeURIComponent(version)}&path=${encodeURIComponent(path)}`,
+        null
       );
       
       if (!completeResponse.ok) throw new Error('Failed to complete upload');
-
+  
+      // CLEAR PROGRESS AND REFRESH ARTIFACTS
       delete state.uploadProgress[uploadId];
       await fetchArtifacts(repo);
-  } catch (err) {
+      
+    } catch (err) {
       delete state.uploadProgress[uploadId];
       throw err;
+    }
   }
-}
+
 
 async function fetchArtifacts(repoName: string) {
   state.loading = true;
@@ -141,13 +141,12 @@ async function fetchArtifacts(repoName: string) {
 }
 
 async function deleteArtifact(repo: string, version: string, path: string) {
-    try {
-        await api.delete(`/api/v1/artifacts/${repo}/${version}/${path}`);
-        await fetchArtifacts(repo);
-    } catch (err) {
-        state.error = err instanceof Error ? err.message : 'Failed to delete artifact';
-        throw err;
-    }
+  try {
+    await api.delete(`/api/v1/artifacts/${repo}/${encodeURIComponent(version)}/${encodeURIComponent(path)}`);
+    await fetchArtifacts(repo);
+  } catch (err) {
+    throw new Error(err instanceof Error ? err.message : 'Failed to delete artifact');
+  }
 }
 
 async function updateMetadata(repo: string, artifactId: string, metadata: Record<string, any>) {
