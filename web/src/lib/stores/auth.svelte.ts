@@ -190,5 +190,16 @@ export const api = {
             }
         });
         return handleResponse(response);
-    }
+    },
+    async patch(url: string, data: any) {
+      const response = await fetch(url, {
+          method: 'PATCH',
+          headers: {
+              Authorization: `Bearer ${authState.token}`,
+              'Content-Type': 'application/json'
+          },
+          body: data instanceof Blob ? data : JSON.stringify(data)
+      });
+      return handleResponse(response);
+  },
 };

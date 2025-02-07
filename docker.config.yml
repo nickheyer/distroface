@@ -16,3 +16,7 @@ auth:
   realm: "http://0.0.0.0:8668/auth/token"
   service: "registry"
   issuer: "registry-auth-server"
+
+artifacts:
+  enabled: true
+  max_upload_size: "5G"

@@ -50,6 +50,32 @@ CREATE TABLE IF NOT EXISTS image_metadata (
     FOREIGN KEY(owner) REFERENCES users(username)
 );
 
+-- Artifact repositories
+CREATE TABLE IF NOT EXISTS artifact_repositories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    description TEXT,
+    owner TEXT NOT NULL,
+    private BOOLEAN DEFAULT TRUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(owner) REFERENCES users(username)
+);
+
+-- Artifact metadata
+CREATE TABLE IF NOT EXISTS artifacts (
+    id TEXT PRIMARY KEY,
+    repo_id INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    version TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mime_type TEXT,
+    metadata TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(repo_id) REFERENCES artifact_repositories(id)
+);
+
 -- Create indexes
 CREATE INDEX idx_roles_name ON roles(name);
 CREATE INDEX idx_groups_name ON groups(name);

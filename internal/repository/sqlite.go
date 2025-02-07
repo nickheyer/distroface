@@ -7,6 +7,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/models"
 )
 
@@ -717,4 +718,169 @@ func (r *SQLiteRepository) UpdateImageVisibility(id string, private bool) error 
 	}
 
 	return nil
+}
+
+func (r *SQLiteRepository) CreateArtifactRepository(repo *models.ArtifactRepository) error {
+	_, err := r.db.Exec(
+		`INSERT INTO artifact_repositories (name, description, owner, private) 
+		 VALUES (?, ?, ?, ?)`,
+		repo.Name, repo.Description, repo.Owner, repo.Private,
+	)
+	return err
+}
+
+func (r *SQLiteRepository) GetArtifactRepository(name string) (*models.ArtifactRepository, error) {
+	repo := &models.ArtifactRepository{}
+	err := r.db.QueryRow(
+		`SELECT id, name, description, owner, private, created_at, updated_at 
+		 FROM artifact_repositories WHERE name = ?`,
+		name,
+	).Scan(&repo.ID, &repo.Name, &repo.Description, &repo.Owner, &repo.Private,
+		&repo.CreatedAt, &repo.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return repo, nil
+}
+
+func (r *SQLiteRepository) ListArtifactRepositories(username string) ([]models.ArtifactRepository, error) {
+	rows, err := r.db.Query(
+		`SELECT id, name, description, owner, private, created_at, updated_at 
+		 FROM artifact_repositories 
+		 WHERE owner = ? OR (private = false)`,
+		username,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var repos []models.ArtifactRepository
+	for rows.Next() {
+		var repo models.ArtifactRepository
+		err := rows.Scan(&repo.ID, &repo.Name, &repo.Description, &repo.Owner,
+			&repo.Private, &repo.CreatedAt, &repo.UpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		repos = append(repos, repo)
+	}
+
+	fmt.Printf("FOUND REPOS: %v\n\n", repos)
+	return repos, nil
+}
+
+func (r *SQLiteRepository) DeleteArtifactRepository(name string) error {
+	_, err := r.db.Exec("DELETE FROM artifact_repositories WHERE name = ?", name)
+	if err != nil {
+		return err
+	}
+
+	// Also delete all artifacts in this repository
+	_, err = r.db.Exec(
+		`DELETE FROM artifacts WHERE repo_id IN 
+		 (SELECT id FROM artifact_repositories WHERE name = ?)`,
+		name,
+	)
+	return err
+}
+
+func (r *SQLiteRepository) CreateArtifact(artifact *models.Artifact) error {
+	_, err := r.db.Exec(
+		`INSERT INTO artifacts (repo_id, name, version, size, mime_type, metadata) 
+		 VALUES (?, ?, ?, ?, ?, ?)`,
+		artifact.RepoID, artifact.Name, artifact.Version, artifact.Size,
+		artifact.MimeType, artifact.Metadata,
+	)
+	return err
+}
+
+func (r *SQLiteRepository) ListArtifacts(repoID int) ([]models.Artifact, error) {
+	rows, err := r.db.Query(
+		`SELECT COALESCE(id, ''), repo_id, name, version, size, 
+			 COALESCE(mime_type, ''), COALESCE(metadata, '{}'), created_at, updated_at 
+			 FROM artifacts WHERE repo_id = ?`,
+		repoID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var artifacts []models.Artifact
+	for rows.Next() {
+		var artifact models.Artifact
+		err := rows.Scan(
+			&artifact.ID,
+			&artifact.RepoID,
+			&artifact.Name,
+			&artifact.Version,
+			&artifact.Size,
+			&artifact.MimeType,
+			&artifact.Metadata,
+			&artifact.CreatedAt,
+			&artifact.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan artifact: %v", err)
+		}
+		// GENERATE NEW UUID IF EMPTY
+		if artifact.ID == "" {
+			artifact.ID = uuid.New().String()
+			_, err = r.db.Exec(
+				"UPDATE artifacts SET id = ? WHERE repo_id = ? AND version = ? AND name = ?",
+				artifact.ID, artifact.RepoID, artifact.Version, artifact.Name,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("failed to update artifact ID: %v", err)
+			}
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, nil
+}
+
+func (r *SQLiteRepository) UpdateArtifactMetadata(id string, metadata string) error {
+	_, err := r.db.Exec(
+		"UPDATE artifacts SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		metadata, id,
+	)
+	return err
+}
+
+func (r *SQLiteRepository) DeleteArtifact(repoID int, version string, path string) error {
+	_, err := r.db.Exec(
+		"DELETE FROM artifacts WHERE repo_id = ? AND version = ? AND name = ?",
+		repoID, version, path,
+	)
+	return err
+}
+
+func (r *SQLiteRepository) SearchArtifacts(query string, username string) ([]models.Artifact, error) {
+	rows, err := r.db.Query(
+		`SELECT a.id, a.repo_id, a.name, a.version, a.size, a.mime_type, 
+		        a.metadata, a.created_at, a.updated_at
+		 FROM artifacts a
+		 JOIN artifact_repositories r ON a.repo_id = r.id
+		 WHERE (r.owner = ? OR r.private = false)
+		   AND (a.name LIKE ? OR a.metadata LIKE ?)`,
+		username, "%"+query+"%", "%"+query+"%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var artifacts []models.Artifact
+	for rows.Next() {
+		var artifact models.Artifact
+		err := rows.Scan(&artifact.ID, &artifact.RepoID, &artifact.Name,
+			&artifact.Version, &artifact.Size, &artifact.MimeType,
+			&artifact.Metadata, &artifact.CreatedAt, &artifact.UpdatedAt)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	return artifacts, nil
 }

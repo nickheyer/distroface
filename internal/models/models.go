@@ -13,25 +13,29 @@ type Scope string
 
 const (
 	// ACTIONS
-	ActionView    Action = "VIEW"
-	ActionCreate  Action = "CREATE"
-	ActionUpdate  Action = "UPDATE"
-	ActionDelete  Action = "DELETE"
-	ActionPush    Action = "PUSH"
-	ActionPull    Action = "PULL"
-	ActionAdmin   Action = "ADMIN"
-	ActionLogin   Action = "LOGIN"
-	ActionLogout  Action = "LOGOUT"
-	ActionMigrate Action = "MIGRATE"
+	ActionView     Action = "VIEW"
+	ActionCreate   Action = "CREATE"
+	ActionUpdate   Action = "UPDATE"
+	ActionDelete   Action = "DELETE"
+	ActionPush     Action = "PUSH"
+	ActionPull     Action = "PULL"
+	ActionAdmin    Action = "ADMIN"
+	ActionLogin    Action = "LOGIN"
+	ActionLogout   Action = "LOGOUT"
+	ActionMigrate  Action = "MIGRATE"
+	ActionUpload   Action = "UPLOAD"
+	ActionDownload Action = "DOWNLOAD"
 
 	// RESOURCES
-	ResourceTask   Resource = "TASK"
-	ResourceWebUI  Resource = "WEBUI"
-	ResourceImage  Resource = "IMAGE"
-	ResourceTag    Resource = "TAG"
-	ResourceUser   Resource = "USER"
-	ResourceGroup  Resource = "GROUP"
-	ResourceSystem Resource = "SYSTEM"
+	ResourceTask     Resource = "TASK"
+	ResourceWebUI    Resource = "WEBUI"
+	ResourceImage    Resource = "IMAGE"
+	ResourceTag      Resource = "TAG"
+	ResourceUser     Resource = "USER"
+	ResourceGroup    Resource = "GROUP"
+	ResourceSystem   Resource = "SYSTEM"
+	ResourceArtifact Resource = "ARTIFACT"
+	ResourceRepo     Resource = "REPO"
 
 	// SCOPES
 	ScopeGlobal     Scope = "global"
@@ -137,6 +141,8 @@ func DefaultRoles() []Role {
 				{Action: ActionView, Resource: ResourceWebUI},
 				{Action: ActionLogin, Resource: ResourceWebUI},
 				{Action: ActionLogout, Resource: ResourceWebUI},
+				{Action: ActionView, Resource: ResourceRepo},
+				{Action: ActionView, Resource: ResourceArtifact},
 			},
 		},
 		{
@@ -151,6 +157,10 @@ func DefaultRoles() []Role {
 				{Action: ActionLogin, Resource: ResourceWebUI},
 				{Action: ActionLogout, Resource: ResourceWebUI},
 				{Action: ActionMigrate, Resource: ResourceTask},
+				{Action: ActionView, Resource: ResourceRepo},
+				{Action: ActionView, Resource: ResourceArtifact},
+				{Action: ActionDownload, Resource: ResourceArtifact},
+				{Action: ActionUpload, Resource: ResourceArtifact},
 			},
 		},
 		{
@@ -194,6 +204,28 @@ type DockerManifest struct {
 		Size      int64  `json:"size"`
 		Digest    string `json:"digest"`
 	} `json:"layers"`
+}
+
+type ArtifactRepository struct {
+	ID          int       `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Owner       string    `json:"owner"`
+	Private     bool      `json:"private"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type Artifact struct {
+	ID        string    `json:"id"`
+	RepoID    int       `json:"repo_id"`
+	Name      string    `json:"name"`
+	Version   string    `json:"version"`
+	Size      int64     `json:"size"`
+	MimeType  string    `json:"mime_type"`
+	Metadata  string    `json:"metadata"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type VisibilityUpdateRequest struct {

@@ -146,6 +146,7 @@ func (s *Server) setupRoutes() error {
 	authHandler := handlers.NewAuthHandler(s.config, s.authService)
 	userHandler := handlers.NewUserHandler(repo, s.permManager)
 	repoHandler := handlers.NewRepositoryHandler(repo, s.config)
+	artifactHandler := handlers.NewArtifactHandler(repo, s.config)
 	groupHandler := handlers.NewGroupHandler(repo)
 	roleHandler := handlers.NewRoleHandler(repo, s.permManager)
 
@@ -207,6 +208,28 @@ func (s *Server) setupRoutes() error {
 		http.HandlerFunc(repoHandler.ProxyCatalog))).Methods("GET")
 	api.Handle("/registry/proxy/tags", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask)(
 		http.HandlerFunc(repoHandler.ProxyTags))).Methods("GET")
+
+	// ARTIFACT ROUTES
+	api.Handle("/artifacts/repos", requirePermission(s.authService, models.ActionCreate, models.ResourceRepo)(
+		http.HandlerFunc(artifactHandler.CreateRepository))).Methods("POST")
+	api.Handle("/artifacts/repos", requirePermission(s.authService, models.ActionView, models.ResourceRepo)(
+		http.HandlerFunc(artifactHandler.ListRepositories))).Methods("GET")
+	api.Handle("/artifacts/repos/{repo}", requirePermission(s.authService, models.ActionDelete, models.ResourceRepo)(
+		http.HandlerFunc(artifactHandler.DeleteRepository))).Methods("DELETE")
+	api.Handle("/artifacts/{repo}/upload", requirePermission(s.authService, models.ActionUpload, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.InitiateUpload))).Methods("POST")
+	api.Handle("/artifacts/{repo}/upload/{uuid}", requirePermission(s.authService, models.ActionUpload, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.HandleUpload))).Methods("PATCH")
+	api.Handle("/artifacts/{repo}/upload/{uuid}", requirePermission(s.authService, models.ActionUpload, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.CompleteUpload))).Methods("PUT")
+	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.DownloadArtifact))).Methods("GET")
+	api.Handle("/artifacts/{repo}/versions", requirePermission(s.authService, models.ActionView, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.ListVersions))).Methods("GET")
+	api.Handle("/artifacts/{repo}/{id}/metadata", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.UpdateMetadata))).Methods("PUT")
+	api.Handle("/artifacts/search", requirePermission(s.authService, models.ActionView, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.SearchArtifacts))).Methods("GET")
 
 	// REGISTRY ROUTES
 	regAPI := s.router.PathPrefix("/v2").Subrouter()

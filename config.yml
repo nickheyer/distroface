@@ -12,5 +12,9 @@ database:
 
 auth:
   realm: "http://registry.localdomain:8668/auth/token"
-  service: "registry.localdomain:8668"  # MATCH DOCKER SERVICE NAME
+  service: "registry.localdomain:8668"
   issuer: "registry-auth-server"
+
+artifacts:
+  enabled: true
+  max_upload_size: "5G"

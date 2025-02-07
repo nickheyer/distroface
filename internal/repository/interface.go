@@ -41,4 +41,15 @@ type Repository interface {
 	DeleteImageMetadata(id string) error
 	ListPublicImageMetadata() ([]*models.ImageMetadata, error)
 	UpdateImageVisibility(id string, private bool) error
+
+	// ARTIFACT OPS
+	CreateArtifactRepository(repo *models.ArtifactRepository) error
+	GetArtifactRepository(name string) (*models.ArtifactRepository, error)
+	ListArtifactRepositories(username string) ([]models.ArtifactRepository, error)
+	DeleteArtifactRepository(name string) error
+	CreateArtifact(artifact *models.Artifact) error
+	ListArtifacts(repoID int) ([]models.Artifact, error)
+	UpdateArtifactMetadata(id string, metadata string) error
+	DeleteArtifact(repoID int, version string, path string) error
+	SearchArtifacts(query string, username string) ([]models.Artifact, error)
 }

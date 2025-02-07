@@ -4,7 +4,10 @@ INSERT INTO roles (name, description, permissions) VALUES
     {"action":"VIEW","resource":"WEBUI"},
     {"action":"LOGIN","resource":"WEBUI"},
     {"action":"PULL","resource":"IMAGE"},
-    {"action":"VIEW","resource":"TAG"}
+    {"action":"VIEW","resource":"TAG"},
+    {"action":"VIEW","resource":"ARTIFACT"},
+    {"action":"DOWNLOAD","resource":"ARTIFACT"},
+    {"action":"VIEW","resource":"REPO"}
  ]'),
 
 ('reader', 'Basic read access', 
@@ -14,7 +17,10 @@ INSERT INTO roles (name, description, permissions) VALUES
     {"action":"PULL","resource":"IMAGE"},
     {"action":"VIEW","resource":"TAG"},
     {"action":"VIEW","resource":"USER"},
-    {"action":"VIEW","resource":"GROUP"}
+    {"action":"VIEW","resource":"GROUP"},
+    {"action":"VIEW","resource":"ARTIFACT"},
+    {"action":"DOWNLOAD","resource":"ARTIFACT"},
+    {"action":"VIEW","resource":"REPO"}
  ]'),
 
 ('developer', 'Standard developer access', 
@@ -30,7 +36,15 @@ INSERT INTO roles (name, description, permissions) VALUES
     {"action":"CREATE","resource":"TAG"},
     {"action":"DELETE","resource":"TAG"},
     {"action":"VIEW","resource":"USER"},
-    {"action":"VIEW","resource":"GROUP"}
+    {"action":"VIEW","resource":"GROUP"},
+    {"action":"VIEW","resource":"ARTIFACT"},
+    {"action":"UPLOAD","resource":"ARTIFACT"},
+    {"action":"UPDATE","resource":"ARTIFACT"},
+    {"action":"DOWNLOAD","resource":"ARTIFACT"},
+    {"action":"DELETE","resource":"ARTIFACT"},
+    {"action":"VIEW","resource":"REPO"},
+    {"action":"CREATE","resource":"REPO"},
+    {"action":"DELETE","resource":"REPO"}
  ]'),
 
 ('administrator', 'Full system access', 
@@ -53,7 +67,15 @@ INSERT INTO roles (name, description, permissions) VALUES
     {"action":"DELETE","resource":"IMAGE"},
     {"action":"VIEW","resource":"TAG"},
     {"action":"CREATE","resource":"TAG"},
-    {"action":"DELETE","resource":"TAG"}
+    {"action":"DELETE","resource":"TAG"},
+    {"action":"VIEW","resource":"ARTIFACT"},
+    {"action":"UPLOAD","resource":"ARTIFACT"},
+    {"action":"UPDATE","resource":"ARTIFACT"},
+    {"action":"DOWNLOAD","resource":"ARTIFACT"},
+    {"action":"DELETE","resource":"ARTIFACT"},
+    {"action":"VIEW","resource":"REPO"},
+    {"action":"CREATE","resource":"REPO"},
+    {"action":"DELETE","resource":"REPO"}
  ]');
 
 -- Insert default groups

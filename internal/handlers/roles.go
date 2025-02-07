@@ -150,29 +150,33 @@ func (h *RoleHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
 // HELPER FUNCTIONS TO VALIDATE PERMISSIONS
 func isValidAction(action models.Action) bool {
 	validActions := map[models.Action]bool{
-		models.ActionView:    true,
-		models.ActionCreate:  true,
-		models.ActionUpdate:  true,
-		models.ActionDelete:  true,
-		models.ActionPush:    true,
-		models.ActionPull:    true,
-		models.ActionAdmin:   true,
-		models.ActionLogin:   true,
-		models.ActionLogout:  true,
-		models.ActionMigrate: true,
+		models.ActionView:     true,
+		models.ActionCreate:   true,
+		models.ActionUpdate:   true,
+		models.ActionDelete:   true,
+		models.ActionPush:     true,
+		models.ActionPull:     true,
+		models.ActionAdmin:    true,
+		models.ActionLogin:    true,
+		models.ActionLogout:   true,
+		models.ActionMigrate:  true,
+		models.ActionUpload:   true,
+		models.ActionDownload: true,
 	}
 	return validActions[action]
 }
 
 func isValidResource(resource models.Resource) bool {
 	validResources := map[models.Resource]bool{
-		models.ResourceWebUI:  true,
-		models.ResourceImage:  true,
-		models.ResourceTag:    true,
-		models.ResourceUser:   true,
-		models.ResourceGroup:  true,
-		models.ResourceSystem: true,
-		models.ResourceTask:   true,
+		models.ResourceWebUI:    true,
+		models.ResourceImage:    true,
+		models.ResourceTag:      true,
+		models.ResourceUser:     true,
+		models.ResourceGroup:    true,
+		models.ResourceSystem:   true,
+		models.ResourceTask:     true,
+		models.ResourceArtifact: true,
+		models.ResourceRepo:     true,
 	}
 	return validResources[resource]
 }
