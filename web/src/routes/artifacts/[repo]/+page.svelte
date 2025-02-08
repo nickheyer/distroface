@@ -12,6 +12,7 @@
         Edit,
         Loader2,
         AlertCircle,
+        Search
     } from "lucide-svelte";
     import type {
         ArtifactRepository,
@@ -29,18 +30,17 @@
     let metadataModalOpen = $state(false);
     let selectedArtifact = $state<Artifact | null>(null);
     let dragOver = $state(false);
+    let droppedFiles = $state<FileList | null>(null);
 
     function handleDragOver(e: DragEvent) {
-        e.preventDefault(); // PREVENT DEFAULT
-        dragOver = true; // SETTING DRAG STATE
+        e.preventDefault();
+        dragOver = true;
     }
 
     function handleDragLeave() {
         dragOver = false;
     }
 
-    // THIS IS ARBITRARY AS HELL, BUT I CANT PROPOGATE UNTIL I SAVE TO VARIABLE
-    let droppedFiles: FileList | null = null;
     function handleDrop(e: DragEvent) {
         e.preventDefault();
         dragOver = false;
@@ -48,6 +48,9 @@
         if (e.dataTransfer?.files.length) {
             droppedFiles = e.dataTransfer.files;
             uploadModalOpen = true;
+        } else {
+          droppedFiles = null;
+          showToast('No files found in dropped files', 'error');
         }
     }
 
@@ -81,7 +84,7 @@
                 artifacts.repositories.find((r) => r.name === repoName) || null;
 
             if (repository) {
-                await artifacts.fetchArtifacts(repository.name);
+                artifacts.currentRepo = repository;
                 artifacts_list = artifacts.artifacts[repository.id] || [];
             } else {
                 error = "Repository not found";
@@ -212,6 +215,19 @@
             </div>
         </div>
 
+        <!-- SEARCH -->
+        <div class="flex flex-col sm:flex-row gap-4">
+          <div class="relative">
+              <input
+                  type="text"
+                  placeholder="Search artifacts..."
+                  class="block w-full pl-10 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                  bind:value={artifacts.fileSearchTerm}
+              />
+              <Search class="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+          </div>
+        </div>
+
         <!-- ARTIFACTS TABLE -->
         {#if artifacts_list.length === 0}
             <div class="text-center py-12 bg-white rounded-lg shadow-sm">
@@ -256,7 +272,7 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-200">
-                        {#each artifacts_list as artifact}
+                        {#each artifacts.filteredArtifacts[repository.id] || [] as artifact (artifact.created_at)}
                             <tr>
                                 <td
                                     class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"
@@ -328,7 +344,12 @@
         {#if uploadModalOpen}
             <UploadArtifactModal
                 {repository}
-                onclose={() => (uploadModalOpen = false)}
+                onclose={() => {
+                  uploadModalOpen = false;
+                  droppedFiles = null;
+                  loadRepository();
+                }}
+                initialFiles={droppedFiles}
             />
         {/if}
 

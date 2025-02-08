@@ -14,7 +14,7 @@ export function showToast(message: string, type: ToastType = 'info') {
   const id = crypto.randomUUID();
   toasts.update((existing) => [...existing, { id, message, type }]);
 
-  // Auto remove after 5s
+  // AUTO REMOVE AFTER 5 SECONDS
   setTimeout(() => {
     toasts.update((all) => all.filter((t) => t.id !== id));
   }, 5000);

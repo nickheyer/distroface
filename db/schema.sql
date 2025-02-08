@@ -3,6 +3,19 @@ DROP TABLE IF EXISTS roles;
 DROP TABLE IF EXISTS groups;
 DROP TABLE IF EXISTS users;
 DROP TABLE IF EXISTS image_metadata;
+DROP TABLE IF EXISTS artifact_repositories;
+DROP TABLE IF EXISTS artifacts;
+DROP TABLE IF EXISTS artifact_properties;
+DROP TABLE IF EXISTS settings;
+
+-- Settings table
+CREATE TABLE IF NOT EXISTS settings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    key TEXT UNIQUE NOT NULL,
+    value TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 
 -- Roles table
 CREATE TABLE IF NOT EXISTS roles (
@@ -50,7 +63,7 @@ CREATE TABLE IF NOT EXISTS image_metadata (
     FOREIGN KEY(owner) REFERENCES users(username)
 );
 
--- Artifact repositories
+-- Artifact repositories table
 CREATE TABLE IF NOT EXISTS artifact_repositories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT UNIQUE NOT NULL,
@@ -62,7 +75,7 @@ CREATE TABLE IF NOT EXISTS artifact_repositories (
     FOREIGN KEY(owner) REFERENCES users(username)
 );
 
--- Artifact metadata
+-- Artifact metadata table
 CREATE TABLE IF NOT EXISTS artifacts (
     id TEXT PRIMARY KEY,
     repo_id INTEGER NOT NULL,
@@ -76,13 +89,28 @@ CREATE TABLE IF NOT EXISTS artifacts (
     FOREIGN KEY(repo_id) REFERENCES artifact_repositories(id)
 );
 
+-- Artifact properties table
+CREATE TABLE IF NOT EXISTS artifact_properties (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id TEXT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
+);
+
 -- Create indexes
-CREATE INDEX idx_roles_name ON roles(name);
-CREATE INDEX idx_groups_name ON groups(name);
-CREATE INDEX idx_groups_scope ON groups(scope);
-CREATE INDEX idx_users_username ON users(username);
-CREATE INDEX idx_image_metadata_owner ON image_metadata(owner);
-CREATE INDEX idx_image_metadata_name ON image_metadata(name);
+CREATE INDEX IF NOT EXISTS idx_roles_name ON roles(name);
+CREATE INDEX IF NOT EXISTS idx_groups_name ON groups(name);
+CREATE INDEX IF NOT EXISTS idx_groups_scope ON groups(scope);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_image_metadata_owner ON image_metadata(owner);
+CREATE INDEX IF NOT EXISTS idx_image_metadata_name ON image_metadata(name);
+CREATE INDEX IF NOT EXISTS idx_artifact_properties_key ON artifact_properties(key);
+CREATE INDEX IF NOT EXISTS idx_artifact_properties_value ON artifact_properties(value);
+CREATE INDEX IF NOT EXISTS idx_artifact_properties_artifact ON artifact_properties(artifact_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_properties_lookup ON artifact_properties(artifact_id, key, value);
+CREATE INDEX IF NOT EXISTS idx_settings_key ON settings(key);
 
 -- Update triggers
 CREATE TRIGGER update_roles_timestamp 
@@ -112,4 +140,12 @@ BEGIN
     UPDATE image_metadata SET updated_at = CURRENT_TIMESTAMP 
     WHERE id = NEW.id;
 END;
+
+CREATE TRIGGER update_settings_timestamp 
+AFTER UPDATE ON settings
+BEGIN
+    UPDATE settings SET updated_at = CURRENT_TIMESTAMP 
+    WHERE id = NEW.id;
+END;
+
 

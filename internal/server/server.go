@@ -153,6 +153,7 @@ func (s *Server) setupRoutes() error {
 	artifactHandler := handlers.NewArtifactHandler(repo, s.config)
 	groupHandler := handlers.NewGroupHandler(repo)
 	roleHandler := handlers.NewRoleHandler(repo, s.permManager)
+	settingsHandler := handlers.NewSettingsHandler(repo, s.config)
 
 	// PUBLIC ROUTES
 	s.router.HandleFunc("/v2/", authHandler.HandleV2Check)
@@ -163,6 +164,16 @@ func (s *Server) setupRoutes() error {
 	// API ROUTES
 	api := s.router.PathPrefix("/api/v1").Subrouter()
 	api.Use(s.authMiddleware.AuthMiddleware)
+
+	// SETTINGS ROUTES
+	api.Handle("/settings", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+		http.HandlerFunc(settingsHandler.GetSettings))).Methods("GET")
+	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+		http.HandlerFunc(settingsHandler.GetSettings))).Methods("GET")
+	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+		http.HandlerFunc(settingsHandler.UpdateSettings))).Methods("PUT")
+	api.Handle("/settings/{section}/reset", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+		http.HandlerFunc(settingsHandler.ResetSettings))).Methods("POST")
 
 	// REPOSITORY ROUTES
 	api.Handle("/repositories", requirePermission(s.authService, models.ActionView, models.ResourceWebUI)(

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -172,6 +173,31 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// PARSE PROPERTIES
+	var properties map[string]string
+	if propertiesJSON := r.URL.Query().Get("properties"); propertiesJSON != "" {
+		if err := json.Unmarshal([]byte(propertiesJSON), &properties); err != nil {
+			http.Error(w, "Invalid properties format", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// GET ARTIFACT SETTINGS
+	settings, err := h.getSettings()
+	if err != nil {
+		h.logger.Printf("Failed to get settings: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// VALIDATE PROPERTIES
+	for _, required := range settings.Properties.Required {
+		if _, exists := properties[required]; !exists {
+			http.Error(w, fmt.Sprintf("Missing required property: %s", required), http.StatusBadRequest)
+			return
+		}
+	}
+
 	// PROCESS COMPLETED UPLOAD
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "_uploads", uploadID)
 	finalPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifactPath)
@@ -213,6 +239,17 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		h.logger.Printf("Failed to create artifact metadata: %v", err)
 		http.Error(w, "Failed to save artifact metadata", http.StatusInternalServerError)
 		return
+	}
+
+	if len(properties) > 0 {
+		if err := h.repo.SetArtifactProperties(artifact.ID, properties); err != nil {
+			h.logger.Printf("Failed to store properties: %v", err)
+			// UPLOAD WORKED, CONTINUE ON
+		}
+	}
+
+	if settings.Retention.Enabled {
+		go h.applyRetentionPolicy(repo.ID, settings.Retention)
 	}
 
 	w.WriteHeader(http.StatusCreated)
@@ -327,6 +364,64 @@ func (h *ArtifactHandler) UpdateMetadata(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusOK)
 }
 
+func (h *ArtifactHandler) UpdateProperties(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	repoName := vars["repo"]
+	artifactID := vars["id"]
+	username := r.Context().Value(constants.UsernameKey).(string)
+
+	// VERIFY
+	repo, err := h.repo.GetArtifactRepository(repoName)
+	if err != nil {
+		http.Error(w, "Repository not found", http.StatusNotFound)
+		return
+	}
+
+	if repo.Owner != username && repo.Private {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	var properties map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&properties); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// GET VALIDATION
+	settings, err := h.getSettings()
+	if err != nil {
+		h.logger.Printf("Failed to get settings: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// ENSURE REQUIRED
+	existingProps, err := h.repo.GetArtifactProperties(artifactID)
+	if err != nil {
+		h.logger.Printf("Failed to get existing properties: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	for _, required := range settings.Properties.Required {
+		if _, exists := properties[required]; !exists {
+			if _, hadProp := existingProps[required]; hadProp {
+				http.Error(w, fmt.Sprintf("Cannot remove required property: %s", required), http.StatusBadRequest)
+				return
+			}
+		}
+	}
+
+	if err := h.repo.SetArtifactProperties(artifactID, properties); err != nil {
+		h.logger.Printf("Failed to update properties: %v", err)
+		http.Error(w, "Failed to update properties", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
 func (h *ArtifactHandler) DeleteArtifact(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	repoName := vars["repo"]
@@ -415,18 +510,46 @@ func (h *ArtifactHandler) DeleteRepository(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request) {
-	query := r.URL.Query().Get("q")
-	username := r.Context().Value(constants.UsernameKey).(string)
+	var req struct {
+		Properties map[string]string `json:"properties"`
+		Sort       string            `json:"sort"`
+		Order      string            `json:"order"`
+		Limit      int               `json:"limit"`
+	}
 
-	artifacts, err := h.repo.SearchArtifacts(query, username)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// GET SETTINGS
+	settings, err := h.getSettings()
 	if err != nil {
-		h.logger.Printf("Failed to search artifacts: %v", err)
-		http.Error(w, "Failed to search artifacts", http.StatusInternalServerError)
+		h.logger.Printf("Failed to get settings: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	// APPLY DEFAULTS
+	if req.Sort == "" {
+		req.Sort = settings.Search.DefaultSort
+	}
+	if req.Order == "" {
+		req.Order = settings.Search.DefaultOrder
+	}
+	if req.Limit == 0 || req.Limit > settings.Search.MaxResults {
+		req.Limit = settings.Search.MaxResults
+	}
+
+	results, err := h.repo.SearchArtifacts(req.Properties, req.Sort, req.Order, req.Limit)
+	if err != nil {
+		h.logger.Printf("Search failed: %v", err)
+		http.Error(w, "Search failed", http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(artifacts)
+	json.NewEncoder(w).Encode(results)
 }
 
 func (h *ArtifactHandler) validatePath(path string, allowAbs bool) error {
@@ -445,4 +568,89 @@ func (h *ArtifactHandler) validatePath(path string, allowAbs bool) error {
 
 func (h *ArtifactHandler) ensureDirectoryExists(path string) error {
 	return os.MkdirAll(path, 0755)
+}
+
+func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.RetentionPolicy) {
+	artifacts, err := h.repo.ListArtifacts(repoID)
+	if err != nil {
+		h.logger.Printf("Failed to list artifacts for retention: %v", err)
+		return
+	}
+
+	// GROUP ARTIFACTS
+	groups := make(map[string][]models.Artifact)
+	for _, artifact := range artifacts {
+		props, err := h.repo.GetArtifactProperties(artifact.ID)
+		if err != nil {
+			h.logger.Printf("Failed to get properties for artifact %s: %v", artifact.ID, err)
+			continue
+		}
+
+		// CREATE PROP KEY LIKE JENKINS
+		key := createGroupKey(props)
+		groups[key] = append(groups[key], artifact)
+	}
+
+	// APPLY RETENTION
+	for _, group := range groups {
+		// SORT BY: TODO - USE OUR SORT BY SETTING
+		sort.Slice(group, func(i, j int) bool {
+			return group[i].CreatedAt.After(group[j].CreatedAt)
+		})
+
+		// KEEP LATEST UNLESS CONFIGURED
+		start := 0
+		if retention.ExcludeLatest && len(group) > 0 {
+			start = 1
+		}
+
+		// DELETE EXCESS
+		for i := start + retention.MaxVersions; i < len(group); i++ {
+			artifact := group[i]
+
+			// CHECK AGE
+			if retention.MaxAge > 0 {
+				age := time.Since(artifact.CreatedAt)
+				if age.Hours() < float64(retention.MaxAge*24) {
+					continue
+				}
+			}
+
+			// DELETE ARTIFACTS
+			if err := h.repo.DeleteArtifact(artifact.RepoID, artifact.Version, artifact.Name); err != nil {
+				h.logger.Printf("Failed to delete artifact %s during retention: %v", artifact.ID, err)
+			}
+		}
+	}
+}
+
+func (h *ArtifactHandler) getSettings() (*models.ArtifactSettings, error) {
+	settingsBytes, err := h.repo.GetSettingsSection(models.SettingKeyArtifacts)
+	if err != nil {
+		fmt.Printf("ERROR: %v", err)
+		// IF NOT FOUND, GET DEFAULTS
+		defaultSettings, err := models.GetDefaultSettings(models.SettingKeyArtifacts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get default settings: %v", err)
+		}
+		return defaultSettings.(*models.ArtifactSettings), nil
+	}
+
+	var settings models.ArtifactSettings
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		fmt.Printf("ERROR: %v", err)
+		return nil, fmt.Errorf("failed to parse settings: %v", err)
+	}
+
+	return &settings, nil
+}
+
+func createGroupKey(properties map[string]string) string {
+	var parts []string
+	for _, key := range []string{"branch", "buildType"} {
+		if val, ok := properties[key]; ok {
+			parts = append(parts, val)
+		}
+	}
+	return strings.Join(parts, "-")
 }

@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"encoding/json"
+
 	"github.com/nickheyer/distroface/internal/models"
 )
 
@@ -51,5 +53,13 @@ type Repository interface {
 	ListArtifacts(repoID int) ([]models.Artifact, error)
 	UpdateArtifactMetadata(id string, metadata string) error
 	DeleteArtifact(repoID int, version string, path string) error
-	SearchArtifacts(query string, username string) ([]models.Artifact, error)
+	SetArtifactProperties(artifactID string, properties map[string]string) error
+	GetArtifactProperties(artifactID string) (map[string]string, error)
+	SearchArtifacts(properties map[string]string, sort string, order string, limit int) ([]models.Artifact, error)
+
+	// SETTINGS OPS
+	GetAllSettings() (map[string]json.RawMessage, error)
+	GetSettingsSection(section string) (json.RawMessage, error)
+	UpdateSettingsSection(section string, settings json.RawMessage) error
+	ResetSettingsSection(section string) error
 }

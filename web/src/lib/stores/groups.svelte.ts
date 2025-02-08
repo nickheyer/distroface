@@ -4,6 +4,7 @@ export interface Group {
     name: string;
     description: string;
     roles: string[];
+    scope: string;
 }
 
 // STATE

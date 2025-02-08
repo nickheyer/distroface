@@ -399,6 +399,7 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
-registry.db
+registry.db*
 repomix-output.txt
 distroface
+

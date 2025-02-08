@@ -21,7 +21,6 @@
         Lock,
         Loader2,
     } from "lucide-svelte";
-    import { formatDistance } from "date-fns";
 
     let createModalOpen = $state(false);
     let uploadModalOpen = $state(false);
@@ -31,6 +30,10 @@
 
     $effect(() => {
         artifacts.fetchRepositories().catch(console.error);
+    });
+
+    $effect(() => {
+        artifacts.currentRepo = selectedRepo;
     });
 
     function openUploadModal(repo: ArtifactRepository) {
@@ -96,7 +99,7 @@
                 type="text"
                 placeholder="Search repositories..."
                 class="block w-full pl-10 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                bind:value={artifacts.searchTerm}
+                bind:value={artifacts.repoSearchTerm}
             />
             <Search class="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
         </div>
@@ -113,7 +116,7 @@
     >
       <Loader2 class="h-8 w-8 animate-spin text-blue-500" />
     </div>
-    {:else if artifacts.filtered.length === 0}
+    {:else if artifacts.filteredRepos.length === 0}
     <div
       class="text-center py-12"
       ondragover={handleDragOverGlobal}
@@ -134,7 +137,7 @@
             ondrop={handleDropGlobal}
             role="application"
         >
-            {#each artifacts.filtered as repo}
+            {#each artifacts.filteredRepos as repo}
                 <div
                     class="relative rounded-lg border border-gray-300 bg-white px-6 py-5 shadow-sm hover:border-gray-400 focus-within:ring-2 focus-within:ring-blue-500 focus-within:ring-offset-2"
                 >
@@ -202,6 +205,7 @@
             uploadModalOpen = false;
             selectedRepo = null;
             uploadFiles = null;
+            artifacts.fetchRepositories();
         }}
     />
 {/if}

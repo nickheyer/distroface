@@ -776,7 +776,7 @@ func (r *SQLiteRepository) DeleteArtifactRepository(name string) error {
 		return err
 	}
 
-	// Also delete all artifacts in this repository
+	// DELETE ALL ARTIFACTS IN THIS REPO
 	_, err = r.db.Exec(
 		`DELETE FROM artifacts WHERE repo_id IN 
 		 (SELECT id FROM artifact_repositories WHERE name = ?)`,
@@ -859,16 +859,30 @@ func (r *SQLiteRepository) DeleteArtifact(repoID int, version string, path strin
 	return err
 }
 
-func (r *SQLiteRepository) SearchArtifacts(query string, username string) ([]models.Artifact, error) {
-	rows, err := r.db.Query(
-		`SELECT a.id, a.repo_id, a.name, a.version, a.size, a.mime_type, 
-		        a.metadata, a.created_at, a.updated_at
-		 FROM artifacts a
-		 JOIN artifact_repositories r ON a.repo_id = r.id
-		 WHERE (r.owner = ? OR r.private = false)
-		   AND (a.name LIKE ? OR a.metadata LIKE ?)`,
-		username, "%"+query+"%", "%"+query+"%",
-	)
+func (r *SQLiteRepository) SearchArtifacts(properties map[string]string, sort string, order string, limit int) ([]models.Artifact, error) {
+	query := `
+			SELECT DISTINCT a.* 
+			FROM artifacts a
+			JOIN artifact_properties p ON a.id = p.artifact_id
+			WHERE 1=1
+	`
+	args := []interface{}{}
+
+	for key, value := range properties {
+		query += " AND EXISTS (SELECT 1 FROM artifact_properties p2 WHERE p2.artifact_id = a.id AND p2.key = ? AND p2.value = ?)"
+		args = append(args, key, value)
+	}
+
+	if sort != "" {
+		query += " ORDER BY " + sort + " " + order
+	}
+
+	if limit > 0 {
+		query += " LIMIT ?"
+		args = append(args, limit)
+	}
+
+	rows, err := r.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -876,14 +890,163 @@ func (r *SQLiteRepository) SearchArtifacts(query string, username string) ([]mod
 
 	var artifacts []models.Artifact
 	for rows.Next() {
-		var artifact models.Artifact
-		err := rows.Scan(&artifact.ID, &artifact.RepoID, &artifact.Name,
-			&artifact.Version, &artifact.Size, &artifact.MimeType,
-			&artifact.Metadata, &artifact.CreatedAt, &artifact.UpdatedAt)
+		var a models.Artifact
+		err := rows.Scan(&a.ID, &a.RepoID, &a.Name, &a.Version, &a.Size, &a.MimeType, &a.Metadata, &a.CreatedAt, &a.UpdatedAt)
 		if err != nil {
 			return nil, err
 		}
-		artifacts = append(artifacts, artifact)
+		artifacts = append(artifacts, a)
 	}
+
 	return artifacts, nil
+}
+
+func (r *SQLiteRepository) GetAllSettings() (map[string]json.RawMessage, error) {
+	rows, err := r.db.Query("SELECT key, value FROM settings")
+	fmt.Printf("ROWS: %v", rows)
+	if err != nil {
+		fmt.Printf("ERROR: %v", err)
+		return nil, err
+	}
+	defer rows.Close()
+
+	settings := make(map[string]json.RawMessage)
+	for rows.Next() {
+		var key string
+		var value []byte
+		if err := rows.Scan(&key, &value); err != nil {
+			fmt.Printf("ERROR: %v", err)
+			return nil, err
+		}
+		settings[key] = json.RawMessage(value)
+	}
+
+	return settings, nil
+}
+
+func (r *SQLiteRepository) GetSettingsSection(section string) (json.RawMessage, error) {
+	var value []byte
+	err := r.db.QueryRow("SELECT value FROM settings WHERE key = ?", section).Scan(&value)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			// RETURN EMPTY JSON IS SETTING DOESNT EXIST
+			return json.RawMessage("{}"), nil
+		}
+		return nil, err
+	}
+	return json.RawMessage(value), nil
+}
+
+func (r *SQLiteRepository) UpdateSettingsSection(section string, settings json.RawMessage) error {
+	var js json.RawMessage
+	if err := json.Unmarshal(settings, &js); err != nil {
+		return fmt.Errorf("invalid JSON: %v", err)
+	}
+
+	_, err := r.db.Exec(`
+			INSERT INTO settings (key, value) 
+			VALUES (?, ?) 
+			ON CONFLICT(key) DO UPDATE SET 
+					value = excluded.value,
+					updated_at = CURRENT_TIMESTAMP
+	`, section, settings)
+
+	return err
+}
+
+func (r *SQLiteRepository) ResetSettingsSection(section string) error {
+	var defaultValue json.RawMessage
+
+	switch section {
+	case "artifacts":
+		defaultValue = json.RawMessage(`{
+					"retention": {
+							"enabled": false,
+							"maxVersions": 5,
+							"maxAge": 30,
+							"excludeLatest": true
+					},
+					"storage": {
+							"maxFileSize": 1024,
+							"allowedTypes": ["*/*"],
+							"compressionEnabled": true
+					},
+					"properties": {
+							"required": ["version", "build", "branch"],
+							"indexed": ["version", "build", "branch", "commit"]
+					},
+					"search": {
+							"maxResults": 100,
+							"defaultSort": "created",
+							"defaultOrder": "desc"
+					}
+			}`)
+	case "registry":
+		defaultValue = json.RawMessage(`{
+					"cleanup": {
+							"enabled": false,
+							"maxAge": 90,
+							"unusedOnly": true
+					},
+					"proxy": {
+							"enabled": false,
+							"remoteUrl": "",
+							"cacheEnabled": true,
+							"cacheMaxAge": 24
+					}
+			}`)
+	default:
+		return fmt.Errorf("unknown settings section: %s", section)
+	}
+
+	return r.UpdateSettingsSection(section, defaultValue)
+}
+
+func (r *SQLiteRepository) SetArtifactProperties(artifactID string, properties map[string]string) error {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// DELETE EXISTING PROPERTIES
+	_, err = tx.Exec("DELETE FROM artifact_properties WHERE artifact_id = ?", artifactID)
+	if err != nil {
+		return err
+	}
+
+	// INSERT NEW PROPERTIES
+	stmt, err := tx.Prepare("INSERT INTO artifact_properties (artifact_id, key, value) VALUES (?, ?, ?)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for key, value := range properties {
+		_, err = stmt.Exec(artifactID, key, value)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (r *SQLiteRepository) GetArtifactProperties(artifactID string) (map[string]string, error) {
+	rows, err := r.db.Query("SELECT key, value FROM artifact_properties WHERE artifact_id = ?", artifactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	properties := make(map[string]string)
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			return nil, err
+		}
+		properties[key] = value
+	}
+
+	return properties, nil
 }

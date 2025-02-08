@@ -10,7 +10,8 @@ const state = $state<{
   error: string | null;
   uploadProgress: { [uploadId: string]: number };
   currentRepo: ArtifactRepository | null;
-  searchTerm: string;
+  repoSearchTerm: string;
+  fileSearchTerm: string;
 }>({
   repositories: [],
   artifacts: {},
@@ -18,16 +19,36 @@ const state = $state<{
   error: null,
   uploadProgress: {},
   currentRepo: null,
-  searchTerm: ''
+  repoSearchTerm: '',
+  fileSearchTerm: ''
 });
 
 // COMPUTED
 const filteredRepositories = $derived(() => {
-  const searchLower = state.searchTerm.toLowerCase();
+  const searchLower = state.repoSearchTerm.toLowerCase();
   return state.repositories.filter((repo) =>
       repo.name.toLowerCase().includes(searchLower) ||
       repo.description.toLowerCase().includes(searchLower)
   );
+});
+
+const filteredArtifacts = $derived(() => {
+  const searchLower = state.fileSearchTerm.toLowerCase();
+  if (!state.currentRepo?.id) {
+    console.log('No repo id set: ', state.currentRepo);
+    return {};
+  }
+
+  if (searchLower === '') {
+    return state.artifacts;
+  }
+
+  const tmpArtifacts = Object.assign({}, state.artifacts);
+  tmpArtifacts[state.currentRepo.id] = state.artifacts[state.currentRepo.id].filter((artifact) =>
+      artifact.name.toLowerCase().includes(searchLower)
+  );
+
+  return tmpArtifacts;
 });
 
 async function fetchRepositories() {
@@ -38,6 +59,9 @@ async function fetchRepositories() {
         const response = await api.get('/api/v1/artifacts/repos');
         const data = await response.json();
         state.repositories = data || [];
+        for (const r of state.repositories) {
+          await fetchArtifacts(r.name);
+        }
     } catch (err) {
         state.error = err instanceof Error ? err.message : 'Failed to fetch repositories';
         throw err;
@@ -79,8 +103,7 @@ async function uploadArtifact(repo: string, file: File, version: string, path: s
       const initResponse = await api.post(`/api/v1/artifacts/${repo}/upload`, {});
       if (!initResponse.ok) throw new Error('Failed to initialize upload');
       
-      const location = initResponse.headers.get('Location');
-      const uploadEndpoint = location;
+      const uploadEndpoint = initResponse.headers.get('Location');
       if (!uploadEndpoint) throw new Error('Invalid upload location');
   
       // UPLOADING 10MB CHUNKS FOR BETTER STABILITY
@@ -107,7 +130,6 @@ async function uploadArtifact(repo: string, file: File, version: string, path: s
   
       // CLEAR PROGRESS AND REFRESH ARTIFACTS
       delete state.uploadProgress[uploadId];
-      await fetchArtifacts(repo);
       
     } catch (err) {
       delete state.uploadProgress[uploadId];
@@ -180,10 +202,13 @@ export const artifacts = {
     get error() { return state.error },
     get currentRepo() { return state.currentRepo },
     set currentRepo(repo: ArtifactRepository | null) { state.currentRepo = repo },
-    get searchTerm() { return state.searchTerm },
-    set searchTerm(term: string) { state.searchTerm = term },
+    get repoSearchTerm() { return state.repoSearchTerm },
+    set repoSearchTerm(term: string) { state.repoSearchTerm = term },
+    get fileSearchTerm() { return state.fileSearchTerm },
+    set fileSearchTerm(term: string) { state.fileSearchTerm = term },
     get uploadProgress() { return state.uploadProgress },
-    get filtered() { return filteredRepositories() },
+    get filteredRepos() { return filteredRepositories() },
+    get filteredArtifacts() { return filteredArtifacts() },
 
     // ACTIONS
     fetchRepositories,

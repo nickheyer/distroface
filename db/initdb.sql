@@ -88,3 +88,41 @@ INSERT INTO groups (name, description, roles, scope) VALUES
 -- Create default admin user with password 'admin'
 INSERT INTO users (username, password, groups) VALUES 
 ('admin', '$2b$12$t.owjcZ9NU85Ikgxo/4gMu6zBOAo608pmYeKOlOuUb6RMjgjKgXXa', '["admins"]');
+
+-- Default settings --
+INSERT INTO settings (key, value) VALUES 
+('artifacts', '{
+    "retention": {
+        "enabled": false,
+        "maxVersions": 5,
+        "maxAge": 30,
+        "excludeLatest": true
+    },
+    "storage": {
+        "maxFileSize": 1024,
+        "allowedTypes": ["*/*"],
+        "compressionEnabled": true
+    },
+    "properties": {
+        "required": ["version", "build", "branch"],
+        "indexed": ["version", "build", "branch", "commit"]
+    },
+    "search": {
+        "maxResults": 100,
+        "defaultSort": "created",
+        "defaultOrder": "desc"
+    }
+}'),
+('registry', '{
+    "cleanup": {
+        "enabled": false,
+        "maxAge": 90,
+        "unusedOnly": true
+    },
+    "proxy": {
+        "enabled": false,
+        "remoteUrl": "",
+        "cacheEnabled": true,
+        "cacheMaxAge": 24
+    }
+}');

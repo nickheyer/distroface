@@ -11,6 +11,15 @@ export interface AuthResponse {
     issued_at: string;
 }
 
+export interface Role {
+  name: string;
+  description: string;
+  permissions: Array<{
+      action: string;
+      resource: string;
+  }>;
+}
+
 // STATE
 const authState = $state({
     token: null as string | null,
