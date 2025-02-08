@@ -221,17 +221,6 @@
       </div>
     </div>
   </div>
-  <div class="bg-white shadow sm:rounded-lg">
-      <div class="px-4 py-5 sm:p-6">
-          <h3 class="text-base font-semibold leading-6 text-gray-900">
-              Welcome to DistroFace Registry
-          </h3>
-          <div class="mt-2 max-w-xl text-sm text-gray-500">
-              <p>You are logged in as {auth.user.username}</p>
-              <p class="mt-2">Your groups: {auth.user.groups.join(", ")}</p>
-          </div>
-      </div>
-  </div>
 {:else}
   <div class="text-center">
       Redirecting to login...
