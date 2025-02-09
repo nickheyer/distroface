@@ -1,68 +1,94 @@
-BINARY=distroface
-GO=go
-GOBUILD=$(GO) build
-GOCLEAN=$(GO) clean
-GOTEST=$(GO) test
-GOGET=$(GO) get
+# DISTROFACE MAKE
+# RUN 'make dev' FOR LOCAL INSTANCE
+# RUN 'make prod' FOR LOCAL PROD INSTANCE W/O VITE PROXY
+# RUN 'make clean' TO DELETE FILES
 
-NPM=npm
-CMD_PATH=./cmd
-ALL_PACKAGES=$(shell go list ./...)
-WEB_DIR=./web
-DEV_ROOT_DIR=/tmp/registry
+SHELL := /bin/sh
+BINARY        ?= distroface
+CMD_PATH      ?= ./cmd
+WEB_DIR       ?= ./web
+CONFIG_FILE   ?= config.yml
 
-.PHONY: all build test clean run deps dev build-ui install-ui init-db prod
+# TOOLS
+GO            ?= go
+NPM           ?= npm
+YQ            ?= yq  # YQ (YAML FLAVORED JQ - NEEDS TO BE INSTALLED)
 
-all: clean build
+# DB PATH IS PARSED FROM CONFIG.YML W/ YQ
+STORAGE_ROOT  := $(shell $(YQ) -r '.storage.root_directory' $(CONFIG_FILE) 2>/dev/null || echo registry)
+DB_PATH       := $(shell $(YQ) -r '.database.path' $(CONFIG_FILE) 2>/dev/null || echo registry.db)
+GOBUILD       = $(GO) build
+GOCLEAN       = $(GO) clean
+GOTEST        = $(GO) test
+ALL_PACKAGES  = $(shell go list ./...)
 
-# PRODUCTION BUILD
-build: 
-	# BUILD FRONTEND
+.PHONY: all build test clean dev run dev-backend dev-frontend deps format prod
+all: build
+
+## -----------------------
+## PROD
+## -----------------------
+build:
+	@echo "Building web frontend..."
 	cd $(WEB_DIR) && $(NPM) install && $(NPM) run build
-	# BUILD BACKEND
+	@echo "Building Go backend..."
 	$(GOBUILD) -o $(BINARY) $(CMD_PATH)
 
-test:
-	$(GOTEST) $(ALL_PACKAGES)
-
-clean:
-	$(GOCLEAN)
-	rm -rf $(WEB_DIR)/dist $(DEV_ROOT_DIR) $(BINARY) registry.db
-	find . -name ".DS_Store" -delete
-	make init-db
-
-init-db:
-	sqlite3 registry.db < ./db/schema.sql
-	sqlite3 registry.db < ./db/initdb.sql
-
-# DEVELOPMENT MODE
-dev: clean
-	make -j 2 dev-backend dev-frontend
-
-# DEV WITHOUT CLEAN
-run-frontend:
-	cd $(WEB_DIR) && $(NPM) run dev
-
-run-backend:
-	GO_ENV=development $(GO) run $(CMD_PATH)/main.go
-
-run:
-	make -j 2 run-backend run-frontend
-
-dev-backend: init-db
-	GO_ENV=development $(GO) run $(CMD_PATH)/main.go
-
-dev-frontend:
-	cd $(WEB_DIR) && $(NPM) install && $(NPM) run dev
-
-# PRODUCTION MODE
 prod: build
+	@echo "Starting $(BINARY) in production mode..."
 	GO_ENV=production ./$(BINARY)
 
-deps:
-	$(GO) mod tidy
-	cd $(WEB_DIR) && $(NPM) install
+## -----------------------
+## TEST, LINT, AND FORMATTING
+## -----------------------
+test:
+	$(GOTEST) $(ALL_PACKAGES)
 
 format:
 	gofmt -s -w .
 	cd $(WEB_DIR) && $(NPM) run format
+
+## -----------------------
+## CLEANING (FOR DEV)
+## -----------------------
+clean:
+	@echo "Cleaning build artifacts..."
+	$(GOCLEAN)
+	rm -rf $(WEB_DIR)/dist $(BINARY) $(STORAGE_ROOT) $(DB_PATH)
+	find . -name ".DS_Store" -delete 
+
+
+## -----------------------
+## DEV
+## -----------------------
+dev: clean
+	@echo "Starting dev mode (frontend + backend in parallel)..."
+	$(MAKE) -j 2 dev-backend dev-frontend
+
+run:
+	@echo "Running backend + frontend at once..."
+	$(MAKE) -j 2 run-backend run-frontend
+
+dev-backend:
+	@echo "Starting backend in development mode with DB_PATH=$(DB_PATH)..."
+	GO_ENV=development $(GO) run $(CMD_PATH)/main.go
+
+dev-frontend:
+	@echo "Starting frontend (SvelteKit dev server)..."
+	cd $(WEB_DIR) && $(NPM) install && $(NPM) run dev
+
+run-backend:
+	@echo "Running backend with existing DB (no init)..."
+	GO_ENV=development $(GO) run $(CMD_PATH)/main.go
+
+run-frontend:
+	cd $(WEB_DIR) && $(NPM) run dev
+
+## -----------------------
+## DEPENDENCIES
+## -----------------------
+deps:
+	@echo "Tidying Go modules and installing NPM modules..."
+	$(GO) mod tidy
+	cd $(WEB_DIR) && $(NPM) install
+

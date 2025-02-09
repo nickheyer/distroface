@@ -1,20 +1,24 @@
+storage:
+  root_directory: "~/.distroface/data"
+
 server:
   port: "8668"
   domain: "registry.localdomain"
-  rsa_key_file: "/tmp/registry_auth.key"
-  cert_bundle: "/tmp/registry_auth.crt"
-
-storage:
-  root_directory: "/tmp/registry"
+  rsa_key_file: "~/.distroface/certs/distro_auth.key"
+  cert_bundle: "~/.distroface/certs/distro_auth.crt"
 
 database:
-  path: "./registry.db"
+  path: "~/.distroface/db/distro.db"
 
 auth:
   realm: "http://registry.localdomain:8668/auth/token"
   service: "registry.localdomain:8668"
   issuer: "registry-auth-server"
 
-artifacts:
-  enabled: true
-  max_upload_size: "5G"
+init:
+  drop: true # SET VIA ENV TO DROP ALL TABLES ON INIT
+  roles: true
+  groups: true
+  user: true
+  username: admin
+  password: admin

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,8 +15,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"github.com/nickheyer/distroface/internal/config"
 	"github.com/nickheyer/distroface/internal/constants"
+	"github.com/nickheyer/distroface/internal/logging"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"github.com/opencontainers/go-digest"
@@ -25,25 +24,25 @@ import (
 
 type RepositoryHandler struct {
 	repo   repository.Repository
-	config *config.Config
-	logger *log.Logger
+	config *models.Config
+	log    *logging.LogService
 }
 
-func NewRepositoryHandler(repo repository.Repository, cfg *config.Config) *RepositoryHandler {
+func NewRepositoryHandler(repo repository.Repository, cfg *models.Config, log *logging.LogService) *RepositoryHandler {
 	return &RepositoryHandler{
 		repo:   repo,
 		config: cfg,
-		logger: log.New(os.Stdout, "REGISTRY: ", log.LstdFlags),
+		log:    log,
 	}
 }
 
 func (h *RepositoryHandler) ListRepositories(w http.ResponseWriter, r *http.Request) {
 	username := r.Context().Value(constants.UsernameKey).(string)
-	h.logger.Printf("Listing repositories for user: %s", username)
+	h.log.Printf("Listing repositories for user: %s", username)
 
 	metadata, err := h.repo.ListImageMetadata(username)
 	if err != nil {
-		h.logger.Printf("Failed to list repositories: %v", err)
+		h.log.Printf("Failed to list repositories: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -112,7 +111,7 @@ func (h *RepositoryHandler) ListRepositories(w http.ResponseWriter, r *http.Requ
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(repositories); err != nil {
-		h.logger.Printf("Failed to encode response: %v", err)
+		h.log.Printf("Failed to encode response: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -125,7 +124,7 @@ func (h *RepositoryHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	tag := vars["tag"]
 	username := r.Context().Value(constants.UsernameKey).(string)
 
-	h.logger.Printf("Deleting tag %s from repository %s by user %s", tag, name, username)
+	h.log.Printf("Deleting tag %s from repository %s by user %s", tag, name, username)
 
 	// GET TAG'S MANIFEST DIGEST
 	tagLinkPath := filepath.Join(
@@ -145,7 +144,7 @@ func (h *RepositoryHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "TAG NOT FOUND", http.StatusNotFound)
 			return
 		}
-		h.logger.Printf("Failed to read tag link: %v", err)
+		h.log.Printf("Failed to read tag link: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -155,27 +154,27 @@ func (h *RepositoryHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 	// REMOVE TAG DIRECTORY
 	tagDir := filepath.Dir(filepath.Dir(tagLinkPath))
 	if err := os.RemoveAll(tagDir); err != nil {
-		h.logger.Printf("Failed to remove tag directory: %v", err)
+		h.log.Printf("Failed to remove tag directory: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
 
 	// CHECK FOR REMAINING TAGS
 	if hasRemainingTags, err := h.checkRemainingTags(name, manifestDigest); err != nil {
-		h.logger.Printf("Error checking remaining tags: %v", err)
+		h.log.Printf("Error checking remaining tags: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	} else if !hasRemainingTags {
 		// PERFORM FULL CLEANUP FOR LAST TAG
 		if err := h.performFullCleanup(name, manifestDigest); err != nil {
-			h.logger.Printf("Error during full cleanup: %v", err)
+			h.log.Printf("Error during full cleanup: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
 	} else {
 		// UPDATE METADATA TO REMOVE JUST THIS TAG
 		if err := h.updateImageMetadata(manifestDigest, tag); err != nil {
-			h.logger.Printf("Error updating image metadata: %v", err)
+			h.log.Printf("Error updating image metadata: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
@@ -189,12 +188,12 @@ func (h *RepositoryHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 	name := vars["name"]
 	username := r.Context().Value(constants.UsernameKey).(string)
 
-	h.logger.Printf("Listing tags for repository %s by user %s", name, username)
+	h.log.Printf("Listing tags for repository %s by user %s", name, username)
 
 	// GET ALL METADATA FOR REPO
 	metadata, err := h.repo.ListImageMetadata(username)
 	if err != nil {
-		h.logger.Printf("Failed to get repository metadata: %v", err)
+		h.log.Printf("Failed to get repository metadata: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -226,7 +225,7 @@ func (h *RepositoryHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		h.logger.Printf("Failed to encode tags response: %v", err)
+		h.log.Printf("Failed to encode tags response: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -239,7 +238,7 @@ func (h *RepositoryHandler) HandleManifest(w http.ResponseWriter, r *http.Reques
 	reference := vars["reference"]
 	username := r.Context().Value(constants.UsernameKey).(string)
 
-	h.logger.Printf("Handling manifest request: method=%s repo=%s ref=%s user=%s",
+	h.log.Printf("Handling manifest request: method=%s repo=%s ref=%s user=%s",
 		r.Method, name, reference, username)
 
 	switch r.Method {
@@ -256,14 +255,14 @@ func (h *RepositoryHandler) getManifest(w http.ResponseWriter, r *http.Request, 
 	// RESOLVE MANIFEST PATH
 	manifestPath := h.resolveManifestPath(name, reference)
 	if manifestPath == "" {
-		h.logger.Printf("Failed to resolve manifest path for %s:%s", name, reference)
+		h.log.Printf("Failed to resolve manifest path for %s:%s", name, reference)
 		http.Error(w, "MANIFEST NOT FOUND", http.StatusNotFound)
 		return
 	}
 
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
-		h.logger.Printf("Failed to read manifest at %s: %v", manifestPath, err)
+		h.log.Printf("Failed to read manifest at %s: %v", manifestPath, err)
 		http.Error(w, "MANIFEST NOT FOUND", http.StatusNotFound)
 		return
 	}
@@ -273,7 +272,7 @@ func (h *RepositoryHandler) getManifest(w http.ResponseWriter, r *http.Request, 
 		MediaType string `json:"mediaType"`
 	}
 	if err := json.Unmarshal(manifest, &manifestObj); err != nil {
-		h.logger.Printf("Failed to parse manifest JSON: %v", err)
+		h.log.Printf("Failed to parse manifest JSON: %v", err)
 		http.Error(w, "INVALID MANIFEST", http.StatusBadRequest)
 		return
 	}
@@ -294,7 +293,7 @@ func (h *RepositoryHandler) getManifest(w http.ResponseWriter, r *http.Request, 
 func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, name, reference, username string) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		h.logger.Printf("Failed to read manifest body: %v", err)
+		h.log.Printf("Failed to read manifest body: %v", err)
 		http.Error(w, "INVALID REQUEST", http.StatusBadRequest)
 		return
 	}
@@ -319,7 +318,7 @@ func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, 
 	}
 
 	if err := json.Unmarshal(body, &manifestObj); err != nil {
-		h.logger.Printf("Failed to parse manifest JSON: %v", err)
+		h.log.Printf("Failed to parse manifest JSON: %v", err)
 		http.Error(w, "INVALID MANIFEST", http.StatusBadRequest)
 		return
 	}
@@ -340,14 +339,14 @@ func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, 
 		"revisions",
 	)
 	if err := os.MkdirAll(manifestDir, 0755); err != nil {
-		h.logger.Printf("Failed to create manifest directory: %v", err)
+		h.log.Printf("Failed to create manifest directory: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
 
 	manifestPath := filepath.Join(manifestDir, manifestDigest.String())
 	if err := os.WriteFile(manifestPath, body, 0644); err != nil {
-		h.logger.Printf("Failed to write manifest: %v", err)
+		h.log.Printf("Failed to write manifest: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -369,7 +368,7 @@ func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, 
 		metadata.Size = totalSize
 		metadata.UpdatedAt = time.Now()
 		if err := h.repo.UpdateImageMetadata(metadata); err != nil {
-			h.logger.Printf("Failed to update image metadata: %v", err)
+			h.log.Printf("Failed to update image metadata: %v", err)
 		}
 	} else {
 		// CREATE NEW METADATA
@@ -384,7 +383,7 @@ func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, 
 			UpdatedAt: time.Now(),
 		}
 		if err := h.repo.CreateImageMetadata(metadata); err != nil {
-			h.logger.Printf("Failed to create image metadata: %v", err)
+			h.log.Printf("Failed to create image metadata: %v", err)
 		}
 	}
 
@@ -400,14 +399,14 @@ func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, 
 			"current",
 		)
 		if err := os.MkdirAll(tagDir, 0755); err != nil {
-			h.logger.Printf("Failed to create tag directory: %v", err)
+			h.log.Printf("Failed to create tag directory: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
 
 		linkPath := filepath.Join(tagDir, "link")
 		if err := os.WriteFile(linkPath, []byte(manifestDigest.String()), 0644); err != nil {
-			h.logger.Printf("Failed to write tag link: %v", err)
+			h.log.Printf("Failed to write tag link: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
@@ -424,7 +423,7 @@ func (h *RepositoryHandler) DeleteManifest(w http.ResponseWriter, r *http.Reques
 	reference := vars["reference"]
 	username := r.Context().Value(constants.UsernameKey).(string)
 
-	h.logger.Printf("Deleting manifest %s from repository %s by user %s", reference, name, username)
+	h.log.Printf("Deleting manifest %s from repository %s by user %s", reference, name, username)
 
 	// RESOLVE MANIFEST PATH
 	manifestPath := h.resolveManifestPath(name, reference)
@@ -435,7 +434,7 @@ func (h *RepositoryHandler) DeleteManifest(w http.ResponseWriter, r *http.Reques
 
 	// RM MANIFEST FILE
 	if err := os.Remove(manifestPath); err != nil {
-		h.logger.Printf("Failed to delete manifest file: %v", err)
+		h.log.Printf("Failed to delete manifest file: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -453,7 +452,7 @@ func (h *RepositoryHandler) DeleteManifest(w http.ResponseWriter, r *http.Reques
 			"link",
 		)
 		if err := os.RemoveAll(filepath.Dir(tagLinkPath)); err != nil {
-			h.logger.Printf("Failed to remove tag directory: %v", err)
+			h.log.Printf("Failed to remove tag directory: %v", err)
 			// DONT FAIL ON FAILURE TO CLEANUP TAG
 		}
 	}
@@ -471,13 +470,13 @@ func (h *RepositoryHandler) DeleteManifest(w http.ResponseWriter, r *http.Reques
 		if len(newTags) == 0 {
 			// IF NO TAGS, DELETE METADATA
 			if err := h.repo.DeleteImageMetadata(metadata.ID); err != nil {
-				h.logger.Printf("Failed to delete image metadata: %v", err)
+				h.log.Printf("Failed to delete image metadata: %v", err)
 			}
 		} else {
 			// UPDATE REMAINING TAGS
 			metadata.Tags = newTags
 			if err := h.repo.UpdateImageMetadata(metadata); err != nil {
-				h.logger.Printf("Failed to update image metadata: %v", err)
+				h.log.Printf("Failed to update image metadata: %v", err)
 			}
 		}
 	}
@@ -494,7 +493,7 @@ func (h *RepositoryHandler) InitiateBlobUpload(w http.ResponseWriter, r *http.Re
 	// CREATE UPLOAD DIR
 	uploadDir := filepath.Join(h.config.Storage.RootDirectory, "_uploads")
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		h.logger.Printf("Failed to create upload directory: %v", err)
+		h.log.Printf("Failed to create upload directory: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -502,7 +501,7 @@ func (h *RepositoryHandler) InitiateBlobUpload(w http.ResponseWriter, r *http.Re
 	// CREATE EMPTY FILE
 	uploadPath := filepath.Join(uploadDir, uploadID)
 	if _, err := os.Create(uploadPath); err != nil {
-		h.logger.Printf("Failed to create upload file: %v", err)
+		h.log.Printf("Failed to create upload file: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -523,7 +522,7 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	// OPEN FILE IN APPEND MODE
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		h.logger.Printf("Failed to open upload file: %v", err)
+		h.log.Printf("Failed to open upload file: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -532,7 +531,7 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	// GET CURRENT SIZE
 	info, err := file.Stat()
 	if err != nil {
-		h.logger.Printf("Failed to stat file: %v", err)
+		h.log.Printf("Failed to stat file: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -541,7 +540,7 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	// COPY DATA IN CHUNKS
 	written, err := io.Copy(file, r.Body)
 	if err != nil {
-		h.logger.Printf("Failed to write data: %v", err)
+		h.log.Printf("Failed to write data: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -560,7 +559,7 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 	expectedDigest := r.URL.Query().Get("digest")
 
 	if expectedDigest == "" {
-		h.logger.Printf("Missing digest parameter")
+		h.log.Printf("Missing digest parameter")
 		http.Error(w, "MISSING DIGEST", http.StatusBadRequest)
 		return
 	}
@@ -570,7 +569,7 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 	// CREATE OR OPEN FILE
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
-		h.logger.Printf("Failed to open upload file: %v", err)
+		h.log.Printf("Failed to open upload file: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -582,28 +581,28 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 		// TEEREADER
 		reader := io.TeeReader(r.Body, hash)
 		if _, err := io.Copy(file, reader); err != nil {
-			h.logger.Printf("Failed to write upload data: %v", err)
+			h.log.Printf("Failed to write upload data: %v", err)
 			http.Error(w, "FAILED TO WRITE DATA", http.StatusInternalServerError)
 			return
 		}
 	} else {
 		// READ EXISTING FILE HASH IF NO BODY
 		if err := file.Close(); err != nil {
-			h.logger.Printf("Failed to close file for reading: %v", err)
+			h.log.Printf("Failed to close file for reading: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
 
 		file, err = os.Open(uploadPath)
 		if err != nil {
-			h.logger.Printf("Failed to open file for reading: %v", err)
+			h.log.Printf("Failed to open file for reading: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
 		defer file.Close()
 
 		if _, err := io.Copy(hash, file); err != nil {
-			h.logger.Printf("Failed to read file for hash: %v", err)
+			h.log.Printf("Failed to read file for hash: %v", err)
 			http.Error(w, "FAILED TO READ DATA", http.StatusInternalServerError)
 			return
 		}
@@ -612,7 +611,7 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 	actualDigest := fmt.Sprintf("sha256:%x", hash.Sum(nil))
 
 	if actualDigest != expectedDigest {
-		h.logger.Printf("Digest mismatch: expected=%s actual=%s", expectedDigest, actualDigest)
+		h.log.Printf("Digest mismatch: expected=%s actual=%s", expectedDigest, actualDigest)
 		http.Error(w, "DIGEST MISMATCH", http.StatusBadRequest)
 		return
 	}
@@ -624,7 +623,7 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 		"sha256",
 	)
 	if err := os.MkdirAll(blobDir, 0755); err != nil {
-		h.logger.Printf("Failed to create blob directory: %v", err)
+		h.log.Printf("Failed to create blob directory: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -634,7 +633,7 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 	// TRY RENAME, FALLBACK TO COPY
 	if err := os.Rename(uploadPath, blobPath); err != nil {
 		if err := copyFile(uploadPath, blobPath); err != nil {
-			h.logger.Printf("Failed to copy blob: %v", err)
+			h.log.Printf("Failed to copy blob: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
@@ -651,14 +650,14 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 		strings.TrimPrefix(expectedDigest, "sha256:"),
 	)
 	if err := os.MkdirAll(layerLinkDir, 0755); err != nil {
-		h.logger.Printf("Failed to create layer link directory: %v", err)
+		h.log.Printf("Failed to create layer link directory: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
 
 	linkPath := filepath.Join(layerLinkDir, "link")
 	if err := os.WriteFile(linkPath, []byte(expectedDigest), 0644); err != nil {
-		h.logger.Printf("Failed to write layer link: %v", err)
+		h.log.Printf("Failed to write layer link: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -685,7 +684,7 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 	)
 
 	if _, err := os.Stat(layerLink); err != nil {
-		h.logger.Printf("Blob not found in repository: %s", digest)
+		h.log.Printf("Blob not found in repository: %s", digest)
 		http.Error(w, "BLOB NOT FOUND", http.StatusNotFound)
 		return
 	}
@@ -699,7 +698,7 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 
 	blob, err := os.Open(blobPath)
 	if err != nil {
-		h.logger.Printf("Failed to open blob: %v", err)
+		h.log.Printf("Failed to open blob: %v", err)
 		http.Error(w, "BLOB NOT FOUND", http.StatusNotFound)
 		return
 	}
@@ -707,7 +706,7 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 
 	info, err := blob.Stat()
 	if err != nil {
-		h.logger.Printf("Failed to get blob info: %v", err)
+		h.log.Printf("Failed to get blob info: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -746,11 +745,11 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
 			strings.Contains(err.Error(), "broken pipe") {
 			// LOG DEBUG
-			h.logger.Printf("Client disconnected during blob transfer: %v", err)
+			h.log.Printf("Client disconnected during blob transfer: %v", err)
 			return
 		}
 		// LOG ERR
-		h.logger.Printf("Unexpected error streaming blob: %v", err)
+		h.log.Printf("Unexpected error streaming blob: %v", err)
 	}
 }
 
@@ -760,7 +759,7 @@ func (h *RepositoryHandler) DeleteBlob(w http.ResponseWriter, r *http.Request) {
 	digest := vars["digest"]
 	username := r.Context().Value(constants.UsernameKey).(string)
 
-	h.logger.Printf("Deleting blob %s from repository %s by user %s", digest, name, username)
+	h.log.Printf("Deleting blob %s from repository %s by user %s", digest, name, username)
 
 	// CHECK IF BLOB IS REFERENCED
 	layerLink := filepath.Join(
@@ -778,14 +777,14 @@ func (h *RepositoryHandler) DeleteBlob(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "BLOB NOT FOUND", http.StatusNotFound)
 			return
 		}
-		h.logger.Printf("Failed to check layer link: %v", err)
+		h.log.Printf("Failed to check layer link: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
 
 	// RM LAYER LINK IF IT EXISTS
 	if err := os.RemoveAll(filepath.Dir(layerLink)); err != nil {
-		h.logger.Printf("Failed to remove layer link: %v", err)
+		h.log.Printf("Failed to remove layer link: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -805,7 +804,7 @@ func (h *RepositoryHandler) DeleteBlob(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		h.logger.Printf("Failed to check blob references: %v", err)
+		h.log.Printf("Failed to check blob references: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -819,7 +818,7 @@ func (h *RepositoryHandler) DeleteBlob(w http.ResponseWriter, r *http.Request) {
 			strings.TrimPrefix(digest, "sha256:"),
 		)
 		if err := os.Remove(blobPath); err != nil && !os.IsNotExist(err) {
-			h.logger.Printf("Failed to delete blob file: %v", err)
+			h.log.Printf("Failed to delete blob file: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
@@ -857,7 +856,7 @@ func (h *RepositoryHandler) resolveManifestPath(name, reference string) string {
 
 		digest, err := os.ReadFile(tagLinkPath)
 		if err != nil {
-			h.logger.Printf("Failed to read tag link at %s: %v", tagLinkPath, err)
+			h.log.Printf("Failed to read tag link at %s: %v", tagLinkPath, err)
 			return ""
 		}
 
@@ -873,7 +872,7 @@ func (h *RepositoryHandler) resolveManifestPath(name, reference string) string {
 
 	// DOES MANIFEST EXIST
 	if _, err := os.Stat(manifestPath); err != nil {
-		h.logger.Printf("Manifest not found at %s: %v", manifestPath, err)
+		h.log.Printf("Manifest not found at %s: %v", manifestPath, err)
 		return ""
 	}
 
@@ -989,7 +988,7 @@ func (h *RepositoryHandler) performFullCleanup(name, manifestDigest string) erro
 			strings.TrimPrefix(digest, "sha256:"),
 		)
 		if err := os.RemoveAll(layerLinkDir); err != nil {
-			h.logger.Printf("Warning: failed to remove layer link directory: %v", err)
+			h.log.Printf("Warning: failed to remove layer link directory: %v", err)
 		}
 
 		// RM BLOB IF NOT REFERENCED ELSEWHERE
@@ -1001,7 +1000,7 @@ func (h *RepositoryHandler) performFullCleanup(name, manifestDigest string) erro
 				strings.TrimPrefix(digest, "sha256:"),
 			)
 			if err := os.Remove(blobPath); err != nil && !os.IsNotExist(err) {
-				h.logger.Printf("Warning: failed to remove blob: %v", err)
+				h.log.Printf("Warning: failed to remove blob: %v", err)
 			}
 		}
 	}
@@ -1080,19 +1079,19 @@ func (h *RepositoryHandler) UpdateImageVisibility(w http.ResponseWriter, r *http
 	// CHECK OWNERSHIP USING THE DIGEST/SHA ID
 	metadata, err := h.repo.GetImageMetadata(req.ID)
 	if err != nil {
-		h.logger.Printf("Failed to get image metadata: %v", err)
+		h.log.Printf("Failed to get image metadata: %v", err)
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 
 	if metadata.Owner != username {
-		h.logger.Printf("User %s not authorized for image %s", username, req.ID)
+		h.log.Printf("User %s not authorized for image %s", username, req.ID)
 		http.Error(w, "Not authorized", http.StatusForbidden)
 		return
 	}
 
 	if err := h.repo.UpdateImageVisibility(req.ID, req.Private); err != nil {
-		h.logger.Printf("Failed to update visibility: %v", err)
+		h.log.Printf("Failed to update visibility: %v", err)
 		http.Error(w, "Failed to update visibility", http.StatusInternalServerError)
 		return
 	}

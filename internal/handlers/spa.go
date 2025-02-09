@@ -5,13 +5,13 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nickheyer/distroface/internal/config"
+	"github.com/nickheyer/distroface/internal/models"
 )
 
 type SPAHandler struct {
 	StaticPath string
 	IndexPath  string
-	config     *config.Config
+	config     *models.Config
 }
 
 // MIME TYPES MAP
@@ -25,7 +25,7 @@ var MimeTypes = map[string]string{
 	".svg":  "image/svg+xml",
 }
 
-func NewSPAHandler(cfg *config.Config, staticPath, indexPath string) SPAHandler {
+func NewSPAHandler(cfg *models.Config, staticPath, indexPath string) SPAHandler {
 	return SPAHandler{
 		StaticPath: staticPath,
 		IndexPath:  indexPath,

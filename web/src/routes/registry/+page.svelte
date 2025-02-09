@@ -14,6 +14,8 @@
     import { auth, api } from "$lib/stores/auth.svelte";
     import { formatDistance } from "date-fns";
     import type { ImageRepository, VisibilityUpdateRequest } from '$lib/types/registry.svelte';
+    import { showToast } from "$lib/stores/toast.svelte";
+    import Toast from "$lib/components/Toast.svelte";
 
     let error = $state<string | null>(null);
     let deleteConfirmation = $state<{
@@ -61,6 +63,13 @@
         }
     });
 
+    $effect(() => {
+        if (error) {
+            showToast(error, 'error');
+            error = null;
+        }
+    })
+
     async function handleDelete() {
         if (!deleteConfirmation) return;
 
@@ -107,17 +116,7 @@
     </div>
 
     <!-- ERROR STATE -->
-    {#if registry.error}
-        <div class="rounded-lg bg-red-50 p-4">
-            <div class="flex">
-                <AlertCircle class="h-5 w-5 text-red-400" />
-                <div class="ml-3">
-                    <h3 class="text-sm font-medium text-red-800">Error</h3>
-                    <p class="mt-1 text-sm text-red-700">{registry.error}</p>
-                </div>
-            </div>
-        </div>
-    {/if}
+    <Toast></Toast>
 
     <!-- LOADING STATE -->
     {#if registry.loading}

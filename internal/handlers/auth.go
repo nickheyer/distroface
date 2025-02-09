@@ -7,24 +7,28 @@ import (
 	"strings"
 
 	"github.com/nickheyer/distroface/internal/auth"
-	"github.com/nickheyer/distroface/internal/config"
+	"github.com/nickheyer/distroface/internal/logging"
+	"github.com/nickheyer/distroface/internal/models"
+	"go.uber.org/zap"
 )
 
 type AuthHandler struct {
-	config *config.Config
+	config *models.Config
 	auth   auth.AuthService
+	log    *logging.LogService
 }
 
-func NewAuthHandler(cfg *config.Config, authService auth.AuthService) *AuthHandler {
+func NewAuthHandler(cfg *models.Config, authService auth.AuthService, log *logging.LogService) *AuthHandler {
 	return &AuthHandler{
 		config: cfg,
 		auth:   authService,
+		log:    log,
 	}
 }
 
 // REGISTRY V2 CHECK
 func (h *AuthHandler) HandleV2Check(w http.ResponseWriter, r *http.Request) {
-	fmt.Println("V2 HANDLE CHECK RECIEVED!")
+	h.log.Info("V2 HANDLE CHECK RECIEVED")
 	authHeader := r.Header.Get("Authorization")
 
 	if authHeader == "" {
@@ -38,6 +42,7 @@ func (h *AuthHandler) HandleV2Check(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// VALIDATE TOKEN
+	h.log.Info("VALIDATING BEARER TOKEN")
 	tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 	if _, err := h.auth.ValidateToken(r.Context(), tokenString); err != nil {
 		w.Header().Set("WWW-Authenticate",
@@ -55,21 +60,23 @@ func (h *AuthHandler) HandleV2Check(w http.ResponseWriter, r *http.Request) {
 
 // HANDLE REGISTRY AUTH TOKEN REQUEST
 func (h *AuthHandler) HandleRegistryAuth(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("REGISTRY AUTH REQUEST: METHOD=%s CONTENT-TYPE=%s\n",
-		r.Method, r.Header.Get("Content-Type"))
+	h.log.Info("REGISTRY AUTH REQUEST",
+		zap.String("METHOD", r.Method),
+		zap.Any("CONTENT TYPE", r.Header.Get("Content-Type")))
 
 	var username, password, scope, service string
 
 	// HANDLE FORM POST
 	if r.Method == "POST" {
 		if err := r.ParseForm(); err != nil {
-			fmt.Printf("ERROR PARSING FORM: %v\n", err)
+			h.log.Error("ERROR PARSING FORM", err)
 			http.Error(w, "INVALID FORM DATA", http.StatusBadRequest)
 			return
 		}
 
 		// DUMP FORM DATA FOR DEBUGGING
-		fmt.Printf("FORM DATA: %+v\n", r.PostForm)
+		h.log.Debug("REGISTRY AUTH FORM",
+			zap.Any("FORM DATA", r.PostForm))
 
 		username = r.PostForm.Get("username") // DOCKER SENDS username
 		password = r.PostForm.Get("password") // GET PASSWORD FROM FORM
@@ -93,8 +100,10 @@ func (h *AuthHandler) HandleRegistryAuth(w http.ResponseWriter, r *http.Request)
 		username = "anonymous"
 	}
 
-	fmt.Printf("PROCESSING AUTH REQUEST - USER=%s SCOPE=%s SERVICE=%s\n",
-		username, scope, service)
+	h.log.Debug("PROCESSING AUTH REQUEST",
+		zap.String("USER", username),
+		zap.String("SCOPE", scope),
+		zap.String("SERVICE", service))
 
 	// CREATE AUTH REQUEST
 	authReq := auth.AuthRequest{
@@ -108,7 +117,7 @@ func (h *AuthHandler) HandleRegistryAuth(w http.ResponseWriter, r *http.Request)
 	// AUTHENTICATE
 	response, err := h.auth.Authenticate(r.Context(), authReq)
 	if err != nil {
-		fmt.Printf("AUTH FAILED: %v\n", err)
+		h.log.Error("AUTH FAILED", err)
 		challenge := fmt.Sprintf(`Bearer realm="%s",service="%s"`,
 			h.config.Auth.Realm,
 			h.config.Auth.Service)
@@ -158,6 +167,7 @@ func (h *AuthHandler) HandleWebLogin(w http.ResponseWriter, r *http.Request) {
 	response, err := h.auth.Authenticate(r.Context(), authReq)
 	webResponse, ok := response.(*auth.WebAuthResponse)
 	if !ok || err != nil {
+		h.log.Error("ERROR CONVERTING WEB AUTH RESPONSE", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -173,12 +183,14 @@ func (h *AuthHandler) HandleTokenRefresh(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&refreshRequest); err != nil {
+		h.log.Error("INVALID REQUEST", err)
 		http.Error(w, "INVALID REQUEST", http.StatusBadRequest)
 		return
 	}
 
 	response, err := h.auth.RefreshToken(r.Context(), refreshRequest.RefreshToken)
 	if err != nil {
+		h.log.Error("INVALID REFRESH TOKEN", err)
 		http.Error(w, "INVALID REFRESH TOKEN", http.StatusUnauthorized)
 		return
 	}

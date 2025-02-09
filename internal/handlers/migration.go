@@ -46,28 +46,28 @@ type MigrationRequest struct {
 
 // EXTEND REPOSITORY HANDLER
 func (h *RepositoryHandler) MigrateImages(w http.ResponseWriter, r *http.Request) {
-	h.logger.Printf("Received migration request")
+	h.log.Printf("Received migration request")
 
 	// GET USERNAME FROM REQUEST CONTEXT
 	username := r.Context().Value(constants.UsernameKey).(string)
-	h.logger.Printf("Migration requested by user: %s", username)
+	h.log.Printf("Migration requested by user: %s", username)
 
 	var req MigrationRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.Printf("Failed to decode migration request: %v", err)
+		h.log.Printf("Failed to decode migration request: %v", err)
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	// VALIDATE REQUEST
 	if req.SourceRegistry == "" || len(req.Images) == 0 {
-		h.logger.Printf("Invalid request: source_registry=%s, image_count=%d",
+		h.log.Printf("Invalid request: source_registry=%s, image_count=%d",
 			req.SourceRegistry, len(req.Images))
 		http.Error(w, "Source registry and images are required", http.StatusBadRequest)
 		return
 	}
 
-	h.logger.Printf("Creating migration task for %d images from %s",
+	h.log.Printf("Creating migration task for %d images from %s",
 		len(req.Images), req.SourceRegistry)
 
 	// CREATE TASK
@@ -88,7 +88,7 @@ func (h *RepositoryHandler) MigrateImages(w http.ResponseWriter, r *http.Request
 		defer cancel() // Cleanup the context when done
 		defer func() {
 			if r := recover(); r != nil {
-				h.logger.Printf("Panic recovered in migration process: %v", r)
+				h.log.Printf("Panic recovered in migration process: %v", r)
 				task.Status = "failed"
 				task.Error = fmt.Sprintf("Internal error: %v", r)
 				h.updateMigrationTask(task)
@@ -98,7 +98,7 @@ func (h *RepositoryHandler) MigrateImages(w http.ResponseWriter, r *http.Request
 		h.processMigration(ctx, task, &req)
 	}()
 
-	h.logger.Printf("Migration task %s started", taskID)
+	h.log.Printf("Migration task %s started", taskID)
 
 	// RETURN TASK ID
 	w.Header().Set("Content-Type", "application/json")
@@ -126,8 +126,8 @@ func (h *RepositoryHandler) GetMigrationStatus(w http.ResponseWriter, r *http.Re
 }
 
 func (h *RepositoryHandler) processMigration(ctx context.Context, task *MigrationTask, req *MigrationRequest) {
-	h.logger.Printf("Starting migration process for task %s with %d images", task.ID, len(req.Images))
-	h.logger.Printf("Source registry: %s", req.SourceRegistry)
+	h.log.Printf("Starting migration process for task %s with %d images", task.ID, len(req.Images))
+	h.log.Printf("Source registry: %s", req.SourceRegistry)
 
 	task.Status = "running"
 	h.updateMigrationTask(task)
@@ -137,11 +137,11 @@ func (h *RepositoryHandler) processMigration(ctx context.Context, task *Migratio
 
 	// LOG CONTEXT STATE
 	deadline, hasDeadline := ctx.Deadline()
-	h.logger.Printf("Context state - Done: %v, Err: %v, Deadline: %v, HasDeadline: %v",
+	h.log.Printf("Context state - Done: %v, Err: %v, Deadline: %v, HasDeadline: %v",
 		ctx.Done() != nil, ctx.Err(), deadline, hasDeadline)
 
 	if ctx.Err() != nil {
-		h.logger.Printf("Context already has error before processing: %v", ctx.Err())
+		h.log.Printf("Context already has error before processing: %v", ctx.Err())
 		task.Status = "failed"
 		task.Error = fmt.Sprintf("Context error before processing: %v", ctx.Err())
 		h.updateMigrationTask(task)
@@ -149,17 +149,17 @@ func (h *RepositoryHandler) processMigration(ctx context.Context, task *Migratio
 	}
 
 	for i, img := range req.Images {
-		h.logger.Printf("Processing image %d/%d: %s", i+1, totalImages, img)
+		h.log.Printf("Processing image %d/%d: %s", i+1, totalImages, img)
 
 		select {
 		case <-ctx.Done():
-			h.logger.Printf("Context cancelled during migration of %s. Error: %v", img, ctx.Err())
+			h.log.Printf("Context cancelled during migration of %s. Error: %v", img, ctx.Err())
 			task.Status = "failed"
 			task.Error = fmt.Sprintf("Migration cancelled during %s: %v", img, ctx.Err())
 			h.updateMigrationTask(task)
 			return
 		default:
-			h.logger.Printf("Starting migration of image: %s", img)
+			h.log.Printf("Starting migration of image: %s", img)
 
 			// CREATE NEW CONTEXT WITH TIMEOUT FOR THIS IMAGE
 			imageCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -167,7 +167,7 @@ func (h *RepositoryHandler) processMigration(ctx context.Context, task *Migratio
 			cancel() // ALWAYS CANCEL CLEANUP
 
 			if err != nil {
-				h.logger.Printf("Failed to migrate image %s: %v", img, err)
+				h.log.Printf("Failed to migrate image %s: %v", img, err)
 				task.Status = "failed"
 				task.Error = fmt.Sprintf("Failed to migrate %s: %v", img, err)
 				h.updateMigrationTask(task)
@@ -176,14 +176,14 @@ func (h *RepositoryHandler) processMigration(ctx context.Context, task *Migratio
 
 			completedImages++
 			progress := float64(completedImages) / float64(totalImages) * 100
-			h.logger.Printf("Successfully migrated image %s. Progress: %.2f%%", img, progress)
+			h.log.Printf("Successfully migrated image %s. Progress: %.2f%%", img, progress)
 
 			task.Progress = progress
 			h.updateMigrationTask(task)
 		}
 	}
 
-	h.logger.Printf("Migration completed successfully. Total images processed: %d", completedImages)
+	h.log.Printf("Migration completed successfully. Total images processed: %d", completedImages)
 	task.Status = "completed"
 	task.EndTime = time.Now()
 	h.updateMigrationTask(task)
@@ -205,9 +205,9 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 	var ctxUsername string
 	if username, ok := ctx.Value(constants.UsernameKey).(string); ok {
 		ctxUsername = username
-		h.logger.Printf("Migrating image as user: %s", ctxUsername)
+		h.log.Printf("Migrating image as user: %s", ctxUsername)
 	} else {
-		h.logger.Printf("No username in context, using default")
+		h.log.Printf("No username in context, using default")
 		ctxUsername = "admin"
 	}
 
@@ -217,7 +217,7 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 		imagePath,
 		tag)
 
-	h.logger.Printf("Fetching manifest from: %s", sourceURL)
+	h.log.Printf("Fetching manifest from: %s", sourceURL)
 
 	// CREATE CUSTOM TRANSPORT
 	tr := &http.Transport{
@@ -255,14 +255,14 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 	// MAKE REQUEST
 	resp, err := client.Do(req)
 	if err != nil {
-		h.logger.Printf("Failed to fetch manifest from %s: %v", sourceURL, err)
+		h.log.Printf("Failed to fetch manifest from %s: %v", sourceURL, err)
 		return fmt.Errorf("failed to fetch manifest: %v", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		h.logger.Printf("Manifest fetch failed with status %d: %s", resp.StatusCode, string(body))
+		h.log.Printf("Manifest fetch failed with status %d: %s", resp.StatusCode, string(body))
 		return fmt.Errorf("manifest fetch failed with status %d", resp.StatusCode)
 	}
 
@@ -272,7 +272,7 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 		return fmt.Errorf("failed to read manifest: %v", err)
 	}
 
-	h.logger.Printf("Successfully fetched manifest for %s:%s", imagePath, tag)
+	h.log.Printf("Successfully fetched manifest for %s:%s", imagePath, tag)
 
 	// PARSE MANIFEST TO GET LAYERS
 	var manifestObj struct {
@@ -326,10 +326,10 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 		existingDigest, err := os.ReadFile(existingManifestPath)
 		if err == nil {
 			if string(existingDigest) == manifestDigest.String() {
-				h.logger.Printf("Tag %s already exists with same digest, skipping", tag)
+				h.log.Printf("Tag %s already exists with same digest, skipping", tag)
 				return nil
 			}
-			h.logger.Printf("Tag %s exists but digest differs, updating", tag)
+			h.log.Printf("Tag %s exists but digest differs, updating", tag)
 		}
 	}
 
@@ -338,7 +338,7 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 		return fmt.Errorf("failed to write manifest: %v", err)
 	}
 
-	h.logger.Printf("Stored manifest for %s:%s with digest %s", imagePath, tag, manifestDigest)
+	h.log.Printf("Stored manifest for %s:%s with digest %s", imagePath, tag, manifestDigest)
 
 	// CREATE SEMAPHORE FOR CONCURRENT DOWNLOADS
 	sem := make(chan struct{}, 5) // LIMIT TO 5 CONCURRENT DOWNLOADS
@@ -418,15 +418,15 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 	}
 
 	if err := h.repo.CreateImageMetadata(metadata); err != nil {
-		h.logger.Printf("Warning: failed to create image metadata: %v", err)
+		h.log.Printf("Warning: failed to create image metadata: %v", err)
 	}
 
-	h.logger.Printf("Successfully migrated image %s:%s", imagePath, tag)
+	h.log.Printf("Successfully migrated image %s:%s", imagePath, tag)
 	return nil
 }
 
 func (h *RepositoryHandler) pullAndStoreBlob(ctx context.Context, sourceRegistry, imagePath, digest, username, password string) error {
-	h.logger.Printf("Checking blob %s for image %s", digest, imagePath)
+	h.log.Printf("Checking blob %s for image %s", digest, imagePath)
 
 	// SPLIT DIGEST INTO ALGORITHM AND HASH
 	digestParts := strings.Split(digest, ":")
@@ -443,13 +443,13 @@ func (h *RepositoryHandler) pullAndStoreBlob(ctx context.Context, sourceRegistry
 	)
 
 	if _, err := os.Stat(blobPath); err == nil {
-		h.logger.Printf("Blob %s already exists, creating link", digest)
+		h.log.Printf("Blob %s already exists, creating link", digest)
 		// JUST CREATE THE LINK
 		return h.createBlobLink(imagePath, digest, digestParts[1])
 	}
 
 	// BLOB DOESN'T EXIST, PULL IT
-	h.logger.Printf("Pulling new blob %s", digest)
+	h.log.Printf("Pulling new blob %s", digest)
 
 	// BUILD BLOB URL
 	blobURL := fmt.Sprintf("https://%s/v2/%s/blobs/%s",

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { showToast } from '$lib/stores/toast.svelte';
+    import { showToast } from "$lib/stores/toast.svelte";
     import { auth } from "$lib/stores/auth.svelte";
     import { artifacts } from "$lib/stores/artifacts.svelte";
     import { page } from "$app/state";
@@ -12,14 +12,18 @@
         Edit,
         Loader2,
         AlertCircle,
-        Search
+        Search,
+        Tag,
     } from "lucide-svelte";
     import type {
         ArtifactRepository,
         Artifact,
     } from "$lib/types/artifacts.svelte";
+    import PropertyEditor from "$lib/components/artifacts/PropertyEditor.svelte";
     import UploadArtifactModal from "$lib/components/artifacts/UploadArtifactModal.svelte";
     import MetadataEditor from "$lib/components/artifacts/MetadataEditor.svelte";
+    import DeleteArtifactModal from "$lib/components/artifacts/DeleteArtifactModal.svelte";
+    
 
     // STATE
     let repository = $state<ArtifactRepository | null>(null);
@@ -28,6 +32,8 @@
     let error = $state("");
     let uploadModalOpen = $state(false);
     let metadataModalOpen = $state(false);
+    let propertiesModalOpen = $state(false);
+    let deleteModalOpen = $state(false);
     let selectedArtifact = $state<Artifact | null>(null);
     let dragOver = $state(false);
     let droppedFiles = $state<FileList | null>(null);
@@ -49,24 +55,27 @@
             droppedFiles = e.dataTransfer.files;
             uploadModalOpen = true;
         } else {
-          droppedFiles = null;
-          showToast('No files found in dropped files', 'error');
+            droppedFiles = null;
+            showToast("No files found in dropped files", "error");
         }
     }
 
     async function handleOperation<T>(
         operation: () => Promise<T>,
         successMessage: string,
-        errorPrefix: string
+        errorPrefix: string,
     ): Promise<T | undefined> {
         try {
             loading = true;
             const result = await operation();
-            showToast(successMessage, 'success');
+            showToast(successMessage, "success");
             return result;
         } catch (err) {
-            const errorMessage = err instanceof Error ? err.message : 'An unexpected error occurred';
-            showToast(`${errorPrefix}: ${errorMessage}`, 'error');
+            const errorMessage =
+                err instanceof Error
+                    ? err.message
+                    : "An unexpected error occurred";
+            showToast(`${errorPrefix}: ${errorMessage}`, "error");
             return undefined;
         } finally {
             loading = false;
@@ -101,47 +110,37 @@
 
     async function deleteArtifact(artifact: Artifact) {
         if (!repository?.name) return;
-        
-        if (confirm(`Are you sure you want to delete ${artifact.name}?`)) {
-            await handleOperation(
-            async () => {
-                if (!repository?.name) return;
-                await artifacts.deleteArtifact(repository.name, artifact.version, artifact.name);
-                await loadRepository();
-            },
-            `Successfully deleted ${artifact.name}`,
-            'Failed to delete artifact'
-            );
-        }
+        selectedArtifact = artifact;
+        deleteModalOpen = true;
     }
 
     async function downloadArtifact(artifact: Artifact) {
-    if (!repository) return;
-    
-    try {
-        const response = await fetch(
-            `/api/v1/artifacts/${repository.name}/${artifact.version}/${artifact.name}`,
-            {
-                headers: {
-                    Authorization: `Bearer ${auth.token}`
-                }
-            }
-        );
-        
-        if (!response.ok) throw new Error('Download failed');
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = artifact.name;
-        document.body.appendChild(a);
-        a.click();
-        window.URL.revokeObjectURL(url);
-        document.body.removeChild(a);
-    } catch (err) {
-        error = err instanceof Error ? err.message : 'Download failed';
+        if (!repository) return;
+
+        try {
+            const response = await fetch(
+                `/api/v1/artifacts/${repository.name}/${artifact.version}/${artifact.name}`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${auth.token}`,
+                    },
+                },
+            );
+
+            if (!response.ok) throw new Error("Download failed");
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = artifact.name;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } catch (err) {
+            error = err instanceof Error ? err.message : "Download failed";
+        }
     }
-}
 
     $effect(() => {
         loadRepository();
@@ -198,7 +197,7 @@
             ondragover={handleDragOver}
             ondragleave={handleDragLeave}
             ondrop={handleDrop}
-            role='application'
+            role="application"
         >
             <div class="space-y-2">
                 <Upload class="mx-auto h-12 w-12 text-gray-400" />
@@ -217,15 +216,15 @@
 
         <!-- SEARCH -->
         <div class="flex flex-col sm:flex-row gap-4">
-          <div class="relative">
-              <input
-                  type="text"
-                  placeholder="Search artifacts..."
-                  class="block w-full pl-10 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
-                  bind:value={artifacts.fileSearchTerm}
-              />
-              <Search class="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-          </div>
+            <div class="relative">
+                <input
+                    type="text"
+                    placeholder="Search artifacts..."
+                    class="block w-full pl-10 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    bind:value={artifacts.fileSearchTerm}
+                />
+                <Search class="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+            </div>
         </div>
 
         <!-- ARTIFACTS TABLE -->
@@ -324,6 +323,17 @@
                                         </button>
                                         <button
                                             type="button"
+                                            onclick={() => {
+                                                selectedArtifact = artifact;
+                                                propertiesModalOpen = true;
+                                            }}
+                                            class="text-gray-600 hover:text-blue-600"
+                                            aria-label={`Edit properties for ${artifact.name}`}
+                                        >
+                                            <Tag class="h-4 w-4" />
+                                        </button>
+                                        <button
+                                            type="button"
                                             onclick={() =>
                                                 deleteArtifact(artifact)}
                                             class="text-red-600 hover:text-red-900"
@@ -345,9 +355,9 @@
             <UploadArtifactModal
                 {repository}
                 onclose={() => {
-                  uploadModalOpen = false;
-                  droppedFiles = null;
-                  loadRepository();
+                    uploadModalOpen = false;
+                    droppedFiles = null;
+                    loadRepository();
                 }}
                 initialFiles={droppedFiles}
             />
@@ -361,6 +371,30 @@
                     metadataModalOpen = false;
                     selectedArtifact = null;
                 }}
+            />
+        {/if}
+
+        {#if propertiesModalOpen && selectedArtifact}
+            <PropertyEditor
+                artifact={selectedArtifact}
+                {repository}
+                onclose={() => {
+                    propertiesModalOpen = false;
+                    selectedArtifact = null;
+                    loadRepository();
+                }}
+            />
+        {/if}
+
+        {#if deleteModalOpen && repository}
+        <DeleteArtifactModal
+            repository={repository}
+            artifact={selectedArtifact}
+            onclose={() => {
+                deleteModalOpen = false;
+                selectedArtifact = null;
+                loadRepository();
+            }}
             />
         {/if}
     {/if}

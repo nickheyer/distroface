@@ -1,5 +1,5 @@
 <script lang="ts">
-  import Tag from '$lib/components/Tag.svelte';
+  import Tag from "$lib/components/Tag.svelte";
   import { auth, api } from "$lib/stores/auth.svelte";
   import {
     AlertCircle,
@@ -10,6 +10,8 @@
     Tag as TagIcon,
     Package,
   } from "lucide-svelte";
+  import { showToast } from "$lib/stores/toast.svelte";
+  import Toast from "$lib/components/Toast.svelte";
 
   type RegistryImage = {
     name: string;
@@ -47,7 +49,7 @@
       // USE PROXY ENDPOINT FOR CATALOG
       const response = await api.get(
         // WE QUERY PARAM THE USER/PASS FOR THE REMOTE, BUT THIS USER AUTH TOKEN STILL ADDED TO HEADERS
-        `/api/v1/registry/proxy/catalog?registry=${encodeURIComponent(sourceRegistry)}&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+        `/api/v1/registry/proxy/catalog?registry=${encodeURIComponent(sourceRegistry)}&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
       );
 
       const data = await response.json();
@@ -57,7 +59,7 @@
       const imagePromises = repositories.map(async (repo: string) => {
         // USE PROXY ENDPOINT FOR TAGS
         const tagResponse = await api.get(
-          `/api/v1/registry/proxy/tags?registry=${encodeURIComponent(sourceRegistry)}&repository=${encodeURIComponent(repo)}&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`
+          `/api/v1/registry/proxy/tags?registry=${encodeURIComponent(sourceRegistry)}&repository=${encodeURIComponent(repo)}&username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}`,
         );
 
         if (tagResponse.ok) {
@@ -93,7 +95,7 @@
         selectedImages[imageName] = [...selectedImages[imageName], tag];
       } else {
         selectedImages[imageName] = selectedImages[imageName].filter(
-          (t) => t !== tag
+          (t) => t !== tag,
         );
         if (selectedImages[imageName].length === 0) {
           delete selectedImages[imageName];
@@ -105,8 +107,8 @@
 
   const filteredImages = $derived(
     images.filter((img) =>
-      img.name.toLowerCase().includes(searchTerm.toLowerCase())
-    )
+      img.name.toLowerCase().includes(searchTerm.toLowerCase()),
+    ),
   );
 
   const hasSelectedImages = $derived(Object.keys(selectedImages).length > 0);
@@ -119,7 +121,7 @@
     try {
       // CONVERT SELECTIONS TO IMAGE LIST
       const imageList = Object.entries(selectedImages).flatMap(([name, tags]) =>
-        tags.map((tag) => `${name}:${tag}`)
+        tags.map((tag) => `${name}:${tag}`),
       );
 
       const response = await api.post("/api/v1/registry/migrate", {
@@ -141,7 +143,7 @@
   async function pollStatus(id: string) {
     try {
       const response = await api.get(
-        `/api/v1/registry/migrate/status?task_id=${id}`
+        `/api/v1/registry/migrate/status?task_id=${id}`,
       );
       const data = await response.json();
 
@@ -171,6 +173,13 @@
       migrationInProgress = false;
     }
   });
+
+  $effect(() => {
+    if (error) {
+      showToast(error, "error");
+      error = null;
+    }
+  });
 </script>
 
 <div class="space-y-6">
@@ -184,12 +193,9 @@
   </div>
 
   <div class="bg-white shadow-sm rounded-lg p-6">
-    {#if error}
-      <div class="mb-4 p-4 rounded-md bg-red-50 text-red-700 flex items-center">
-        <AlertCircle class="h-5 w-5 mr-2" />
-        {error}
-      </div>
-    {/if}
+    
+    <!-- ERROR HANDLING -->
+    <Toast></Toast>
 
     <form onsubmit={handleSubmit} class="space-y-4">
       <div>
@@ -263,21 +269,18 @@
       </div>
 
       {#if images.length > 0}
-      
         <div class="mt-4">
-
-
-        <div class="flex justify-between items-center mb-4">
-                <h3 class="text-lg font-medium text-gray-900">Available Images</h3>
-                <div class="relative">
-                    <input
-                        type="text"
-                        bind:value={searchTerm}
-                        placeholder="Search images..."
-                        class="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
-                    />
-                    <Search class="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-                </div>
+          <div class="flex justify-between items-center mb-4">
+            <h3 class="text-lg font-medium text-gray-900">Available Images</h3>
+            <div class="relative">
+              <input
+                type="text"
+                bind:value={searchTerm}
+                placeholder="Search images..."
+                class="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+              />
+              <Search class="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
+            </div>
           </div>
 
           <div class="border border-gray-200 rounded-lg overflow-hidden">
@@ -290,14 +293,14 @@
                   </div>
                   <div class="mt-2 flex flex-wrap gap-2">
                     {#each image.tags as tag}
-                    <Tag
-                      name={image.name}
-                      tag={tag}
-                      onClick={() => toggleImageTag(image.name, tag)}
-                      selected={selectedImages[image.name]?.includes(tag)}
-                    />
+                      <Tag
+                        name={image.name}
+                        {tag}
+                        onClick={() => toggleImageTag(image.name, tag)}
+                        selected={selectedImages[image.name]?.includes(tag)}
+                      />
                     {/each}
-                </div>
+                  </div>
                 </div>
               {/each}
             </div>

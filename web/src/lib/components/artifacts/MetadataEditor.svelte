@@ -1,6 +1,6 @@
 <script lang="ts">
   import { artifacts } from "$lib/stores/artifacts.svelte";
-  import { X, Plus, Minus } from "lucide-svelte";
+  import { X, Plus, Minus, Save } from "lucide-svelte";
   import type { ArtifactRepository, Artifact } from "$lib/types/artifacts.svelte";
 
   let { artifact, repository, onclose } = $props<{
@@ -49,6 +49,7 @@
               return acc;
           }, {} as Record<string, string>);
 
+          // UPDATE METADATA
           await artifacts.updateMetadata(repository.name, artifact.id, metadata);
           onclose();
       } catch (err) {
@@ -134,7 +135,13 @@
                                   disabled={loading}
                                   class="inline-flex w-full justify-center rounded-md bg-blue-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-blue-500 sm:ml-3 sm:w-auto"
                               >
-                                  {loading ? 'Saving...' : 'Save Changes'}
+                                {#if loading}
+                                <Save class="h-4 w-4 mr-2 animate-spin" />
+                                Saving...
+                                {:else}
+                                <Save class="h-4 w-4 mr-2" />
+                                Save Changes
+                                {/if}
                               </button>
                               <button
                                   type="button"

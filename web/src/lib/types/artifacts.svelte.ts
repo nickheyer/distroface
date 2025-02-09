@@ -16,6 +16,7 @@ export interface Artifact {
   size: number;
   mime_type: string;
   metadata: string;
+  properties: Record<string, string>|null;
   created_at: string;
   updated_at: string;
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { artifacts } from "$lib/stores/artifacts.svelte";
-  import { Upload, X } from "lucide-svelte";
+  import { Upload, X, Plus } from "lucide-svelte";
   import type { ArtifactRepository } from "$lib/types/artifacts.svelte";
 
   let {
@@ -35,6 +35,10 @@
     }
   });
 
+  $effect(() => {
+    artifacts.fetchArtifactSettings();
+  });
+
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
     dragOver = true;
@@ -67,7 +71,10 @@
     }
   }
 
-  async function handleSubmit() {
+  async function handleSubmit(e: Event) {
+    e.preventDefault();
+    e.stopPropagation();
+    
     if (!files?.length) {
       error = "Please select a file to upload";
       return;
@@ -79,6 +86,9 @@
     }
 
     loading = true;
+    error = null;
+    uploadProgress = 0;
+
     try {
       validateFileUpload(files);
       await artifacts.uploadArtifact(
@@ -90,6 +100,7 @@
       onclose();
     } catch (err) {
       error = err instanceof Error ? err.message : "Failed to upload artifact";
+      uploadProgress = 0;
     } finally {
       loading = false;
       initialFiles = null;
@@ -106,6 +117,7 @@
     }
   }
 </script>
+
 
 <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity z-50">
   <div class="fixed inset-0 z-10 overflow-y-auto">
@@ -211,6 +223,25 @@
                   class="mt-1 block w-full px-4 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                   placeholder="folder/artifact.zip"
                 />
+              </div>
+
+              <div class="mt-4">
+                <h4 class="text-sm font-medium text-gray-700">Properties</h4>
+                {#each artifacts.requiredProperties as propName}
+                  <div class="mt-2">
+                    <label for={propName} class="block text-sm font-medium text-gray-700">
+                      {propName}*
+                    </label>
+                    <input
+                      type="text"
+                      id={propName}
+                      bind:value={artifacts.properties[propName]}
+                      required
+                      class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                    />
+                  </div>
+                {/each}
+                <!-- EVENTUALLY ADDED PROPS GO HERE -->
               </div>
 
               <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">

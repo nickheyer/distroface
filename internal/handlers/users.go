@@ -11,6 +11,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/auth/permissions"
 	"github.com/nickheyer/distroface/internal/constants"
+	"github.com/nickheyer/distroface/internal/logging"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 )
@@ -18,12 +19,14 @@ import (
 type UserHandler struct {
 	repo        repository.Repository
 	permManager *permissions.PermissionManager
+	log         *logging.LogService
 }
 
-func NewUserHandler(repo repository.Repository, permManager *permissions.PermissionManager) *UserHandler {
+func NewUserHandler(repo repository.Repository, permManager *permissions.PermissionManager, log *logging.LogService) *UserHandler {
 	return &UserHandler{
 		repo:        repo,
 		permManager: permManager,
+		log:         log,
 	}
 }
 
@@ -204,6 +207,40 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(userResponse)
+}
+
+func (h *UserHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	usernameToDelete := vars["username"]
+
+	// GET TARGET USER FROM CONTEXT
+	requestingUser, ok := r.Context().Value(constants.UsernameKey).(string)
+	if !ok || requestingUser == "" {
+		http.Error(w, "UNAUTHORIZED", http.StatusUnauthorized)
+		return
+	}
+
+	// CANT DELETE SELF, THIS MAKES SENSE RIGHT?
+	if requestingUser == usernameToDelete {
+		http.Error(w, "CANNOT DELETE YOUR OWN ACCOUNT", http.StatusBadRequest)
+		return
+	}
+
+	// CHECK IF TARGET USER EXISTS
+	if _, err := h.repo.GetUser(usernameToDelete); err != nil {
+		http.Error(w, "USER NOT FOUND", http.StatusNotFound)
+		return
+	}
+
+	// DELETE USER
+	if err := h.repo.DeleteUser(usernameToDelete); err != nil {
+		h.log.Printf("Failed to delete user: %v", err)
+		http.Error(w, "FAILED TO DELETE USER", http.StatusInternalServerError)
+		return
+	}
+
+	// RETURN 204
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *UserHandler) validateGroups(groups []string) error {

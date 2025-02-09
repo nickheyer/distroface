@@ -2,26 +2,27 @@ package handlers
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
 
 	"github.com/gorilla/mux"
+	"github.com/nickheyer/distroface/internal/logging"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 )
 
 type GroupHandler struct {
 	repo repository.Repository
+	log  *logging.LogService
 }
 
-func NewGroupHandler(repo repository.Repository) *GroupHandler {
-	return &GroupHandler{repo: repo}
+func NewGroupHandler(repo repository.Repository, log *logging.LogService) *GroupHandler {
+	return &GroupHandler{repo: repo, log: log}
 }
 
 func (h *GroupHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 	groups, err := h.repo.ListGroups()
 	if err != nil {
-		log.Printf("Failed to list groups: %v", err)
+		h.log.Printf("Failed to list groups: %v", err)
 		http.Error(w, "FAILED TO LIST GROUPS", http.StatusInternalServerError)
 		return
 	}
@@ -44,7 +45,7 @@ func (h *GroupHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(response); err != nil {
-		log.Printf("Failed to encode groups response: %v", err)
+		h.log.Printf("Failed to encode groups response: %v", err)
 		http.Error(w, "FAILED TO ENCODE RESPONSE", http.StatusInternalServerError)
 		return
 	}

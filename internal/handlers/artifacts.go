@@ -4,8 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"os"
 	"path/filepath"
 	"sort"
@@ -14,23 +15,24 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
-	"github.com/nickheyer/distroface/internal/config"
 	"github.com/nickheyer/distroface/internal/constants"
+	"github.com/nickheyer/distroface/internal/logging"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
+	"github.com/nickheyer/distroface/internal/utils"
 )
 
 type ArtifactHandler struct {
 	repo   repository.Repository
-	config *config.Config
-	logger *log.Logger
+	config *models.Config
+	log    *logging.LogService
 }
 
-func NewArtifactHandler(repo repository.Repository, cfg *config.Config) *ArtifactHandler {
+func NewArtifactHandler(repo repository.Repository, cfg *models.Config, log *logging.LogService) *ArtifactHandler {
 	return &ArtifactHandler{
 		repo:   repo,
 		config: cfg,
-		logger: log.New(os.Stdout, "ARTIFACTS: ", log.LstdFlags),
+		log:    log,
 	}
 }
 
@@ -45,7 +47,7 @@ func (h *ArtifactHandler) CreateRepository(w http.ResponseWriter, r *http.Reques
 
 	repo.Owner = username
 	if err := h.repo.CreateArtifactRepository(&repo); err != nil {
-		h.logger.Printf("Failed to create repository: %v", err)
+		h.log.Printf("Failed to create repository: %v", err)
 		http.Error(w, "Failed to create repository", http.StatusInternalServerError)
 		return
 	}
@@ -53,7 +55,7 @@ func (h *ArtifactHandler) CreateRepository(w http.ResponseWriter, r *http.Reques
 	// CREATE REPO SKELETON
 	repoPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repo.Name)
 	if err := h.ensureDirectoryExists(repoPath); err != nil {
-		h.logger.Printf("Failed to create repository directories: %v", err)
+		h.log.Printf("Failed to create repository directories: %v", err)
 		http.Error(w, "Failed to initialize repository", http.StatusInternalServerError)
 		return
 	}
@@ -66,7 +68,7 @@ func (h *ArtifactHandler) ListRepositories(w http.ResponseWriter, r *http.Reques
 
 	repos, err := h.repo.ListArtifactRepositories(username)
 	if err != nil {
-		h.logger.Printf("Failed to list repositories: %v", err)
+		h.log.Printf("Failed to list repositories: %v", err)
 		http.Error(w, "Failed to list repositories", http.StatusInternalServerError)
 		return
 	}
@@ -86,21 +88,23 @@ func (h *ArtifactHandler) InitiateUpload(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
-
 	if repo.Owner != username && repo.Private {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
-	// CREATE UPLOAD ID AND TMP DIR
+	// GENERATE UPLOAD ID
 	uploadID := uuid.New().String()
+
+	// GLOBAL DIR EXISTS
 	uploadDir := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "_uploads")
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		h.logger.Printf("Failed to create upload directory: %v", err)
+		h.log.Printf("Failed to create upload directory: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
+	// Return the upload location to the client
 	w.Header().Set("Location", fmt.Sprintf("/api/v1/artifacts/%s/upload/%s", repoName, uploadID))
 	w.Header().Set("Upload-ID", uploadID)
 	w.WriteHeader(http.StatusAccepted)
@@ -108,34 +112,20 @@ func (h *ArtifactHandler) InitiateUpload(w http.ResponseWriter, r *http.Request)
 
 func (h *ArtifactHandler) HandleUpload(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	repoName := vars["repo"]
 	uploadID := vars["uuid"]
-	username := r.Context().Value(constants.UsernameKey).(string)
-
-	// VERIFY REPO ACCESS
-	repo, err := h.repo.GetArtifactRepository(repoName)
-	if err != nil {
-		http.Error(w, "Repository not found", http.StatusNotFound)
-		return
-	}
-
-	if repo.Owner != username && repo.Private {
-		http.Error(w, "Access denied", http.StatusForbidden)
-		return
-	}
 
 	// HANDLE UPLOAD CHUNK
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "_uploads", uploadID)
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
-		h.logger.Printf("Failed to open upload file: %v", err)
+		h.log.Printf("Failed to open upload file: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 	defer file.Close()
 
 	if _, err := io.Copy(file, r.Body); err != nil {
-		h.logger.Printf("Failed to write upload data: %v", err)
+		h.log.Printf("Failed to write upload data: %v", err)
 		http.Error(w, "Failed to process upload", http.StatusInternalServerError)
 		return
 	}
@@ -151,103 +141,154 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 	artifactPath := r.URL.Query().Get("path")
 	username := r.Context().Value(constants.UsernameKey).(string)
 
-	if version == "" || artifactPath == "" {
+	if repoName == "" || version == "" || artifactPath == "" || uploadID == "" {
 		http.Error(w, "Version and path are required", http.StatusBadRequest)
 		return
 	}
 
+	// BUILD PATHS
+	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "_uploads", uploadID)
 	if err := h.validatePath(artifactPath, false); err != nil {
+		_ = os.Remove(uploadPath)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	finalPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifactPath)
+
 	// VERIFY REPO ACCESS
 	repo, err := h.repo.GetArtifactRepository(repoName)
 	if err != nil {
+		_ = os.Remove(uploadPath)
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
-
 	if repo.Owner != username && repo.Private {
+		_ = os.Remove(uploadPath)
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
 
-	// PARSE PROPERTIES
+	// PARSE PROPS FROM QUERY PARAMS + BODY
 	var properties map[string]string
 	if propertiesJSON := r.URL.Query().Get("properties"); propertiesJSON != "" {
 		if err := json.Unmarshal([]byte(propertiesJSON), &properties); err != nil {
+			_ = os.Remove(uploadPath)
 			http.Error(w, "Invalid properties format", http.StatusBadRequest)
 			return
 		}
 	}
 
+	if err := json.NewDecoder(r.Body).Decode(&properties); err != nil {
+		h.log.Printf("Unable to parse properties from upload body: %v", err)
+	}
+
 	// GET ARTIFACT SETTINGS
 	settings, err := h.getSettings()
 	if err != nil {
-		h.logger.Printf("Failed to get settings: %v", err)
+		_ = os.Remove(uploadPath)
+		h.log.Printf("Failed to get settings: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// VALIDATE PROPERTIES
+	// VALIDATE PROPS
 	for _, required := range settings.Properties.Required {
 		if _, exists := properties[required]; !exists {
+			_ = os.Remove(uploadPath)
 			http.Error(w, fmt.Sprintf("Missing required property: %s", required), http.StatusBadRequest)
 			return
 		}
 	}
 
-	// PROCESS COMPLETED UPLOAD
-	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "_uploads", uploadID)
-	finalPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifactPath)
+	// OPEN UPLOAD
+	file, err := os.Open(uploadPath)
+	if err != nil {
+		_ = os.Remove(uploadPath)
+		h.log.Printf("Failed to open upload: %v", err)
+		http.Error(w, "Failed to process upload", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
 
-	// ENSURE TARGET DIR EXISTS
+	// PEEK FILE TO DETECT MIME
+	buffer := make([]byte, 512)
+	n, err := file.Read(buffer)
+	if err != nil && err != io.EOF {
+		_ = os.Remove(uploadPath)
+		h.log.Printf("Failed to read file: %v", err)
+		http.Error(w, "Failed to process upload", http.StatusInternalServerError)
+		return
+	}
+	mimeType := http.DetectContentType(buffer[:n])
+
+	// VALIDATE FILE SIZE NOW
+	fi, err := file.Stat()
+	if err != nil {
+		_ = os.Remove(uploadPath)
+		h.log.Printf("Failed to stat upload: %v", err)
+		http.Error(w, "Failed to process upload", http.StatusInternalServerError)
+		return
+	}
+
+	fileHeader := &multipart.FileHeader{
+		Size: fi.Size(),
+		Header: textproto.MIMEHeader{
+			"Content-Type": []string{mimeType},
+		},
+	}
+
+	if err := h.validateFileUpload(fileHeader, settings); err != nil {
+		_ = os.Remove(uploadPath)
+		h.log.Printf("File validation failed: %v", err)
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// ENSURE DIR STRUCTURE
 	if err := h.ensureDirectoryExists(filepath.Dir(finalPath)); err != nil {
-		h.logger.Printf("Failed to create artifact directory: %v", err)
+		_ = os.Remove(uploadPath)
+		h.log.Printf("Failed to create artifact directory: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	// MOVE TO FINAL LOCATION
+	// MOVE FILE TO FINAL LOCATION
 	if err := os.Rename(uploadPath, finalPath); err != nil {
-		h.logger.Printf("Failed to move artifact: %v", err)
+		_ = os.Remove(uploadPath)
+		h.log.Printf("Failed to move artifact: %v", err)
 		http.Error(w, "Failed to save artifact", http.StatusInternalServerError)
 		return
 	}
 
-	// GENERATE ARTIFACT METADATA
-	fileInfo, err := os.Stat(finalPath)
-	if err != nil {
-		h.logger.Printf("Failed to get artifact info: %v", err)
-		http.Error(w, "Failed to process artifact", http.StatusInternalServerError)
-		return
-	}
-
+	// CREATE ARTIFACT IN DB
 	artifact := &models.Artifact{
 		RepoID:    repo.ID,
 		Name:      filepath.Base(artifactPath),
 		Version:   version,
-		Size:      fileInfo.Size(),
-		MimeType:  http.DetectContentType([]byte{}),
-		Metadata:  "{}", // DEFAULT EMPTY
+		Size:      fi.Size(),
+		MimeType:  mimeType,
+		Metadata:  "{}",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 
 	if err := h.repo.CreateArtifact(artifact); err != nil {
-		h.logger.Printf("Failed to create artifact metadata: %v", err)
+		_ = os.Remove(uploadPath)
+		h.log.Printf("Failed to create artifact metadata: %v", err)
 		http.Error(w, "Failed to save artifact metadata", http.StatusInternalServerError)
 		return
 	}
 
+	// STORE PROPS
 	if len(properties) > 0 {
 		if err := h.repo.SetArtifactProperties(artifact.ID, properties); err != nil {
-			h.logger.Printf("Failed to store properties: %v", err)
-			// UPLOAD WORKED, CONTINUE ON
+			h.log.Printf("Failed to store properties: %v", err)
+			// DONT ROLL BACK
 		}
 	}
 
+	// OPTION: APPLY RETENTION POLIXY
 	if settings.Retention.Enabled {
 		go h.applyRetentionPolicy(repo.ID, settings.Retention)
 	}
@@ -310,7 +351,7 @@ func (h *ArtifactHandler) ListVersions(w http.ResponseWriter, r *http.Request) {
 
 	artifacts, err := h.repo.ListArtifacts(repo.ID)
 	if err != nil {
-		h.logger.Printf("Failed to list artifacts: %v", err)
+		h.log.Printf("Failed to list artifacts: %v", err)
 		http.Error(w, "Failed to list versions", http.StatusInternalServerError)
 		return
 	}
@@ -356,7 +397,7 @@ func (h *ArtifactHandler) UpdateMetadata(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := h.repo.UpdateArtifactMetadata(artifactID, string(metadataJSON)); err != nil {
-		h.logger.Printf("Failed to update metadata: %v", err)
+		h.log.Printf("Failed to update metadata: %v", err)
 		http.Error(w, "Failed to update metadata", http.StatusInternalServerError)
 		return
 	}
@@ -377,7 +418,7 @@ func (h *ArtifactHandler) UpdateProperties(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if repo.Owner != username && repo.Private {
+	if repo.Owner != username {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -391,7 +432,7 @@ func (h *ArtifactHandler) UpdateProperties(w http.ResponseWriter, r *http.Reques
 	// GET VALIDATION
 	settings, err := h.getSettings()
 	if err != nil {
-		h.logger.Printf("Failed to get settings: %v", err)
+		h.log.Printf("Failed to get settings: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -399,7 +440,7 @@ func (h *ArtifactHandler) UpdateProperties(w http.ResponseWriter, r *http.Reques
 	// ENSURE REQUIRED
 	existingProps, err := h.repo.GetArtifactProperties(artifactID)
 	if err != nil {
-		h.logger.Printf("Failed to get existing properties: %v", err)
+		h.log.Printf("Failed to get existing properties: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -414,7 +455,7 @@ func (h *ArtifactHandler) UpdateProperties(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := h.repo.SetArtifactProperties(artifactID, properties); err != nil {
-		h.logger.Printf("Failed to update properties: %v", err)
+		h.log.Printf("Failed to update properties: %v", err)
 		http.Error(w, "Failed to update properties", http.StatusInternalServerError)
 		return
 	}
@@ -453,14 +494,14 @@ func (h *ArtifactHandler) DeleteArtifact(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
-		h.logger.Printf("Failed to delete artifact file: %v", err)
+		h.log.Printf("Failed to delete artifact file: %v", err)
 		http.Error(w, "Failed to delete artifact", http.StatusInternalServerError)
 		return
 	}
 
 	// DELETE METADATA
 	if err := h.repo.DeleteArtifact(repo.ID, version, artifactPath); err != nil {
-		h.logger.Printf("Failed to delete artifact metadata: %v", err)
+		h.log.Printf("Failed to delete artifact metadata: %v", err)
 		http.Error(w, "Failed to delete artifact metadata", http.StatusInternalServerError)
 		return
 	}
@@ -494,14 +535,14 @@ func (h *ArtifactHandler) DeleteRepository(w http.ResponseWriter, r *http.Reques
 	}
 
 	if err := os.RemoveAll(repoPath); err != nil {
-		h.logger.Printf("Failed to delete repository directory: %v", err)
+		h.log.Printf("Failed to delete repository directory: %v", err)
 		http.Error(w, "Failed to delete repository", http.StatusInternalServerError)
 		return
 	}
 
 	// DELETE METADATA
 	if err := h.repo.DeleteArtifactRepository(repoName); err != nil {
-		h.logger.Printf("Failed to delete repository metadata: %v", err)
+		h.log.Printf("Failed to delete repository metadata: %v", err)
 		http.Error(w, "Failed to delete repository metadata", http.StatusInternalServerError)
 		return
 	}
@@ -525,7 +566,7 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 	// GET SETTINGS
 	settings, err := h.getSettings()
 	if err != nil {
-		h.logger.Printf("Failed to get settings: %v", err)
+		h.log.Printf("Failed to get settings: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
@@ -543,7 +584,7 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 
 	results, err := h.repo.SearchArtifacts(req.Properties, req.Sort, req.Order, req.Limit)
 	if err != nil {
-		h.logger.Printf("Search failed: %v", err)
+		h.log.Printf("Search failed: %v", err)
 		http.Error(w, "Search failed", http.StatusInternalServerError)
 		return
 	}
@@ -566,6 +607,15 @@ func (h *ArtifactHandler) validatePath(path string, allowAbs bool) error {
 	return nil
 }
 
+func (h *ArtifactHandler) validateFileUpload(file *multipart.FileHeader, settings *models.ArtifactSettings) error {
+	maxSize := settings.Storage.MaxFileSize * 1024 * 1024
+	if file.Size > maxSize {
+		return fmt.Errorf("file size (%v) exceeds maximum size of %v", utils.FormatSize(file.Size), utils.FormatSize(maxSize))
+	}
+
+	return nil
+}
+
 func (h *ArtifactHandler) ensureDirectoryExists(path string) error {
 	return os.MkdirAll(path, 0755)
 }
@@ -573,7 +623,7 @@ func (h *ArtifactHandler) ensureDirectoryExists(path string) error {
 func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.RetentionPolicy) {
 	artifacts, err := h.repo.ListArtifacts(repoID)
 	if err != nil {
-		h.logger.Printf("Failed to list artifacts for retention: %v", err)
+		h.log.Printf("Failed to list artifacts for retention: %v", err)
 		return
 	}
 
@@ -582,11 +632,11 @@ func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.Rete
 	for _, artifact := range artifacts {
 		props, err := h.repo.GetArtifactProperties(artifact.ID)
 		if err != nil {
-			h.logger.Printf("Failed to get properties for artifact %s: %v", artifact.ID, err)
+			h.log.Printf("Failed to get properties for artifact %s: %v", artifact.ID, err)
 			continue
 		}
 
-		// CREATE PROP KEY LIKE JENKINS
+		// CREATE PROP KEY (LIKE JENKINS...)
 		key := createGroupKey(props)
 		groups[key] = append(groups[key], artifact)
 	}
@@ -618,31 +668,19 @@ func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.Rete
 
 			// DELETE ARTIFACTS
 			if err := h.repo.DeleteArtifact(artifact.RepoID, artifact.Version, artifact.Name); err != nil {
-				h.logger.Printf("Failed to delete artifact %s during retention: %v", artifact.ID, err)
+				h.log.Printf("Failed to delete artifact %s during retention: %v", artifact.ID, err)
 			}
 		}
 	}
 }
 
 func (h *ArtifactHandler) getSettings() (*models.ArtifactSettings, error) {
-	settingsBytes, err := h.repo.GetSettingsSection(models.SettingKeyArtifacts)
+	settings, err := utils.GetSettings[*models.ArtifactSettings](h.repo, "artifacts")
 	if err != nil {
-		fmt.Printf("ERROR: %v", err)
-		// IF NOT FOUND, GET DEFAULTS
-		defaultSettings, err := models.GetDefaultSettings(models.SettingKeyArtifacts)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get default settings: %v", err)
-		}
-		return defaultSettings.(*models.ArtifactSettings), nil
+		return nil, err
 	}
 
-	var settings models.ArtifactSettings
-	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
-		fmt.Printf("ERROR: %v", err)
-		return nil, fmt.Errorf("failed to parse settings: %v", err)
-	}
-
-	return &settings, nil
+	return settings, nil
 }
 
 func createGroupKey(properties map[string]string) string {

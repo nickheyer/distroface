@@ -838,6 +838,15 @@ func (r *SQLiteRepository) ListArtifacts(repoID int) ([]models.Artifact, error) 
 				return nil, fmt.Errorf("failed to update artifact ID: %v", err)
 			}
 		}
+
+		// GET PROPS
+		properties, err := r.GetArtifactProperties(artifact.ID)
+		if err != nil {
+			fmt.Printf("Coudn't get props for artifact: %v\n", artifact.ID)
+		} else {
+			artifact.Properties = properties
+		}
+
 		artifacts = append(artifacts, artifact)
 	}
 	return artifacts, nil
@@ -955,51 +964,28 @@ func (r *SQLiteRepository) UpdateSettingsSection(section string, settings json.R
 }
 
 func (r *SQLiteRepository) ResetSettingsSection(section string) error {
-	var defaultValue json.RawMessage
-
-	switch section {
-	case "artifacts":
-		defaultValue = json.RawMessage(`{
-					"retention": {
-							"enabled": false,
-							"maxVersions": 5,
-							"maxAge": 30,
-							"excludeLatest": true
-					},
-					"storage": {
-							"maxFileSize": 1024,
-							"allowedTypes": ["*/*"],
-							"compressionEnabled": true
-					},
-					"properties": {
-							"required": ["version", "build", "branch"],
-							"indexed": ["version", "build", "branch", "commit"]
-					},
-					"search": {
-							"maxResults": 100,
-							"defaultSort": "created",
-							"defaultOrder": "desc"
-					}
-			}`)
-	case "registry":
-		defaultValue = json.RawMessage(`{
-					"cleanup": {
-							"enabled": false,
-							"maxAge": 90,
-							"unusedOnly": true
-					},
-					"proxy": {
-							"enabled": false,
-							"remoteUrl": "",
-							"cacheEnabled": true,
-							"cacheMaxAge": 24
-					}
-			}`)
-	default:
+	// GET MODEL DEFAULTS
+	settings, err := models.GetSettingsWithDefaults(section)
+	if err != nil {
 		return fmt.Errorf("unknown settings section: %s", section)
 	}
 
-	return r.UpdateSettingsSection(section, defaultValue)
+	// TO JSON
+	defaultValue, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("failed to marshal default settings: %v", err)
+	}
+
+	// UPDATE OR INSERT
+	_, err = r.db.Exec(`
+        INSERT INTO settings (key, value) 
+        VALUES (?, ?) 
+        ON CONFLICT(key) DO UPDATE SET 
+            value = excluded.value,
+            updated_at = CURRENT_TIMESTAMP
+    `, section, defaultValue)
+
+	return err
 }
 
 func (r *SQLiteRepository) SetArtifactProperties(artifactID string, properties map[string]string) error {

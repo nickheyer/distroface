@@ -12,6 +12,10 @@ const state = $state<{
   currentRepo: ArtifactRepository | null;
   repoSearchTerm: string;
   fileSearchTerm: string;
+  requiredProperties: string[],
+  indexedProperties: string[],
+  properties: Record<string,string>|null
+  settingsError: string | null
 }>({
   repositories: [],
   artifacts: {},
@@ -20,7 +24,12 @@ const state = $state<{
   uploadProgress: {},
   currentRepo: null,
   repoSearchTerm: '',
-  fileSearchTerm: ''
+  fileSearchTerm: '',
+  requiredProperties: [],
+  indexedProperties: [],
+  properties: {},
+  settingsError: null
+
 });
 
 // COMPUTED
@@ -95,55 +104,55 @@ async function deleteRepository(name: string) {
 }
 
 async function uploadArtifact(repo: string, file: File, version: string, path: string) {
-    const uploadId = uuidv4();
-    state.uploadProgress[uploadId] = 0;
-  
-    try {
-      // INIT UPLOAD
-      const initResponse = await api.post(`/api/v1/artifacts/${repo}/upload`, {});
-      if (!initResponse.ok) throw new Error('Failed to initialize upload');
-      
-      const uploadEndpoint = initResponse.headers.get('Location');
-      if (!uploadEndpoint) throw new Error('Invalid upload location');
-  
-      // UPLOADING 10MB CHUNKS FOR BETTER STABILITY
-      const chunkSize = 10 * 1024 * 1024;
-      const totalChunks = Math.ceil(file.size / chunkSize);
-      let uploadedChunks = 0;
-  
-      for (let start = 0; start < file.size; start += chunkSize) {
-        const chunk = file.slice(start, Math.min(start + chunkSize, file.size));
-        const response = await api.patch(uploadEndpoint, chunk, true); // Added flag for blob data
-        if (!response.ok) throw new Error('Failed to upload chunk');
-        
-        uploadedChunks++;
-        state.uploadProgress[uploadId] = (uploadedChunks / totalChunks) * 100;
-      }
-  
-      // COMPLETE UPLOAD
-      const completeResponse = await api.put(
-        `${uploadEndpoint}?version=${encodeURIComponent(version)}&path=${encodeURIComponent(path)}`,
-        null
-      );
-      
-      if (!completeResponse.ok) throw new Error('Failed to complete upload');
-  
-      // CLEAR PROGRESS AND REFRESH ARTIFACTS
-      delete state.uploadProgress[uploadId];
-      
-    } catch (err) {
-      delete state.uploadProgress[uploadId];
-      throw err;
-    }
-  }
+  const uploadId = uuidv4();
+  state.uploadProgress[uploadId] = 0;
 
+  try {
+    // INIT UPLOAD
+    const initResponse = await api.post(`/api/v1/artifacts/${encodeURIComponent(repo)}/upload`, {});
+    if (!initResponse.ok) throw new Error('Failed to initialize upload');
+    
+    const uploadEndpoint = initResponse.headers.get('Location');
+    if (!uploadEndpoint) throw new Error('Invalid upload location');
+
+    // CHUNK SIZE INCREASED FOR LARGE FILES
+    const chunkSize = 50 * 1024 * 1024; // 50MB chunks
+    const totalChunks = Math.ceil(file.size / chunkSize);
+    let uploadedChunks = 0;
+
+    for (let start = 0; start < file.size; start += chunkSize) {
+      const chunk = file.slice(start, Math.min(start + chunkSize, file.size));
+      const response = await api.patch(uploadEndpoint, chunk, true);
+      
+      if (!response.ok) throw new Error('Failed to upload chunk');
+      
+      uploadedChunks++;
+      state.uploadProgress[uploadId] = Math.floor((uploadedChunks / totalChunks) * 100);
+    }
+
+    // COMPLETE UPLOAD
+    const completeUrl = `${uploadEndpoint}?version=${encodeURIComponent(version)}&path=${encodeURIComponent(path)}`;
+    const completeResponse = await api.put(
+      completeUrl,
+      state.properties
+    );
+    
+    if (!completeResponse.ok) throw new Error('Failed to complete upload');
+
+    delete state.uploadProgress[uploadId];
+    
+  } catch (err) {
+    delete state.uploadProgress[uploadId];
+    throw err;
+  }
+}
 
 async function fetchArtifacts(repoName: string) {
   state.loading = true;
   state.error = null;
 
   try {
-      const response = await api.get(`/api/v1/artifacts/${repoName}/versions`);
+      const response = await api.get(`/api/v1/artifacts/${encodeURIComponent(repoName)}/versions`);
       const data: Record<string, Artifact[]> = await response.json();
       const repo = state.repositories.find(r => r.name === repoName);
       if (repo) {
@@ -162,9 +171,26 @@ async function fetchArtifacts(repoName: string) {
   }
 }
 
+async function fetchArtifactSettings() {
+  try {
+    const response = await api.get('/api/v1/settings/artifacts');
+    if (response.ok) {
+      const settings = await response.json();
+      state.requiredProperties = settings.properties?.required || [];
+      state.indexedProperties = settings.properties?.indexed || [];
+      state.properties = state.requiredProperties.reduce<Record<string,string>>((acc, prop) => {
+        acc[prop] = '';
+        return acc;
+      }, {});
+    }
+  } catch (err) {
+    state.settingsError = 'Failed to load artifact settings';
+  }
+}
+
 async function deleteArtifact(repo: string, version: string, path: string) {
   try {
-    await api.delete(`/api/v1/artifacts/${repo}/${encodeURIComponent(version)}/${encodeURIComponent(path)}`);
+    await api.delete(`/api/v1/artifacts/${encodeURIComponent(repo)}/${encodeURIComponent(version)}/${encodeURIComponent(path)}`);
     await fetchArtifacts(repo);
   } catch (err) {
     throw new Error(err instanceof Error ? err.message : 'Failed to delete artifact');
@@ -173,10 +199,20 @@ async function deleteArtifact(repo: string, version: string, path: string) {
 
 async function updateMetadata(repo: string, artifactId: string, metadata: Record<string, any>) {
     try {
-        await api.put(`/api/v1/artifacts/${repo}/${artifactId}/metadata`, metadata);
+        await api.put(`/api/v1/artifacts/${encodeURIComponent(repo)}/${artifactId}/metadata`, metadata);
         await fetchArtifacts(repo);
     } catch (err) {
         state.error = err instanceof Error ? err.message : 'Failed to update metadata';
+        throw err;
+    }
+}
+
+async function updateProperties(repo: string, artifactId: string, props: Record<string, any>) {
+    try {
+        await api.put(`/api/v1/artifacts/${encodeURIComponent(repo)}/${artifactId}/properties`, props);
+        await fetchArtifacts(repo);
+    } catch (err) {
+        state.error = err instanceof Error ? err.message : 'Failed to update properties';
         throw err;
     }
 }
@@ -194,6 +230,11 @@ function formatSize(bytes: number): string {
     return `${size.toFixed(1)} ${units[unitIndex]}`;
 }
 
+function sumArtifacts(artifacts: Artifact[]): string {
+    const sumOfArtifacts = artifacts.reduce((acc, cur) => acc + cur.size, 0);
+    return formatSize(sumOfArtifacts);
+}
+
 export const artifacts = {
     // STATE
     get repositories() { return state.repositories },
@@ -207,6 +248,9 @@ export const artifacts = {
     get fileSearchTerm() { return state.fileSearchTerm },
     set fileSearchTerm(term: string) { state.fileSearchTerm = term },
     get uploadProgress() { return state.uploadProgress },
+    get properties() { return state.properties || {} },
+    get indexedProperties() { return state.indexedProperties || [] },
+    get requiredProperties() { return state.requiredProperties || [] },
     get filteredRepos() { return filteredRepositories() },
     get filteredArtifacts() { return filteredArtifacts() },
 
@@ -218,5 +262,8 @@ export const artifacts = {
     fetchArtifacts,
     deleteArtifact,
     updateMetadata,
-    formatSize
+    formatSize,
+    sumArtifacts,
+    updateProperties,
+    fetchArtifactSettings
 };

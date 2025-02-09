@@ -1,21 +1,32 @@
 <script lang="ts">
-  import { Settings, Package, Server, Shield, Users } from "lucide-svelte";
+  import { Settings, Package, Server, Shield, Users, Key, Cog } from "lucide-svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import ArtifactSettings from "./ArtifactSettings.svelte";
   import RoleSettings from "./RoleSettings.svelte";
   import GroupSettings from "./GroupSettings.svelte";
+  import AuthSettings from "./AuthSettings.svelte";
+  import SystemSettings from "./SystemSettings.svelte";
 
-  let activeTab = $state("general");
+  let activeTab = $state("config");
   let loading = $state(false);
   let error = $state<string | null>(null);
 
   const sections = [
     {
-      id: "general",
-      title: "General Settings",
-      icon: Settings,
-      description: "Basic system configuration",
-      component: null,
+      id: "config",
+      title: "System Configuration",
+      icon: Cog,
+      description: "View system configuration",
+      component: SystemSettings,
+      roles: ['admins']
+    },
+    {
+      id: "auth",
+      title: "Authentication",
+      icon: Key,
+      description: "Security and access control settings",
+      component: AuthSettings,
+      roles: ['admins']
     },
     {
       id: "roles",
@@ -23,6 +34,7 @@
       icon: Shield,
       description: "Manage system roles and permissions",
       component: RoleSettings,
+      roles: ['admins']
     },
     {
       id: "groups",
@@ -30,6 +42,7 @@
       icon: Users,
       description: "Manage user groups and access",
       component: GroupSettings,
+      roles: ['admins']
     },
     {
       id: "artifacts",
@@ -37,41 +50,41 @@
       icon: Package,
       description: "Configure artifact retention and storage policies",
       component: ArtifactSettings,
-    },
-    {
-      id: "registry",
-      title: "Registry Settings",
-      icon: Server,
-      description: "Docker registry configuration",
-      component: null,
-    },
-    {
-      id: "auth",
-      title: "Authentication",
-      icon: Shield,
-      description: "Security and access control settings",
-      component: null,
-    },
+      roles: ['admins']
+    }
   ];
+
+  // FILTER TABS BASED ON ROLE
+  const availableSections = $derived(
+    sections.filter(section => 
+      section.roles.some(role => auth.hasRole(role))
+    )
+  );
+
+  function isTabVisible(tabId: string): boolean {
+    const section = sections.find(s => s.id === tabId);
+    if (!section) return false;
+    return section.roles.some(role => auth.hasRole(role));
+  }
 </script>
 
 <div class="space-y-6">
   <div>
-    <h1 class="text-2xl font-semibold">System Settings</h1>
+    <h1 class="text-2xl font-semibold text-gray-900">Settings</h1>
     <p class="text-sm text-gray-600">
-      Manage system-wide configuration and policies
+      Manage system-wide configuration, settings, and policies
     </p>
   </div>
 
-  <!-- TABS -->
+  <!-- TAB NAV -->
   <div class="border-b border-gray-200">
     <nav class="-mb-px flex space-x-8" aria-label="Tabs">
-      {#each sections as section}
+      {#each availableSections as section}
         <button
-          class="whitespace-nowrap border-b-2 py-4 px-1 text-sm font-medium
-            {activeTab === section.id
-            ? 'border-blue-500 text-blue-600'
-            : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'}"
+          class={`whitespace-nowrap border-b-2 py-4 px-1 text-sm font-medium transition-colors duration-200
+            ${activeTab === section.id
+              ? 'border-blue-500 text-blue-600'
+              : 'border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700'}`}
           onclick={() => (activeTab = section.id)}
         >
           <div class="flex items-center">
@@ -83,7 +96,7 @@
     </nav>
   </div>
 
-  <!-- PANELS -->
+  <!-- ERR -->
   {#if error}
     <div class="rounded-md bg-red-50 p-4">
       <div class="flex">
@@ -97,10 +110,10 @@
     </div>
   {/if}
 
-  <!-- ACTIVE CONTENT -->
+  <!-- CONTENT -->
   <div class="bg-white shadow-sm rounded-lg">
     {#each sections as section}
-      {#if activeTab === section.id}
+      {#if activeTab === section.id && isTabVisible(section.id)}
         <div class="p-6">
           <h2 class="text-lg font-medium text-gray-900">{section.title}</h2>
           <p class="mt-1 text-sm text-gray-500">{section.description}</p>
@@ -113,7 +126,7 @@
             </div>
           {:else if section.component}
             <div class="mt-6">
-              <section.component></section.component>
+              <section.component/>
             </div>
           {/if}
         </div>
