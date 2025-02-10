@@ -5,6 +5,7 @@
 
 # User-specific files
 sandbox/
+build/
 *.rsuser
 *.suo
 *.user
@@ -402,3 +403,5 @@ FodyWeavers.xsd
 registry.db*
 repomix-output.txt
 
+# Added by goreleaser init:
+dist/
