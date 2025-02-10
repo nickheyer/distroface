@@ -23,7 +23,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o distroface ./cmd/
 FROM alpine:3.19
 
 RUN apk add --no-cache ca-certificates tzdata
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+RUN addgroup -S -g 1000 appgroup && adduser -S -u 1000 -G appgroup appuser
 
 RUN mkdir -p /data/registry /data/db /data/certs && \
     chown -R appuser:appgroup /data
