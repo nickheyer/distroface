@@ -20,5 +20,5 @@ init:
   roles: true
   groups: true
   user: true
-  username: $REGISTRY_USER
-  password: $REGISTRY_PASS
+  username: admin
+  password: admin
