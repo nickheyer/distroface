@@ -42,10 +42,4 @@ EXPOSE 8668
 ENV GO_ENV=production \
     TZ=UTC
 
-VOLUME ["/data/registry", "/data/db", "/data/certs"]
-
-# HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-#     CMD wget --no-verbose --tries=1 --spider http://0.0.0.0:${PORT}/v2/ || exit 1
-
-
 ENTRYPOINT ["/app/distroface"]
