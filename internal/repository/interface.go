@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"encoding/json"
+
 	"github.com/nickheyer/distroface/internal/models"
 )
 
@@ -41,4 +43,27 @@ type Repository interface {
 	DeleteImageMetadata(id string) error
 	ListPublicImageMetadata() ([]*models.ImageMetadata, error)
 	UpdateImageVisibility(id string, private bool) error
+
+	// ARTIFACT OPS
+	CreateArtifactRepository(repo *models.ArtifactRepository) error
+	GetArtifactRepository(name string) (*models.ArtifactRepository, error)
+	GetArtifactRepositoryByID(repoID string) (*models.ArtifactRepository, error)
+	ListArtifactRepositories(username string) ([]models.ArtifactRepository, error)
+	DeleteArtifactRepository(name string) error
+	CreateArtifact(artifact *models.Artifact) error
+	ListArtifacts(repoID int) ([]models.Artifact, error)
+	UpdateArtifactMetadata(id string, metadata string) error
+	UpdateArtifactPath(id string, name string, path string, version string) error
+	DeleteArtifact(repoID int, version string, id string) error
+	DeleteArtifactByPath(repoID int, version string, path string) error
+	SetArtifactProperties(artifactID string, properties map[string]string) error
+	GetArtifactProperties(artifactID string) (map[string]string, error)
+	GetArtifact(artifactID string) (models.Artifact, error)
+	SearchArtifacts(criteria models.ArtifactSearchCriteria) ([]models.Artifact, error)
+
+	// SETTINGS OPS
+	GetAllSettings() (map[string]json.RawMessage, error)
+	GetSettingsSection(section string) (json.RawMessage, error)
+	UpdateSettingsSection(section string, settings json.RawMessage) error
+	ResetSettingsSection(section string) error
 }

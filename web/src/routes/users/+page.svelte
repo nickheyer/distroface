@@ -1,8 +1,10 @@
 <script lang="ts">
     import { auth } from "$lib/stores/auth.svelte";
     import { groups } from "$lib/stores/groups.svelte";
-    import { Users, Shield, UserPlus, UserX, Settings } from "lucide-svelte";
+    import { Users, Shield, UserPlus, Trash2, Settings, AlertCircle } from "lucide-svelte";
     import type { User } from "$lib/stores/auth.svelte";
+    import { showToast } from "$lib/stores/toast.svelte";
+    import Toast from "$lib/components/Toast.svelte";
 
     let users = $state<User[]>([]);
     let loading = $state(true);
@@ -14,6 +16,11 @@
     let newUsername = $state("");
     let newPassword = $state("");
     let selectedGroups = $state<string[]>([]);
+
+    // DELETE STATE
+    let deleteModalOpen = $state(false);
+    let userToDelete = $state<string | null>(null);
+    let deleteError = $state<string | null>(null);
 
     async function fetchUsers() {
         try {
@@ -93,6 +100,32 @@
         }
     }
 
+    async function handleDeleteUser() {
+        if (!userToDelete) return;
+        
+        try {
+            const response = await fetch(`/api/v1/users/${userToDelete}`, {
+                method: 'DELETE',
+                headers: {
+                    'Authorization': `Bearer ${auth.token}`
+                }
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText);
+            }
+
+            // CLOSE MODAL AND REFRESH USERS
+            deleteModalOpen = false;
+            userToDelete = null;
+            await fetchUsers();
+            
+        } catch (err) {
+            deleteError = err instanceof Error ? err.message : 'Failed to delete user';
+        }
+    }
+
     $effect(() => {
         if (auth.token) {
             Promise.all([
@@ -117,7 +150,14 @@
         readerCount: users.filter((u) => u.groups.includes("readers")).length,
     });
 
-    // EVERYTHING IS AUTHENTICATED ON SERVER, THIS IS KEEP UI STABLE - EVENTUALLY WILL MAKE MORE GRANULAR
+    $effect(() => {
+        if (error) {
+            showToast(error, 'error');
+            error = null;
+        }
+    })
+
+    // EVERYTHING IS AUTHENTICATED ON SERVER, THIS KEEPS UI STABLE - EVENTUALLY WILL MAKE MORE GRANULAR
     const canCreateUser = $derived(auth.hasRole('admins'));
     const canUpdateUser = $derived(auth.hasRole('admins'));
     const canViewUsers = $derived(auth.hasRole('admins'));
@@ -189,11 +229,7 @@
                 </div>
 
                 <!-- ERR TO DISPLAY -->
-                {#if error}
-                    <div class="text-sm text-red-600">
-                        {error}
-                    </div>
-                {/if}
+                <Toast></Toast>
 
                 <!-- ACTION BUTTONS -->
                 <div class="flex justify-end space-x-2 pt-4">
@@ -327,11 +363,7 @@
     </div>
 
     <!-- ERROR MESSAGE -->
-    {#if error}
-        <div class="bg-red-50 p-4 rounded-md">
-            <div class="text-sm text-red-700">{error}</div>
-        </div>
-    {/if}
+    <Toast></Toast>
 
     <!-- USER LIST -->
     {#if canViewUsers}
@@ -410,7 +442,17 @@
                                                                 {group.name}
                                                             </button>
                                                         {/each}
+                                                        <button
+                                                            onclick={() => {
+                                                                userToDelete = user.username;
+                                                                deleteModalOpen = true;
+                                                            }}
+                                                            class="text-red-600 hover:text-red-900"
+                                                        >
+                                                            <Trash2 class="h-4 w-4" />
+                                                        </button>
                                                     </div>
+
                                                 </td>
                                             </tr>
                                         {/each}
@@ -428,3 +470,65 @@
         </div>
     {/if}
 </div>
+
+<!-- way too much tailwind -->
+{#if deleteModalOpen && userToDelete}
+    <div class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity z-50">
+        <div class="fixed inset-0 z-10 overflow-y-auto">
+            <div class="flex min-h-full items-end justify-center p-4 text-center sm:items-center sm:p-0">
+                <div class="relative transform overflow-hidden rounded-lg bg-white px-4 pb-4 pt-5 text-left shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-lg sm:p-6">
+                    <div class="sm:flex sm:items-start">
+                        <div class="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+                            <AlertCircle class="h-6 w-6 text-red-600" />
+                        </div>
+                        <div class="mt-3 text-center sm:ml-4 sm:mt-0 sm:text-left">
+                            <h3 class="text-base font-semibold leading-6 text-gray-900">
+                                Delete User
+                            </h3>
+                            <div class="mt-2">
+                                <p class="text-sm text-gray-500">
+                                    Are you sure you want to delete user {userToDelete}? This action cannot be undone.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {#if deleteError}
+                        <div class="mt-4 rounded-md bg-red-50 p-4">
+                            <div class="flex">
+                                <AlertCircle class="h-5 w-5 text-red-400" />
+                                <div class="ml-3">
+                                    <h3 class="text-sm font-medium text-red-800">Error</h3>
+                                    <div class="mt-2 text-sm text-red-700">
+                                        <p>{deleteError}</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    {/if}
+
+                    <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
+                        <button
+                            type="button"
+                            onclick={handleDeleteUser}
+                            class="inline-flex w-full justify-center rounded-md bg-red-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-red-500 sm:ml-3 sm:w-auto"
+                        >
+                            Delete User
+                        </button>
+                        <button
+                            type="button"
+                            onclick={() => {
+                                deleteModalOpen = false;
+                                userToDelete = null;
+                                deleteError = null;
+                            }}
+                            class="mt-3 inline-flex w-full justify-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 sm:mt-0 sm:w-auto"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+{/if}

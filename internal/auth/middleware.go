@@ -6,16 +6,16 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nickheyer/distroface/internal/config"
 	"github.com/nickheyer/distroface/internal/constants"
+	"github.com/nickheyer/distroface/internal/models"
 )
 
 type Middleware struct {
 	auth AuthService
-	cfg  *config.Config
+	cfg  *models.Config
 }
 
-func NewMiddleware(auth AuthService, cfg *config.Config) *Middleware {
+func NewMiddleware(auth AuthService, cfg *models.Config) *Middleware {
 	return &Middleware{auth: auth, cfg: cfg}
 }
 

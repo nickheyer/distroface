@@ -1,9 +1,11 @@
 package middleware
 
 import (
-	"log"
 	"net/http"
 	"strings"
+
+	"github.com/nickheyer/distroface/internal/logging"
+	"go.uber.org/zap"
 )
 
 // SENSITIVE HEADERS THAT SHOULD BE MASKED FOR SECURITY
@@ -20,22 +22,23 @@ func filterHeaders(headers http.Header) map[string]string {
 	for key, values := range headers {
 		if sensitiveHeaders[key] {
 			filtered[key] = "[REDACTED]"
-			continue
+		} else {
+			filtered[key] = strings.Join(values, ", ")
 		}
-		filtered[key] = strings.Join(values, ", ")
 	}
 	return filtered
 }
 
-func LoggingMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// SECURITY THROUGH OBSCURITY I GUESS
-		log.Printf("\n[%s] %s %s | IP=%s\n",
-			r.Method,
-			r.URL.Path,
-			filterHeaders(r.Header),
-			r.RemoteAddr,
-		)
-		next.ServeHTTP(w, r)
-	})
+func LoggingMiddleware(log *logging.LogService) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Debug("Incoming HTTP request",
+				zap.String("method", r.Method),
+				zap.String("path", r.URL.Path),
+				zap.Any("headers", filterHeaders(r.Header)),
+				zap.String("remote_addr", r.RemoteAddr),
+			)
+			next.ServeHTTP(w, r)
+		})
+	}
 }

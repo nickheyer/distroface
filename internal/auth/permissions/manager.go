@@ -7,22 +7,24 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nickheyer/distroface/internal/models"
+	"github.com/nickheyer/distroface/internal/repository"
+	"github.com/nickheyer/distroface/internal/utils"
 )
 
 type PermissionManager struct {
 	db    *sql.DB
 	cache PermissionCache
-	mu    sync.RWMutex // OOOOF CONCURRENCY
+	repo  repository.Repository
 }
 
-func NewPermissionManager(db *sql.DB) *PermissionManager {
+func NewPermissionManager(repo repository.Repository, db *sql.DB) *PermissionManager {
 	pm := &PermissionManager{
 		db:    db,
 		cache: NewInMemoryCache(),
+		repo:  repo,
 	}
 
 	// START CACHE CLEANUP
@@ -175,8 +177,11 @@ func (pm *PermissionManager) roleHasPermission(role models.Role, perm models.Per
 }
 
 func (pm *PermissionManager) periodicallyCleanCache() {
-	ticker := time.NewTicker(5 * time.Minute)
+	authSettings, _ := utils.GetSettings[*models.AuthSettings](pm.repo, "auth")
+	interval := time.Duration(authSettings.SessionTimeout) * time.Minute
+	ticker := time.NewTicker(interval)
 	for range ticker.C {
+		fmt.Printf("Cleaning cache...\n")
 		pm.cache.Clear()
 	}
 }

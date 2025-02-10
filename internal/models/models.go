@@ -11,27 +11,32 @@ type Action string
 type Resource string
 type Scope string
 
+// PERMISSIONS - SINGLE SOURCE OF TRUTH
 const (
 	// ACTIONS
-	ActionView    Action = "VIEW"
-	ActionCreate  Action = "CREATE"
-	ActionUpdate  Action = "UPDATE"
-	ActionDelete  Action = "DELETE"
-	ActionPush    Action = "PUSH"
-	ActionPull    Action = "PULL"
-	ActionAdmin   Action = "ADMIN"
-	ActionLogin   Action = "LOGIN"
-	ActionLogout  Action = "LOGOUT"
-	ActionMigrate Action = "MIGRATE"
+	ActionView     Action = "VIEW"
+	ActionCreate   Action = "CREATE"
+	ActionUpdate   Action = "UPDATE"
+	ActionDelete   Action = "DELETE"
+	ActionPush     Action = "PUSH"
+	ActionPull     Action = "PULL"
+	ActionAdmin    Action = "ADMIN"
+	ActionLogin    Action = "LOGIN"
+	ActionLogout   Action = "LOGOUT"
+	ActionMigrate  Action = "MIGRATE"
+	ActionUpload   Action = "UPLOAD"
+	ActionDownload Action = "DOWNLOAD"
 
 	// RESOURCES
-	ResourceTask   Resource = "TASK"
-	ResourceWebUI  Resource = "WEBUI"
-	ResourceImage  Resource = "IMAGE"
-	ResourceTag    Resource = "TAG"
-	ResourceUser   Resource = "USER"
-	ResourceGroup  Resource = "GROUP"
-	ResourceSystem Resource = "SYSTEM"
+	ResourceTask     Resource = "TASK"
+	ResourceWebUI    Resource = "WEBUI"
+	ResourceImage    Resource = "IMAGE"
+	ResourceTag      Resource = "TAG"
+	ResourceUser     Resource = "USER"
+	ResourceGroup    Resource = "GROUP"
+	ResourceSystem   Resource = "SYSTEM"
+	ResourceArtifact Resource = "ARTIFACT"
+	ResourceRepo     Resource = "REPO"
 
 	// SCOPES
 	ScopeGlobal     Scope = "global"
@@ -117,52 +122,6 @@ func (u *User) UnmarshalGroups(data string) error {
 }
 
 // DEFAULT SYSTEM ROLES - TODO: USE THIS INSTEAD OF MANUAL MIGRATIONS
-func DefaultRoles() []Role {
-	return []Role{
-		{
-			Name:        "anonymous",
-			Description: "Unauthenticated access",
-			Permissions: []Permission{
-				{Action: ActionPull, Resource: ResourceImage},
-				{Action: ActionView, Resource: ResourceWebUI},
-				{Action: ActionLogin, Resource: ResourceWebUI},
-			},
-		},
-		{
-			Name:        "reader",
-			Description: "Basic read access",
-			Permissions: []Permission{
-				{Action: ActionPull, Resource: ResourceImage},
-				{Action: ActionView, Resource: ResourceTag},
-				{Action: ActionView, Resource: ResourceWebUI},
-				{Action: ActionLogin, Resource: ResourceWebUI},
-				{Action: ActionLogout, Resource: ResourceWebUI},
-			},
-		},
-		{
-			Name:        "developer",
-			Description: "Standard developer access",
-			Permissions: []Permission{
-				{Action: ActionPull, Resource: ResourceImage},
-				{Action: ActionPush, Resource: ResourceImage},
-				{Action: ActionView, Resource: ResourceTag},
-				{Action: ActionCreate, Resource: ResourceTag},
-				{Action: ActionView, Resource: ResourceWebUI},
-				{Action: ActionLogin, Resource: ResourceWebUI},
-				{Action: ActionLogout, Resource: ResourceWebUI},
-				{Action: ActionMigrate, Resource: ResourceTask},
-			},
-		},
-		{
-			Name:        "administrator",
-			Description: "Full system access",
-			Permissions: []Permission{
-				{Action: ActionAdmin, Resource: ResourceSystem},
-			},
-		},
-	}
-}
-
 type GlobalView struct {
 	TotalImages int64            `json:"total_images"`
 	TotalSize   int64            `json:"total_size"`
@@ -194,6 +153,41 @@ type DockerManifest struct {
 		Size      int64  `json:"size"`
 		Digest    string `json:"digest"`
 	} `json:"layers"`
+}
+
+type ArtifactRepository struct {
+	ID          int       `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Owner       string    `json:"owner"`
+	Private     bool      `json:"private"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type Artifact struct {
+	ID         string            `json:"id"`
+	RepoID     int               `json:"repo_id"`
+	Name       string            `json:"name"`
+	Path       string            `json:"path"`
+	Version    string            `json:"version"`
+	Size       int64             `json:"size"`
+	MimeType   string            `json:"mime_type"`
+	Metadata   string            `json:"metadata"`
+	Properties map[string]string `json:"properties"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+}
+
+type ArtifactSearchCriteria struct {
+	RepoID     *int              `json:"repo_id,omitempty"`
+	Name       *string           `json:"name,omitempty"`
+	Version    *string           `json:"version,omitempty"`
+	Path       *string           `json:"path,omitempty"`
+	Properties map[string]string `json:"properties,omitempty"`
+	Sort       string            `json:"sort,omitempty"`
+	Order      string            `json:"order,omitempty"`
+	Limit      int               `json:"limit,omitempty"`
 }
 
 type VisibilityUpdateRequest struct {

@@ -11,7 +11,6 @@ import (
 
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/nickheyer/distroface/internal/auth/permissions"
-	"github.com/nickheyer/distroface/internal/config"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"golang.org/x/crypto/bcrypt"
@@ -83,7 +82,7 @@ type authService struct {
 	repo         repository.Repository
 	permManager  *permissions.PermissionManager
 	tokenManager *TokenManager
-	config       *config.Config
+	config       *models.Config
 }
 
 type AuthService interface {
@@ -140,7 +139,7 @@ func NewAuthService(
 	permManager *permissions.PermissionManager,
 	signKey *rsa.PrivateKey,
 	verifyKey *rsa.PublicKey,
-	cfg *config.Config,
+	cfg *models.Config,
 ) AuthService {
 	return &authService{
 		repo:         repo,

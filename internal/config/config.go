@@ -16,33 +16,66 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/models"
 	"gopkg.in/yaml.v3"
 )
 
-type Config struct {
-	Server struct {
-		Port        string `yaml:"port" env:"SERVER_PORT"`
-		Domain      string `yaml:"domain" env:"SERVER_DOMAIN"`
-		RSAKeyFile  string `yaml:"rsa_key_file" env:"RSA_KEY_FILE"`
-		TLSKeyFile  string `yaml:"tls_key" env:"TLS_KEY_FILE"`
-		TLSCertFile string `yaml:"tls_certificate" env:"TLS_CERT_FILE"`
-		CertBundle  string `yaml:"cert_bundle" env:"CERT_BUNDLE"`
-	} `yaml:"server"`
-	Storage struct {
-		RootDirectory string `yaml:"root_directory" env:"STORAGE_ROOT"`
-	} `yaml:"storage"`
-	Database struct {
-		Path string `yaml:"path" env:"DB_PATH"`
-	} `yaml:"database"`
-	Auth struct {
-		Realm   string `yaml:"realm" env:"AUTH_REALM"`
-		Service string `yaml:"service" env:"AUTH_SERVICE"`
-		Issuer  string `yaml:"issuer" env:"AUTH_ISSUER"`
-	} `yaml:"auth"`
+func NewDefaultConfig() *models.Config {
+	return &models.Config{
+		Server: struct {
+			Port        string `json:"port" yaml:"port"`
+			Domain      string `json:"domain" yaml:"domain"`
+			RSAKeyFile  string `json:"rsaKeyFile" yaml:"rsa_key_file"`
+			TLSKeyFile  string `json:"tlsKeyFile" yaml:"tls_key_file"`
+			TLSCertFile string `json:"tlsCertFile" yaml:"tls_certificate"`
+			CertBundle  string `json:"certBundle" yaml:"cert_bundle"`
+		}{
+			Port:        "8668",
+			Domain:      "localhost",
+			RSAKeyFile:  "~/.distroface/certs/distro_auth.key",
+			CertBundle:  "~/.distroface/certs/distro_auth.crt",
+			TLSKeyFile:  "",
+			TLSCertFile: "",
+		},
+		Storage: struct {
+			RootDirectory string `json:"rootDirectory" yaml:"root_directory"`
+		}{
+			RootDirectory: "~/.distroface/data",
+		},
+		Database: struct {
+			Path string `json:"path" yaml:"path"`
+		}{
+			Path: "~/.distroface/db/distro.db",
+		},
+		Auth: struct {
+			Realm   string `json:"realm" yaml:"realm"`
+			Service string `json:"service" yaml:"service"`
+			Issuer  string `json:"issuer" yaml:"issuer"`
+		}{
+			Realm:   "http://localhost:8668/auth/token",
+			Service: "registry.localdomain:8668",
+			Issuer:  "registry-auth-server",
+		},
+		Init: struct {
+			Drop     bool   `json:"drop" yaml:"drop"`
+			Roles    bool   `json:"roles" yaml:"roles"`
+			Groups   bool   `json:"groups" yaml:"groups"`
+			User     bool   `json:"user" yaml:"user"`
+			Username string `json:"username" yaml:"username"`
+			Password string `json:"password" yaml:"password"`
+		}{
+			Drop:     false,
+			Roles:    true,
+			Groups:   true,
+			User:     true,
+			Username: "admin",
+			Password: "admin",
+		},
+	}
 }
 
-func Load(configPath string) (*Config, error) {
-	cfg := &Config{}
+func Load(configPath string) (*models.Config, error) {
+	cfg := NewDefaultConfig()
 
 	// LOAD FROM FILE
 	if err := loadFromFile(cfg, configPath); err != nil {
@@ -64,14 +97,15 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("FAILED TO ENSURE CERT BUNDLE: %v", err)
 	}
 
-	fmt.Printf("CONFIG: %v\n", cfg)
+	fmt.Printf("Loading config with the following values: %+v\n", cfg)
 	return cfg, nil
 }
 
-func loadFromFile(cfg *Config, path string) error {
+func loadFromFile(cfg *models.Config, path string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("failed to read config file: %v", err)
+		fmt.Printf("No config file found: %v", err)
+		return nil
 	}
 
 	if err := yaml.Unmarshal(data, cfg); err != nil {
@@ -81,7 +115,7 @@ func loadFromFile(cfg *Config, path string) error {
 	return nil
 }
 
-func loadFromEnv(cfg *Config) error {
+func loadFromEnv(cfg *models.Config) error {
 	val := reflect.ValueOf(cfg).Elem()
 	return loadEnvRecursive(val, "")
 }
@@ -148,7 +182,7 @@ func setField(field reflect.Value, value string) error {
 	return nil
 }
 
-func expandConfigPaths(cfg *Config) error {
+func expandConfigPaths(cfg *models.Config) error {
 	// EXPAND SERVER PATHS
 	var err error
 	cfg.Server.RSAKeyFile, err = expandPath(cfg.Server.RSAKeyFile)
@@ -201,7 +235,7 @@ func expandPath(path string) (string, error) {
 	return filepath.Clean(expanded), nil
 }
 
-func ensureCertBundle(cfg *Config) error {
+func ensureCertBundle(cfg *models.Config) error {
 	// CREATE CERT DIRECTORIES
 	certDir := filepath.Dir(cfg.Server.CertBundle)
 	keyDir := filepath.Dir(cfg.Server.RSAKeyFile)

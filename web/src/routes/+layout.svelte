@@ -11,6 +11,7 @@
         ArrowRight,
         Globe,
         User,
+        Archive
     } from "lucide-svelte";
     import { auth } from "$lib/stores/auth.svelte";
     import { goto } from "$app/navigation";
@@ -30,10 +31,11 @@
 
     const navigation: NavItem[] = [
         { name: "Registry", href: "/registry", Icon: Package },
+        { name: "Public", href: "/public", Icon: Globe },
+        { name: "Artifacts", href: "/artifacts", Icon: Archive},
         { name: "Migration", href: "/migration", Icon: ArrowRight },
         { name: "Users", href: "/users", Icon: Users },
         { name: "Settings", href: "/settings", Icon: Settings },
-        { name: "Public", href: "/public", Icon: Globe },
     ];
 
     $effect(() => {

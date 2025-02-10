@@ -1,18 +1,24 @@
+storage:
+  root_directory: "/data/registry"
+
 server:
   port: "8668"
   domain: "0.0.0.0"
-  rsa_key_file: "/data/certs/registry_auth.key"
-  cert_bundle: "/data/certs/registry_auth.crt"
-  #tls_certificate: "/data/certs/registry.crt"
-  #tls_key: "/data/certs/registry.key"
-
-storage:
-  root_directory: "/data/registry/registry"
+  rsa_key_file: "/data/certs/distro_auth.key"
+  cert_bundle: "/data/certs/distro_auth.crt"
 
 database:
-  path: "/data/db/registry.db"
+  path: "/data/db/distro.db"
 
 auth:
   realm: "http://0.0.0.0:8668/auth/token"
-  service: "registry"
+  service: "registry:8668"
   issuer: "registry-auth-server"
+
+init:
+  drop: false # SET VIA ENV TO DROP ALL TABLES ON INIT
+  roles: true
+  groups: true
+  user: true
+  username: admin
+  password: admin

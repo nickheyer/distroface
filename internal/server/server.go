@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 
 	dconfig "github.com/distribution/distribution/v3/configuration"
 	_ "github.com/distribution/distribution/v3/registry/auth/token"
@@ -15,19 +16,19 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
-
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/auth/permissions"
-	"github.com/nickheyer/distroface/internal/config"
 	"github.com/nickheyer/distroface/internal/constants"
+	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/handlers"
+	"github.com/nickheyer/distroface/internal/logging"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"github.com/nickheyer/distroface/internal/server/middleware"
 )
 
 type Server struct {
-	config         *config.Config
+	config         *models.Config
 	distConfig     *dconfig.Configuration
 	router         *mux.Router
 	ctx            context.Context
@@ -35,28 +36,31 @@ type Server struct {
 	authService    auth.AuthService
 	authMiddleware *auth.Middleware
 	permManager    *permissions.PermissionManager
+	log            *logging.LogService
 }
 
-func NewServer(cfg *config.Config) (*Server, error) {
+func NewServer(cfg *models.Config) (*Server, error) {
 	ctx := context.Background()
 
-	// INIT DATABASE
-	db, err := initDB(cfg.Database.Path)
+	// INIT LOGGING
+	log, err := logging.NewLogService()
 	if err != nil {
-		return nil, fmt.Errorf("DATABASE INIT FAILED: %v", err)
+		return nil, fmt.Errorf("LOGGING INIT FAILED: %v", err)
 	}
+
+	// INIT DB
+	db, err := initDB(cfg)
+	if err != nil {
+		return nil, log.Errorf("DATABASE INIT FAILED", err)
+	}
+	repo := repository.NewSQLiteRepository(db)
+	permManager := permissions.NewPermissionManager(repo, db)
 
 	// READ RSA KEYS
 	signKey, verifyKey, err := loadRSAKeys(cfg.Server.RSAKeyFile)
 	if err != nil {
-		return nil, fmt.Errorf("FAILED TO LOAD RSA KEYS: %v", err)
+		return nil, log.Errorf("FAILED TO LOAD RSA KEYS", err)
 	}
-
-	// INIT REPOSITORY
-	repo := repository.NewSQLiteRepository(db)
-
-	// INIT PERMISSION MANAGER
-	permManager := permissions.NewPermissionManager(db)
 
 	// INIT AUTH SERVICE
 	authService := auth.NewAuthService(
@@ -113,41 +117,68 @@ func NewServer(cfg *config.Config) (*Server, error) {
 		authService:    authService,
 		authMiddleware: authMiddleware,
 		permManager:    permManager,
+		log:            log,
 	}
 
 	if err := s.setupRoutes(); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("ROUTE SETUP FAILED: %v", err)
+		return nil, log.Errorf("ROUTE SETUP FAILED", err)
 	}
 
 	return s, nil
 }
 
-func initDB(dbPath string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("DB CONNECTION FAILED: %v", err)
+func initDB(cfg *models.Config) (*sql.DB, error) {
+	// ENSURE DB EXISTS
+	dir := filepath.Dir(cfg.Database.Path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create DB directory: %w", err)
 	}
 
-	if err := db.Ping(); err != nil {
-		db.Close()
+	// OPEN DB
+	database, err := sql.Open("sqlite3", cfg.Database.Path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open DB: %w", err)
+	}
+
+	// PING DB FOR HEALTHCHECK
+	if err := database.Ping(); err != nil {
+		database.Close()
 		return nil, fmt.Errorf("DB PING FAILED: %v", err)
 	}
 
-	return db, nil
+	// WAL MODE FOR CONCURRENCY
+	_, _ = database.Exec("PRAGMA journal_mode=WAL;")
+	_, _ = database.Exec("PRAGMA busy_timeout=5000;")
+
+	// RUN SCHEMA
+	if err := db.RunSchema(database, cfg); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("schema init error: %w", err)
+	}
+
+	// INSERT INITIAL VALUES VIA CONFIG
+	if err := db.RunInit(database, cfg); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("init data error: %w", err)
+	}
+
+	return database, nil
 }
 
 func (s *Server) setupRoutes() error {
-	s.router.Use(middleware.LoggingMiddleware)
+	s.router.Use(middleware.LoggingMiddleware(s.log))
 	s.router.Use(middleware.CORS)
 
 	// INIT HANDLERS
 	repo := repository.NewSQLiteRepository(s.db)
-	authHandler := handlers.NewAuthHandler(s.config, s.authService)
-	userHandler := handlers.NewUserHandler(repo, s.permManager)
-	repoHandler := handlers.NewRepositoryHandler(repo, s.config)
-	groupHandler := handlers.NewGroupHandler(repo)
-	roleHandler := handlers.NewRoleHandler(repo, s.permManager)
+	authHandler := handlers.NewAuthHandler(s.config, s.authService, s.log)
+	userHandler := handlers.NewUserHandler(repo, s.permManager, s.log)
+	repoHandler := handlers.NewRepositoryHandler(repo, s.config, s.log)
+	artifactHandler := handlers.NewArtifactHandler(repo, s.config, s.log)
+	groupHandler := handlers.NewGroupHandler(repo, s.log)
+	roleHandler := handlers.NewRoleHandler(repo, s.permManager, s.log)
+	settingsHandler := handlers.NewSettingsHandler(repo, s.config, s.log)
 
 	// PUBLIC ROUTES
 	s.router.HandleFunc("/v2/", authHandler.HandleV2Check)
@@ -158,6 +189,16 @@ func (s *Server) setupRoutes() error {
 	// API ROUTES
 	api := s.router.PathPrefix("/api/v1").Subrouter()
 	api.Use(s.authMiddleware.AuthMiddleware)
+
+	// SETTINGS ROUTES
+	api.Handle("/settings", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+		http.HandlerFunc(settingsHandler.GetSettings))).Methods("GET")
+	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+		http.HandlerFunc(settingsHandler.GetSettings))).Methods("GET")
+	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+		http.HandlerFunc(settingsHandler.UpdateSettings))).Methods("PUT")
+	api.Handle("/settings/{section}/reset", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+		http.HandlerFunc(settingsHandler.ResetSettings))).Methods("POST")
 
 	// REPOSITORY ROUTES
 	api.Handle("/repositories", requirePermission(s.authService, models.ActionView, models.ResourceWebUI)(
@@ -179,6 +220,8 @@ func (s *Server) setupRoutes() error {
 	api.HandleFunc("/users/me", userHandler.GetUser).Methods("GET")
 	api.Handle("/users/{username}", requirePermission(s.authService, models.ActionView, models.ResourceUser)(
 		http.HandlerFunc(userHandler.GetUser))).Methods("GET")
+	api.Handle("/users/{username}", requirePermission(s.authService, models.ActionDelete, models.ResourceUser)(
+		http.HandlerFunc(userHandler.DeleteUser))).Methods("DELETE")
 
 	// ROLE MANAGEMENT
 	api.Handle("/roles", requirePermission(s.authService, models.ActionView, models.ResourceSystem)(
@@ -207,6 +250,36 @@ func (s *Server) setupRoutes() error {
 		http.HandlerFunc(repoHandler.ProxyCatalog))).Methods("GET")
 	api.Handle("/registry/proxy/tags", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask)(
 		http.HandlerFunc(repoHandler.ProxyTags))).Methods("GET")
+
+	// ARTIFACT ROUTES
+	api.Handle("/artifacts/repos", requirePermission(s.authService, models.ActionCreate, models.ResourceRepo)(
+		http.HandlerFunc(artifactHandler.CreateRepository))).Methods("POST")
+	api.Handle("/artifacts/repos", requirePermission(s.authService, models.ActionView, models.ResourceRepo)(
+		http.HandlerFunc(artifactHandler.ListRepositories))).Methods("GET")
+	api.Handle("/artifacts/repos/{repo}", requirePermission(s.authService, models.ActionDelete, models.ResourceRepo)(
+		http.HandlerFunc(artifactHandler.DeleteRepository))).Methods("DELETE")
+	api.Handle("/artifacts/{repo}/upload", requirePermission(s.authService, models.ActionUpload, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.InitiateUpload))).Methods("POST")
+	api.Handle("/artifacts/{repo}/upload/{uuid}", // NO CHECKS PER CHUNK
+		http.HandlerFunc(artifactHandler.HandleUpload)).Methods("PATCH")
+	api.Handle("/artifacts/{repo}/upload/{uuid}", requirePermission(s.authService, models.ActionUpload, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.CompleteUpload))).Methods("PUT")
+	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.DownloadArtifact))).Methods("GET")
+	api.Handle("/artifacts/{repo}/query", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.QueryDownloadArtifacts))).Methods("GET")
+	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDelete, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.DeleteArtifact))).Methods("DELETE")
+	api.Handle("/artifacts/{repo}/versions", requirePermission(s.authService, models.ActionView, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.ListVersions))).Methods("GET")
+	api.Handle("/artifacts/{repo}/{id}/metadata", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.UpdateMetadata))).Methods("PUT")
+	api.Handle("/artifacts/{repo}/{id}/properties", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.UpdateProperties))).Methods("PUT")
+	api.Handle("/artifacts/search", requirePermission(s.authService, models.ActionView, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.SearchArtifacts))).Methods("GET")
+	api.Handle("/artifacts/{repo}/{id}/rename", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.RenameArtifact))).Methods("PUT")
 
 	// REGISTRY ROUTES
 	regAPI := s.router.PathPrefix("/v2").Subrouter()
