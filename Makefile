@@ -4,9 +4,12 @@
 # RUN 'make clean' TO DELETE FILES
 
 SHELL := /bin/sh
-BINARY        ?= distroface
+BUILD_DIR ?= ./build
+BUILD_DIR_DF ?= $(BUILD_DIR)/distroface
+BUILD_DIR_DFCLI ?= $(BUILD_DIR)/dfcli
+BINARY        ?= $(BUILD_DIR_DF)/distroface
+CLI_BINARY    ?= $(BUILD_DIR_DFCLI)/dfcli
 CMD_PATH      ?= ./cmd/distroface
-CLI_BINARY    ?= dfcli
 CLI_CMD_PATH  ?= ./cmd/dfcli
 WEB_DIR       ?= ./web
 CONFIG_FILE   ?= config.yml
@@ -30,7 +33,9 @@ all: build
 ## -----------------------
 ## PROD
 ## -----------------------
-build:
+build: build-cli
+	rm -rf $(BINARY)
+	mkdir -p $(BUILD_DIR_DF)
 	@echo "Building web frontend..."
 	cd $(WEB_DIR) && $(NPM) install && $(NPM) run build
 	@echo "Building Go backend..."
@@ -56,7 +61,7 @@ format:
 clean:
 	@echo "Cleaning build artifacts..."
 	$(GOCLEAN)
-	rm -rf $(WEB_DIR)/dist $(BINARY) $(STORAGE_ROOT) $(DB_PATH)
+	rm -rf $(WEB_DIR)/dist $(BINARY) $(STORAGE_ROOT) $(DB_PATH) $(BUILD_DIR)
 	find . -name ".DS_Store" -delete 
 
 
@@ -96,6 +101,7 @@ run-frontend:
 build-cli:
 	@echo "Building CLI..."
 	rm -rf $(CLI_BINARY)
+	mkdir -p $(BUILD_DIR_DFCLI)
 	$(GOBUILD) -o $(CLI_BINARY) $(CLI_CMD_PATH)
 
 deps: build-cli

@@ -16,9 +16,8 @@ RUN go mod download
 COPY . .
 COPY --from=ui-builder /app/web/build ./web/build
 
-
 # BUILD BINARY
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o distroface ./cmd/main.go
+RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o distroface ./cmd/distroface/main.go
 
 # FINAL
 FROM alpine:3.19

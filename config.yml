@@ -16,7 +16,7 @@ auth:
   issuer: "registry-auth-server"
 
 init:
-  drop: true # SET VIA ENV TO DROP ALL TABLES ON INIT
+  drop: false # SET VIA ENV TO DROP ALL TABLES ON INIT
   roles: true
   groups: true
   user: true
