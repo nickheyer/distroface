@@ -1,5 +1,8 @@
 registry.db
 Dockerfile
+volumes/
+.vscode/
+build/
 docker-compose.yml
 web/node_modules/
 web/build/
@@ -402,5 +405,6 @@ FodyWeavers.xsd
 
 # JetBrains Rider
 *.sln.iml
-registry.db
+registry.db*
+release/
 repomix-output.txt
