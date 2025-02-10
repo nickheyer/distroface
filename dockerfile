@@ -34,9 +34,6 @@ COPY --from=go-builder /app/distroface .
 COPY --from=go-builder /app/web/build ./web/build
 COPY --from=go-builder /app/docker.config.yml /app/config.yml
 
-COPY entrypoint.sh /app/
-RUN chmod +x /app/entrypoint.sh
-
 RUN chown -R appuser:appgroup /app
 USER appuser
 
