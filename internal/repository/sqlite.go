@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -743,6 +744,20 @@ func (r *SQLiteRepository) GetArtifactRepository(name string) (*models.ArtifactR
 	return repo, nil
 }
 
+func (r *SQLiteRepository) GetArtifactRepositoryByID(repoID string) (*models.ArtifactRepository, error) {
+	repo := &models.ArtifactRepository{}
+	err := r.db.QueryRow(
+		`SELECT id, name, description, owner, private, created_at, updated_at 
+		 FROM artifact_repositories WHERE id = ?`,
+		repoID,
+	).Scan(&repo.ID, &repo.Name, &repo.Description, &repo.Owner, &repo.Private,
+		&repo.CreatedAt, &repo.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return repo, nil
+}
+
 func (r *SQLiteRepository) ListArtifactRepositories(username string) ([]models.ArtifactRepository, error) {
 	rows, err := r.db.Query(
 		`SELECT id, name, description, owner, private, created_at, updated_at 
@@ -790,9 +805,9 @@ func (r *SQLiteRepository) CreateArtifact(artifact *models.Artifact) error {
 		artifact.ID = uuid.New().String()
 	}
 	_, err := r.db.Exec(
-		`INSERT INTO artifacts (id, repo_id, name, version, size, mime_type, metadata)
-		     VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		artifact.ID, artifact.RepoID, artifact.Name,
+		`INSERT INTO artifacts (id, repo_id, name, path, version, size, mime_type, metadata)
+		     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		artifact.ID, artifact.RepoID, artifact.Name, artifact.Path,
 		artifact.Version, artifact.Size, artifact.MimeType, artifact.Metadata,
 	)
 	return err
@@ -800,7 +815,7 @@ func (r *SQLiteRepository) CreateArtifact(artifact *models.Artifact) error {
 
 func (r *SQLiteRepository) ListArtifacts(repoID int) ([]models.Artifact, error) {
 	rows, err := r.db.Query( // GOOGLE TOLD ME THIS WAS OK
-		`SELECT COALESCE(id, ''), repo_id, name, version, size, 
+		`SELECT COALESCE(id, ''), repo_id, name, path, version, size, 
 			 COALESCE(mime_type, ''), COALESCE(metadata, '{}'), created_at, updated_at 
 			 FROM artifacts WHERE repo_id = ?`,
 		repoID,
@@ -817,6 +832,7 @@ func (r *SQLiteRepository) ListArtifacts(repoID int) ([]models.Artifact, error) 
 			&artifact.ID,
 			&artifact.RepoID,
 			&artifact.Name,
+			&artifact.Path,
 			&artifact.Version,
 			&artifact.Size,
 			&artifact.MimeType,
@@ -860,54 +876,174 @@ func (r *SQLiteRepository) UpdateArtifactMetadata(id string, metadata string) er
 	return err
 }
 
-func (r *SQLiteRepository) DeleteArtifact(repoID int, version string, path string) error {
+func (r *SQLiteRepository) DeleteArtifact(repoID int, version string, id string) error {
 	_, err := r.db.Exec(
-		"DELETE FROM artifacts WHERE repo_id = ? AND version = ? AND name = ?",
+		"DELETE FROM artifacts WHERE repo_id = ? AND version = ? AND id = ?",
+		repoID, version, id,
+	)
+	return err
+}
+
+func (r *SQLiteRepository) DeleteArtifactByPath(repoID int, version string, path string) error {
+	_, err := r.db.Exec(
+		"DELETE FROM artifacts WHERE repo_id = ? AND version = ? AND path = ?",
 		repoID, version, path,
 	)
 	return err
 }
 
-func (r *SQLiteRepository) SearchArtifacts(properties map[string]string, sort string, order string, limit int) ([]models.Artifact, error) {
-	query := `
-			SELECT DISTINCT a.* 
-			FROM artifacts a
-			JOIN artifact_properties p ON a.id = p.artifact_id
-			WHERE 1=1
-	`
+func (r *SQLiteRepository) SearchArtifacts(criteria models.ArtifactSearchCriteria) ([]models.Artifact, error) {
+	baseQuery := `
+        SELECT DISTINCT a.id, a.repo_id, a.name, a.path, a.version, 
+               a.size, a.mime_type, a.metadata, a.created_at, a.updated_at
+        FROM artifacts a
+    `
+
+	// ONLY JOIN PROPERTIES TABLE IF WE HAVE PROPERTY FILTERS
+	if len(criteria.Properties) > 0 {
+		baseQuery = baseQuery + " JOIN artifact_properties p ON a.id = p.artifact_id"
+	}
+
+	// BUILD WHERE CLAUSE AND ARGS
+	whereClause := []string{"1=1"} // START WITH TRUE FOR EASY CONCATENATION
 	args := []interface{}{}
 
-	for key, value := range properties {
-		query += " AND EXISTS (SELECT 1 FROM artifact_properties p2 WHERE p2.artifact_id = a.id AND p2.key = ? AND p2.value = ?)"
-		args = append(args, key, value)
+	if criteria.RepoID != nil {
+		whereClause = append(whereClause, "a.repo_id = ?")
+		args = append(args, *criteria.RepoID)
 	}
 
-	if sort != "" {
-		query += " ORDER BY " + sort + " " + order
+	if criteria.Name != nil {
+		whereClause = append(whereClause, "a.name LIKE ?")
+		args = append(args, *criteria.Name)
 	}
 
-	if limit > 0 {
+	if criteria.Version != nil {
+		whereClause = append(whereClause, "a.version LIKE ?")
+		args = append(args, *criteria.Version)
+	}
+
+	if criteria.Path != nil {
+		whereClause = append(whereClause, "a.path LIKE ?")
+		args = append(args, *criteria.Path)
+	}
+
+	// ADD PROPERTY FILTERS
+	if len(criteria.Properties) > 0 {
+		for key, value := range criteria.Properties {
+			whereClause = append(whereClause,
+				"EXISTS (SELECT 1 FROM artifact_properties p2 WHERE p2.artifact_id = a.id AND p2.key = ? AND p2.value = ?)")
+			args = append(args, key, value)
+		}
+	}
+
+	// COMBINE QUERY PARTS
+	query := baseQuery + " WHERE " + strings.Join(whereClause, " AND ")
+
+	// ADD SORTING
+	if criteria.Sort != "" {
+		// VALIDATE SORT FIELD TO PREVENT SQL INJECTION
+		validSortFields := map[string]bool{
+			"name": true, "version": true, "path": true, "size": true,
+			"created_at": true, "updated_at": true,
+		}
+
+		if !validSortFields[criteria.Sort] {
+			return nil, fmt.Errorf("invalid sort field: %s", criteria.Sort)
+		}
+
+		// VALIDATE ORDER
+		order := strings.ToUpper(criteria.Order)
+		if order != "ASC" && order != "DESC" {
+			order = "DESC" // DEFAULT TO DESC
+		}
+
+		query += fmt.Sprintf(" ORDER BY a.%s %s", criteria.Sort, order)
+	}
+
+	// ADD LIMIT
+	if criteria.Limit > 0 {
 		query += " LIMIT ?"
-		args = append(args, limit)
+		args = append(args, criteria.Limit)
 	}
 
+	// EXECUTE QUERY
 	rows, err := r.db.Query(query, args...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to execute search query: %w", err)
 	}
 	defer rows.Close()
 
 	var artifacts []models.Artifact
 	for rows.Next() {
 		var a models.Artifact
-		err := rows.Scan(&a.ID, &a.RepoID, &a.Name, &a.Version, &a.Size, &a.MimeType, &a.Metadata, &a.CreatedAt, &a.UpdatedAt)
+		err := rows.Scan(
+			&a.ID,
+			&a.RepoID,
+			&a.Name,
+			&a.Path,
+			&a.Version,
+			&a.Size,
+			&a.MimeType,
+			&a.Metadata,
+			&a.CreatedAt,
+			&a.UpdatedAt,
+		)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to scan artifact row: %w", err)
 		}
+
+		// FETCH PROPERTIES IF WE HAVE ANY RESULTS
+		properties, err := r.GetArtifactProperties(a.ID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get artifact properties: %w", err)
+		}
+		a.Properties = properties
+
 		artifacts = append(artifacts, a)
 	}
 
 	return artifacts, nil
+}
+
+func (r *SQLiteRepository) GetArtifact(artifactID string) (models.Artifact, error) {
+	var artifact models.Artifact
+	err := r.db.QueryRow(
+		`SELECT id, repo_id, name, path, version, size, mime_type, metadata, created_at, updated_at 
+         FROM artifacts WHERE id = ?`,
+		artifactID,
+	).Scan(
+		&artifact.ID,
+		&artifact.RepoID,
+		&artifact.Name,
+		&artifact.Path,
+		&artifact.Version,
+		&artifact.Size,
+		&artifact.MimeType,
+		&artifact.Metadata,
+		&artifact.CreatedAt,
+		&artifact.UpdatedAt,
+	)
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
+	}
+
+	// GET PROPS
+	properties, err := r.GetArtifactProperties(artifactID)
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
+	}
+	artifact.Properties = properties
+
+	return artifact, nil
+}
+
+func (r *SQLiteRepository) UpdateArtifactPath(id string, name string, path string, version string) error {
+	_, err := r.db.Exec(
+		"UPDATE artifacts SET name = ?, path = ?, version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		name, path, version, id,
+	)
+	return err
 }
 
 func (r *SQLiteRepository) GetAllSettings() (map[string]json.RawMessage, error) {

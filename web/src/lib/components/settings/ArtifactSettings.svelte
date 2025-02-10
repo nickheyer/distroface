@@ -17,8 +17,8 @@
       compressionEnabled: true
     },
     properties: {
-      required: ['version', 'build', 'branch'],
-      indexed: ['version', 'build', 'branch', 'commit']
+      required: [] as string[],
+      indexed: ['build', 'branch', 'commit']
     },
     search: {
       maxResults: 100,

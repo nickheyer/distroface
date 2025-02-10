@@ -5,7 +5,9 @@
 
 SHELL := /bin/sh
 BINARY        ?= distroface
-CMD_PATH      ?= ./cmd
+CMD_PATH      ?= ./cmd/distroface
+CLI_BINARY    ?= dfcli
+CLI_CMD_PATH  ?= ./cmd/dfcli
 WEB_DIR       ?= ./web
 CONFIG_FILE   ?= config.yml
 
@@ -22,7 +24,7 @@ GOCLEAN       = $(GO) clean
 GOTEST        = $(GO) test
 ALL_PACKAGES  = $(shell go list ./...)
 
-.PHONY: all build test clean dev run dev-backend dev-frontend deps format prod
+.PHONY: all build test clean dev run dev-backend dev-frontend deps format prod build-cli
 all: build
 
 ## -----------------------
@@ -77,6 +79,10 @@ dev-frontend:
 	@echo "Starting frontend (SvelteKit dev server)..."
 	cd $(WEB_DIR) && $(NPM) install && $(NPM) run dev
 
+dev-cli:
+	@echo "Building and watching CLI..."
+	$(GO) run $(CLI_CMD_PATH)/main.go
+
 run-backend:
 	@echo "Running backend with existing DB (no init)..."
 	GO_ENV=development $(GO) run $(CMD_PATH)/main.go
@@ -87,7 +93,12 @@ run-frontend:
 ## -----------------------
 ## DEPENDENCIES
 ## -----------------------
-deps:
+build-cli:
+	@echo "Building CLI..."
+	rm -rf $(CLI_BINARY)
+	$(GOBUILD) -o $(CLI_BINARY) $(CLI_CMD_PATH)
+
+deps: build-cli
 	@echo "Tidying Go modules and installing NPM modules..."
 	$(GO) mod tidy
 	cd $(WEB_DIR) && $(NPM) install

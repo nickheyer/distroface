@@ -266,6 +266,8 @@ func (s *Server) setupRoutes() error {
 		http.HandlerFunc(artifactHandler.CompleteUpload))).Methods("PUT")
 	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact)(
 		http.HandlerFunc(artifactHandler.DownloadArtifact))).Methods("GET")
+	api.Handle("/artifacts/{repo}/query", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.QueryDownloadArtifacts))).Methods("GET")
 	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDelete, models.ResourceArtifact)(
 		http.HandlerFunc(artifactHandler.DeleteArtifact))).Methods("DELETE")
 	api.Handle("/artifacts/{repo}/versions", requirePermission(s.authService, models.ActionView, models.ResourceArtifact)(
@@ -276,6 +278,8 @@ func (s *Server) setupRoutes() error {
 		http.HandlerFunc(artifactHandler.UpdateProperties))).Methods("PUT")
 	api.Handle("/artifacts/search", requirePermission(s.authService, models.ActionView, models.ResourceArtifact)(
 		http.HandlerFunc(artifactHandler.SearchArtifacts))).Methods("GET")
+	api.Handle("/artifacts/{repo}/{id}/rename", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact)(
+		http.HandlerFunc(artifactHandler.RenameArtifact))).Methods("PUT")
 
 	// REGISTRY ROUTES
 	regAPI := s.router.PathPrefix("/v2").Subrouter()

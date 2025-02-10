@@ -22,7 +22,6 @@
   $effect(() => {
     try {
       const artifactProps = artifact.properties || {};
-      console.log(artifactProps)
       properties = Object.entries(artifactProps).map(([key, value]) => ({
         key,
         value: typeof value === 'string' ? value : JSON.stringify(value),

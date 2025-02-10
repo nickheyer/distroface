@@ -1,6 +1,6 @@
 <script lang="ts">
   import { artifacts } from "$lib/stores/artifacts.svelte";
-  import { Upload, X, Plus } from "lucide-svelte";
+  import { Upload, X, Plus, Minus } from "lucide-svelte";
   import type { ArtifactRepository } from "$lib/types/artifacts.svelte";
 
   let {
@@ -20,6 +20,12 @@
   let error = $state<string | null>(null);
   let dragOver = $state(false);
   let uploadProgress = $state(0);
+  interface Property {
+    key: string;
+    value: string;
+  }
+
+  let addProperties = $state<Property[]>([]);
 
   $effect(() => {
     if (files?.[0]) {
@@ -38,6 +44,15 @@
   $effect(() => {
     artifacts.fetchArtifactSettings();
   });
+
+  function addProperty() {
+    addProperties = [...addProperties, { key: "", value: "" }];
+  }
+
+  function removeProperty(index: number) {
+    addProperties = addProperties.filter((_, i) => i !== index);
+  }
+
 
   function handleDragOver(e: DragEvent) {
     e.preventDefault();
@@ -90,12 +105,24 @@
     uploadProgress = 0;
 
     try {
+      // CHECK FOR EMPTY FILE
       validateFileUpload(files);
+
+      // PACK UP ADDITIONAL PROPS
+      const propObj = addProperties.reduce((acc, { key, value }) => {
+              if (key.trim()) {
+                  acc[key.trim()] = value.trim();
+              }
+              return acc;
+          }, {} as Record<string, string>);
+
+      // ATTEMPT UPLOAD
       await artifacts.uploadArtifact(
         repository.name,
         files[0],
         version,
-        path || files[0].name
+        (path && path.length > 0) ? path : files[0].name,
+        propObj
       );
       onclose();
     } catch (err) {
@@ -225,23 +252,58 @@
                 />
               </div>
 
-              <div class="mt-4">
+              <div class="mt-4 space-y-4">
                 <h4 class="text-sm font-medium text-gray-700">Properties</h4>
-                {#each artifacts.requiredProperties as propName}
-                  <div class="mt-2">
-                    <label for={propName} class="block text-sm font-medium text-gray-700">
-                      {propName}*
-                    </label>
+                {#each artifacts.requiredProperties as propName,i}
+                  <div class="flex items-center space-x-2">
                     <input
                       type="text"
+                      placeholder="Property name"
+                      bind:value={artifacts.requiredProperties[i]}
+                      readonly
+                      class="block w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <input
                       id={propName}
+                      type="text"
+                      placeholder="Value"
                       bind:value={artifacts.properties[propName]}
-                      required
-                      class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 sm:text-sm"
+                      class="block w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
                     />
                   </div>
                 {/each}
                 <!-- EVENTUALLY ADDED PROPS GO HERE -->
+                {#each addProperties as property, i}
+                <div class="flex items-center space-x-2">
+                  <input
+                    type="text"
+                    placeholder="Property name"
+                    bind:value={property.key}
+                    class="block w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Value"
+                    bind:value={property.value}
+                    class="block w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                  />
+                  <button
+                    type="button"
+                    onclick={() => removeProperty(i)}
+                    class="p-2 text-gray-400 hover:text-red-500"
+                  >
+                    <Minus class="h-5 w-5" />
+                  </button>
+                </div>
+                {/each}
+                <button
+                  type="button"
+                  onclick={addProperty}
+                  class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                >
+                  <Plus class="h-4 w-4 mr-2" />
+                  Add Property
+                </button>
               </div>
 
               <div class="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">

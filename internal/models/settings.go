@@ -80,8 +80,8 @@ func (s *ArtifactSettings) GetDefaults() Settings {
 			CompressionEnabled: true,
 		},
 		Properties: PropertiesConfig{
-			Required: []string{"version", "build", "branch"},
-			Indexed:  []string{"version", "build", "branch", "commit"},
+			Required: []string{},
+			Indexed:  []string{"build", "branch", "commit"},
 		},
 		Search: SearchConfig{
 			MaxResults:   100,

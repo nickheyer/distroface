@@ -40,7 +40,7 @@ func RunInit(db *sql.DB, cfg *models.Config) error {
 }
 
 const rolesSQL = `
-INSERT INTO roles (name, description, permissions) VALUES 
+INSERT OR IGNORE INTO roles (name, description, permissions) VALUES 
 ('anonymous', 'Unauthenticated access', 
  '[
     {"action":"VIEW","resource":"WEBUI"},
@@ -122,7 +122,7 @@ INSERT INTO roles (name, description, permissions) VALUES
 `
 
 const groupsSQL = `
-INSERT INTO groups (name, description, roles, scope) VALUES 
+INSERT OR IGNORE INTO groups (name, description, roles, scope) VALUES 
 ('admins', 'System Administrators', '["administrator"]', 'system:all'),
 ('developers', 'Development Team', '["developer"]', 'system:all'),
 ('readers', 'Read-only Users', '["reader"]', 'system:all');
@@ -137,7 +137,7 @@ func genUserSQL(cfg *models.Config) (string, error) {
 
 	// RETURN GENERATED SQL, PUT USER IN ADMINS FOR EZ
 	return fmt.Sprintf(`
-INSERT INTO users (username, password, groups) 
+INSERT OR IGNORE INTO users (username, password, groups) 
 VALUES ('%s', '%s', '["admins"]');
 `, cfg.Init.Username, hash), nil
 }

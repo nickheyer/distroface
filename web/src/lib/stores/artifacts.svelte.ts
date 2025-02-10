@@ -103,7 +103,7 @@ async function deleteRepository(name: string) {
     }
 }
 
-async function uploadArtifact(repo: string, file: File, version: string, path: string) {
+async function uploadArtifact(repo: string, file: File, version: string, path: string, addProps: Record<string,string>|null) {
   const uploadId = uuidv4();
   state.uploadProgress[uploadId] = 0;
 
@@ -131,10 +131,11 @@ async function uploadArtifact(repo: string, file: File, version: string, path: s
     }
 
     // COMPLETE UPLOAD
+    const props = { ...state.properties, ...addProps };
     const completeUrl = `${uploadEndpoint}?version=${encodeURIComponent(version)}&path=${encodeURIComponent(path)}`;
     const completeResponse = await api.put(
       completeUrl,
-      state.properties
+      props
     );
     
     if (!completeResponse.ok) throw new Error('Failed to complete upload');

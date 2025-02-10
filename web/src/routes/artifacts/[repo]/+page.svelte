@@ -1,6 +1,6 @@
 <script lang="ts">
     import { showToast } from "$lib/stores/toast.svelte";
-    import { auth } from "$lib/stores/auth.svelte";
+    import { api } from "$lib/stores/auth.svelte";
     import { artifacts } from "$lib/stores/artifacts.svelte";
     import { page } from "$app/state";
     import { formatDistance } from "date-fns";
@@ -23,7 +23,7 @@
     import UploadArtifactModal from "$lib/components/artifacts/UploadArtifactModal.svelte";
     import MetadataEditor from "$lib/components/artifacts/MetadataEditor.svelte";
     import DeleteArtifactModal from "$lib/components/artifacts/DeleteArtifactModal.svelte";
-    
+    import ArtifactDetailModal from "$lib/components/artifacts/ArtifactDetailModal.svelte";
 
     // STATE
     let repository = $state<ArtifactRepository | null>(null);
@@ -34,6 +34,7 @@
     let metadataModalOpen = $state(false);
     let propertiesModalOpen = $state(false);
     let deleteModalOpen = $state(false);
+    let detailModalOpen = $state(false);
     let selectedArtifact = $state<Artifact | null>(null);
     let dragOver = $state(false);
     let droppedFiles = $state<FileList | null>(null);
@@ -60,26 +61,12 @@
         }
     }
 
-    async function handleOperation<T>(
-        operation: () => Promise<T>,
-        successMessage: string,
-        errorPrefix: string,
-    ): Promise<T | undefined> {
-        try {
-            loading = true;
-            const result = await operation();
-            showToast(successMessage, "success");
-            return result;
-        } catch (err) {
-            const errorMessage =
-                err instanceof Error
-                    ? err.message
-                    : "An unexpected error occurred";
-            showToast(`${errorPrefix}: ${errorMessage}`, "error");
-            return undefined;
-        } finally {
-            loading = false;
+    function truncStr(str: string = "", maxLen: number = 32) {
+        // ARBITRARY LENGTH IDK
+        if (str.length <= maxLen) {
+            return str;
         }
+        return str.slice(0, maxLen) + "...";
     }
 
     async function loadRepository() {
@@ -114,19 +101,19 @@
         deleteModalOpen = true;
     }
 
+    async function artifactDetails(artifact: Artifact) {
+        if (!repository?.name) return;
+        selectedArtifact = artifact;
+        detailModalOpen = true;
+    }
+
     async function downloadArtifact(artifact: Artifact) {
         if (!repository) return;
 
         try {
-            const response = await fetch(
-                `/api/v1/artifacts/${repository.name}/${artifact.version}/${artifact.name}`,
-                {
-                    headers: {
-                        Authorization: `Bearer ${auth.token}`,
-                    },
-                },
+            const response = await api.get(
+                `/api/v1/artifacts/${repository.name}/${artifact.version}/${artifact.path}`,
             );
-
             if (!response.ok) throw new Error("Download failed");
             const blob = await response.blob();
             const url = window.URL.createObjectURL(blob);
@@ -139,6 +126,14 @@
             document.body.removeChild(a);
         } catch (err) {
             error = err instanceof Error ? err.message : "Download failed";
+        }
+    }
+
+    function formatJson(str: string) {
+        try {
+            return JSON.stringify(JSON.parse(str), null, 2);
+        } catch {
+            return str;
         }
     }
 
@@ -239,7 +234,7 @@
                 </p>
             </div>
         {:else}
-            <div class="bg-white shadow-sm rounded-lg overflow-hidden">
+            <div class="bg-white shadow-sm rounded-lg overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200">
                     <thead>
                         <tr>
@@ -272,24 +267,28 @@
                     </thead>
                     <tbody class="divide-y divide-gray-200">
                         {#each artifacts.filteredArtifacts[repository.id] || [] as artifact (artifact.created_at)}
-                            <tr>
+                            <tr class="hover:bg-gray-100">
                                 <td
-                                    class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900"
+                                    class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900 cursor-pointer"
+                                    onclick={() => artifactDetails(artifact)}
                                 >
-                                    {artifact.name}
+                                    {truncStr(artifact.name)}
                                 </td>
                                 <td
-                                    class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                                    class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 cursor-pointer"
+                                    onclick={() => artifactDetails(artifact)}
                                 >
-                                    {artifact.version}
+                                    {truncStr(artifact.version)}
                                 </td>
                                 <td
-                                    class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                                    class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 cursor-pointer"
+                                    onclick={() => artifactDetails(artifact)}
                                 >
                                     {artifacts.formatSize(artifact.size)}
                                 </td>
                                 <td
-                                    class="px-6 py-4 whitespace-nowrap text-sm text-gray-500"
+                                    class="px-6 py-4 whitespace-nowrap text-sm text-gray-500 cursor-pointer"
+                                    onclick={() => artifactDetails(artifact)}
                                 >
                                     {formatDistance(
                                         new Date(artifact.updated_at),
@@ -305,7 +304,7 @@
                                             type="button"
                                             onclick={() =>
                                                 downloadArtifact(artifact)}
-                                            class="text-blue-600 hover:text-blue-900"
+                                            class="text-blue-600 hover:text-blue-900 cursor-pointer"
                                             aria-label={`Download ${artifact.name}`}
                                         >
                                             <Download class="h-4 w-4" />
@@ -316,7 +315,7 @@
                                                 selectedArtifact = artifact;
                                                 metadataModalOpen = true;
                                             }}
-                                            class="text-gray-600 hover:text-gray-900"
+                                            class="text-gray-600 hover:text-gray-900 cursor-pointer"
                                             aria-label={`Edit metadata for ${artifact.name}`}
                                         >
                                             <Edit class="h-4 w-4" />
@@ -327,7 +326,7 @@
                                                 selectedArtifact = artifact;
                                                 propertiesModalOpen = true;
                                             }}
-                                            class="text-gray-600 hover:text-blue-600"
+                                            class="text-gray-600 hover:text-blue-600 cursor-pointer"
                                             aria-label={`Edit properties for ${artifact.name}`}
                                         >
                                             <Tag class="h-4 w-4" />
@@ -336,7 +335,7 @@
                                             type="button"
                                             onclick={() =>
                                                 deleteArtifact(artifact)}
-                                            class="text-red-600 hover:text-red-900"
+                                            class="text-red-600 hover:text-red-900 cursor-pointer"
                                             aria-label={`Delete ${artifact.name}`}
                                         >
                                             <Trash2 class="h-4 w-4" />
@@ -386,16 +385,28 @@
             />
         {/if}
 
-        {#if deleteModalOpen && repository}
-        <DeleteArtifactModal
-            repository={repository}
-            artifact={selectedArtifact}
-            onclose={() => {
-                deleteModalOpen = false;
-                selectedArtifact = null;
-                loadRepository();
-            }}
+        {#if deleteModalOpen && selectedArtifact}
+            <DeleteArtifactModal
+                {repository}
+                artifact={selectedArtifact}
+                onclose={() => {
+                    deleteModalOpen = false;
+                    selectedArtifact = null;
+                    loadRepository();
+                }}
             />
+        {/if}
+
+        {#if detailModalOpen && selectedArtifact}
+            <ArtifactDetailModal
+                artifact={selectedArtifact}
+                repository={repository}
+                onclose={() => {
+                    detailModalOpen = false;
+                    selectedArtifact = null;
+                    loadRepository();
+                }}
+            ></ArtifactDetailModal>
         {/if}
     {/if}
 </div>

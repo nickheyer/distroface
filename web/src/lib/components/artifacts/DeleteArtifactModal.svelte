@@ -17,7 +17,7 @@
       try {
         await artifacts.deleteArtifact(repository.name,
                         artifact.version,
-                        artifact.name);
+                        artifact.path);
         onclose();
       } catch (err) {
         error =

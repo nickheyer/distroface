@@ -1,6 +1,9 @@
 package handlers
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +24,7 @@ import (
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"github.com/nickheyer/distroface/internal/utils"
+	"github.com/samber/lo"
 )
 
 type ArtifactHandler struct {
@@ -104,7 +109,7 @@ func (h *ArtifactHandler) InitiateUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Return the upload location to the client
+	// RETURN UPLOAD LOCATION TO THE CLIENT
 	w.Header().Set("Location", fmt.Sprintf("/api/v1/artifacts/%s/upload/%s", repoName, uploadID))
 	w.Header().Set("Upload-ID", uploadID)
 	w.WriteHeader(http.StatusAccepted)
@@ -137,7 +142,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 	vars := mux.Vars(r)
 	repoName := vars["repo"]
 	uploadID := vars["uuid"]
-	version := r.URL.Query().Get("version")
+	version := lo.SnakeCase(r.URL.Query().Get("version"))
 	artifactPath := r.URL.Query().Get("path")
 	username := r.Context().Value(constants.UsernameKey).(string)
 
@@ -265,6 +270,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 	artifact := &models.Artifact{
 		RepoID:    repo.ID,
 		Name:      filepath.Base(artifactPath),
+		Path:      artifactPath,
 		Version:   version,
 		Size:      fi.Size(),
 		MimeType:  mimeType,
@@ -330,6 +336,168 @@ func (h *ArtifactHandler) DownloadArtifact(w http.ResponseWriter, r *http.Reques
 
 	// SERVE IT
 	http.ServeFile(w, r, filePath)
+}
+
+func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	repoName := vars["repo"]
+	username := r.Context().Value(constants.UsernameKey).(string)
+
+	// GET REPO ACCESS
+	repo, err := h.repo.GetArtifactRepository(repoName)
+	if err != nil {
+		http.Error(w, "Repository not found", http.StatusNotFound)
+		return
+	}
+	if repo.Owner != username && repo.Private {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// PARSE QUERY PARAMS
+	queryParams := r.URL.Query()
+
+	// BUILD SEARCH CRITERIA
+	criteria := models.ArtifactSearchCriteria{
+		RepoID:     utils.IntPtr(repo.ID),
+		Properties: make(map[string]string),
+	}
+
+	// HANDLE SPECIAL PARAMS
+	if name := queryParams.Get("name"); name != "" {
+		criteria.Name = utils.StringPtr(name)
+	}
+	if version := queryParams.Get("version"); version != "" {
+		criteria.Version = utils.StringPtr(version)
+	}
+	if path := queryParams.Get("path"); path != "" {
+		criteria.Path = utils.StringPtr(path)
+	}
+	if maxResults := queryParams.Get("num"); maxResults != "" {
+		if n, err := strconv.Atoi(maxResults); err == nil && n > 0 {
+			criteria.Limit = n
+		}
+	} else {
+		criteria.Limit = 1 // DEFAULT TO 1
+	}
+
+	// SET SORTING
+	criteria.Sort = "created_at" // DEFAULT SORT
+	if sort := queryParams.Get("sort"); sort != "" {
+		criteria.Sort = sort
+	}
+	criteria.Order = "DESC" // DEFAULT ORDER
+	if order := queryParams.Get("order"); order != "" {
+		criteria.Order = order
+	}
+
+	// OUTPUT FORMAT (FILE, ZIP, OR TAR.GZ)
+	forceArchive := queryParams.Get("archive") != "" // IF ARCHIVE PARAM EXISTS, FORCE ARCHIVE
+	archiveFormat := strings.ToLower(queryParams.Get("format"))
+	if archiveFormat != "zip" && archiveFormat != "tar.gz" {
+		archiveFormat = "zip" // DEFAULT TO ZIP
+	}
+
+	// ADD PROPERTY FILTERS FROM REMAINING QUERY PARAMS
+	for key, values := range queryParams {
+		switch key {
+		case "num", "archive", "format", "name", "version", "path", "sort", "order":
+			continue // SKIP SPECIAL PARAMS
+		default:
+			if len(values) > 0 {
+				criteria.Properties[key] = values[0]
+			}
+		}
+	}
+
+	// SEARCH ARTIFACTS
+	artifacts, err := h.repo.SearchArtifacts(criteria)
+	if err != nil {
+		h.log.Printf("Failed to search artifacts: %v", err)
+		http.Error(w, "Failed to search artifacts", http.StatusInternalServerError)
+		return
+	}
+
+	if len(artifacts) == 0 {
+		http.Error(w, "No matching artifacts found", http.StatusNotFound)
+		return
+	}
+
+	// IF SINGLE FILE AND NO ARCHIVE FORCED
+	if len(artifacts) == 1 && !forceArchive {
+		artifact := artifacts[0]
+		filePath := filepath.Join(
+			h.config.Storage.RootDirectory,
+			"artifacts",
+			"repos",
+			repoName,
+			"versions",
+			artifact.Version,
+			"files",
+			artifact.Path,
+		)
+		http.ServeFile(w, r, filePath)
+		return
+	}
+
+	// CREATE TMP DIR FOR ARCHIVE
+	tempDir, err := os.MkdirTemp("", "artifact-download-*")
+	if err != nil {
+		h.log.Printf("Failed to create temp directory: %v", err)
+		http.Error(w, "Failed to prepare download", http.StatusInternalServerError)
+		return
+	}
+	defer os.RemoveAll(tempDir)
+
+	// COPY FILES TO TMP DIR
+	for _, artifact := range artifacts {
+		srcPath := filepath.Join(
+			h.config.Storage.RootDirectory,
+			"artifacts",
+			"repos",
+			repoName,
+			"versions",
+			artifact.Version,
+			"files",
+			artifact.Path,
+		)
+		destPath := filepath.Join(tempDir, fmt.Sprintf("%s-%s-%s",
+			artifact.Name,
+			artifact.Version,
+			filepath.Base(artifact.Path)))
+
+		if err := h.copyFile(srcPath, destPath); err != nil {
+			h.log.Printf("Failed to copy file: %v", err)
+			http.Error(w, "Failed to prepare download", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// CREATE ARCHIVE
+	var archivePath string
+	var mimeType string
+	if archiveFormat == "zip" {
+		archivePath = filepath.Join(tempDir, "artifacts.zip")
+		mimeType = "application/zip"
+		if err := h.createZipArchive(tempDir, archivePath); err != nil {
+			h.log.Printf("Failed to create zip archive: %v", err)
+			http.Error(w, "Failed to create archive", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		archivePath = filepath.Join(tempDir, "artifacts.tar.gz")
+		mimeType = "application/gzip"
+		if err := h.createTarGzArchive(tempDir, archivePath); err != nil {
+			h.log.Printf("Failed to create tar.gz archive: %v", err)
+			http.Error(w, "Failed to create archive", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	// SET HEADERS AND SERVE
+	w.Header().Set("Content-Type", mimeType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(archivePath)))
+	http.ServeFile(w, r, archivePath)
 }
 
 func (h *ArtifactHandler) ListVersions(w http.ResponseWriter, r *http.Request) {
@@ -487,22 +655,22 @@ func (h *ArtifactHandler) DeleteArtifact(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// DELETE ROW IN DB
+	if err := h.repo.DeleteArtifactByPath(repo.ID, version, artifactPath); err != nil {
+		h.log.Printf("Failed to delete artifact from db: %v", err)
+		http.Error(w, "Failed to delete artifact from db", http.StatusInternalServerError)
+		return
+	}
+
 	// DELETE FILE
 	filePath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifactPath)
 	if err := h.validatePath(filePath, true); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+	if err := os.RemoveAll(filePath); err != nil && !os.IsNotExist(err) {
 		h.log.Printf("Failed to delete artifact file: %v", err)
 		http.Error(w, "Failed to delete artifact", http.StatusInternalServerError)
-		return
-	}
-
-	// DELETE METADATA
-	if err := h.repo.DeleteArtifact(repo.ID, version, artifactPath); err != nil {
-		h.log.Printf("Failed to delete artifact metadata: %v", err)
-		http.Error(w, "Failed to delete artifact metadata", http.StatusInternalServerError)
 		return
 	}
 
@@ -551,13 +719,8 @@ func (h *ArtifactHandler) DeleteRepository(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Properties map[string]string `json:"properties"`
-		Sort       string            `json:"sort"`
-		Order      string            `json:"order"`
-		Limit      int               `json:"limit"`
-	}
-
+	// PARSE TO CRITERIA STRUCT
+	var req models.ArtifactSearchCriteria
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
@@ -571,26 +734,289 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// APPLY DEFAULTS
-	if req.Sort == "" {
-		req.Sort = settings.Search.DefaultSort
-	}
-	if req.Order == "" {
-		req.Order = settings.Search.DefaultOrder
-	}
-	if req.Limit == 0 || req.Limit > settings.Search.MaxResults {
-		req.Limit = settings.Search.MaxResults
+	// BUILD SEARCH CRITERIA WITH DEFAULTS FROM SETTINGS
+	criteria := models.ArtifactSearchCriteria{
+		RepoID:     req.RepoID,
+		Name:       req.Name,
+		Version:    req.Version,
+		Path:       req.Path,
+		Properties: req.Properties,
+		Sort:       settings.Search.DefaultSort,
+		Order:      settings.Search.DefaultOrder,
+		Limit:      settings.Search.MaxResults,
 	}
 
-	results, err := h.repo.SearchArtifacts(req.Properties, req.Sort, req.Order, req.Limit)
+	// OVERRIDE DEFAULTS IF PROVIDED IN REQUEST
+	if req.Sort != "" {
+		criteria.Sort = req.Sort
+	}
+	if req.Order != "" {
+		criteria.Order = req.Order
+	}
+	if req.Limit > 0 && req.Limit <= settings.Search.MaxResults {
+		criteria.Limit = req.Limit
+	}
+
+	// VALIDATE SORT FIELD
+	validSortFields := map[string]bool{
+		"name":       true,
+		"version":    true,
+		"path":       true,
+		"size":       true,
+		"created_at": true,
+		"updated_at": true,
+	}
+	if !validSortFields[criteria.Sort] {
+		http.Error(w, fmt.Sprintf("Invalid sort field: %s", criteria.Sort), http.StatusBadRequest)
+		return
+	}
+
+	// VALIDATE ORDER
+	criteria.Order = strings.ToUpper(criteria.Order)
+	if criteria.Order != "ASC" && criteria.Order != "DESC" {
+		criteria.Order = settings.Search.DefaultOrder
+	}
+
+	// PERFORM SEARCH
+	results, err := h.repo.SearchArtifacts(criteria)
 	if err != nil {
 		h.log.Printf("Search failed: %v", err)
 		http.Error(w, "Search failed", http.StatusInternalServerError)
 		return
 	}
 
+	// BUILD RESPONSE
+	type SearchResponse struct {
+		Results []models.Artifact `json:"results"`
+		Total   int               `json:"total"`
+		Limit   int               `json:"limit"`
+		Sort    string            `json:"sort"`
+		Order   string            `json:"order"`
+	}
+
+	response := SearchResponse{
+		Results: results,
+		Total:   len(results),
+		Limit:   criteria.Limit,
+		Sort:    criteria.Sort,
+		Order:   criteria.Order,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		h.log.Printf("Failed to encode response: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+}
+
+func (h *ArtifactHandler) RenameArtifact(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	repoName := vars["repo"]
+	artifactID := vars["id"]
+	username := r.Context().Value(constants.UsernameKey).(string)
+
+	var updateReq struct {
+		Name    string `json:"name"`
+		Path    string `json:"path"` // OPTIONAL
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&updateReq); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// VALIDATE PATHS
+	if err := h.validatePath(updateReq.Path, false); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// CHECK ACCESS
+	repo, err := h.repo.GetArtifactRepository(repoName)
+	if err != nil {
+		http.Error(w, "Repository not found", http.StatusNotFound)
+		return
+	}
+	if repo.Owner != username {
+		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	// GET ARTIFACT
+	artifact, err := h.repo.GetArtifact(artifactID)
+	if err != nil {
+		http.Error(w, "Failed to get artifact", http.StatusInternalServerError)
+		return
+	}
+
+	// ESCAPE VERSION
+	updateReq.Version = lo.SnakeCase(updateReq.Version)
+
+	// IF NO PATH, MAINTAIN DIR STRUCTURE AND UPDATE FILENAME
+	if updateReq.Path == "" {
+		dir := filepath.Dir(artifact.Path)
+		if dir == "." {
+			updateReq.Path = updateReq.Name
+		} else {
+			updateReq.Path = filepath.Join(dir, updateReq.Name)
+		}
+	}
+
+	// BUILD FULL PATH
+	oldPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", artifact.Version, "files", artifact.Path)
+	newPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", updateReq.Version, "files", updateReq.Path)
+
+	// NEW DIR
+	if err := os.MkdirAll(filepath.Dir(newPath), 0755); err != nil {
+		http.Error(w, "Failed to create directories", http.StatusInternalServerError)
+		return
+	}
+
+	// MOVE FILE
+	if err := os.Rename(oldPath, newPath); err != nil {
+		http.Error(w, "Failed to move file", http.StatusInternalServerError)
+		return
+	}
+
+	// UPDATE DB
+	if err := h.repo.UpdateArtifactPath(artifactID, updateReq.Name, updateReq.Path, updateReq.Version); err != nil {
+		// TRY TO MOVE BACK ON FAILURE
+		os.Rename(newPath, oldPath)
+		http.Error(w, "Failed to update database", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// PRIVATE METHODS
+
+func (h *ArtifactHandler) createZipArchive(sourceDir, destPath string) error {
+	zipfile, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer zipfile.Close()
+
+	archive := zip.NewWriter(zipfile)
+	defer archive.Close()
+
+	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// SKIP THE ZIP FILE ITSELF
+		if path == destPath {
+			return nil
+		}
+
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+
+		// SET RELATIVE PATH
+		header.Name, err = filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			header.Name += "/"
+		} else {
+			header.Method = zip.Deflate
+		}
+
+		writer, err := archive.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+
+		_, err = io.Copy(writer, file)
+		return err
+	})
+}
+
+func (h *ArtifactHandler) createTarGzArchive(sourceDir, destPath string) error {
+	file, err := os.Create(destPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gzWriter := gzip.NewWriter(file)
+	defer gzWriter.Close()
+
+	tarWriter := tar.NewWriter(gzWriter)
+	defer tarWriter.Close()
+
+	return filepath.Walk(sourceDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
+		// SKIP THE ARCHIVE FILE ITSELF
+		if path == destPath {
+			return nil
+		}
+
+		header, err := tar.FileInfoHeader(info, info.Name())
+		if err != nil {
+			return err
+		}
+
+		// SET RELATIVE PATH
+		header.Name, err = filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return err
+		}
+
+		if info.IsDir() {
+			return nil
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer file.Close()
+
+		_, err = io.Copy(tarWriter, file)
+		return err
+	})
+}
+
+func (h *ArtifactHandler) copyFile(src, dst string) error {
+	source, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	destination, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer destination.Close()
+
+	_, err = io.Copy(destination, source)
+	return err
 }
 
 func (h *ArtifactHandler) validatePath(path string, allowAbs bool) error {
@@ -666,9 +1092,25 @@ func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.Rete
 				}
 			}
 
-			// DELETE ARTIFACTS
-			if err := h.repo.DeleteArtifact(artifact.RepoID, artifact.Version, artifact.Name); err != nil {
+			// DELETE ARTIFACTS FROM DB
+			if err := h.repo.DeleteArtifact(artifact.RepoID, artifact.Version, artifact.ID); err != nil {
 				h.log.Printf("Failed to delete artifact %s during retention: %v", artifact.ID, err)
+			}
+
+			// DELETE ARTIFACTS FROM FILESYSTEM
+			repo, _ := h.repo.GetArtifactRepositoryByID(fmt.Sprintf("%v", artifact.RepoID))
+			versionPath := filepath.Join(
+				h.config.Storage.RootDirectory,
+				"artifacts",
+				"repos",
+				repo.Name,
+				"versions",
+				artifact.Version,
+			)
+
+			if err := os.RemoveAll(versionPath); err != nil && !os.IsNotExist(err) {
+				h.log.Printf("Failed to prune version path: %v", err)
+				return
 			}
 		}
 	}

@@ -169,6 +169,7 @@ type Artifact struct {
 	ID         string            `json:"id"`
 	RepoID     int               `json:"repo_id"`
 	Name       string            `json:"name"`
+	Path       string            `json:"path"`
 	Version    string            `json:"version"`
 	Size       int64             `json:"size"`
 	MimeType   string            `json:"mime_type"`
@@ -176,6 +177,17 @@ type Artifact struct {
 	Properties map[string]string `json:"properties"`
 	CreatedAt  time.Time         `json:"created_at"`
 	UpdatedAt  time.Time         `json:"updated_at"`
+}
+
+type ArtifactSearchCriteria struct {
+	RepoID     *int              `json:"repo_id,omitempty"`
+	Name       *string           `json:"name,omitempty"`
+	Version    *string           `json:"version,omitempty"`
+	Path       *string           `json:"path,omitempty"`
+	Properties map[string]string `json:"properties,omitempty"`
+	Sort       string            `json:"sort,omitempty"`
+	Order      string            `json:"order,omitempty"`
+	Limit      int               `json:"limit,omitempty"`
 }
 
 type VisibilityUpdateRequest struct {

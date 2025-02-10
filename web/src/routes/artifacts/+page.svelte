@@ -24,7 +24,7 @@
     let uploadModalOpen = $state(false);
     let deleteModalOpen = $state(false);
     let selectedRepo = $state<ArtifactRepository | null>(null);
-    let menuOpen = $state<string | null>(null); // Track which repo's menu is open
+    let menuOpen = $state<string | null>(null);
   
     // LOAD REPOS ON MOUNT
     $effect(() => {

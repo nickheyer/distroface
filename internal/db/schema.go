@@ -106,6 +106,7 @@ CREATE TABLE IF NOT EXISTS artifacts (
     id TEXT PRIMARY KEY,
     repo_id INTEGER NOT NULL,
     name TEXT NOT NULL,
+    path TEXT NOT NULL,
     version TEXT NOT NULL,
     size INTEGER NOT NULL,
     mime_type TEXT,
