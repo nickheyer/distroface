@@ -6,9 +6,9 @@ RUN npm ci
 RUN npm run build
 
 # BUILD STAGE FOR GO BACKEND
-FROM golang:1.22-alpine AS go-builder
+FROM golang:1.22-bullseye AS go-builder
 
-RUN apk add --no-cache gcc musl-dev
+RUN apt-get update && apt-get install -y gcc libc6-dev libsqlite3-dev
 WORKDIR /app
 
 COPY go.mod go.sum ./
