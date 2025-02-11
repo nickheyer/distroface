@@ -1,5 +1,3 @@
-//go:build no_sqlite3
-
 package main
 
 import (

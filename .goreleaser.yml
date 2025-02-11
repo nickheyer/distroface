@@ -9,13 +9,14 @@ builds:
     binary: distroface
     env:
       - CGO_ENABLED=1
+      # NEED THIS FOR WIN X-COMPILE
+      - CC=x86_64-w64-mingw32-gcc
+      - CXX=x86_64-w64-mingw32-g++
     goos:
       - windows
       - linux
     goarch:
       - amd64
-    flags:
-      - -tags=sqlite_omit_load_extension
     ldflags:
       - -s -w
 
@@ -29,8 +30,6 @@ builds:
       - darwin
     goarch:
       - amd64
-    flags:
-      - -tags=sqlite_omit_load_extension
     ldflags:
       - -s -w
 
@@ -45,8 +44,6 @@ builds:
       - linux
     goarch:
       - arm64
-    flags:
-      - -tags=sqlite_omit_load_extension
     ldflags:
       - -s -w
 
@@ -65,14 +62,12 @@ builds:
     ignore:
       - goos: windows
         goarch: arm64
-    flags:
-      - -tags=no_sqlite3
     ldflags:
       - -s -w
 
 archives:
   - id: distroface
-    builds: 
+    builds:
       - distroface_amd64
       - distroface_darwin_amd64
       - distroface_arm64
@@ -86,7 +81,8 @@ archives:
         format: zip
         
   - id: dfcli
-    builds: [dfcli]
+    builds:
+      - dfcli
     format: tar.gz
     name_template: "dfcli_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:

@@ -12,7 +12,7 @@ COPY go.* ./
 RUN go mod download
 COPY . .
 COPY --from=ui-builder /app/web/build ./web/build
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -tags sqlite_omit_load_extension -o distroface ./cmd/distroface/main.go
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o distroface ./cmd/distroface/main.go
 
 # BUILD STAGE FOR GO BACKEND - ARM64
 FROM golang:1.22-bullseye AS go-builder-arm64
