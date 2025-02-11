@@ -56,6 +56,7 @@ func main() {
 
 	// SET DEFAULTS BEFORE INIT
 	viper.SetDefault("server", defaultServerURL)
+	viper.SetDefault("timeout", "5m")
 
 	// INIT CONFIG AFTER DEFAULTS
 	cobra.OnInitialize(initConfig)
@@ -63,9 +64,11 @@ func main() {
 	// GLOBAL FLAGS
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ~/.dfcli/config.json)")
 	rootCmd.PersistentFlags().String("server", defaultServerURL, "DistroFace server URL")
+	rootCmd.PersistentFlags().String("timeout", "5m", "Request timeout (30s, 5m, 1h, etc.)")
 
 	// BIND FLAGS TO VIPER
 	viper.BindPFlag("server", rootCmd.PersistentFlags().Lookup("server"))
+	viper.BindPFlag("timeout", rootCmd.PersistentFlags().Lookup("timeout"))
 
 	// AUTH COMMANDS
 	rootCmd.AddCommand(newLoginCmd())
@@ -206,10 +209,15 @@ func initClient() error {
 		serverURL = "http://" + serverURL
 	}
 
+	clientTimeout := viper.GetDuration("timeout")
+	if clientTimeout == 0 {
+		clientTimeout = 5 * time.Minute
+	}
+
 	client = &APIClient{
 		BaseURL:    serverURL,
 		Token:      config.Token,
-		HTTPClient: &http.Client{Timeout: 30 * time.Second},
+		HTTPClient: &http.Client{Timeout: clientTimeout},
 	}
 
 	return nil
@@ -557,6 +565,7 @@ func (c *APIClient) resetSettings(section string) error {
 
 // USER AUTH OPERATION(S)
 func login(server, username, password string) (string, error) {
+	// HARD CODING A 30 SEC TIMEOUT HERE, WE DONT NEED 5 MIN TO AUTH
 	client := &http.Client{Timeout: 30 * time.Second}
 
 	payload := map[string]string{
@@ -773,7 +782,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "download [repo]",
-		Short: "Download an artifact (uses the new query route)",
+		Short: "Download an artifact (via query)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo := args[0]
