@@ -67,6 +67,8 @@ jobs:
             gcc-aarch64-linux-gnu \
             g++-aarch64-linux-gnu \
             libc6-dev-arm64-cross \
+            gcc-mingw-w64-i686 \
+            gcc-mingw-w64-x86-64 \
             sqlite3 \
             libsqlite3-dev
           

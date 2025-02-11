@@ -24,7 +24,7 @@ COPY . .
 COPY --from=ui-builder /app/web/build ./web/build
 ENV CC=aarch64-linux-gnu-gcc
 ENV CXX=aarch64-linux-gnu-g++
-RUN CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -tags sqlite_omit_load_extension -o distroface ./cmd/distroface/main.go
+RUN CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -o distroface ./cmd/distroface/main.go
 
 # FINAL IMAGE - AMD64
 FROM debian:bullseye-slim AS final-amd64
