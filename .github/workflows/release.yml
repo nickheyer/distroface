@@ -32,7 +32,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Install SQLite dependencies
+      - name: Install dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y sqlite3 libsqlite3-dev gcc-aarch64-linux-gnu
@@ -40,11 +40,66 @@ jobs:
       - name: Run tests
         run: go test -v ./...
 
-  build-and-release:
+  build-web:
     # needs: test
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          
+      - name: Build Web UI
+        working-directory: web
+        run: |
+          npm ci
+          npm run build
+          
+      - name: Upload web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: web/build
+
+  build-binaries:
+    needs: [build-web]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    strategy:
+      matrix:
+        include:
+          # LINUX
+          - os: linux
+            arch: amd64
+            cgo: 1
+            cc: gcc
+            binary_ext: ""
+          - os: linux
+            arch: arm64  
+            cgo: 1
+            cc: aarch64-linux-gnu-gcc
+            binary_ext: ""
+            
+          # DARWIN
+          - os: darwin
+            arch: amd64
+            cgo: 0
+            binary_ext: ""
+          - os: darwin
+            arch: arm64
+            cgo: 0
+            binary_ext: ""
+            
+          # WINDOWS
+          - os: windows
+            arch: amd64
+            cgo: 1
+            cc: x86_64-w64-mingw32-gcc
+            binary_ext: ".exe"
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,48 +110,84 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Download web build
+        uses: actions/download-artifact@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-
+          name: web-build
+          path: web/build
+          
       - name: Install cross-compilation tools
+        if: matrix.os != 'darwin'
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            gcc-aarch64-linux-gnu \
-            g++-aarch64-linux-gnu \
-            libc6-dev-arm64-cross \
-            gcc-mingw-w64-i686 \
-            gcc-mingw-w64-x86-64 \
-            sqlite3 \
-            libsqlite3-dev
-      - name: Install frontend dependencies
-        working-directory: web
-        run: npm ci
-        
-      - name: Build frontend
-        working-directory: web
-        run: npm run build
-        
-      - name: Set up GoReleaser
-        uses: goreleaser/goreleaser-action@v5
-        with:
-          install-only: true
-          
-      - name: Run GoReleaser
+          sudo apt-get install -y gcc g++ mingw-w64 gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Build Distroface
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: goreleaser release --clean
-        
-  docker:
-    # needs: test
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          CC: ${{ matrix.cc }}
+        run: |
+          mkdir -p dist
+          go build -o dist/distroface${{ matrix.binary_ext }} ./cmd/distroface/main.go
+          go build -o dist/dfcli${{ matrix.binary_ext }} ./cmd/dfcli/main.go
+
+      - name: Prepare release artifacts
+        run: |
+          cd dist
+          if [ "${{ matrix.os }}" = "windows" ]; then
+            7z a distroface-${{ matrix.os }}-${{ matrix.arch }}.zip distroface${{ matrix.binary_ext }} dfcli${{ matrix.binary_ext }} ../config.yml
+            7z a dfcli-${{ matrix.os }}-${{ matrix.arch }}.zip dfcli${{ matrix.binary_ext }}
+          else
+            tar czf distroface-${{ matrix.os }}-${{ matrix.arch }}.tar.gz distroface${{ matrix.binary_ext }} dfcli${{ matrix.binary_ext }} ../config.yml
+            tar czf dfcli-${{ matrix.os }}-${{ matrix.arch }}.tar.gz dfcli${{ matrix.binary_ext }}
+          fi
+          
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            dist/distroface-${{ matrix.os }}-${{ matrix.arch }}.*
+            dist/dfcli-${{ matrix.os }}-${{ matrix.arch }}.*
+            
+  create-release:
+    needs: build-binaries
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-artifacts-*
+          path: dist
+          merge-multiple: true
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/distroface-*
+            dist/dfcli-*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          
+  docker:
+    needs: [build-web]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download web build
+        uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web/build
       
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
