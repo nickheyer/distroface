@@ -62,7 +62,7 @@ builds:
 
   - id: dfcli_win
     main: ./cmd/dfcli/main.go
-    binary: dfcli.exe
+    binary: dfcli
     env:
       - CGO_ENABLED=0
     goos:
@@ -76,7 +76,7 @@ builds:
     main: ./cmd/dfcli/main.go
     binary: dfcli
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
     goos:
       - linux
     goarch:
@@ -92,7 +92,7 @@ archives:
       - distroface_darwin_amd64
       - distroface_arm64
     format: tar.gz
-    name_template: "distroface_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "distroface_{{ .Version }}_{{ .Arch }}"
     files:
       - config.yml
       - web/build/**/*
@@ -105,7 +105,7 @@ archives:
       - dfcli_darwin
       - dfcli_linux
       - dfcli_win
-    name_template: "dfcli_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "dfcli_{{ .Version }}_{{ .Arch }}"
 
 checksum:
   name_template: 'checksums.txt'
