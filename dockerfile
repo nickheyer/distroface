@@ -1,5 +1,5 @@
 # UI BASE
-FROM --platform=$BUILDPLATFORM node:20-alpine AS ui-builder
+FROM --platform=${BUILDPLATFORM} node:20-alpine AS ui-builder
 WORKDIR /app/web
 COPY web/package*.json ./
 RUN npm ci
@@ -7,7 +7,7 @@ COPY web/ ./
 RUN npm run build
 
 # GO BASE
-FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS go-base
+FROM --platform=${BUILDPLATFORM} golang:1.22-alpine AS go-base
 WORKDIR /src
 COPY go.* ./
 RUN go mod download
@@ -15,7 +15,7 @@ COPY . .
 COPY --from=ui-builder /app/web/build ./web/build
 
 # AMD-64 BUILD
-FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder-amd64
+FROM --platform=${BUILDPLATFORM} golang:1.22-alpine AS builder-amd64
 WORKDIR /src
 RUN apk add --no-cache gcc musl-dev sqlite-dev
 COPY --from=go-base /src ./
@@ -26,9 +26,9 @@ ENV GOARCH=amd64
 RUN go build -ldflags="-w -s" -o distroface ./cmd/distroface/main.go
 
 # ARM-64 BUILD
-FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder-arm64
+FROM --platform=${BUILDPLATFORM} golang:1.22-alpine AS builder-arm64
 WORKDIR /src
-RUN apk add --no-cache gcc musl-dev sqlite-dev gcc-aarch64-linux-musl
+RUN apk add --no-cache gcc musl-dev sqlite
 COPY --from=go-base /src ./
 COPY --from=go-base /go/pkg /go/pkg
 ENV CGO_ENABLED=1
