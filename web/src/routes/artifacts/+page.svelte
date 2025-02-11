@@ -92,24 +92,26 @@
     {:else}
       <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
         {#each artifacts.filteredRepos as repo}
-          <div class="bg-white overflow-hidden shadow rounded-lg hover:shadow-md transition-shadow duration-200">
-            <div class="p-6">
+          <div class="bg-white shadow rounded-lg hover:shadow-md transition-shadow duration-200">
+            <div class="p-6 flex flex-col h-full">
               <!-- HEADER -->
               <div class="flex justify-between items-start">
-                <a href="/artifacts/{repo.name}" class="group">
-                  <div class="flex items-center">
-                    <Package class="h-6 w-6 text-gray-400 group-hover:text-blue-500 transition-colors" />
-                    <div class="ml-3">
-                      <h3 class="text-lg font-medium text-gray-900 group-hover:text-blue-600">
+                <a href="/artifacts/{repo.name}" class="group flex-1 min-w-0">
+                  <div class="flex items-start">
+                    <Package class="h-6 w-6 flex-shrink-0 text-gray-400 group-hover:text-blue-500 transition-colors" />
+                    <div class="ml-3 min-w-0">
+                      <h3 class="text-lg font-medium text-gray-900 group-hover:text-blue-600 truncate">
                         {repo.name}
                       </h3>
-                      <p class="text-sm text-gray-500">{repo.description || "No description"}</p>
+                      <p class="text-sm text-gray-500 break-words">
+                        {repo.description || "No description"}
+                      </p>
                     </div>
                   </div>
                 </a>
                 
                 <!-- ACTIONS MENU -->
-                <div class="relative">
+                <div class="relative flex-shrink-0 ml-4">
                   <button
                     onclick={() => menuOpen = menuOpen === repo.name ? null : repo.name}
                     class="p-1 rounded-full hover:bg-gray-100"
@@ -150,7 +152,7 @@
                   {/if}
                 </div>
               </div>
-  
+      
               <!-- METADATA -->
               <div class="mt-4 flex items-center justify-between text-sm">
                 <div class="flex items-center text-gray-500">
@@ -162,11 +164,11 @@
                     Public
                   {/if}
                 </div>
-                <span class="text-gray-500">
+                <span class="text-gray-500 truncate ml-2">
                   Updated {formatDate(repo.updated_at)}
                 </span>
               </div>
-  
+      
               <!-- STATS -->
               <div class="mt-4 border-t pt-4">
                 <div class="flex justify-between text-sm text-gray-500">
