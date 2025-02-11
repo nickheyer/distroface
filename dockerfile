@@ -10,7 +10,7 @@ FROM golang:1.22-alpine AS go-builder
 
 WORKDIR /app
 COPY go.mod go.sum ./
-RUN apk add --no-cache gcc musl-dev sqlite && go mod download
+RUN apk add --no-cache gcc musl-dev && go mod download
 COPY . .
 COPY --from=ui-builder /app/web/build ./web/build
 
@@ -21,7 +21,7 @@ RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o distroface ./cmd/
 FROM alpine:3.19
 
 RUN \
-    apk add --no-cache sqlite sqlite-libs ca-certificates tzdata && \
+    apk add --no-cache ca-certificates tzdata && \
     addgroup -S -g 1000 appgroup && \
     adduser -S -u 1000 -G appgroup -h /app appuser && \
     mkdir -p /data/registry /data/db /data/certs && \
@@ -31,8 +31,6 @@ WORKDIR /app
 
 COPY --from=go-builder /app/distroface .
 COPY --from=go-builder /app/web/build ./web/build
-COPY --from=go-builder /app/db/schema.sql /app/db/schema.sql
-COPY --from=go-builder /app/db/initdb.sql /app/db/initdb.sql
 COPY --from=go-builder /app/docker.config.yml /app/config.yml
 RUN chown -R appuser:appgroup /app
 USER appuser
