@@ -17,7 +17,7 @@ COPY --from=ui-builder /app/web/build ./web/build
 # AMD-64 BUILD
 FROM --platform=${BUILDPLATFORM} golang:1.22-alpine AS builder-amd64
 WORKDIR /src
-RUN apk add --no-cache gcc musl-dev sqlite-dev
+RUN apk add --no-cache gcc musl-dev sqlite
 COPY --from=go-base /src ./
 COPY --from=go-base /go/pkg /go/pkg
 ENV CGO_ENABLED=1
