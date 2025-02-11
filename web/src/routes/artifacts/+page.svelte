@@ -90,7 +90,7 @@
         </div>
       </div>
     {:else}
-      <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
+      <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
         {#each artifacts.filteredRepos as repo}
           <div class="bg-white shadow rounded-lg hover:shadow-md transition-shadow duration-200">
             <div class="p-6 flex flex-col h-full">

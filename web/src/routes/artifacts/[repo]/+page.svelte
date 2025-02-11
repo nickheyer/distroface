@@ -163,7 +163,7 @@
         <!-- REPOSITORY HEADER -->
         <div class="bg-white shadow-sm rounded-lg p-6">
             <div class="flex items-center justify-between">
-                <div class="flex items-center">
+                <div class="inline-flex items-center">
                     <Package class="h-8 w-8 text-gray-400" />
                     <div class="ml-4">
                         <h1 class="text-2xl font-semibold text-gray-900">
