@@ -28,12 +28,13 @@ RUN go build -ldflags="-w -s" -o distroface ./cmd/distroface/main.go
 # ARM-64 BUILD
 FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder-arm64
 WORKDIR /src
-RUN apk add --no-cache gcc musl-dev sqlite-dev
+RUN apk add --no-cache gcc musl-dev sqlite-dev gcc-aarch64-linux-musl
 COPY --from=go-base /src ./
 COPY --from=go-base /go/pkg /go/pkg
 ENV CGO_ENABLED=1
 ENV GOOS=linux
 ENV GOARCH=arm64
+ENV CC=aarch64-linux-musl-gcc
 RUN go build -ldflags="-w -s" -o distroface ./cmd/distroface/main.go
 
 # RUNTIME FOR AMD64
