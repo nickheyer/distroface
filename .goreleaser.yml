@@ -81,6 +81,17 @@ builds:
       - linux
     goarch:
       - amd64
+    ldflags:
+      - -s
+
+  - id: dfcli_arm64
+    main: ./cmd/dfcli/main.go
+    binary: dfcli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
       - arm64
     ldflags:
       - -s
