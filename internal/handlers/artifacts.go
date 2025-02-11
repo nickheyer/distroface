@@ -727,44 +727,53 @@ func (h *ArtifactHandler) DeleteRepository(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request) {
-	// PARSE TO CRITERIA STRUCT
-	var req models.ArtifactSearchCriteria
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
+	username := r.Context().Value(constants.UsernameKey).(string)
 
-	// GET SETTINGS
-	settings, err := h.getSettings()
-	if err != nil {
-		h.log.Printf("Failed to get settings: %v", err)
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
-		return
-	}
+	// PARSE QUERY PARAMS
+	queryParams := r.URL.Query()
 
-	// BUILD SEARCH CRITERIA WITH DEFAULTS FROM SETTINGS
+	// BUILD SEARCH CRITERIA
 	criteria := models.ArtifactSearchCriteria{
-		RepoID:     req.RepoID,
-		Name:       req.Name,
-		Version:    req.Version,
-		Path:       req.Path,
-		Properties: req.Properties,
-		Sort:       settings.Search.DefaultSort,
-		Order:      settings.Search.DefaultOrder,
-		Limit:      settings.Search.MaxResults,
+		Properties: make(map[string]string),
 	}
 
-	// OVERRIDE DEFAULTS IF PROVIDED IN REQUEST
-	if req.Sort != "" {
-		criteria.Sort = req.Sort
-	}
-	if req.Order != "" {
-		criteria.Order = req.Order
-	}
-	if req.Limit > 0 && req.Limit <= settings.Search.MaxResults {
-		criteria.Limit = req.Limit
+	// HANDLE SPECIAL PARAMS
+	if repo := queryParams.Get("repo"); repo != "" {
+		// GET REPO ACCESS IF REPO IN PARAMS, ELSE FILTER AFTER QUERY
+		repoObj, err := h.repo.GetArtifactRepository(repo)
+		if err != nil {
+			http.Error(w, "Repository not found", http.StatusNotFound)
+			return
+		}
+		if repoObj.Owner != username && repoObj.Private {
+			http.Error(w, "Access denied", http.StatusForbidden)
+			return
+		}
+		criteria.RepoID = utils.IntPtr(repoObj.ID)
 	}
 
+	if name := queryParams.Get("name"); name != "" {
+		criteria.Name = utils.StringPtr(name)
+	}
+	if version := queryParams.Get("version"); version != "" {
+		criteria.Version = utils.StringPtr(version)
+	}
+	if path := queryParams.Get("path"); path != "" {
+		criteria.Path = utils.StringPtr(path)
+	}
+	if maxResults := queryParams.Get("num"); maxResults != "" {
+		if n, err := strconv.Atoi(maxResults); err == nil && n > 0 {
+			criteria.Limit = n
+		}
+	} else {
+		criteria.Limit = 9999 // SEEMS RIGHT
+	}
+
+	// SET SORTING
+	criteria.Sort = "created_at" // DEFAULT SORT
+	if sort := queryParams.Get("sort"); sort != "" {
+		criteria.Sort = sort
+	}
 	// VALIDATE SORT FIELD
 	validSortFields := map[string]bool{
 		"name":       true,
@@ -779,17 +788,42 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// GET SETTINGS
+	settings, err := h.getSettings()
+	if err != nil {
+		h.log.Printf("Failed to get settings: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	// VALIDATE ORDER
 	criteria.Order = strings.ToUpper(criteria.Order)
 	if criteria.Order != "ASC" && criteria.Order != "DESC" {
 		criteria.Order = settings.Search.DefaultOrder
 	}
 
-	// PERFORM SEARCH
-	results, err := h.repo.SearchArtifacts(criteria)
+	// ADD PROPERTY FILTERS FROM REMAINING QUERY PARAMS
+	for key, values := range queryParams {
+		switch key {
+		case "num", "archive", "format", "name", "version", "path", "sort", "order":
+			continue // SKIP SPECIAL PARAMS
+		default:
+			if len(values) > 0 {
+				criteria.Properties[key] = values[0]
+			}
+		}
+	}
+
+	// SEARCH ARTIFACTS
+	artifacts, err := h.repo.SearchArtifacts(criteria)
 	if err != nil {
-		h.log.Printf("Search failed: %v", err)
-		http.Error(w, "Search failed", http.StatusInternalServerError)
+		h.log.Printf("Failed to search artifacts: %v", err)
+		http.Error(w, "Failed to search artifacts", http.StatusInternalServerError)
+		return
+	}
+
+	if len(artifacts) == 0 {
+		http.Error(w, "No matching artifacts found", http.StatusNotFound)
 		return
 	}
 
@@ -803,9 +837,9 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 	}
 
 	response := SearchResponse{
-		Results: results,
-		Total:   len(results),
-		Limit:   criteria.Limit,
+		Results: artifacts,
+		Total:   len(artifacts),
+		Limit:   min(criteria.Limit, len(artifacts)),
 		Sort:    criteria.Sort,
 		Order:   criteria.Order,
 	}

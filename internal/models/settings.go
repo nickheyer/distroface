@@ -85,8 +85,8 @@ func (s *ArtifactSettings) GetDefaults() Settings {
 		},
 		Search: SearchConfig{
 			MaxResults:   100,
-			DefaultSort:  "created",
-			DefaultOrder: "desc",
+			DefaultSort:  "created_at",
+			DefaultOrder: "DESC",
 		},
 	}
 }

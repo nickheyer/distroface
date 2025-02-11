@@ -432,8 +432,13 @@ func (c *APIClient) deleteArtifact(repo, version, path string) error {
 	return err
 }
 
-func (c *APIClient) searchArtifacts(properties map[string]string) ([]models.Artifact, error) {
-	resp, err := c.doRequest("GET", "/api/v1/artifacts/search", properties)
+func (c *APIClient) searchArtifacts(q url.Values) ([]models.Artifact, error) {
+	endpoint := "/api/v1/artifacts/search"
+	if len(q) > 0 {
+		endpoint = endpoint + "?" + q.Encode()
+	}
+
+	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -799,7 +804,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 				w = f
 			}
 
-			// Build query parameters
+			// BUILD QUERY
 			q := make(url.Values)
 
 			if version != "" {
@@ -824,7 +829,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 				q.Set("order", order)
 			}
 
-			// Add property filters (key=value)
+			// ADD PROPS
 			for _, p := range props {
 				parts := strings.SplitN(p, "=", 2)
 				if len(parts) == 2 {
@@ -840,7 +845,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
 	cmd.Flags().BoolVar(&archive, "archive", false, "Force an archive download (zip or tar.gz)")
 	cmd.Flags().StringVar(&format, "format", "", "Archive format (zip or tar.gz)")
-	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value)")
+	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value, key=value,...)")
 	cmd.Flags().StringVarP(&output, "output", "o", "-", "Output file (use - for stdout)")
 	cmd.Flags().IntVar(&num, "num", 0, "Max number of matching artifacts to retrieve (default 1)")
 	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")
@@ -914,13 +919,46 @@ func newArtifactDeleteCmd() *cobra.Command {
 }
 
 func newArtifactSearchCmd() *cobra.Command {
-	var properties map[string]string
+	var (
+		version string
+		artPath string
+		props   []string
+		num     int
+		sortBy  string
+		order   string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "search",
-		Short: "Search for artifacts",
+		Short: "Search for artifacts (via query)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			artifacts, err := client.searchArtifacts(properties)
+			// BUILD QUERY
+			q := make(url.Values)
+
+			if version != "" {
+				q.Set("version", version)
+			}
+			if artPath != "" {
+				q.Set("path", artPath)
+			}
+			if num > 0 {
+				q.Set("num", strconv.Itoa(num))
+			}
+			if sortBy != "" {
+				q.Set("sort", sortBy)
+			}
+			if order != "" {
+				q.Set("order", order)
+			}
+
+			for _, p := range props {
+				parts := strings.SplitN(p, "=", 2)
+				if len(parts) == 2 {
+					q.Set(parts[0], parts[1])
+				}
+			}
+
+			artifacts, err := client.searchArtifacts(q)
 			if err != nil {
 				return fmt.Errorf("search failed: %v", err)
 			}
@@ -940,8 +978,12 @@ func newArtifactSearchCmd() *cobra.Command {
 			return w.Flush()
 		},
 	}
-
-	cmd.Flags().StringToStringVar(&properties, "property", nil, "Search properties (key=value)")
+	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version filter")
+	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
+	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value, key=value,...)")
+	cmd.Flags().IntVar(&num, "num", 0, "Max number of matching artifacts to retrieve (default 1)")
+	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")
+	cmd.Flags().StringVar(&order, "order", "", "Sort order (ASC or DESC)")
 
 	return cmd
 }
