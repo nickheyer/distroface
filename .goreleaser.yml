@@ -47,23 +47,43 @@ builds:
     ldflags:
       - -s -w
 
-  - id: dfcli
+  - id: dfcli_darwin
+    main: ./cmd/dfcli/main.go
+    binary: dfcli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s
+
+  - id: dfcli_win
+    main: ./cmd/dfcli/main.go
+    binary: dfcli.exe
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - windows
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+
+  - id: dfcli_linux
     main: ./cmd/dfcli/main.go
     binary: dfcli
     env:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
     ldflags:
-      - -s -w
+      - -s
 
 archives:
   - id: distroface
@@ -82,12 +102,10 @@ archives:
         
   - id: dfcli
     builds:
-      - dfcli
-    format: tar.gz
+      - dfcli_darwin
+      - dfcli_linux
+      - dfcli_win
     name_template: "dfcli_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        format: zip
 
 checksum:
   name_template: 'checksums.txt'
