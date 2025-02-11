@@ -54,7 +54,10 @@ RUN addgroup -S -g 1000 appgroup && \
 WORKDIR /app
 COPY --chown=appuser:appgroup docker.config.yml config.yml
 COPY --from=ui-builder --chown=appuser:appgroup /app/web/build ./web/build
-COPY --from=builder-${TARGETARCH} --chown=appuser:appgroup /src/distroface .
+
+# BUILDX SHOULD THEORETICALLY DO AN 'IF/ELSE' HERE
+COPY --from=builder-amd64 --chown=appuser:appgroup /src/distroface . 
+COPY --from=builder-arm64 --chown=appuser:appgroup /src/distroface .
 
 USER appuser
 EXPOSE 8668
