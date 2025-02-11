@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,9 +238,20 @@ func (h *RepositoryHandler) HandleManifest(w http.ResponseWriter, r *http.Reques
 	name := vars["name"]
 	reference := vars["reference"]
 	username := r.Context().Value(constants.UsernameKey).(string)
+	h.log.Printf("Handling manifest request: method=%s repo=%s ref=%s user=%s path=%s",
+		r.Method, name, reference, username, r.URL.Path)
 
-	h.log.Printf("Handling manifest request: method=%s repo=%s ref=%s user=%s",
-		r.Method, name, reference, username)
+	// NORMALIZE REPOSITORY PATH
+	name = strings.TrimPrefix(name, "/")
+	name = strings.TrimSuffix(name, "/")
+
+	// ENSURE SUBPATH DIRECTORIES EXIST
+	repoPath := filepath.Join(h.config.Storage.RootDirectory, "repositories", name)
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		h.log.Printf("Failed to create repository directory structure: %v", err)
+		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		return
+	}
 
 	switch r.Method {
 	case "HEAD", "GET":
@@ -291,17 +303,43 @@ func (h *RepositoryHandler) getManifest(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, name, reference, username string) {
+	h.log.Printf("Starting putManifest: repo=%s ref=%s user=%s contentType=%s",
+		name, reference, username, r.Header.Get("Content-Type"))
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		h.log.Printf("Failed to read manifest body: %v", err)
-		http.Error(w, "INVALID REQUEST", http.StatusBadRequest)
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	// GET DIGEST
+	// GET DIGEST AND LOG IT
 	manifestDigest := digest.FromBytes(body)
+	h.log.Printf("Calculated manifest digest: %s", manifestDigest)
 
-	// GET LAYER INFO
+	// ENSURE ALL PARENT DIRECTORIES EXIST
+	manifestDir := filepath.Join(
+		h.config.Storage.RootDirectory,
+		"repositories",
+		name,
+		"_manifests",
+		"revisions",
+	)
+	if err := os.MkdirAll(manifestDir, 0755); err != nil {
+		h.log.Printf("Failed to create manifest directory: %v", err)
+		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		return
+	}
+
+	// STORE BY DIGEST
+	manifestPath := filepath.Join(manifestDir, manifestDigest.String())
+	h.log.Printf("Creating manifest at path: %s", manifestPath)
+	if err := os.WriteFile(manifestPath, body, 0644); err != nil {
+		h.log.Printf("Failed to write manifest: %v", err)
+		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		return
+	}
+
+	// PARSE MANIFEST FOR SIZE CALCULATION
 	var manifestObj struct {
 		SchemaVersion int    `json:"schemaVersion"`
 		MediaType     string `json:"mediaType"`
@@ -316,38 +354,9 @@ func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, 
 			Digest    string `json:"digest"`
 		} `json:"layers"`
 	}
-
 	if err := json.Unmarshal(body, &manifestObj); err != nil {
 		h.log.Printf("Failed to parse manifest JSON: %v", err)
 		http.Error(w, "INVALID MANIFEST", http.StatusBadRequest)
-		return
-	}
-
-	// GET TOTAL SIZE
-	var totalSize int64
-	totalSize += manifestObj.Config.Size
-	for _, layer := range manifestObj.Layers {
-		totalSize += layer.Size
-	}
-
-	// STORE BY DIGEST
-	manifestDir := filepath.Join(
-		h.config.Storage.RootDirectory,
-		"repositories",
-		name,
-		"_manifests",
-		"revisions",
-	)
-	if err := os.MkdirAll(manifestDir, 0755); err != nil {
-		h.log.Printf("Failed to create manifest directory: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
-		return
-	}
-
-	manifestPath := filepath.Join(manifestDir, manifestDigest.String())
-	if err := os.WriteFile(manifestPath, body, 0644); err != nil {
-		h.log.Printf("Failed to write manifest: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
 
@@ -365,18 +374,18 @@ func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, 
 		if !hasTag {
 			metadata.Tags = append(metadata.Tags, reference)
 		}
-		metadata.Size = totalSize
+		metadata.Size = calculateTotalSize(manifestObj)
 		metadata.UpdatedAt = time.Now()
 		if err := h.repo.UpdateImageMetadata(metadata); err != nil {
 			h.log.Printf("Failed to update image metadata: %v", err)
 		}
 	} else {
 		// CREATE NEW METADATA
-		metadata = &models.ImageMetadata{
+		metadata := &models.ImageMetadata{
 			ID:        manifestDigest.String(),
 			Name:      name,
 			Tags:      []string{reference},
-			Size:      totalSize,
+			Size:      calculateTotalSize(manifestObj),
 			Owner:     username,
 			Labels:    make(map[string]string),
 			CreatedAt: time.Now(),
@@ -492,6 +501,7 @@ func (h *RepositoryHandler) InitiateBlobUpload(w http.ResponseWriter, r *http.Re
 
 	// CREATE UPLOAD DIR
 	uploadDir := filepath.Join(h.config.Storage.RootDirectory, "_uploads")
+
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
 		h.log.Printf("Failed to create upload directory: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
@@ -506,7 +516,8 @@ func (h *RepositoryHandler) InitiateBlobUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uploadID))
+	location := fmt.Sprintf("/v2/%s/blobs/uploads/%s", url.PathEscape(name), uploadID)
+	w.Header().Set("Location", location)
 	w.Header().Set("Docker-Upload-UUID", uploadID)
 	w.Header().Set("Range", "0-0")
 	w.WriteHeader(http.StatusAccepted)
@@ -558,6 +569,10 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 	uploadID := vars["uuid"]
 	expectedDigest := r.URL.Query().Get("digest")
 
+	// TRIM EXTRA SLASHES
+	name = strings.TrimPrefix(name, "/")
+	name = strings.TrimSuffix(name, "/")
+
 	if expectedDigest == "" {
 		h.log.Printf("Missing digest parameter")
 		http.Error(w, "MISSING DIGEST", http.StatusBadRequest)
@@ -566,57 +581,7 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
 
-	// CREATE OR OPEN FILE
-	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE, 0644)
-	if err != nil {
-		h.log.Printf("Failed to open upload file: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	// WRITE REQUEST BODY IF PRESENT
-	hash := sha256.New()
-	if r.ContentLength > 0 {
-		// TEEREADER
-		reader := io.TeeReader(r.Body, hash)
-		if _, err := io.Copy(file, reader); err != nil {
-			h.log.Printf("Failed to write upload data: %v", err)
-			http.Error(w, "FAILED TO WRITE DATA", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		// READ EXISTING FILE HASH IF NO BODY
-		if err := file.Close(); err != nil {
-			h.log.Printf("Failed to close file for reading: %v", err)
-			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
-			return
-		}
-
-		file, err = os.Open(uploadPath)
-		if err != nil {
-			h.log.Printf("Failed to open file for reading: %v", err)
-			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
-			return
-		}
-		defer file.Close()
-
-		if _, err := io.Copy(hash, file); err != nil {
-			h.log.Printf("Failed to read file for hash: %v", err)
-			http.Error(w, "FAILED TO READ DATA", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	actualDigest := fmt.Sprintf("sha256:%x", hash.Sum(nil))
-
-	if actualDigest != expectedDigest {
-		h.log.Printf("Digest mismatch: expected=%s actual=%s", expectedDigest, actualDigest)
-		http.Error(w, "DIGEST MISMATCH", http.StatusBadRequest)
-		return
-	}
-
-	// MOVE TO FINAL LOCATION
+	// ENSURE BLOB DIRECTORIES EXIST FOR THE PATH
 	blobDir := filepath.Join(
 		h.config.Storage.RootDirectory,
 		"blobs",
@@ -628,12 +593,36 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	blobPath := filepath.Join(blobDir, strings.TrimPrefix(expectedDigest, "sha256:"))
+	// CALCULATE HASH WHILE COPY
+	file, err := os.OpenFile(uploadPath, os.O_RDWR|os.O_CREATE, 0644)
+	if err != nil {
+		h.log.Printf("Failed to open upload file: %v", err)
+		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
 
-	// TRY RENAME, FALLBACK TO COPY
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		h.log.Printf("Failed to calculate hash: %v", err)
+		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		return
+	}
+
+	actualDigest := fmt.Sprintf("sha256:%x", hash.Sum(nil))
+	if actualDigest != expectedDigest {
+		h.log.Printf("Digest mismatch: expected=%s actual=%s", expectedDigest, actualDigest)
+		http.Error(w, "DIGEST MISMATCH", http.StatusBadRequest)
+		return
+	}
+
+	// MOVE BLOB TO FINAL RESTING PLACE
+	blobPath := filepath.Join(blobDir, strings.TrimPrefix(expectedDigest, "sha256:"))
 	if err := os.Rename(uploadPath, blobPath); err != nil {
+
+		// IF RENAME FAILS, TRY COPY BECAUSE WHY NOT
 		if err := copyFile(uploadPath, blobPath); err != nil {
-			h.log.Printf("Failed to copy blob: %v", err)
+			h.log.Printf("Failed to store blob: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
@@ -829,8 +818,18 @@ func (h *RepositoryHandler) DeleteBlob(w http.ResponseWriter, r *http.Request) {
 
 // HELPER FUNCTIONS
 func (h *RepositoryHandler) resolveManifestPath(name, reference string) string {
-	var manifestPath string
+	// TRIM EXTRA SLASHES
+	name = strings.TrimPrefix(name, "/")
+	name = strings.TrimSuffix(name, "/")
 
+	// ENSURE SUBPATH DIRS EXIST
+	repoPath := filepath.Join(h.config.Storage.RootDirectory, "repositories", name)
+	if err := os.MkdirAll(repoPath, 0755); err != nil {
+		h.log.Printf("Failed to create repository directory structure: %v", err)
+		return ""
+	}
+
+	var manifestPath string
 	if strings.HasPrefix(reference, "sha256:") {
 		// DIRECT DIGEST REF
 		manifestPath = filepath.Join(
@@ -843,7 +842,7 @@ func (h *RepositoryHandler) resolveManifestPath(name, reference string) string {
 		)
 	} else {
 		// TAG REF - NEED TO RESOLVE TO DIGEST
-		tagLinkPath := filepath.Join(
+		tagPath := filepath.Join(
 			h.config.Storage.RootDirectory,
 			"repositories",
 			name,
@@ -853,13 +852,11 @@ func (h *RepositoryHandler) resolveManifestPath(name, reference string) string {
 			"current",
 			"link",
 		)
-
-		digest, err := os.ReadFile(tagLinkPath)
+		digest, err := os.ReadFile(tagPath)
 		if err != nil {
-			h.log.Printf("Failed to read tag link at %s: %v", tagLinkPath, err)
+			h.log.Printf("Failed to read tag link at %s: %v", tagPath, err)
 			return ""
 		}
-
 		manifestPath = filepath.Join(
 			h.config.Storage.RootDirectory,
 			"repositories",
@@ -868,6 +865,12 @@ func (h *RepositoryHandler) resolveManifestPath(name, reference string) string {
 			"revisions",
 			string(digest),
 		)
+	}
+
+	// ENSURE ALL PARENT DIRS EXIST
+	if err := os.MkdirAll(filepath.Dir(manifestPath), 0755); err != nil {
+		h.log.Printf("Failed to create manifest directory structure: %v", err)
+		return ""
 	}
 
 	// DOES MANIFEST EXIST

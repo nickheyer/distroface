@@ -286,9 +286,9 @@ func (s *Server) setupRoutes() error {
 	regAPI.Use(s.authMiddleware.RegistryAuthMiddleware)
 
 	// MANIFEST OPERATIONS
-	regAPI.Handle("/{name}/manifests/{reference}", requirePermission(s.authService, models.ActionPull, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/manifests/{reference}", requirePermission(s.authService, models.ActionPull, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.HandleManifest))).Methods("GET", "HEAD")
-	regAPI.Handle("/{name}/manifests/{reference}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/manifests/{reference}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.HandleManifest))).Methods("PUT")
 
 	// CATALOGUE OPERATIONS
@@ -296,25 +296,25 @@ func (s *Server) setupRoutes() error {
 		http.HandlerFunc(repoHandler.ListRepositories))).Methods("GET")
 
 	// BLOB OPERATIONS
-	regAPI.Handle("/{name}/blobs/{digest}", requirePermission(s.authService, models.ActionPull, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/{digest}", requirePermission(s.authService, models.ActionPull, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.GetBlob))).Methods("GET", "HEAD")
-	regAPI.Handle("/{name}/blobs/uploads/", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/uploads/", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.InitiateBlobUpload))).Methods("POST")
-	regAPI.Handle("/{name}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.HandleBlobUpload))).Methods("PATCH")
-	regAPI.Handle("/{name}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.CompleteBlobUpload))).Methods("PUT")
 
 	// TAG OPERATIONS
-	regAPI.Handle("/{name}/tags/list", requirePermission(s.authService, models.ActionView, models.ResourceTag)(
+	regAPI.Handle("/{name:.*}/tags/list", requirePermission(s.authService, models.ActionView, models.ResourceTag)(
 		http.HandlerFunc(repoHandler.ListTags))).Methods("GET")
 
 	// ALL V2 DELETE OPERATIONS
-	regAPI.Handle("/{name}/manifests/{reference}", requirePermission(s.authService, models.ActionDelete, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/manifests/{reference}", requirePermission(s.authService, models.ActionDelete, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.DeleteManifest))).Methods("DELETE")
-	regAPI.Handle("/{name}/blobs/{digest}", requirePermission(s.authService, models.ActionDelete, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/{digest}", requirePermission(s.authService, models.ActionDelete, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.DeleteBlob))).Methods("DELETE")
-	regAPI.Handle("/{name}/tags/{tag}", requirePermission(s.authService, models.ActionDelete, models.ResourceTag)(
+	regAPI.Handle("/{name:.*}/tags/{tag}", requirePermission(s.authService, models.ActionDelete, models.ResourceTag)(
 		http.HandlerFunc(repoHandler.DeleteBlob))).Methods("DELETE")
 
 	// STATIC FILES

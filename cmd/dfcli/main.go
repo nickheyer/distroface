@@ -16,113 +16,23 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/models"
+	"github.com/nickheyer/distroface/internal/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
 )
-
-// MODELS
-type ImageRepository struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Tags      []ImageTag `json:"tags"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	Owner     string     `json:"owner"`
-	Private   bool       `json:"private"`
-	Size      int64      `json:"size"`
-}
-
-type ImageTag struct {
-	Name    string    `json:"name"`
-	Size    int64     `json:"size"`
-	Digest  string    `json:"digest"`
-	Created time.Time `json:"created"`
-}
-
-type ArtifactRepository struct {
-	ID          int       `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Owner       string    `json:"owner"`
-	Private     bool      `json:"private"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-type Artifact struct {
-	ID         string            `json:"id"`
-	RepoID     int               `json:"repo_id"`
-	Name       string            `json:"name"`
-	Path       string            `json:"path"`
-	Version    string            `json:"version"`
-	Size       int64             `json:"size"`
-	MimeType   string            `json:"mime_type"`
-	Metadata   string            `json:"metadata"`
-	Properties map[string]string `json:"properties"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
-}
-
-type ArtifactSearchCriteria struct {
-	RepoID     *int              `json:"repo_id,omitempty"`
-	Name       *string           `json:"name,omitempty"`
-	Version    *string           `json:"version,omitempty"`
-	Path       *string           `json:"path,omitempty"`
-	Properties map[string]string `json:"properties,omitempty"`
-	Sort       string            `json:"sort,omitempty"`
-	Order      string            `json:"order,omitempty"`
-	Limit      int               `json:"limit,omitempty"`
-}
-
-type User struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	Groups    []string  `json:"groups"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-type Group struct {
-	ID          int       `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Roles       []string  `json:"roles"`
-	Scope       string    `json:"scope"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-type Role struct {
-	ID          int          `json:"id"`
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Permissions []Permission `json:"permissions"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
-}
-
-type Permission struct {
-	Action   string `json:"action"`
-	Resource string `json:"resource"`
-	Scope    string `json:"scope,omitempty"`
-}
-
-const (
-	defaultConfigFile = "~/.dfcli/config.json"
-	defaultServerURL  = "http://localhost:8668"
-)
-
-type AuthConfig struct {
-	Token    string `json:"token"`
-	Username string `json:"username"`
-	Server   string `json:"server"`
-}
 
 type APIClient struct {
 	BaseURL    string
 	Token      string
 	HTTPClient *http.Client
 }
+
+const (
+	defaultConfigFile = "~/.dfcli/config.json"
+	defaultServerURL  = "http://localhost:8668"
+)
 
 var (
 	cfgFile string
@@ -280,7 +190,7 @@ func initConfig() {
 }
 
 func initClient() error {
-	var config AuthConfig
+	var config models.AuthConfig
 	data, err := os.ReadFile(getConfigPath())
 	if err == nil {
 		if err := json.Unmarshal(data, &config); err != nil {
@@ -387,7 +297,7 @@ func formatSize(bytes int64) string {
 	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
-func saveConfig(config AuthConfig) error {
+func saveConfig(config models.AuthConfig) error {
 	configDir := filepath.Join(getHomeDir(), ".dfcli")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
 		return fmt.Errorf("failed to create config directory: %v", err)
@@ -407,25 +317,25 @@ func saveConfig(config AuthConfig) error {
 }
 
 // IMAGE OPERATIONS
-func (c *APIClient) listImages() ([]ImageRepository, error) {
+func (c *APIClient) listImages() ([]models.ImageRepository, error) {
 	resp, err := c.doRequest("GET", "/api/v1/repositories", nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var repos []ImageRepository
+	var repos []models.ImageRepository
 	return repos, json.NewDecoder(resp.Body).Decode(&repos)
 }
 
-func (c *APIClient) listImageTags(name string) ([]ImageTag, error) {
+func (c *APIClient) listImageTags(name string) ([]models.ImageTag, error) {
 	resp, err := c.doRequest("GET", fmt.Sprintf("/v2/%s/tags/list", name), nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var tags []ImageTag
+	var tags []models.ImageTag
 	return tags, json.NewDecoder(resp.Body).Decode(&tags)
 }
 
@@ -453,14 +363,14 @@ func (c *APIClient) createArtifactRepo(name string, description string, private 
 	return err
 }
 
-func (c *APIClient) listArtifactRepos() ([]ArtifactRepository, error) {
+func (c *APIClient) listArtifactRepos() ([]models.ArtifactRepository, error) {
 	resp, err := c.doRequest("GET", "/api/v1/artifacts/repos", nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var repos []ArtifactRepository
+	var repos []models.ArtifactRepository
 	return repos, json.NewDecoder(resp.Body).Decode(&repos)
 }
 
@@ -514,26 +424,26 @@ func (c *APIClient) deleteArtifact(repo, version, path string) error {
 	return err
 }
 
-func (c *APIClient) searchArtifacts(properties map[string]string) ([]Artifact, error) {
+func (c *APIClient) searchArtifacts(properties map[string]string) ([]models.Artifact, error) {
 	resp, err := c.doRequest("GET", "/api/v1/artifacts/search", properties)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var artifacts []Artifact
+	var artifacts []models.Artifact
 	return artifacts, json.NewDecoder(resp.Body).Decode(&artifacts)
 }
 
 // USER OPERATIONS
-func (c *APIClient) listUsers() ([]User, error) {
+func (c *APIClient) listUsers() ([]models.User, error) {
 	resp, err := c.doRequest("GET", "/api/v1/users", nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var users []User
+	var users []models.User
 	return users, json.NewDecoder(resp.Body).Decode(&users)
 }
 
@@ -562,14 +472,14 @@ func (c *APIClient) updateUserGroups(username string, groups []string) error {
 }
 
 // GROUP OPERATIONS
-func (c *APIClient) listGroups() ([]Group, error) {
+func (c *APIClient) listGroups() ([]models.Group, error) {
 	resp, err := c.doRequest("GET", "/api/v1/groups", nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var groups []Group
+	var groups []models.Group
 	return groups, json.NewDecoder(resp.Body).Decode(&groups)
 }
 
@@ -598,18 +508,18 @@ func (c *APIClient) deleteGroup(name string) error {
 }
 
 // ROLE OPERATIONS
-func (c *APIClient) listRoles() ([]Role, error) {
+func (c *APIClient) listRoles() ([]models.Role, error) {
 	resp, err := c.doRequest("GET", "/api/v1/roles", nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var roles []Role
+	var roles []models.Role
 	return roles, json.NewDecoder(resp.Body).Decode(&roles)
 }
 
-func (c *APIClient) updateRole(name string, description string, permissions []Permission) error {
+func (c *APIClient) updateRole(name string, description string, permissions []models.Permission) error {
 	payload := map[string]interface{}{
 		"description": description,
 		"permissions": permissions,
@@ -714,7 +624,7 @@ func newLoginCmd() *cobra.Command {
 				return fmt.Errorf("login failed: %v", err)
 			}
 
-			config := AuthConfig{
+			config := models.AuthConfig{
 				Token:    token,
 				Username: username,
 				Server:   server,
@@ -933,7 +843,6 @@ func newArtifactDownloadCmd() *cobra.Command {
 func newArtifactUploadCmd() *cobra.Command {
 	var version, path string
 	var properties map[string]string
-
 	cmd := &cobra.Command{
 		Use:   "upload [repo] [file]",
 		Short: "Upload an artifact",
@@ -942,14 +851,23 @@ func newArtifactUploadCmd() *cobra.Command {
 			repo := args[0]
 			file := args[1]
 
+			// IF NO VERSION PROVIDED, USE SANITIZED FILENAME
 			if version == "" {
-				version = filepath.Base(file)
-			}
-			if path == "" {
-				path = filepath.Base(file)
+				version = utils.SanitizeVersion(filepath.Base(file))
+			} else {
+				version = utils.SanitizeVersion(version)
 			}
 
-			fmt.Printf("Uploading %s to %s (version: %s, path: %s)\n", file, repo, version, path)
+			// IF NO PATH PROVIDED, USE SANITIZED FILENAME
+			if path == "" {
+				path = utils.SanitizeFilePath(filepath.Base(file))
+			} else {
+				path = utils.SanitizeFilePath(path)
+			}
+
+			fmt.Printf("Uploading %s to %s (version: %s, path: %s)\n",
+				file, repo, version, path)
+
 			if err := client.uploadArtifact(repo, file, version, path, properties); err != nil {
 				return fmt.Errorf("upload failed: %v", err)
 			}
@@ -1175,7 +1093,7 @@ func newRoleUpdateCmd() *cobra.Command {
 				return err
 			}
 
-			var currentRole *Role
+			var currentRole *models.Role
 			for _, r := range roles {
 				if r.Name == args[0] {
 					currentRole = &r
@@ -1196,15 +1114,16 @@ func newRoleUpdateCmd() *cobra.Command {
 				if len(parts) != 2 {
 					return fmt.Errorf("invalid permission format: %s", p)
 				}
-				permissions = append(permissions, Permission{
-					Action:   parts[0],
-					Resource: parts[1],
+
+				permissions = append(permissions, models.Permission{
+					Action:   models.Action(parts[0]),
+					Resource: models.Resource(parts[1]),
 				})
 			}
 
 			// REMOVE PERMISSIONS
 			if len(removePerms) > 0 {
-				var filtered []Permission
+				var filtered []models.Permission
 				for _, p := range permissions {
 					remove := false
 					pStr := fmt.Sprintf("%s:%s", p.Action, p.Resource)

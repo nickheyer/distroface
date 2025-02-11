@@ -10,6 +10,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/textproto"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -24,7 +25,6 @@ import (
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"github.com/nickheyer/distroface/internal/utils"
-	"github.com/samber/lo"
 )
 
 type ArtifactHandler struct {
@@ -142,14 +142,22 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 	vars := mux.Vars(r)
 	repoName := vars["repo"]
 	uploadID := vars["uuid"]
-	version := lo.SnakeCase(r.URL.Query().Get("version"))
+	version := r.URL.Query().Get("version")
 	artifactPath := r.URL.Query().Get("path")
 	username := r.Context().Value(constants.UsernameKey).(string)
 
-	if repoName == "" || version == "" || artifactPath == "" || uploadID == "" {
-		http.Error(w, "Version and path are required", http.StatusBadRequest)
+	if artifactPath == "" {
+		artifactPath = utils.SanitizeFilePath(repoName)
+	}
+
+	if repoName == "" || version == "" || uploadID == "" {
+		http.Error(w, "Required parameters missing", http.StatusBadRequest)
 		return
 	}
+
+	// CLEAN AND ENCODE PATHS
+	version = url.QueryEscape(version)
+	artifactPath = url.QueryEscape(artifactPath)
 
 	// BUILD PATHS
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "_uploads", uploadID)
@@ -851,7 +859,7 @@ func (h *ArtifactHandler) RenameArtifact(w http.ResponseWriter, r *http.Request)
 	}
 
 	// ESCAPE VERSION
-	updateReq.Version = lo.SnakeCase(updateReq.Version)
+	updateReq.Version = url.QueryEscape(updateReq.Version)
 
 	// IF NO PATH, MAINTAIN DIR STRUCTURE AND UPDATE FILENAME
 	if updateReq.Path == "" {
@@ -1020,14 +1028,18 @@ func (h *ArtifactHandler) copyFile(src, dst string) error {
 }
 
 func (h *ArtifactHandler) validatePath(path string, allowAbs bool) error {
-	// NO PATH TRAVERSAL
-	if strings.Contains(path, "..") {
-		return fmt.Errorf("invalid path: contains parent directory reference")
+	cleanPath := filepath.Clean(path)
+
+	if strings.Contains(cleanPath, "..") {
+		return fmt.Errorf("path cannot contain parent directory references")
 	}
 
-	// RELATIVE ONLY
-	if !allowAbs && filepath.IsAbs(path) {
-		return fmt.Errorf("invalid path: absolute paths not allowed")
+	if !allowAbs && filepath.IsAbs(cleanPath) {
+		return fmt.Errorf("absolute paths not allowed")
+	}
+
+	if len(cleanPath) > 255 {
+		return fmt.Errorf("path too long (max 255 characters)")
 	}
 
 	return nil

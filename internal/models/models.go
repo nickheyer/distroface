@@ -104,7 +104,7 @@ func (g *Group) UnmarshalRoles(data string) error {
 type User struct {
 	ID        int       `json:"id"`
 	Username  string    `json:"username"`
-	Password  []byte    `json:"-"`
+	Password  []byte    `json:"-,omitempty"`
 	Groups    []string  `json:"groups"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -126,6 +126,23 @@ type GlobalView struct {
 	TotalImages int64            `json:"total_images"`
 	TotalSize   int64            `json:"total_size"`
 	Images      []*ImageMetadata `json:"images"`
+}
+
+type ImageRepository struct {
+	ID        string     `json:"id"`
+	Name      string     `json:"name"`
+	Tags      []ImageTag `json:"tags"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	Owner     string     `json:"owner"`
+	Private   bool       `json:"private"`
+	Size      int64      `json:"size"`
+}
+
+type ImageTag struct {
+	Name    string    `json:"name"`
+	Size    int64     `json:"size"`
+	Digest  string    `json:"digest"`
+	Created time.Time `json:"created"`
 }
 
 type ImageMetadata struct {
@@ -218,6 +235,12 @@ type CustomClaims struct {
 	Access  []*ResourceActions `json:"access,omitempty"`
 	Groups  []string           `json:"groups,omitempty"`
 	jwt.RegisteredClaims
+}
+
+type AuthConfig struct {
+	Token    string `json:"token"`
+	Username string `json:"username"`
+	Server   string `json:"server"`
 }
 
 func (c CustomClaims) Valid() error {

@@ -78,10 +78,10 @@ func (h *AuthHandler) HandleRegistryAuth(w http.ResponseWriter, r *http.Request)
 		h.log.Debug("REGISTRY AUTH FORM",
 			zap.Any("FORM DATA", r.PostForm))
 
-		username = r.PostForm.Get("username") // DOCKER SENDS username
-		password = r.PostForm.Get("password") // GET PASSWORD FROM FORM
+		username = r.PostForm.Get("username")
+		password = r.PostForm.Get("password")
 		scope = r.PostForm.Get("scope")
-		service = h.config.Auth.Service // USE CONFIGURED SERVICE
+		service = h.config.Auth.Service
 	} else {
 		// HANDLE BASIC AUTH
 		if basicUser, basicPass, ok := r.BasicAuth(); ok {
@@ -132,16 +132,25 @@ func (h *AuthHandler) HandleRegistryAuth(w http.ResponseWriter, r *http.Request)
 
 	regResponse, ok := response.(*auth.RegAuthResponse)
 	if !ok {
+		h.log.Error("INVALID RESPONSE TYPE", fmt.Errorf("expected RegAuthResponse"))
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
 
+	// SET RECOMENDED HEADERS
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+
 	if err := json.NewEncoder(w).Encode(regResponse); err != nil {
-		fmt.Printf("ERROR ENCODING RESPONSE: %v\n", err)
+		h.log.Error("FAILED TO ENCODE RESPONSE", err)
 		http.Error(w, "INTERNAL SERVER ERROR", http.StatusInternalServerError)
 		return
 	}
+
+	h.log.Info("AUTH SUCCESS",
+		zap.String("USER", username),
+		zap.String("SCOPE", scope))
 }
 
 // WEB UI LOGIN

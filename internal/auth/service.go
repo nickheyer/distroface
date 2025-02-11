@@ -419,6 +419,10 @@ func parseScope(scope string) ([]models.ResourceActions, error) {
 		name := parts[1]         // IMAGE NAME
 		requestedStr := parts[2] // PULL,PUSH
 
+		// TRIM ANY EXTRA SLASHES
+		name = strings.TrimPrefix(name, "/")
+		name = strings.TrimSuffix(name, "/")
+
 		// SPLIT ACTIONS STRING INTO SLICE
 		requestedActions := strings.Split(requestedStr, ",")
 
