@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	dconfig "github.com/distribution/distribution/v3/configuration"
 	_ "github.com/distribution/distribution/v3/registry/auth/token"
@@ -22,6 +23,7 @@ import (
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/handlers"
 	"github.com/nickheyer/distroface/internal/logging"
+	"github.com/nickheyer/distroface/internal/metrics"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"github.com/nickheyer/distroface/internal/server/middleware"
@@ -170,15 +172,17 @@ func (s *Server) setupRoutes() error {
 	s.router.Use(middleware.LoggingMiddleware(s.log))
 	s.router.Use(middleware.CORS)
 
-	// INIT HANDLERS
+	// INIT HANDLERS + MISC SERVICES
+	metricsSrv := metrics.NewMetricsService(s.log, s.config.Storage.RootDirectory)
 	repo := repository.NewSQLiteRepository(s.db)
 	authHandler := handlers.NewAuthHandler(s.config, s.authService, s.log)
 	userHandler := handlers.NewUserHandler(repo, s.permManager, s.log)
-	repoHandler := handlers.NewRepositoryHandler(repo, s.config, s.log)
-	artifactHandler := handlers.NewArtifactHandler(repo, s.config, s.log)
+	repoHandler := handlers.NewRepositoryHandler(repo, s.config, s.log, metricsSrv)
+	artifactHandler := handlers.NewArtifactHandler(repo, s.config, s.log, metricsSrv)
 	groupHandler := handlers.NewGroupHandler(repo, s.log)
 	roleHandler := handlers.NewRoleHandler(repo, s.permManager, s.log)
 	settingsHandler := handlers.NewSettingsHandler(repo, s.config, s.log)
+	metricsHandler := handlers.NewMetricsHandler(metricsSrv, s.log)
 
 	// PUBLIC ROUTES
 	s.router.HandleFunc("/v2/", authHandler.HandleV2Check)
@@ -193,6 +197,8 @@ func (s *Server) setupRoutes() error {
 	// SETTINGS ROUTES
 	api.Handle("/settings", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
 		http.HandlerFunc(settingsHandler.GetSettings))).Methods("GET")
+	api.Handle("/settings/metrics", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+		http.HandlerFunc(metricsHandler.GetMetrics))).Methods("GET")
 	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
 		http.HandlerFunc(settingsHandler.GetSettings))).Methods("GET")
 	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
@@ -365,8 +371,12 @@ func loadRSAKeys(keyPath string) (*rsa.PrivateKey, *rsa.PublicKey, error) {
 
 func (s *Server) Start() error {
 	srv := &http.Server{
-		Addr:    fmt.Sprintf("%s:%s", s.config.Server.Domain, s.config.Server.Port),
-		Handler: s.router,
+		Addr:              fmt.Sprintf("%s:%s", s.config.Server.Domain, s.config.Server.Port),
+		ReadTimeout:       30 * time.Minute,
+		WriteTimeout:      30 * time.Minute,
+		ReadHeaderTimeout: 60 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		Handler:           s.router,
 	}
 
 	// SETUP TLS IF CONFIGURED

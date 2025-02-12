@@ -1,9 +1,10 @@
 package handlers
 
 import (
+	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,29 +12,32 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/nickheyer/distroface/internal/constants"
 	"github.com/nickheyer/distroface/internal/logging"
+	"github.com/nickheyer/distroface/internal/metrics"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
+	"github.com/nickheyer/distroface/internal/utils"
 	"github.com/opencontainers/go-digest"
 )
 
 type RepositoryHandler struct {
-	repo   repository.Repository
-	config *models.Config
-	log    *logging.LogService
+	repo    repository.Repository
+	config  *models.Config
+	log     *logging.LogService
+	metrics *metrics.MetricsService
 }
 
-func NewRepositoryHandler(repo repository.Repository, cfg *models.Config, log *logging.LogService) *RepositoryHandler {
+func NewRepositoryHandler(repo repository.Repository, cfg *models.Config, log *logging.LogService, metrics *metrics.MetricsService) *RepositoryHandler {
 	return &RepositoryHandler{
-		repo:   repo,
-		config: cfg,
-		log:    log,
+		repo:    repo,
+		config:  cfg,
+		log:     log,
+		metrics: metrics,
 	}
 }
 
@@ -524,43 +528,80 @@ func (h *RepositoryHandler) InitiateBlobUpload(w http.ResponseWriter, r *http.Re
 }
 
 func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Request) {
+	// METRICS
+	h.metrics.TrackUploadStart()
+	startTime := time.Now()
+
 	vars := mux.Vars(r)
 	name := vars["name"]
 	uploadID := vars["uuid"]
-
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
+	const bufSize = 8 * 1024 * 1024
 
-	// OPEN FILE IN APPEND MODE
-	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_APPEND, 0644)
+	// OPEN FILE (APPEND MODE)
+	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
-		h.log.Printf("Failed to open upload file: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		h.metrics.TrackUploadFailed()
+		h.log.Printf("FAILED TO OPEN UPLOAD FILE: %v", err)
+		http.Error(w, "INTERNAL SERVER ERROR", http.StatusInternalServerError)
 		return
 	}
 	defer file.Close()
 
-	// GET CURRENT SIZE
+	// TODO: NEED TO MESS WITH BUFFER SIZES AND SEE WHATS BEST FOR THIS
+	bufWriter := bufio.NewWriterSize(file, bufSize)
+	defer bufWriter.Flush()
+
+	// GET CURRENT SIZE FOR RANGE HEADER
 	info, err := file.Stat()
 	if err != nil {
+		h.metrics.TrackUploadFailed()
 		h.log.Printf("Failed to stat file: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		http.Error(w, "INTERNAL SERVER ERROR", http.StatusInternalServerError)
 		return
 	}
 	startSize := info.Size()
 
-	// COPY DATA IN CHUNKS
-	written, err := io.Copy(file, r.Body)
+	// SET TIMEOUT IF NONE
+	if _, ok := r.Context().Deadline(); !ok {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+		defer cancel()
+		r = r.WithContext(ctx)
+	}
+
+	// COPY DATA FROM BODY
+	copyBuffer := make([]byte, bufSize)
+	written, err := io.CopyBuffer(bufWriter, r.Body, copyBuffer)
 	if err != nil {
-		h.log.Printf("Failed to write data: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		if !utils.IsNetworkError(err) {
+			h.metrics.TrackUploadFailed()
+			h.log.Printf("UPLOAD ERROR: %v", err)
+			http.Error(w, "FAILED TO PROCESS UPLOAD", http.StatusInternalServerError)
+			return
+		}
 		return
 	}
 
-	// SET HEADERS
+	// FLUSH REMAINING DATA
+	if err := bufWriter.Flush(); err != nil {
+		h.metrics.TrackUploadFailed()
+		h.log.Printf("FAILED TO FLUSH BUFFER: %v", err)
+		http.Error(w, "FAILED TO SAVE UPLOAD", http.StatusInternalServerError)
+		return
+	}
+
+	// CALCULATE NEW SIZE
+	newSize := startSize + written
+
+	// SET RESPONSE HEADERS
+	w.Header().Set("Upload-Offset", fmt.Sprintf("%d", newSize))
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uploadID))
 	w.Header().Set("Docker-Upload-UUID", uploadID)
-	w.Header().Set("Range", fmt.Sprintf("0-%d", startSize+written-1))
+	w.Header().Set("Range", fmt.Sprintf("0-%d", newSize-1))
 	w.WriteHeader(http.StatusAccepted)
+
+	// COMPLETE METRICS
+	h.metrics.TrackUploadComplete(written, time.Since(startTime))
 }
 
 func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Request) {
@@ -581,7 +622,57 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
 
-	// ENSURE BLOB DIRECTORIES EXIST FOR THE PATH
+	// CREATE OR OPEN FILE
+	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		h.log.Printf("Failed to open upload file: %v", err)
+		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	// WRITE REQUEST BODY IF PRESENT
+	hash := sha256.New()
+	if r.ContentLength > 0 {
+		// TEEREADER - HASHING/WRITING AT THE SAME TIME?
+		reader := io.TeeReader(r.Body, hash)
+		if _, err := io.Copy(file, reader); err != nil {
+			h.log.Printf("Failed to write upload data: %v", err)
+			http.Error(w, "FAILED TO WRITE DATA", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// READ EXISTING FILE HASH IF NO BODY
+		if err := file.Close(); err != nil {
+			h.log.Printf("Failed to close file for reading: %v", err)
+			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+			return
+		}
+
+		file, err = os.Open(uploadPath)
+		if err != nil {
+			h.log.Printf("Failed to open file for reading: %v", err)
+			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		if _, err := io.Copy(hash, file); err != nil {
+			h.log.Printf("Failed to read file for hash: %v", err)
+			http.Error(w, "FAILED TO READ DATA", http.StatusInternalServerError)
+			return
+		}
+	}
+
+	actualDigest := fmt.Sprintf("sha256:%x", hash.Sum(nil))
+
+	if actualDigest != expectedDigest {
+		h.log.Printf("Digest mismatch: expected=%s actual=%s", expectedDigest, actualDigest)
+		http.Error(w, "DIGEST MISMATCH", http.StatusBadRequest)
+		return
+	}
+
+	// MOVE TO FINAL LOCATION
 	blobDir := filepath.Join(
 		h.config.Storage.RootDirectory,
 		"blobs",
@@ -593,31 +684,9 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// CALCULATE HASH WHILE COPY
-	file, err := os.OpenFile(uploadPath, os.O_RDWR|os.O_CREATE, 0644)
-	if err != nil {
-		h.log.Printf("Failed to open upload file: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-		h.log.Printf("Failed to calculate hash: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
-		return
-	}
-
-	actualDigest := fmt.Sprintf("sha256:%x", hash.Sum(nil))
-	if actualDigest != expectedDigest {
-		h.log.Printf("Digest mismatch: expected=%s actual=%s", expectedDigest, actualDigest)
-		http.Error(w, "DIGEST MISMATCH", http.StatusBadRequest)
-		return
-	}
-
-	// MOVE BLOB TO FINAL RESTING PLACE
 	blobPath := filepath.Join(blobDir, strings.TrimPrefix(expectedDigest, "sha256:"))
+
+	// TRY RENAME, FALLBACK TO COPY
 	if err := os.Rename(uploadPath, blobPath); err != nil {
 
 		// IF RENAME FAILS, TRY COPY BECAUSE WHY NOT
@@ -657,9 +726,14 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 }
 
 func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
+	// METRICS: MARK DL START AND STATT TIME
+	h.metrics.TrackDownloadStart()
+	startTime := time.Now()
+
 	vars := mux.Vars(r)
 	name := vars["name"]
 	digest := vars["digest"]
+	bufSize := 1024 * 1024 // 1MB BUFFER
 
 	// VERIFY BLOB EXISTS AND IS LINKED TO REPOSITORY
 	layerLink := filepath.Join(
@@ -671,7 +745,6 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 		strings.TrimPrefix(digest, "sha256:"),
 		"link",
 	)
-
 	if _, err := os.Stat(layerLink); err != nil {
 		h.log.Printf("Blob not found in repository: %s", digest)
 		http.Error(w, "BLOB NOT FOUND", http.StatusNotFound)
@@ -695,6 +768,7 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 
 	info, err := blob.Stat()
 	if err != nil {
+		h.metrics.TrackDownloadFailed()
 		h.log.Printf("Failed to get blob info: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
@@ -706,40 +780,73 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Accept-Ranges", "bytes")
 
-	// HANDLE RANGE REQUESTS
+	// CHECK FOR RANGE REQUEST
 	rangeHeader := r.Header.Get("Range")
+	var reader io.Reader = blob
+	var contentLength int64
+
 	if rangeHeader != "" {
-		// PARSE RANGE HEADER
-		// EX: bytes=0-1000
 		var start, end int64
-		fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+		_, err := fmt.Sscanf(rangeHeader, "bytes=%d-%d", &start, &end)
+		if err != nil {
+			h.metrics.TrackDownloadFailed()
+			h.log.Printf("Invalid range header: %v", err)
+			http.Error(w, "Invalid Range", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+
+		// IF END IS NOT PROVIDED, SET TO EOF
 		if end == 0 {
 			end = info.Size() - 1
 		}
+
+		// CHECK RANGES
 		if start > end || start < 0 || end >= info.Size() {
 			http.Error(w, "Invalid Range", http.StatusRequestedRangeNotSatisfiable)
 			return
 		}
+
+		// CALC LEN IN REQUEST
+		contentLength = end - start + 1
+
+		// SET HEADERS FOR PARTIAL
 		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, info.Size()))
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", contentLength))
 		w.WriteHeader(http.StatusPartialContent)
-		blob.Seek(start, io.SeekStart)
+
+		// SEEK TO OFFSET
+		_, err = blob.Seek(start, io.SeekStart)
+		if err != nil {
+			if !utils.IsNetworkError(err) {
+				h.metrics.TrackDownloadFailed()
+				h.log.Printf("Failed to seek blob: %v", err)
+				http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+				return
+			}
+		}
+		// LIMIT READER
+		reader = io.LimitReader(blob, contentLength)
+	} else {
+		// FULL DOWNLOAD, USE FILE SIZE
+		contentLength = info.Size()
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", contentLength))
 	}
 
-	// USE BUFFERED COPY WITH LARGER BUFFER
-	buf := make([]byte, 32*1024) // 32KB buffer
-	_, err = io.CopyBuffer(w, blob, buf)
+	buf := make([]byte, bufSize)
+	// COPY READER
+	bytesWritten, err := io.CopyBuffer(w, reader, buf)
 	if err != nil {
-		// CHECK FOR COMMON NETWORK INTERRUPTION ERRORS
-		if errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNRESET) ||
-			strings.Contains(err.Error(), "broken pipe") {
-			// LOG DEBUG
-			h.log.Printf("Client disconnected during blob transfer: %v", err)
+		// CHECK FOR COMMON NET ERRORS
+		if !utils.IsNetworkError(err) {
+			h.metrics.TrackDownloadFailed()
+			h.log.Printf("Download error: %v", err)
+			http.Error(w, "Failed to process Download", http.StatusInternalServerError)
 			return
 		}
-		// LOG ERR
-		h.log.Printf("Unexpected error streaming blob: %v", err)
 	}
+
+	// REPORT WITH NUM BYTES SENT
+	h.metrics.TrackDownloadComplete(bytesWritten, time.Since(startTime))
 }
 
 func (h *RepositoryHandler) DeleteBlob(w http.ResponseWriter, r *http.Request) {

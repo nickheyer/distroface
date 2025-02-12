@@ -23,6 +23,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/nickheyer/distroface/internal/constants"
 	"github.com/nickheyer/distroface/internal/logging"
+	"github.com/nickheyer/distroface/internal/metrics"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"github.com/nickheyer/distroface/internal/utils"
@@ -30,16 +31,18 @@ import (
 )
 
 type ArtifactHandler struct {
-	repo   repository.Repository
-	config *models.Config
-	log    *logging.LogService
+	repo    repository.Repository
+	config  *models.Config
+	log     *logging.LogService
+	metrics *metrics.MetricsService
 }
 
-func NewArtifactHandler(repo repository.Repository, cfg *models.Config, log *logging.LogService) *ArtifactHandler {
+func NewArtifactHandler(repo repository.Repository, cfg *models.Config, log *logging.LogService, metrics *metrics.MetricsService) *ArtifactHandler {
 	return &ArtifactHandler{
-		repo:   repo,
-		config: cfg,
-		log:    log,
+		repo:    repo,
+		config:  cfg,
+		log:     log,
+		metrics: metrics,
 	}
 }
 

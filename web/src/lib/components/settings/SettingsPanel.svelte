@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { Settings, Package, Server, Shield, Users, Key, Cog } from "lucide-svelte";
+  import { Settings, Package, Server, Shield, Users, Key, Cog, ChartBarStacked } from "lucide-svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import ArtifactSettings from "./ArtifactSettings.svelte";
   import RoleSettings from "./RoleSettings.svelte";
   import GroupSettings from "./GroupSettings.svelte";
   import AuthSettings from "./AuthSettings.svelte";
   import SystemSettings from "./SystemSettings.svelte";
+  import MetricsPanel from "./MetricsPanel.svelte";
 
   let activeTab = $state("config");
   let loading = $state(false);
@@ -51,6 +52,14 @@
       description: "Configure artifact retention and storage policies",
       component: ArtifactSettings,
       roles: ['admins']
+    },
+    {
+      id: "metrics",
+      title: "Metrics Data",
+      icon: ChartBarStacked,
+      description: "Real-time performance monitoring",
+      component: MetricsPanel,
+      roles: ['admins']
     }
   ];
 
@@ -72,7 +81,7 @@
   <div>
     <h1 class="text-2xl font-semibold text-gray-900">Settings</h1>
     <p class="text-sm text-gray-600">
-      Manage system-wide configuration, settings, and policies
+      Manage system-wide configuration, settings, policies, and metrics
     </p>
   </div>
 

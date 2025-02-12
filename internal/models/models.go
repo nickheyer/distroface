@@ -254,3 +254,36 @@ type AuthConfig struct {
 func (c CustomClaims) Valid() error {
 	return c.RegisteredClaims.Valid()
 }
+
+// METRIC TYPES
+type BlobMetrics struct {
+	Total          int64   `json:"total"`
+	Failed         int64   `json:"failed"`
+	InProgress     int32   `json:"inProgress"`
+	BytesProcessed int64   `json:"bytesProcessed"`
+	AvgDuration    float64 `json:"avgDuration"`
+}
+
+type PerformanceMetrics struct {
+	AvgUploadSpeed   float64 `json:"avgUploadSpeed"`   // MB/S
+	AvgDownloadSpeed float64 `json:"avgDownloadSpeed"` // MB/S
+	DiskUsage        int64   `json:"diskUsage"`        // GB
+	DiskTotal        int64   `json:"diskTotal"`        // GB
+	MemoryUsage      int64   `json:"memoryUsage"`      // MB
+	MemoryTotal      int64   `json:"memoryTotal"`      // MB
+	CpuUsage         float64 `json:"cpuUsage"`
+}
+
+type TimeSeriesPoint struct {
+	Timestamp     time.Time `json:"timestamp"`
+	UploadSpeed   float64   `json:"uploadSpeed"`
+	DownloadSpeed float64   `json:"downloadSpeed"`
+	ActiveUploads int32     `json:"activeUploads"`
+}
+
+type MetricsData struct {
+	BlobUploads    BlobMetrics        `json:"blobUploads"`
+	BlobDownloads  BlobMetrics        `json:"blobDownloads"`
+	Performance    PerformanceMetrics `json:"performance"`
+	TimeseriesData []TimeSeriesPoint  `json:"timeseriesData"`
+}
