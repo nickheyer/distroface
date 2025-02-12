@@ -290,3 +290,8 @@ type MetricsData struct {
 	Performance    PerformanceMetrics `json:"performance"`
 	TimeseriesData []TimeSeriesPoint  `json:"timeseriesData"`
 }
+
+type DiskInfo struct {
+	DiskTotal     int64
+	DiskAvailable int64
+}

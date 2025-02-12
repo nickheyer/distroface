@@ -4,11 +4,11 @@ import (
 	"math"
 	"runtime"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/nickheyer/distroface/internal/logging"
 	"github.com/nickheyer/distroface/internal/models"
+	"github.com/nickheyer/distroface/internal/utils"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/mem"
 )
@@ -112,17 +112,9 @@ func (ms *MetricsService) updateSystemMetrics() {
 		ms.data.Performance.MemoryTotal = int64(vm.Total)
 	}
 
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(ms.dataDir, &stat); err != nil {
-		ms.data.Performance.DiskTotal = 0
-		ms.data.Performance.DiskUsage = 0
-	} else {
-		diskTotal := int64(stat.Blocks) * int64(stat.Bsize)
-		diskAvailable := int64(stat.Bavail) * int64(stat.Bsize)
-		ms.data.Performance.DiskTotal = diskTotal
-		ms.data.Performance.DiskUsage = diskTotal - diskAvailable
-	}
-
+	diskInfo := utils.GetDiskInfo(ms.dataDir)
+	ms.data.Performance.DiskTotal = diskInfo.DiskTotal
+	ms.data.Performance.DiskUsage = diskInfo.DiskTotal - diskInfo.DiskAvailable
 	ms.data.Performance.AvgUploadSpeed = ms.calculateAverageSpeed(ms.speedSamples.upload)
 	ms.data.Performance.AvgDownloadSpeed = ms.calculateAverageSpeed(ms.speedSamples.download)
 
