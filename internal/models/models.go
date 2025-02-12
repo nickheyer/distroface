@@ -207,6 +207,14 @@ type ArtifactSearchCriteria struct {
 	Limit      int               `json:"limit,omitempty"`
 }
 
+type SearchResponse struct {
+	Results []Artifact `json:"results"`
+	Total   int        `json:"total"`
+	Limit   int        `json:"limit"`
+	Sort    string     `json:"sort"`
+	Order   string     `json:"order"`
+}
+
 type VisibilityUpdateRequest struct {
 	ID      string `json:"id"`
 	Private bool   `json:"private"`

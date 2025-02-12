@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -25,6 +26,7 @@ import (
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"github.com/nickheyer/distroface/internal/utils"
+	"github.com/samber/lo"
 )
 
 type ArtifactHandler struct {
@@ -805,7 +807,7 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 	// ADD PROPERTY FILTERS FROM REMAINING QUERY PARAMS
 	for key, values := range queryParams {
 		switch key {
-		case "num", "archive", "format", "name", "version", "path", "sort", "order":
+		case "repo", "num", "archive", "format", "name", "version", "path", "sort", "order":
 			continue // SKIP SPECIAL PARAMS
 		default:
 			if len(values) > 0 {
@@ -822,24 +824,40 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if len(artifacts) == 0 {
+	// VALIDATE RESULT + AUTH BEFORE SENDING BACK TO USER
+	forbidden := []int{}
+	authorized := []int{}
+	scopedArtifacts := lo.Filter(artifacts, func(a models.Artifact, index int) bool {
+		repoID := a.RepoID
+		if repoID == 0 || slices.Contains(forbidden, repoID) {
+			return false
+		}
+
+		if slices.Contains(authorized, repoID) {
+			return true
+		}
+
+		repoObj, err := h.repo.GetArtifactRepositoryByID(fmt.Sprintf("%v", repoID))
+		if err != nil || (repoObj.Owner != username && repoObj.Private) {
+			forbidden = append(forbidden, repoID)
+			return false
+		}
+
+		authorized = append(authorized, repoID)
+		return true
+	})
+
+	numRes := len(scopedArtifacts)
+	if numRes == 0 {
 		http.Error(w, "No matching artifacts found", http.StatusNotFound)
 		return
 	}
 
 	// BUILD RESPONSE
-	type SearchResponse struct {
-		Results []models.Artifact `json:"results"`
-		Total   int               `json:"total"`
-		Limit   int               `json:"limit"`
-		Sort    string            `json:"sort"`
-		Order   string            `json:"order"`
-	}
-
-	response := SearchResponse{
-		Results: artifacts,
-		Total:   len(artifacts),
-		Limit:   min(criteria.Limit, len(artifacts)),
+	response := models.SearchResponse{
+		Results: scopedArtifacts,
+		Total:   numRes,
+		Limit:   min(criteria.Limit, numRes),
 		Sort:    criteria.Sort,
 		Order:   criteria.Order,
 	}

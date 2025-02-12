@@ -432,20 +432,21 @@ func (c *APIClient) deleteArtifact(repo, version, path string) error {
 	return err
 }
 
-func (c *APIClient) searchArtifacts(q url.Values) ([]models.Artifact, error) {
+func (c *APIClient) searchArtifacts(q url.Values) (*models.SearchResponse, error) {
 	endpoint := "/api/v1/artifacts/search"
 	if len(q) > 0 {
 		endpoint = endpoint + "?" + q.Encode()
 	}
-
+	var search *models.SearchResponse
 	resp, err := c.doRequest("GET", endpoint, nil)
 	if err != nil {
-		return nil, err
+		return &models.SearchResponse{
+			Results: []models.Artifact{},
+			Total:   0,
+		}, nil
 	}
 	defer resp.Body.Close()
-
-	var artifacts []models.Artifact
-	return artifacts, json.NewDecoder(resp.Body).Decode(&artifacts)
+	return search, json.NewDecoder(resp.Body).Decode(&search)
 }
 
 // USER OPERATIONS
@@ -920,21 +921,25 @@ func newArtifactDeleteCmd() *cobra.Command {
 
 func newArtifactSearchCmd() *cobra.Command {
 	var (
+		repo    string
 		version string
 		artPath string
 		props   []string
 		num     int
 		sortBy  string
 		order   string
+		table   bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "search",
 		Short: "Search for artifacts (via query)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// BUILD QUERY
-			q := make(url.Values)
 
+			q := make(url.Values)
+			if repo != "" {
+				q.Set("repo", repo)
+			}
 			if version != "" {
 				q.Set("version", version)
 			}
@@ -958,32 +963,41 @@ func newArtifactSearchCmd() *cobra.Command {
 				}
 			}
 
-			artifacts, err := client.searchArtifacts(q)
-			if err != nil {
-				return fmt.Errorf("search failed: %v", err)
-			}
+			search, err := client.searchArtifacts(q)
+			if table {
+				if err != nil {
+					return fmt.Errorf("search failed: %v", err)
+				}
 
-			// FORMAT OUTPUT AS A TABLE
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "REPOSITORY\tNAME\tVERSION\tSIZE\tUPDATED")
-			for _, a := range artifacts {
-				fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n",
-					a.RepoID,
-					a.Name,
-					a.Version,
-					formatSize(a.Size),
-					a.UpdatedAt.Format(time.RFC3339),
-				)
+				// FORMAT ARTIFACTS AS A TABLE (IF TABLE FLAG)
+				artifacts := search.Results
+				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+				fmt.Fprintln(w, "Total Matches:", search.Total)
+				fmt.Fprintln(w, "\nREPOSITORY\tNAME\tVERSION\tSIZE\tUPDATED")
+				for _, a := range artifacts {
+					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n",
+						a.RepoID,
+						a.Name,
+						a.Version,
+						formatSize(a.Size),
+						a.UpdatedAt.Format(time.RFC3339),
+					)
+				}
+				return w.Flush()
+			} else {
+				// FORMAT AS JSON BY DEFAULT
+				return printJSON(search)
 			}
-			return w.Flush()
 		},
 	}
+	cmd.Flags().StringVarP(&repo, "repo", "r", "", "Artifact repository name")
 	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version filter")
 	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
 	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value, key=value,...)")
 	cmd.Flags().IntVar(&num, "num", 0, "Max number of matching artifacts to retrieve (default 1)")
 	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")
 	cmd.Flags().StringVar(&order, "order", "", "Sort order (ASC or DESC)")
+	cmd.Flags().BoolVarP(&table, "table", "t", false, "Format results as a table")
 
 	return cmd
 }
