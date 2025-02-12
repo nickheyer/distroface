@@ -894,10 +894,11 @@ func (r *SQLiteRepository) DeleteArtifactByPath(repoID int, version string, path
 
 func (r *SQLiteRepository) SearchArtifacts(criteria models.ArtifactSearchCriteria) ([]models.Artifact, error) {
 	baseQuery := `
-        SELECT DISTINCT a.id, a.repo_id, a.name, a.path, a.version, 
-               a.size, a.mime_type, a.metadata, a.created_at, a.updated_at
-        FROM artifacts a
-    `
+			SELECT DISTINCT a.id, a.repo_id, a.name, a.path, a.version, 
+						 a.size, a.mime_type, a.metadata, a.created_at, a.updated_at
+			FROM artifacts a
+			JOIN artifact_repositories ar ON a.repo_id = ar.id
+	`
 
 	// ONLY JOIN PROPERTIES TABLE IF WE HAVE PROPERTY FILTERS
 	if len(criteria.Properties) > 0 {
@@ -905,8 +906,14 @@ func (r *SQLiteRepository) SearchArtifacts(criteria models.ArtifactSearchCriteri
 	}
 
 	// BUILD WHERE CLAUSE AND ARGS
-	whereClause := []string{"1=1"} // START WITH TRUE FOR EASY CONCATENATION
-	args := []interface{}{}
+	whereClause := []string{"(ar.owner = ? OR ar.private = FALSE)"} // REPO ACCESS CHECK
+
+	// WE REALLY SHOULDNT BE HITTING THIS, SINCE WE SET ANONYMOUS USER IN HANDLER
+	if criteria.Username == "" {
+		return nil, fmt.Errorf("no username provided to search")
+	}
+
+	args := []interface{}{criteria.Username}
 
 	if criteria.RepoID != nil {
 		whereClause = append(whereClause, "a.repo_id = ?")
@@ -952,19 +959,23 @@ func (r *SQLiteRepository) SearchArtifacts(criteria models.ArtifactSearchCriteri
 			return nil, fmt.Errorf("invalid sort field: %s", criteria.Sort)
 		}
 
-		// VALIDATE ORDER
 		order := strings.ToUpper(criteria.Order)
 		if order != "ASC" && order != "DESC" {
-			order = "DESC" // DEFAULT TO DESC
+			order = "DESC"
 		}
 
 		query += fmt.Sprintf(" ORDER BY a.%s %s", criteria.Sort, order)
 	}
 
-	// ADD LIMIT
+	// ADD LIMIT AND OFFSET
 	if criteria.Limit > 0 {
 		query += " LIMIT ?"
 		args = append(args, criteria.Limit)
+	}
+
+	if criteria.Offset > 0 {
+		query += " OFFSET ?"
+		args = append(args, criteria.Offset)
 	}
 
 	// EXECUTE QUERY
@@ -993,7 +1004,6 @@ func (r *SQLiteRepository) SearchArtifacts(criteria models.ArtifactSearchCriteri
 			return nil, fmt.Errorf("failed to scan artifact row: %w", err)
 		}
 
-		// FETCH PROPERTIES IF WE HAVE ANY RESULTS
 		properties, err := r.GetArtifactProperties(a.ID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get artifact properties: %w", err)

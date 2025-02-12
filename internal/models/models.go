@@ -198,6 +198,7 @@ type Artifact struct {
 
 type ArtifactSearchCriteria struct {
 	RepoID     *int              `json:"repo_id,omitempty"`
+	Username   string            `json:"username,omitempty"`
 	Name       *string           `json:"name,omitempty"`
 	Version    *string           `json:"version,omitempty"`
 	Path       *string           `json:"path,omitempty"`
@@ -205,12 +206,14 @@ type ArtifactSearchCriteria struct {
 	Sort       string            `json:"sort,omitempty"`
 	Order      string            `json:"order,omitempty"`
 	Limit      int               `json:"limit,omitempty"`
+	Offset     int               `json:"offset,omitempty"`
 }
 
 type SearchResponse struct {
 	Results []Artifact `json:"results"`
 	Total   int        `json:"total"`
 	Limit   int        `json:"limit"`
+	Offset  int        `json:"offset"`
 	Sort    string     `json:"sort"`
 	Order   string     `json:"order"`
 }

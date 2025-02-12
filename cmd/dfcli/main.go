@@ -926,6 +926,7 @@ func newArtifactSearchCmd() *cobra.Command {
 		artPath string
 		props   []string
 		num     int
+		offset  int
 		sortBy  string
 		order   string
 		table   bool
@@ -948,6 +949,9 @@ func newArtifactSearchCmd() *cobra.Command {
 			}
 			if num > 0 {
 				q.Set("num", strconv.Itoa(num))
+			}
+			if offset > 0 {
+				q.Set("offset", strconv.Itoa(offset))
 			}
 			if sortBy != "" {
 				q.Set("sort", sortBy)

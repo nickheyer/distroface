@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -27,7 +26,6 @@ import (
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"github.com/nickheyer/distroface/internal/utils"
-	"github.com/samber/lo"
 )
 
 type ArtifactHandler struct {
@@ -732,7 +730,11 @@ func (h *ArtifactHandler) DeleteRepository(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request) {
+	// GET USER OR SET TO ANON
 	username := r.Context().Value(constants.UsernameKey).(string)
+	if username == "" {
+		username = "anonymous"
+	}
 
 	// PARSE QUERY PARAMS
 	queryParams := r.URL.Query()
@@ -769,9 +771,20 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 	if maxResults := queryParams.Get("num"); maxResults != "" {
 		if n, err := strconv.Atoi(maxResults); err == nil && n > 0 {
 			criteria.Limit = n
+		} else {
+			criteria.Limit = 9999
 		}
 	} else {
 		criteria.Limit = 9999 // SEEMS RIGHT
+	}
+	if offset := queryParams.Get("offset"); offset != "" {
+		if o, err := strconv.Atoi(offset); err == nil && o > 0 {
+			criteria.Offset = o
+		} else {
+			criteria.Offset = 0
+		}
+	} else {
+		criteria.Offset = 0
 	}
 
 	// SET SORTING
@@ -810,7 +823,7 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 	// ADD PROPERTY FILTERS FROM REMAINING QUERY PARAMS
 	for key, values := range queryParams {
 		switch key {
-		case "repo", "num", "archive", "format", "name", "version", "path", "sort", "order":
+		case "username", "repo", "num", "offset", "archive", "format", "name", "version", "path", "sort", "order":
 			continue // SKIP SPECIAL PARAMS
 		default:
 			if len(values) > 0 {
@@ -827,30 +840,7 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// VALIDATE RESULT + AUTH BEFORE SENDING BACK TO USER
-	forbidden := []int{}
-	authorized := []int{}
-	scopedArtifacts := lo.Filter(artifacts, func(a models.Artifact, index int) bool {
-		repoID := a.RepoID
-		if repoID == 0 || slices.Contains(forbidden, repoID) {
-			return false
-		}
-
-		if slices.Contains(authorized, repoID) {
-			return true
-		}
-
-		repoObj, err := h.repo.GetArtifactRepositoryByID(fmt.Sprintf("%v", repoID))
-		if err != nil || (repoObj.Owner != username && repoObj.Private) {
-			forbidden = append(forbidden, repoID)
-			return false
-		}
-
-		authorized = append(authorized, repoID)
-		return true
-	})
-
-	numRes := len(scopedArtifacts)
+	numRes := len(artifacts)
 	if numRes == 0 {
 		http.Error(w, "No matching artifacts found", http.StatusNotFound)
 		return
@@ -858,9 +848,10 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 
 	// BUILD RESPONSE
 	response := models.SearchResponse{
-		Results: scopedArtifacts,
+		Results: artifacts,
 		Total:   numRes,
 		Limit:   min(criteria.Limit, numRes),
+		Offset:  min(criteria.Offset, 0),
 		Sort:    criteria.Sort,
 		Order:   criteria.Order,
 	}
