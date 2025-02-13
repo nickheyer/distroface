@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -782,14 +781,13 @@ func newArtifactDownloadCmd() *cobra.Command {
 		version string
 		artPath string
 		output  string
-		format  string
 		props   []string
 		num     int
 		sortBy  string
 		order   string
+		useZip  bool
 		unpack  bool
 		flat    bool
-		force   bool
 	)
 
 	cmd := &cobra.Command{
@@ -801,23 +799,14 @@ func newArtifactDownloadCmd() *cobra.Command {
 
 			// BUILD QUERY
 			q := make(url.Values)
-
 			if version != "" {
 				q.Set("version", version)
 			}
 			if artPath != "" {
 				q.Set("path", artPath)
 			}
-			if format != "" && format != "zip" && format != "tar.gz" {
-				return fmt.Errorf("invalid format: must be zip or tar.gz")
-			}
-			if format != "" {
-				q.Set("format", format)
-			}
 			if num > 0 {
 				q.Set("num", strconv.Itoa(num))
-				// FORCE ARCHIVE IF NUM > 1
-				q.Set("archive", "1")
 			}
 			if sortBy != "" {
 				q.Set("sort", sortBy)
@@ -825,11 +814,13 @@ func newArtifactDownloadCmd() *cobra.Command {
 			if order != "" {
 				q.Set("order", order)
 			}
+			if useZip {
+				q.Set("format", "zip")
+			} else {
+				q.Set("format", "tar.gz")
+			}
 			if flat {
 				q.Set("flat", "1")
-			}
-			if force {
-				q.Set("archive", "1")
 			}
 
 			// ADD PROPS
@@ -840,51 +831,35 @@ func newArtifactDownloadCmd() *cobra.Command {
 				}
 			}
 
-			// GET CONTENT TYPE AND SUGGESTED FILENAME FROM HEADERS
-			headResp, err := client.doRequest("HEAD", fmt.Sprintf("/api/v1/artifacts/%s/query?%s", repo, q.Encode()), nil)
-			if err != nil {
-				return fmt.Errorf("failed to get artifact info: %v", err)
-			}
-			headResp.Body.Close()
-
-			contentType := headResp.Header.Get("Content-Type")
-			filename := headResp.Header.Get("Content-Disposition")
-			if filename != "" {
-				_, params, _ := mime.ParseMediaType(filename)
-				if params["filename"] != "" {
-					filename = params["filename"]
-				}
-			}
-
 			// DETERMINE OUTPUT PATH
 			var outputPath string
 			if output == "-" {
 				outputPath = "-"
 			} else if output != "" {
 				outputPath = output
-			} else if filename != "" {
-				outputPath = filename
 			} else {
-				// DEFAULT NAME BASED ON REPO
+				// DEFAULT NAME BASED ON REPO + VERSION
+				suffix := ".tar.gz"
+				if useZip {
+					suffix = ".zip"
+				}
 
-				if strings.Contains(contentType, "gzip") {
-					outputPath = fmt.Sprintf("%s-artifacts.tar.gz", repo)
-				} else if strings.Contains(contentType, "zip") {
-					outputPath = fmt.Sprintf("%s-artifacts.zip", repo)
+				if version != "" {
+					outputPath = fmt.Sprintf("%s-%s%s", repo, version, suffix)
 				} else {
-					outputPath = "artifact" // SERVER SHOULD PROVIDE BETTER NAME
+					outputPath = fmt.Sprintf("%s%s", repo, suffix)
 				}
 			}
 
-			// CREATE THE ARTIFACT(S) PATHS/FILES
+			// DOWNLOAD THE ARTIFACT(S)
 			var w io.Writer
 			var tempFile *os.File
+			var err error
 
 			if outputPath == "-" {
 				w = os.Stdout
 			} else {
 				if unpack && (strings.HasSuffix(outputPath, ".zip") || strings.HasSuffix(outputPath, ".tar.gz")) {
-					// CREATE TEMP FILE FOR ARCHIVE
 					tempFile, err = os.CreateTemp("", "dfcli-download-*")
 					if err != nil {
 						return fmt.Errorf("failed to create temp file: %v", err)
@@ -898,6 +873,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 					}
 					defer f.Close()
 					w = f
+					fmt.Printf("Downloading to %s\n", outputPath)
 				}
 			}
 
@@ -906,7 +882,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 				return fmt.Errorf("download failed: %v", err)
 			}
 
-			// HANDLE UNPACKING IF REQUESTED
+			// HANDLE UNPACKING
 			if unpack && tempFile != nil {
 				tempFile.Close()
 				unpackDir := "."
@@ -917,11 +893,13 @@ func newArtifactDownloadCmd() *cobra.Command {
 					}
 				}
 
-				if strings.HasSuffix(outputPath, ".zip") {
+				fmt.Printf("Unpacking to %s\n", unpackDir)
+
+				if useZip {
 					if err := unpackZip(tempFile.Name(), unpackDir, flat); err != nil {
 						return fmt.Errorf("failed to unpack zip: %v", err)
 					}
-				} else if strings.HasSuffix(outputPath, ".tar.gz") {
+				} else {
 					if err := unpackTarGz(tempFile.Name(), unpackDir, flat); err != nil {
 						return fmt.Errorf("failed to unpack tar.gz: %v", err)
 					}
@@ -936,13 +914,12 @@ func newArtifactDownloadCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
 	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output path (file or directory if --unpack)")
-	cmd.Flags().StringVar(&format, "format", "", "Archive format when forcing archive (zip or tar.gz)")
 	cmd.Flags().IntVar(&num, "num", 1, "Number of matching artifacts to retrieve")
 	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")
 	cmd.Flags().StringVar(&order, "order", "", "Sort order (ASC or DESC)")
-	cmd.Flags().BoolVar(&unpack, "unpack", false, "Automatically unpack archives")
+	cmd.Flags().BoolVar(&useZip, "zip", false, "Use ZIP format instead of TAR.GZ")
+	cmd.Flags().BoolVar(&unpack, "unpack", false, "Automatically unpack archive")
 	cmd.Flags().BoolVar(&flat, "flat", false, "Flatten directory structure when unpacking")
-	cmd.Flags().BoolVar(&force, "force", false, "Force archive creation even for single files")
 
 	return cmd
 }
