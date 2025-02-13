@@ -353,6 +353,9 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 	vars := mux.Vars(r)
 	repoName := vars["repo"]
 	username := r.Context().Value(constants.UsernameKey).(string)
+	if username == "" {
+		username = "anonymous"
+	}
 
 	// GET REPO ACCESS
 	repo, err := h.repo.GetArtifactRepository(repoName)
@@ -372,6 +375,7 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 	criteria := models.ArtifactSearchCriteria{
 		RepoID:     utils.IntPtr(repo.ID),
 		Properties: make(map[string]string),
+		Username:   username,
 	}
 
 	// HANDLE SPECIAL PARAMS
