@@ -1361,11 +1361,13 @@ func unpackZip(zipPath string, destPath string, flat bool) error {
 	defer r.Close()
 
 	for _, f := range r.File {
-		targetPath := f.Name
-		if flat {
-			targetPath = filepath.Base(targetPath)
+		// OG FILE NAME
+		fileName := filepath.Base(f.Name)
+		if !flat {
+			fileName = f.Name // FULL PATH
 		}
-		targetPath = filepath.Join(destPath, targetPath)
+
+		targetPath := filepath.Join(destPath, fileName)
 
 		if f.FileInfo().IsDir() {
 			if !flat {
@@ -1374,6 +1376,7 @@ func unpackZip(zipPath string, destPath string, flat bool) error {
 			continue
 		}
 
+		// MK DIR
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 			return err
 		}
@@ -1424,11 +1427,13 @@ func unpackTarGz(tarPath string, destPath string, flat bool) error {
 			return err
 		}
 
-		targetPath := header.Name
-		if flat {
-			targetPath = filepath.Base(targetPath)
+		// OG FILE NAME
+		fileName := filepath.Base(header.Name)
+		if !flat {
+			fileName = header.Name // FULL PATH
 		}
-		targetPath = filepath.Join(destPath, targetPath)
+
+		targetPath := filepath.Join(destPath, fileName)
 
 		switch header.Typeflag {
 		case tar.TypeDir:

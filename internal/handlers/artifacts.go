@@ -523,14 +523,22 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 
 		var destPath string
 		if flat {
+			// OG FILE NAMES
 			destPath = filepath.Join(tempDir, filepath.Base(artifact.Path))
 		} else {
-			destPath = filepath.Join(tempDir, fmt.Sprintf("%s-%s-%s",
-				artifact.Name,
-				artifact.Version,
-				filepath.Base(artifact.Path)))
+			// USE PATH STRUCTUE
+			destPath = filepath.Join(tempDir, artifact.Version, artifact.Path)
 		}
 
+		// MK DIR
+		if err := os.MkdirAll(filepath.Dir(destPath), 0755); err != nil {
+			h.metrics.TrackDownloadFailed()
+			h.log.Printf("Failed to create directories: %v", err)
+			http.Error(w, "Failed to prepare download", http.StatusInternalServerError)
+			return
+		}
+
+		// CP FILE
 		if err := h.copyFile(srcPath, destPath); err != nil {
 			h.metrics.TrackDownloadFailed()
 			h.log.Printf("Failed to copy file: %v", err)
@@ -539,7 +547,7 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 		}
 	}
 
-	// CREATE ARCHIVE WITH APPROPRIATE NAME
+	// CREATE ARCHIVE
 	archiveName := fmt.Sprintf("%s-artifacts", repoName)
 	var archivePath string
 	var mimeType string
