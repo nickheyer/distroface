@@ -742,6 +742,7 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 	// BUILD SEARCH CRITERIA
 	criteria := models.ArtifactSearchCriteria{
 		Properties: make(map[string]string),
+		Username:   username,
 	}
 
 	// HANDLE SPECIAL PARAMS
