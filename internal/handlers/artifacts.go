@@ -148,6 +148,8 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 	version := r.URL.Query().Get("version")
 	artifactPath := r.URL.Query().Get("path")
 	username := r.Context().Value(constants.UsernameKey).(string)
+	h.metrics.TrackUploadStart()
+	start := time.Now()
 
 	if artifactPath == "" {
 		artifactPath = utils.SanitizeFilePath(repoName)
@@ -155,6 +157,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 
 	if repoName == "" || version == "" || uploadID == "" {
 		http.Error(w, "Required parameters missing", http.StatusBadRequest)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 
@@ -167,6 +170,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 	if err := h.validatePath(artifactPath, false); err != nil {
 		_ = os.Remove(uploadPath)
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 
@@ -177,11 +181,13 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		_ = os.Remove(uploadPath)
 		http.Error(w, "Repository not found", http.StatusNotFound)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 	if repo.Owner != username && repo.Private {
 		_ = os.Remove(uploadPath)
 		http.Error(w, "Access denied", http.StatusForbidden)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 
@@ -191,6 +197,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		if err := json.Unmarshal([]byte(propertiesJSON), &properties); err != nil {
 			_ = os.Remove(uploadPath)
 			http.Error(w, "Invalid properties format", http.StatusBadRequest)
+			h.metrics.TrackUploadFailed()
 			return
 		}
 	}
@@ -205,6 +212,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		_ = os.Remove(uploadPath)
 		h.log.Printf("Failed to get settings: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 
@@ -213,6 +221,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		if _, exists := properties[required]; !exists {
 			_ = os.Remove(uploadPath)
 			http.Error(w, fmt.Sprintf("Missing required property: %s", required), http.StatusBadRequest)
+			h.metrics.TrackUploadFailed()
 			return
 		}
 	}
@@ -223,6 +232,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		_ = os.Remove(uploadPath)
 		h.log.Printf("Failed to open upload: %v", err)
 		http.Error(w, "Failed to process upload", http.StatusInternalServerError)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 	defer file.Close()
@@ -234,6 +244,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		_ = os.Remove(uploadPath)
 		h.log.Printf("Failed to read file: %v", err)
 		http.Error(w, "Failed to process upload", http.StatusInternalServerError)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 	mimeType := http.DetectContentType(buffer[:n])
@@ -244,6 +255,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		_ = os.Remove(uploadPath)
 		h.log.Printf("Failed to stat upload: %v", err)
 		http.Error(w, "Failed to process upload", http.StatusInternalServerError)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 
@@ -258,6 +270,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		_ = os.Remove(uploadPath)
 		h.log.Printf("File validation failed: %v", err)
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 
@@ -266,6 +279,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		_ = os.Remove(uploadPath)
 		h.log.Printf("Failed to create artifact directory: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 
@@ -274,6 +288,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		_ = os.Remove(uploadPath)
 		h.log.Printf("Failed to move artifact: %v", err)
 		http.Error(w, "Failed to save artifact", http.StatusInternalServerError)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 
@@ -294,6 +309,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		_ = os.Remove(uploadPath)
 		h.log.Printf("Failed to create artifact metadata: %v", err)
 		http.Error(w, "Failed to save artifact metadata", http.StatusInternalServerError)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 
@@ -311,6 +327,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.WriteHeader(http.StatusCreated)
+	h.metrics.TrackUploadComplete(fi.Size(), time.Since(start))
 }
 
 func (h *ArtifactHandler) DownloadArtifact(w http.ResponseWriter, r *http.Request) {
@@ -319,8 +336,11 @@ func (h *ArtifactHandler) DownloadArtifact(w http.ResponseWriter, r *http.Reques
 	version := vars["version"]
 	artifactPath := vars["path"]
 	username := r.Context().Value(constants.UsernameKey).(string)
+	h.metrics.TrackDownloadStart()
+	start := time.Now()
 
 	if err := h.validatePath(artifactPath, false); err != nil {
+		h.metrics.TrackDownloadFailed()
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -328,11 +348,13 @@ func (h *ArtifactHandler) DownloadArtifact(w http.ResponseWriter, r *http.Reques
 	// VERIFY REPO ACCESS
 	repo, err := h.repo.GetArtifactRepository(repoName)
 	if err != nil {
+		h.metrics.TrackDownloadFailed()
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
 
 	if repo.Owner != username && repo.Private {
+		h.metrics.TrackDownloadFailed()
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -340,12 +362,15 @@ func (h *ArtifactHandler) DownloadArtifact(w http.ResponseWriter, r *http.Reques
 	filePath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifactPath)
 
 	// VERIFY ARTIFACT ACTUALLY EXISTS
-	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+	fileInfo, err := os.Stat(filePath)
+	if os.IsNotExist(err) {
+		h.metrics.TrackDownloadFailed()
 		http.Error(w, "Artifact not found", http.StatusNotFound)
 		return
 	}
 
 	// SERVE IT
+	h.metrics.TrackDownloadComplete(fileInfo.Size(), time.Since(start))
 	http.ServeFile(w, r, filePath)
 }
 
@@ -353,6 +378,9 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 	vars := mux.Vars(r)
 	repoName := vars["repo"]
 	username := r.Context().Value(constants.UsernameKey).(string)
+	h.metrics.TrackDownloadStart()
+	start := time.Now()
+
 	if username == "" {
 		username = "anonymous"
 	}
@@ -360,10 +388,12 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 	// GET REPO ACCESS
 	repo, err := h.repo.GetArtifactRepository(repoName)
 	if err != nil {
+		h.metrics.TrackDownloadFailed()
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
 	if repo.Owner != username && repo.Private {
+		h.metrics.TrackDownloadFailed()
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -406,18 +436,11 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 		criteria.Order = order
 	}
 
-	// OUTPUT FORMAT (FILE, ZIP, OR TAR.GZ)
-	forceArchive := queryParams.Get("archive") != "" // IF ARCHIVE PARAM EXISTS, FORCE ARCHIVE
-	archiveFormat := strings.ToLower(queryParams.Get("format"))
-	if archiveFormat != "zip" && archiveFormat != "tar.gz" {
-		archiveFormat = "zip" // DEFAULT TO ZIP
-	}
-
-	// ADD PROPERTY FILTERS FROM REMAINING QUERY PARAMS
+	// ADD PROPERTY FILTERS
 	for key, values := range queryParams {
 		switch key {
-		case "num", "archive", "format", "name", "version", "path", "sort", "order":
-			continue // SKIP SPECIAL PARAMS
+		case "num", "archive", "format", "name", "version", "path", "sort", "order", "flat":
+			continue
 		default:
 			if len(values) > 0 {
 				criteria.Properties[key] = values[0]
@@ -428,18 +451,25 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 	// SEARCH ARTIFACTS
 	artifacts, err := h.repo.SearchArtifacts(criteria)
 	if err != nil {
+		h.metrics.TrackDownloadFailed()
 		h.log.Printf("Failed to search artifacts: %v", err)
 		http.Error(w, "Failed to search artifacts", http.StatusInternalServerError)
 		return
 	}
 
 	if len(artifacts) == 0 {
+		h.metrics.TrackDownloadFailed()
 		http.Error(w, "No matching artifacts found", http.StatusNotFound)
 		return
 	}
 
+	// DETERMINE IF WE SHOULD CREATE AN ARCHIVE
+	forceArchive := queryParams.Get("archive") == "1"
+	numRequested, _ := strconv.Atoi(queryParams.Get("num"))
+	shouldArchive := forceArchive || len(artifacts) > 1 || numRequested > 1
+
 	// IF SINGLE FILE AND NO ARCHIVE FORCED
-	if len(artifacts) == 1 && !forceArchive {
+	if len(artifacts) == 1 && !shouldArchive {
 		artifact := artifacts[0]
 		filePath := filepath.Join(
 			h.config.Storage.RootDirectory,
@@ -451,18 +481,32 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 			"files",
 			artifact.Path,
 		)
+
+		// SET CONTENT DISPOSITION WITH ORIGINAL FILENAME
+		h.metrics.TrackDownloadComplete(artifact.Size, time.Since(start))
+		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(artifact.Path)))
+		w.Header().Set("Content-Type", artifact.MimeType)
 		http.ServeFile(w, r, filePath)
 		return
+	}
+
+	// CREATE ARCHIVE
+	archiveFormat := strings.ToLower(queryParams.Get("format"))
+	if archiveFormat != "zip" && archiveFormat != "tar.gz" {
+		archiveFormat = "zip" // DEFAULT TO ZIP
 	}
 
 	// CREATE TMP DIR FOR ARCHIVE
 	tempDir, err := os.MkdirTemp("", "artifact-download-*")
 	if err != nil {
+		h.metrics.TrackDownloadFailed()
 		h.log.Printf("Failed to create temp directory: %v", err)
 		http.Error(w, "Failed to prepare download", http.StatusInternalServerError)
 		return
 	}
 	defer os.RemoveAll(tempDir)
+
+	flat := queryParams.Get("flat") == "1"
 
 	// COPY FILES TO TMP DIR
 	for _, artifact := range artifacts {
@@ -476,40 +520,59 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 			"files",
 			artifact.Path,
 		)
-		destPath := filepath.Join(tempDir, fmt.Sprintf("%s-%s-%s",
-			artifact.Name,
-			artifact.Version,
-			filepath.Base(artifact.Path)))
+
+		var destPath string
+		if flat {
+			destPath = filepath.Join(tempDir, filepath.Base(artifact.Path))
+		} else {
+			destPath = filepath.Join(tempDir, fmt.Sprintf("%s-%s-%s",
+				artifact.Name,
+				artifact.Version,
+				filepath.Base(artifact.Path)))
+		}
 
 		if err := h.copyFile(srcPath, destPath); err != nil {
+			h.metrics.TrackDownloadFailed()
 			h.log.Printf("Failed to copy file: %v", err)
 			http.Error(w, "Failed to prepare download", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// CREATE ARCHIVE
+	// CREATE ARCHIVE WITH APPROPRIATE NAME
+	archiveName := fmt.Sprintf("%s-artifacts", repoName)
 	var archivePath string
 	var mimeType string
+
 	if archiveFormat == "zip" {
-		archivePath = filepath.Join(tempDir, "artifacts.zip")
+		archivePath = filepath.Join(tempDir, archiveName+".zip")
 		mimeType = "application/zip"
-		if err := h.createZipArchive(tempDir, archivePath); err != nil {
+		if err := h.createZipArchive(tempDir, archivePath, flat); err != nil {
+			h.metrics.TrackDownloadFailed()
 			h.log.Printf("Failed to create zip archive: %v", err)
 			http.Error(w, "Failed to create archive", http.StatusInternalServerError)
 			return
 		}
 	} else {
-		archivePath = filepath.Join(tempDir, "artifacts.tar.gz")
+		archivePath = filepath.Join(tempDir, archiveName+".tar.gz")
 		mimeType = "application/gzip"
-		if err := h.createTarGzArchive(tempDir, archivePath); err != nil {
+		if err := h.createTarGzArchive(tempDir, archivePath, flat); err != nil {
+			h.metrics.TrackDownloadFailed()
 			h.log.Printf("Failed to create tar.gz archive: %v", err)
 			http.Error(w, "Failed to create archive", http.StatusInternalServerError)
 			return
 		}
 	}
 
+	fileInfo, err := os.Stat(archivePath)
+	if os.IsNotExist(err) {
+		h.metrics.TrackDownloadFailed()
+		http.Error(w, "Unable to create archive of artifacts", http.StatusNotFound)
+		return
+	}
+
 	// SET HEADERS AND SERVE
+	h.metrics.TrackDownloadComplete(fileInfo.Size(), time.Since(start))
 	w.Header().Set("Content-Type", mimeType)
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(archivePath)))
 	http.ServeFile(w, r, archivePath)
@@ -951,7 +1014,7 @@ func (h *ArtifactHandler) RenameArtifact(w http.ResponseWriter, r *http.Request)
 
 // PRIVATE METHODS
 
-func (h *ArtifactHandler) createZipArchive(sourceDir, destPath string) error {
+func (h *ArtifactHandler) createZipArchive(sourceDir, destPath string, flat bool) error {
 	zipfile, err := os.Create(destPath)
 	if err != nil {
 		return err
@@ -977,13 +1040,22 @@ func (h *ArtifactHandler) createZipArchive(sourceDir, destPath string) error {
 		}
 
 		// SET RELATIVE PATH
-		header.Name, err = filepath.Rel(sourceDir, path)
-		if err != nil {
-			return err
+		if flat {
+			header.Name = filepath.Base(path)
+		} else {
+			relPath, err := filepath.Rel(sourceDir, path)
+			if err != nil {
+				return err
+			}
+			header.Name = relPath
 		}
 
 		if info.IsDir() {
-			header.Name += "/"
+			if !flat {
+				header.Name += "/"
+			} else {
+				return nil // SKIP DIRECTORIES IN FLAT MODE
+			}
 		} else {
 			header.Method = zip.Deflate
 		}
@@ -1008,7 +1080,7 @@ func (h *ArtifactHandler) createZipArchive(sourceDir, destPath string) error {
 	})
 }
 
-func (h *ArtifactHandler) createTarGzArchive(sourceDir, destPath string) error {
+func (h *ArtifactHandler) createTarGzArchive(sourceDir, destPath string, flat bool) error {
 	file, err := os.Create(destPath)
 	if err != nil {
 		return err
@@ -1037,9 +1109,20 @@ func (h *ArtifactHandler) createTarGzArchive(sourceDir, destPath string) error {
 		}
 
 		// SET RELATIVE PATH
-		header.Name, err = filepath.Rel(sourceDir, path)
-		if err != nil {
-			return err
+		if flat {
+			header.Name = filepath.Base(path)
+		} else {
+			relPath, err := filepath.Rel(sourceDir, path)
+			if err != nil {
+				return err
+			}
+			header.Name = relPath
+		}
+
+		if info.IsDir() {
+			if flat {
+				return nil // SKIP DIRECTORIES IN FLAT MODE
+			}
 		}
 
 		if err := tarWriter.WriteHeader(header); err != nil {
@@ -1113,6 +1196,7 @@ func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.Rete
 	artifacts, err := h.repo.ListArtifacts(repoID)
 	if err != nil {
 		h.log.Printf("Failed to list artifacts for retention: %v", err)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 

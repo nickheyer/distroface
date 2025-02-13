@@ -408,3 +408,4 @@ FodyWeavers.xsd
 registry.db*
 release/
 repomix-output.txt
+.DS_Store

@@ -405,3 +405,4 @@ repomix-output.txt
 
 # Added by goreleaser init:
 dist/
+.DS_Store

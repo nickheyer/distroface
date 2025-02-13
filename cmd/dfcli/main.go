@@ -1,10 +1,14 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
@@ -775,35 +779,25 @@ func newArtifactRepoListCmd() *cobra.Command {
 
 func newArtifactDownloadCmd() *cobra.Command {
 	var (
-		output  string
 		version string
 		artPath string
-		archive bool
+		output  string
 		format  string
 		props   []string
 		num     int
 		sortBy  string
 		order   string
+		unpack  bool
+		flat    bool
+		force   bool
 	)
 
 	cmd := &cobra.Command{
 		Use:   "download [repo]",
-		Short: "Download an artifact (via query)",
+		Short: "Download artifacts via query",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo := args[0]
-
-			var w io.Writer
-			if output == "-" {
-				w = os.Stdout
-			} else {
-				f, err := os.Create(output)
-				if err != nil {
-					return err
-				}
-				defer f.Close()
-				w = f
-			}
 
 			// BUILD QUERY
 			q := make(url.Values)
@@ -814,20 +808,28 @@ func newArtifactDownloadCmd() *cobra.Command {
 			if artPath != "" {
 				q.Set("path", artPath)
 			}
-			if archive {
-				q.Set("archive", "1")
+			if format != "" && format != "zip" && format != "tar.gz" {
+				return fmt.Errorf("invalid format: must be zip or tar.gz")
 			}
 			if format != "" {
 				q.Set("format", format)
 			}
 			if num > 0 {
 				q.Set("num", strconv.Itoa(num))
+				// FORCE ARCHIVE IF NUM > 1
+				q.Set("archive", "1")
 			}
 			if sortBy != "" {
 				q.Set("sort", sortBy)
 			}
 			if order != "" {
 				q.Set("order", order)
+			}
+			if flat {
+				q.Set("flat", "1")
+			}
+			if force {
+				q.Set("archive", "1")
 			}
 
 			// ADD PROPS
@@ -838,85 +840,111 @@ func newArtifactDownloadCmd() *cobra.Command {
 				}
 			}
 
-			return client.downloadArtifacts(repo, q, w)
+			// GET CONTENT TYPE AND SUGGESTED FILENAME FROM HEADERS
+			headResp, err := client.doRequest("HEAD", fmt.Sprintf("/api/v1/artifacts/%s/query?%s", repo, q.Encode()), nil)
+			if err != nil {
+				return fmt.Errorf("failed to get artifact info: %v", err)
+			}
+			headResp.Body.Close()
+
+			contentType := headResp.Header.Get("Content-Type")
+			filename := headResp.Header.Get("Content-Disposition")
+			if filename != "" {
+				_, params, _ := mime.ParseMediaType(filename)
+				if params["filename"] != "" {
+					filename = params["filename"]
+				}
+			}
+
+			// DETERMINE OUTPUT PATH
+			var outputPath string
+			if output == "-" {
+				outputPath = "-"
+			} else if output != "" {
+				outputPath = output
+			} else if filename != "" {
+				outputPath = filename
+			} else {
+				// DEFAULT NAME BASED ON REPO
+
+				if strings.Contains(contentType, "gzip") {
+					outputPath = fmt.Sprintf("%s-artifacts.tar.gz", repo)
+				} else if strings.Contains(contentType, "zip") {
+					outputPath = fmt.Sprintf("%s-artifacts.zip", repo)
+				} else {
+					outputPath = "artifact" // SERVER SHOULD PROVIDE BETTER NAME
+				}
+			}
+
+			// CREATE THE ARTIFACT(S) PATHS/FILES
+			var w io.Writer
+			var tempFile *os.File
+
+			if outputPath == "-" {
+				w = os.Stdout
+			} else {
+				if unpack && (strings.HasSuffix(outputPath, ".zip") || strings.HasSuffix(outputPath, ".tar.gz")) {
+					// CREATE TEMP FILE FOR ARCHIVE
+					tempFile, err = os.CreateTemp("", "dfcli-download-*")
+					if err != nil {
+						return fmt.Errorf("failed to create temp file: %v", err)
+					}
+					defer os.Remove(tempFile.Name())
+					w = tempFile
+				} else {
+					f, err := os.Create(outputPath)
+					if err != nil {
+						return fmt.Errorf("failed to create output file: %v", err)
+					}
+					defer f.Close()
+					w = f
+				}
+			}
+
+			// DOWNLOAD
+			if err := client.downloadArtifacts(repo, q, w); err != nil {
+				return fmt.Errorf("download failed: %v", err)
+			}
+
+			// HANDLE UNPACKING IF REQUESTED
+			if unpack && tempFile != nil {
+				tempFile.Close()
+				unpackDir := "."
+				if output != "" {
+					unpackDir = output
+					if err := os.MkdirAll(output, 0755); err != nil {
+						return fmt.Errorf("failed to create output directory: %v", err)
+					}
+				}
+
+				if strings.HasSuffix(outputPath, ".zip") {
+					if err := unpackZip(tempFile.Name(), unpackDir, flat); err != nil {
+						return fmt.Errorf("failed to unpack zip: %v", err)
+					}
+				} else if strings.HasSuffix(outputPath, ".tar.gz") {
+					if err := unpackTarGz(tempFile.Name(), unpackDir, flat); err != nil {
+						return fmt.Errorf("failed to unpack tar.gz: %v", err)
+					}
+				}
+			}
+
+			return nil
 		},
 	}
 
 	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version filter")
 	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
-	cmd.Flags().BoolVar(&archive, "archive", false, "Force an archive download (zip or tar.gz)")
-	cmd.Flags().StringVar(&format, "format", "", "Archive format (zip or tar.gz)")
-	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value, key=value,...)")
-	cmd.Flags().StringVarP(&output, "output", "o", "-", "Output file (use - for stdout)")
-	cmd.Flags().IntVar(&num, "num", 0, "Max number of matching artifacts to retrieve (default 1)")
+	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value)")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Output path (file or directory if --unpack)")
+	cmd.Flags().StringVar(&format, "format", "", "Archive format when forcing archive (zip or tar.gz)")
+	cmd.Flags().IntVar(&num, "num", 1, "Number of matching artifacts to retrieve")
 	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")
 	cmd.Flags().StringVar(&order, "order", "", "Sort order (ASC or DESC)")
+	cmd.Flags().BoolVar(&unpack, "unpack", false, "Automatically unpack archives")
+	cmd.Flags().BoolVar(&flat, "flat", false, "Flatten directory structure when unpacking")
+	cmd.Flags().BoolVar(&force, "force", false, "Force archive creation even for single files")
 
 	return cmd
-}
-
-func newArtifactUploadCmd() *cobra.Command {
-	var version, path string
-	var properties map[string]string
-	cmd := &cobra.Command{
-		Use:   "upload [repo] [file]",
-		Short: "Upload an artifact",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			repo := args[0]
-			file := args[1]
-
-			// IF NO VERSION PROVIDED, USE SANITIZED FILENAME
-			if version == "" {
-				version = utils.SanitizeVersion(filepath.Base(file))
-			} else {
-				version = utils.SanitizeVersion(version)
-			}
-
-			// IF NO PATH PROVIDED, USE SANITIZED FILENAME
-			if path == "" {
-				path = utils.SanitizeFilePath(filepath.Base(file))
-			} else {
-				path = utils.SanitizeFilePath(path)
-			}
-
-			fmt.Printf("Uploading %s to %s (version: %s, path: %s)\n",
-				file, repo, version, path)
-
-			if err := client.uploadArtifact(repo, file, version, path, properties); err != nil {
-				return fmt.Errorf("upload failed: %v", err)
-			}
-
-			fmt.Println("Upload successful")
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version")
-	cmd.Flags().StringVarP(&path, "path", "p", "", "Artifact path in repository")
-	cmd.Flags().StringToStringVar(&properties, "property", nil, "Properties (key=value,key=value,...)")
-
-	return cmd
-}
-
-func newArtifactDeleteCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete [repo] [version] [path]",
-		Short: "Delete an artifact",
-		Args:  cobra.ExactArgs(3),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			repo := args[0]
-			version := args[1]
-			path := args[2]
-
-			if err := client.deleteArtifact(repo, version, path); err != nil {
-				return fmt.Errorf("failed to delete artifact: %v", err)
-			}
-
-			fmt.Println("Artifact deleted successfully")
-			return nil
-		},
-	}
 }
 
 func newArtifactSearchCmd() *cobra.Command {
@@ -1004,6 +1032,70 @@ func newArtifactSearchCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&table, "table", "t", false, "Format results as a table")
 
 	return cmd
+}
+
+func newArtifactUploadCmd() *cobra.Command {
+	var version, path string
+	var properties map[string]string
+	cmd := &cobra.Command{
+		Use:   "upload [repo] [file]",
+		Short: "Upload an artifact",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo := args[0]
+			file := args[1]
+
+			// IF NO VERSION PROVIDED, USE SANITIZED FILENAME
+			if version == "" {
+				version = utils.SanitizeVersion(filepath.Base(file))
+			} else {
+				version = utils.SanitizeVersion(version)
+			}
+
+			// IF NO PATH PROVIDED, USE SANITIZED FILENAME
+			if path == "" {
+				path = utils.SanitizeFilePath(filepath.Base(file))
+			} else {
+				path = utils.SanitizeFilePath(path)
+			}
+
+			fmt.Printf("Uploading %s to %s (version: %s, path: %s)\n",
+				file, repo, version, path)
+
+			if err := client.uploadArtifact(repo, file, version, path, properties); err != nil {
+				return fmt.Errorf("upload failed: %v", err)
+			}
+
+			fmt.Println("Upload successful")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version")
+	cmd.Flags().StringVarP(&path, "path", "p", "", "Artifact path in repository")
+	cmd.Flags().StringToStringVar(&properties, "property", nil, "Properties (key=value,key=value,...)")
+
+	return cmd
+}
+
+func newArtifactDeleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete [repo] [version] [path]",
+		Short: "Delete an artifact",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo := args[0]
+			version := args[1]
+			path := args[2]
+
+			if err := client.deleteArtifact(repo, version, path); err != nil {
+				return fmt.Errorf("failed to delete artifact: %v", err)
+			}
+
+			fmt.Println("Artifact deleted successfully")
+			return nil
+		},
+	}
 }
 
 func newUserListCmd() *cobra.Command {
@@ -1281,4 +1373,108 @@ func newSettingsResetCmd() *cobra.Command {
 			return client.resetSettings(args[0])
 		},
 	}
+}
+
+// HELPERS
+func unpackZip(zipPath string, destPath string, flat bool) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		targetPath := f.Name
+		if flat {
+			targetPath = filepath.Base(targetPath)
+		}
+		targetPath = filepath.Join(destPath, targetPath)
+
+		if f.FileInfo().IsDir() {
+			if !flat {
+				os.MkdirAll(targetPath, 0755)
+			}
+			continue
+		}
+
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			return err
+		}
+
+		outFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		if err != nil {
+			return err
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			outFile.Close()
+			return err
+		}
+
+		_, err = io.Copy(outFile, rc)
+		rc.Close()
+		outFile.Close()
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func unpackTarGz(tarPath string, destPath string, flat bool) error {
+	file, err := os.Open(tarPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gzr, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		targetPath := header.Name
+		if flat {
+			targetPath = filepath.Base(targetPath)
+		}
+		targetPath = filepath.Join(destPath, targetPath)
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			if !flat {
+				if err := os.MkdirAll(targetPath, 0755); err != nil {
+					return err
+				}
+			}
+		case tar.TypeReg:
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return err
+			}
+			outFile, err := os.Create(targetPath)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(outFile, tr); err != nil {
+				outFile.Close()
+				return err
+			}
+			outFile.Close()
+		}
+	}
+
+	return nil
 }
