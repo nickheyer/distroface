@@ -39,7 +39,9 @@ RUN npm run build
 # ---------------------------
 # 3) FINAL STAGE
 # ---------------------------
-  FROM --platform=$TARGETPLATFORM debian:bullseye-slim
+  FROM --platform=$TARGETPLATFORM debian:bookworm-slim
+
+  ENV DEBIAN_FRONTEND=noninteractive
 
   RUN apt-get update && \
       apt-get install -y --no-install-recommends \
