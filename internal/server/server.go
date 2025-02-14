@@ -39,6 +39,7 @@ type Server struct {
 	authMiddleware *auth.Middleware
 	permManager    *permissions.PermissionManager
 	log            *logging.LogService
+	client         *http.Client
 }
 
 func NewServer(cfg *models.Config) (*Server, error) {
@@ -370,6 +371,28 @@ func loadRSAKeys(keyPath string) (*rsa.PrivateKey, *rsa.PublicKey, error) {
 }
 
 func (s *Server) Start() error {
+	transport := &http.Transport{
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+
+		// NEED FOR TRAEFIK ON OUTGOING
+		DisableKeepAlives: false,
+		ProxyConnectHeader: http.Header{
+			"User-Agent": []string{"DistroFace/1.0"},
+		},
+	}
+
+	httpClient := &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Minute,
+	}
+	http.DefaultClient = httpClient
+	s.client = httpClient
+
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", s.config.Server.Domain, s.config.Server.Port),
 		ReadTimeout:       30 * time.Minute,

@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,10 +28,14 @@ import (
 )
 
 type RepositoryHandler struct {
-	repo    repository.Repository
-	config  *models.Config
-	log     *logging.LogService
-	metrics *metrics.MetricsService
+	repo         repository.Repository
+	config       *models.Config
+	log          *logging.LogService
+	metrics      *metrics.MetricsService
+	uploadHashes *struct {
+		sync.RWMutex
+		hashes map[string]hash.Hash
+	}
 }
 
 func NewRepositoryHandler(repo repository.Repository, cfg *models.Config, log *logging.LogService, metrics *metrics.MetricsService) *RepositoryHandler {
@@ -38,6 +44,12 @@ func NewRepositoryHandler(repo repository.Repository, cfg *models.Config, log *l
 		config:  cfg,
 		log:     log,
 		metrics: metrics,
+		uploadHashes: &struct {
+			sync.RWMutex
+			hashes map[string]hash.Hash
+		}{
+			hashes: make(map[string]hash.Hash),
+		},
 	}
 }
 
@@ -501,18 +513,84 @@ func (h *RepositoryHandler) DeleteManifest(w http.ResponseWriter, r *http.Reques
 func (h *RepositoryHandler) InitiateBlobUpload(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
-	uploadID := uuid.New().String()
 
 	// CREATE UPLOAD DIR
 	uploadDir := filepath.Join(h.config.Storage.RootDirectory, "_uploads")
 
-	if err := os.MkdirAll(uploadDir, 0755); err != nil {
-		h.log.Printf("Failed to create upload directory: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+	// IF DIGEST, THEN WE START AND END HERE,
+	// NO IDEA WHY DOCKER DOES THIS,
+	// BUT ITS A COMPACT FORM OF THE MULTIPART PACKED INTO AN IF BLOCK
+	digestParam := r.URL.Query().Get("digest")
+	if digestParam != "" {
+		uploadID := uuid.New().String()
+		if err := os.MkdirAll(uploadDir, 0755); err != nil {
+			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+			return
+		}
+		// CREATE EMPTY FILE
+		uploadPath := filepath.Join(uploadDir, uploadID)
+		f, err := os.Create(uploadPath)
+		if err != nil {
+			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+			return
+		}
+		defer f.Close()
+		hh := sha256.New()
+		_, err = io.Copy(io.MultiWriter(f, hh), r.Body)
+		if err != nil {
+			os.Remove(uploadPath)
+			http.Error(w, "UPLOAD FAILED", http.StatusInternalServerError)
+			return
+		}
+		actual := fmt.Sprintf("sha256:%x", hh.Sum(nil))
+		if actual != digestParam {
+			os.Remove(uploadPath)
+			http.Error(w, "Digest mismatch", http.StatusBadRequest)
+			return
+		}
+		f.Close()
+		blobDir := filepath.Join(h.config.Storage.RootDirectory, "blobs", "sha256")
+		if err := os.MkdirAll(blobDir, 0755); err != nil {
+			os.Remove(uploadPath)
+			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+			return
+		}
+		blobPath := filepath.Join(blobDir, strings.TrimPrefix(digestParam, "sha256:"))
+		if err := os.Rename(uploadPath, blobPath); err != nil {
+			if err2 := copyFile(uploadPath, blobPath); err2 != nil {
+				os.Remove(uploadPath)
+				http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+				return
+			}
+			os.Remove(uploadPath)
+		}
+		linkDir := filepath.Join(
+			h.config.Storage.RootDirectory,
+			"repositories",
+			name,
+			"_layers",
+			"sha256",
+			strings.TrimPrefix(digestParam, "sha256:"),
+		)
+		if err := os.MkdirAll(linkDir, 0755); err != nil {
+			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+			return
+		}
+		linkPath := filepath.Join(linkDir, "link")
+		if err := os.WriteFile(linkPath, []byte(digestParam), 0644); err != nil {
+			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Docker-Content-Digest", digestParam)
+		w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/%s", name, digestParam))
+		w.WriteHeader(http.StatusCreated)
 		return
 	}
-
-	// CREATE EMPTY FILE
+	uploadID := uuid.New().String()
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		return
+	} // END OF MONOLITHIC UPLOAD CHAIN, FORTUNATELY WE DONT DO THIS OFTEN
 	uploadPath := filepath.Join(uploadDir, uploadID)
 	if _, err := os.Create(uploadPath); err != nil {
 		h.log.Printf("Failed to create upload file: %v", err)
@@ -531,15 +609,39 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	// METRICS
 	h.metrics.TrackUploadStart()
 	startTime := time.Now()
+	const bufSize = 32 * 1024 * 1024
 
 	vars := mux.Vars(r)
 	name := vars["name"]
+	name = strings.TrimPrefix(name, "/")
+	name = strings.TrimSuffix(name, "/")
 	uploadID := vars["uuid"]
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
-	const bufSize = 8 * 1024 * 1024
 
-	// OPEN FILE (APPEND MODE)
-	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	// STORE RUNNING HASH IN MEMORY BY UPLOAD ID
+	h.log.Printf("BEFORE HASH SETUP - HASHES: %v", h.uploadHashes.hashes)
+	h.uploadHashes.Lock()
+	if _, exists := h.uploadHashes.hashes[uploadID]; !exists {
+		h.log.Printf("CREATING NEW HASH FOR %s", uploadID)
+		h.uploadHashes.hashes[uploadID] = sha256.New()
+	} else {
+		h.log.Printf("FOUND EXISTING HASH FOR %s", uploadID)
+	}
+	hash := h.uploadHashes.hashes[uploadID]
+	h.uploadHashes.Unlock()
+	h.log.Printf("AFTER HASH SETUP - HASHES: %v", h.uploadHashes.hashes)
+
+	// GET OFFSET
+	info, err := os.Stat(uploadPath)
+	if err != nil && !os.IsNotExist(err) {
+		h.log.Printf("Failed to stat upload: %v", err)
+		http.Error(w, "INTERNAL SERVER ERROR", http.StatusInternalServerError)
+		return
+	}
+	currentSize := info.Size()
+
+	// OPEN FILE (SEEK TO OFFSET)
+	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		h.metrics.TrackUploadFailed()
 		h.log.Printf("FAILED TO OPEN UPLOAD FILE: %v", err)
@@ -548,39 +650,57 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 
-	// TODO: NEED TO MESS WITH BUFFER SIZES AND SEE WHATS BEST FOR THIS
-	bufWriter := bufio.NewWriterSize(file, bufSize)
-	defer bufWriter.Flush()
-
-	// GET CURRENT SIZE FOR RANGE HEADER
-	info, err := file.Stat()
-	if err != nil {
+	if _, err := file.Seek(currentSize, io.SeekStart); err != nil {
 		h.metrics.TrackUploadFailed()
-		h.log.Printf("Failed to stat file: %v", err)
+		h.log.Printf("Failed to seek: %v", err)
 		http.Error(w, "INTERNAL SERVER ERROR", http.StatusInternalServerError)
 		return
 	}
-	startSize := info.Size()
 
-	// SET TIMEOUT IF NONE
-	if _, ok := r.Context().Deadline(); !ok {
-		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-		defer cancel()
-		r = r.WithContext(ctx)
-	}
+	// TODO: NEED TO MESS WITH BUFFER SIZES AND SEE WHATS BEST FOR THIS
+	bufWriter := bufio.NewWriterSize(file, bufSize)
+
+	// CLEANUP HANDLING
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
+	defer cancel()
+
+	// FLUSH HANLDING
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				bufWriter.Flush()
+			case <-done:
+				return
+			}
+		}
+	}()
 
 	// COPY DATA FROM BODY
-	copyBuffer := make([]byte, bufSize)
-	written, err := io.CopyBuffer(bufWriter, r.Body, copyBuffer)
+	written, err := io.Copy(io.MultiWriter(bufWriter, hash), r.Body)
 	if err != nil {
-		if !utils.IsNetworkError(err) {
+		if ctx.Err() == context.DeadlineExceeded {
 			h.metrics.TrackUploadFailed()
-			h.log.Printf("UPLOAD ERROR: %v", err)
-			http.Error(w, "FAILED TO PROCESS UPLOAD", http.StatusInternalServerError)
+			h.log.Printf("Upload timed out: %v", err)
+			http.Error(w, "REQUEST TIMEOUT", http.StatusRequestTimeout)
 			return
 		}
+		if !utils.IsNetworkError(err) {
+			h.metrics.TrackUploadFailed()
+			h.log.Printf("Upload error: %v", err)
+			http.Error(w, "UPLOAD FAILED", http.StatusInternalServerError)
+			return
+		}
+		// ENSURE FLUSH FOR NET ERRORS
+		bufWriter.Flush()
 		return
 	}
+
+	h.log.Printf("AFTER COPY - BYTES WRITTEN: %d", written)
 
 	// FLUSH REMAINING DATA
 	if err := bufWriter.Flush(); err != nil {
@@ -590,138 +710,86 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	// CALCULATE NEW SIZE
-	newSize := startSize + written
-
-	// SET RESPONSE HEADERS
-	w.Header().Set("Upload-Offset", fmt.Sprintf("%d", newSize))
-	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uploadID))
-	w.Header().Set("Docker-Upload-UUID", uploadID)
-	w.Header().Set("Range", fmt.Sprintf("0-%d", newSize-1))
-	w.WriteHeader(http.StatusAccepted)
-
-	// COMPLETE METRICS
+	// COMPLETE UPLOAD, END METRICS
 	h.metrics.TrackUploadComplete(written, time.Since(startTime))
+	w.Header().Set("Docker-Upload-UUID", uploadID)
+	w.Header().Set("Range", fmt.Sprintf("0-%d", currentSize+written-1))
+	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uploadID))
+	w.WriteHeader(http.StatusAccepted)
 }
 
 func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	name := vars["name"]
-	uploadID := vars["uuid"]
-	expectedDigest := r.URL.Query().Get("digest")
-
-	// TRIM EXTRA SLASHES
-	name = strings.TrimPrefix(name, "/")
+	name := strings.TrimPrefix(vars["name"], "/")
 	name = strings.TrimSuffix(name, "/")
-
-	if expectedDigest == "" {
-		h.log.Printf("Missing digest parameter")
+	uploadID := vars["uuid"]
+	expected := r.URL.Query().Get("digest")
+	if expected == "" {
 		http.Error(w, "MISSING DIGEST", http.StatusBadRequest)
 		return
 	}
-
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
-
-	// CREATE OR OPEN FILE
-	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE, 0644)
+	h.uploadHashes.Lock()
+	hasher, ok := h.uploadHashes.hashes[uploadID]
+	if !ok {
+		hasher = sha256.New()
+		h.uploadHashes.hashes[uploadID] = hasher
+	}
+	h.uploadHashes.Unlock()
+	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
-		h.log.Printf("Failed to open upload file: %v", err)
-		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		http.Error(w, "UPLOAD NOT FOUND", http.StatusNotFound)
 		return
 	}
 	defer file.Close()
-
-	// WRITE REQUEST BODY IF PRESENT
-	hash := sha256.New()
-	if r.ContentLength > 0 {
-		// TEEREADER - HASHING/WRITING AT THE SAME TIME?
-		reader := io.TeeReader(r.Body, hash)
-		if _, err := io.Copy(file, reader); err != nil {
-			h.log.Printf("Failed to write upload data: %v", err)
-			http.Error(w, "FAILED TO WRITE DATA", http.StatusInternalServerError)
-			return
-		}
-	} else {
-		// READ EXISTING FILE HASH IF NO BODY
-		if err := file.Close(); err != nil {
-			h.log.Printf("Failed to close file for reading: %v", err)
-			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
-			return
-		}
-
-		file, err = os.Open(uploadPath)
-		if err != nil {
-			h.log.Printf("Failed to open file for reading: %v", err)
-			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
-			return
-		}
-		defer file.Close()
-
-		if _, err := io.Copy(hash, file); err != nil {
-			h.log.Printf("Failed to read file for hash: %v", err)
-			http.Error(w, "FAILED TO READ DATA", http.StatusInternalServerError)
-			return
-		}
-	}
-
-	actualDigest := fmt.Sprintf("sha256:%x", hash.Sum(nil))
-
-	if actualDigest != expectedDigest {
-		h.log.Printf("Digest mismatch: expected=%s actual=%s", expectedDigest, actualDigest)
-		http.Error(w, "DIGEST MISMATCH", http.StatusBadRequest)
+	_, err = io.Copy(io.MultiWriter(file, hasher), r.Body)
+	if err != nil {
+		http.Error(w, "UPLOAD FAILED", http.StatusInternalServerError)
 		return
 	}
-
-	// MOVE TO FINAL LOCATION
-	blobDir := filepath.Join(
-		h.config.Storage.RootDirectory,
-		"blobs",
-		"sha256",
-	)
+	h.uploadHashes.Lock()
+	actual := fmt.Sprintf("sha256:%x", hasher.Sum(nil))
+	delete(h.uploadHashes.hashes, uploadID)
+	h.uploadHashes.Unlock()
+	if actual != expected {
+		os.Remove(uploadPath)
+		http.Error(w, "Digest mismatch", http.StatusBadRequest)
+		return
+	}
+	blobDir := filepath.Join(h.config.Storage.RootDirectory, "blobs", "sha256")
 	if err := os.MkdirAll(blobDir, 0755); err != nil {
-		h.log.Printf("Failed to create blob directory: %v", err)
+		os.Remove(uploadPath)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
-
-	blobPath := filepath.Join(blobDir, strings.TrimPrefix(expectedDigest, "sha256:"))
-
-	// TRY RENAME, FALLBACK TO COPY
+	blobPath := filepath.Join(blobDir, strings.TrimPrefix(expected, "sha256:"))
 	if err := os.Rename(uploadPath, blobPath); err != nil {
-
-		// IF RENAME FAILS, TRY COPY BECAUSE WHY NOT
-		if err := copyFile(uploadPath, blobPath); err != nil {
-			h.log.Printf("Failed to store blob: %v", err)
+		if err2 := copyFile(uploadPath, blobPath); err2 != nil {
+			os.Remove(uploadPath)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
 		os.Remove(uploadPath)
 	}
-
-	// CREATE REPO LINK
-	layerLinkDir := filepath.Join(
+	linkDir := filepath.Join(
 		h.config.Storage.RootDirectory,
 		"repositories",
 		name,
 		"_layers",
 		"sha256",
-		strings.TrimPrefix(expectedDigest, "sha256:"),
+		strings.TrimPrefix(expected, "sha256:"),
 	)
-	if err := os.MkdirAll(layerLinkDir, 0755); err != nil {
-		h.log.Printf("Failed to create layer link directory: %v", err)
+	if err := os.MkdirAll(linkDir, 0755); err != nil {
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
-
-	linkPath := filepath.Join(layerLinkDir, "link")
-	if err := os.WriteFile(linkPath, []byte(expectedDigest), 0644); err != nil {
-		h.log.Printf("Failed to write layer link: %v", err)
+	linkPath := filepath.Join(linkDir, "link")
+	if err := os.WriteFile(linkPath, []byte(expected), 0644); err != nil {
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
-
-	w.Header().Set("Docker-Content-Digest", expectedDigest)
-	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/%s", name, expectedDigest))
+	w.Header().Set("Docker-Content-Digest", expected)
+	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/%s", name, expected))
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -733,7 +801,7 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 	digest := vars["digest"]
-	bufSize := 1024 * 1024 // 1MB BUFFER
+	bufSize := 32 * 1024 * 1024 // 32MB BUFFER
 
 	// VERIFY BLOB EXISTS AND IS LINKED TO REPOSITORY
 	layerLink := filepath.Join(
@@ -782,7 +850,7 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 
 	// CHECK FOR RANGE REQUEST
 	rangeHeader := r.Header.Get("Range")
-	var reader io.Reader = blob
+	var bytesWritten int64
 	var contentLength int64
 
 	if rangeHeader != "" {
@@ -817,31 +885,33 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 		// SEEK TO OFFSET
 		_, err = blob.Seek(start, io.SeekStart)
 		if err != nil {
+			h.metrics.TrackDownloadFailed()
+			h.log.Printf("Failed to seek blob: %v", err)
+			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+			return
+		}
+
+		// RANGE HANDLER
+		bytesWritten, err = io.CopyN(w, blob, contentLength)
+		if err != nil {
 			if !utils.IsNetworkError(err) {
 				h.metrics.TrackDownloadFailed()
-				h.log.Printf("Failed to seek blob: %v", err)
-				http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+				h.log.Printf("Error while using CopyN: %v", err)
+				http.Error(w, "Failed to process Download", http.StatusInternalServerError)
 				return
 			}
 		}
-		// LIMIT READER
-		reader = io.LimitReader(blob, contentLength)
 	} else {
 		// FULL DOWNLOAD, USE FILE SIZE
-		contentLength = info.Size()
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", contentLength))
-	}
-
-	buf := make([]byte, bufSize)
-	// COPY READER
-	bytesWritten, err := io.CopyBuffer(w, reader, buf)
-	if err != nil {
-		// CHECK FOR COMMON NET ERRORS
-		if !utils.IsNetworkError(err) {
-			h.metrics.TrackDownloadFailed()
-			h.log.Printf("Download error: %v", err)
-			http.Error(w, "Failed to process Download", http.StatusInternalServerError)
-			return
+		buf := make([]byte, bufSize)
+		bytesWritten, err = io.CopyBuffer(w, blob, buf)
+		if err != nil {
+			if !utils.IsNetworkError(err) {
+				h.metrics.TrackDownloadFailed()
+				h.log.Printf("Error while using CopyBuffer: %v", err)
+				http.Error(w, "Failed to process Download", http.StatusInternalServerError)
+				return
+			}
 		}
 	}
 
