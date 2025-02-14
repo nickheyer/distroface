@@ -619,17 +619,13 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
 
 	// STORE RUNNING HASH IN MEMORY BY UPLOAD ID
-	h.log.Printf("BEFORE HASH SETUP - HASHES: %v", h.uploadHashes.hashes)
 	h.uploadHashes.Lock()
 	if _, exists := h.uploadHashes.hashes[uploadID]; !exists {
 		h.log.Printf("CREATING NEW HASH FOR %s", uploadID)
 		h.uploadHashes.hashes[uploadID] = sha256.New()
-	} else {
-		h.log.Printf("FOUND EXISTING HASH FOR %s", uploadID)
 	}
 	hash := h.uploadHashes.hashes[uploadID]
 	h.uploadHashes.Unlock()
-	h.log.Printf("AFTER HASH SETUP - HASHES: %v", h.uploadHashes.hashes)
 
 	// GET OFFSET
 	info, err := os.Stat(uploadPath)
@@ -720,6 +716,7 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 
 func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
+	// NORMALIZE NAME
 	name := strings.TrimPrefix(vars["name"], "/")
 	name = strings.TrimSuffix(name, "/")
 	uploadID := vars["uuid"]
@@ -730,6 +727,7 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 	}
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
 	h.uploadHashes.Lock()
+	// TRY GET HASH WE BUILT INCREMENTALLY
 	hasher, ok := h.uploadHashes.hashes[uploadID]
 	if !ok {
 		hasher = sha256.New()
@@ -763,6 +761,8 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 	blobPath := filepath.Join(blobDir, strings.TrimPrefix(expected, "sha256:"))
+
+	// TRY RENAME, FALLBACK TO COPY
 	if err := os.Rename(uploadPath, blobPath); err != nil {
 		if err2 := copyFile(uploadPath, blobPath); err2 != nil {
 			os.Remove(uploadPath)
@@ -771,6 +771,7 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 		}
 		os.Remove(uploadPath)
 	}
+	// CREATE REPO LINK
 	linkDir := filepath.Join(
 		h.config.Storage.RootDirectory,
 		"repositories",
