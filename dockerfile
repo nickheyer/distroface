@@ -3,15 +3,15 @@
 # Multi-arch Dockerfile for Go + Svelte + SQLite
 
 # ---------------------------
-# 1) BUILD STAGE FOR UI - SKIPPED IN WORKFLOW, USING PREVIOUSLY BUILT WEBPACK
+# 1) BUILD STAGE FOR UI
 # ---------------------------
-# FROM --platform=$BUILDPLATFORM node:20-bullseye AS ui-builder
+FROM --platform=$BUILDPLATFORM node:20-bullseye AS ui-builder
 
-# WORKDIR /app/web
-# COPY web/package*.json ./
-# RUN npm ci
-# COPY web/ .
-# RUN npm run build
+WORKDIR /app/web
+COPY web/package*.json ./
+RUN npm ci
+COPY web/ .
+RUN npm run build
 
 
 # ---------------------------
@@ -59,13 +59,11 @@
   
   WORKDIR /app
   
-  # BRING IN GO BINARY
+  # BRING IN UI + GO BINARY
+  COPY --from=ui-builder /app/web/build ./web/build
   COPY --from=go-builder /app/distroface .
-  
-  # GITHUB-ACTION-ONLY: COPY PREBUILT ASSETS INTO IMAGE
-  COPY web/build web/build
-
   COPY --from=go-builder /app/docker.config.yml config.yml
+
   RUN chown -R appuser:appgroup /app
   
   USER appuser
