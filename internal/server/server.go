@@ -169,9 +169,19 @@ func initDB(cfg *models.Config) (*sql.DB, error) {
 	return database, nil
 }
 
+func (s *Server) notFoundHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		s.log.Errorf("404 NOT FOUND", fmt.Errorf("PATH: %s METHOD: %s", r.URL.Path, r.Method))
+		http.NotFound(w, r)
+	}
+}
+
 func (s *Server) setupRoutes() error {
 	s.router.Use(middleware.LoggingMiddleware(s.log))
 	s.router.Use(middleware.CORS)
+
+	// 404
+	s.router.NotFoundHandler = s.notFoundHandler()
 
 	// INIT HANDLERS + MISC SERVICES
 	metricsSrv := metrics.NewMetricsService(s.log, s.config.Storage.RootDirectory)

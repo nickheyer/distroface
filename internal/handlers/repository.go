@@ -34,22 +34,63 @@ type RepositoryHandler struct {
 	metrics      *metrics.MetricsService
 	uploadHashes *struct {
 		sync.RWMutex
-		hashes map[string]hash.Hash
+		hashes map[string]*struct {
+			hash     hash.Hash
+			lastUsed time.Time
+		}
 	}
+	cleanupTicker *time.Ticker
 }
 
 func NewRepositoryHandler(repo repository.Repository, cfg *models.Config, log *logging.LogService, metrics *metrics.MetricsService) *RepositoryHandler {
-	return &RepositoryHandler{
+	h := &RepositoryHandler{
 		repo:    repo,
 		config:  cfg,
 		log:     log,
 		metrics: metrics,
 		uploadHashes: &struct {
 			sync.RWMutex
-			hashes map[string]hash.Hash
+			hashes map[string]*struct {
+				hash     hash.Hash
+				lastUsed time.Time
+			}
 		}{
-			hashes: make(map[string]hash.Hash),
+			hashes: make(map[string]*struct {
+				hash     hash.Hash
+				lastUsed time.Time
+			}),
 		},
+		cleanupTicker: time.NewTicker(10 * time.Minute),
+	}
+	go h.cleanupOldHashes()
+
+	return h
+}
+
+func (h *RepositoryHandler) cleanupOldHashes() {
+	for range h.cleanupTicker.C {
+		h.uploadHashes.Lock()
+		now := time.Now()
+		for id, hashInfo := range h.uploadHashes.hashes {
+			// REMOVE HASHES NOT USED IN LAST 30 MINS
+			if now.Sub(hashInfo.lastUsed) > 30*time.Minute {
+				h.log.Printf("CLEANING UP UNUSED HASH FOR UPLOAD %s", id)
+				delete(h.uploadHashes.hashes, id)
+			}
+		}
+		h.uploadHashes.Unlock()
+	}
+}
+
+func (h *RepositoryHandler) rmHash(uploadID string) {
+	h.uploadHashes.Lock()
+	delete(h.uploadHashes.hashes, uploadID)
+	h.uploadHashes.Unlock()
+}
+
+func (h *RepositoryHandler) Shutdown() {
+	if h.cleanupTicker != nil {
+		h.cleanupTicker.Stop()
 	}
 }
 
@@ -618,18 +659,29 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	uploadID := vars["uuid"]
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
 
-	// STORE RUNNING HASH IN MEMORY BY UPLOAD ID
+	// STORE/UPDATE RUNNING HASH IN MEMORY BY UPLOAD ID
 	h.uploadHashes.Lock()
-	if _, exists := h.uploadHashes.hashes[uploadID]; !exists {
+	hashInfo, exists := h.uploadHashes.hashes[uploadID]
+	if !exists {
 		h.log.Printf("CREATING NEW HASH FOR %s", uploadID)
-		h.uploadHashes.hashes[uploadID] = sha256.New()
+		hashInfo = &struct {
+			hash     hash.Hash
+			lastUsed time.Time
+		}{
+			hash:     sha256.New(),
+			lastUsed: time.Now(),
+		}
+		h.uploadHashes.hashes[uploadID] = hashInfo
 	}
-	hash := h.uploadHashes.hashes[uploadID]
+	hashInfo.lastUsed = time.Now() // UPDATE LAST USED TIME
+	hash := hashInfo.hash
 	h.uploadHashes.Unlock()
 
 	// GET OFFSET
 	info, err := os.Stat(uploadPath)
 	if err != nil && !os.IsNotExist(err) {
+		h.rmHash(uploadID)
+		h.metrics.TrackUploadFailed()
 		h.log.Printf("Failed to stat upload: %v", err)
 		http.Error(w, "INTERNAL SERVER ERROR", http.StatusInternalServerError)
 		return
@@ -639,6 +691,7 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	// OPEN FILE (SEEK TO OFFSET)
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
+		h.rmHash(uploadID)
 		h.metrics.TrackUploadFailed()
 		h.log.Printf("FAILED TO OPEN UPLOAD FILE: %v", err)
 		http.Error(w, "INTERNAL SERVER ERROR", http.StatusInternalServerError)
@@ -647,6 +700,7 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	defer file.Close()
 
 	if _, err := file.Seek(currentSize, io.SeekStart); err != nil {
+		h.rmHash(uploadID)
 		h.metrics.TrackUploadFailed()
 		h.log.Printf("Failed to seek: %v", err)
 		http.Error(w, "INTERNAL SERVER ERROR", http.StatusInternalServerError)
@@ -663,16 +717,11 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	// COPY DATA FROM BODY
 	written, err := io.Copy(io.MultiWriter(bufWriter, hash), r.Body)
 	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
+		if ctx.Err() == context.DeadlineExceeded || !utils.IsNetworkError(err) {
+			h.rmHash(uploadID)
 			h.metrics.TrackUploadFailed()
-			h.log.Printf("Upload timed out: %v", err)
+			h.log.Printf("Upload failed (network/timeout error): %v", err)
 			http.Error(w, "REQUEST TIMEOUT", http.StatusRequestTimeout)
-			return
-		}
-		if !utils.IsNetworkError(err) {
-			h.metrics.TrackUploadFailed()
-			h.log.Printf("Upload error: %v", err)
-			http.Error(w, "UPLOAD FAILED", http.StatusInternalServerError)
 			return
 		}
 		// ENSURE FLUSH FOR NET ERRORS
@@ -684,6 +733,7 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 
 	// FLUSH REMAINING DATA
 	if err := bufWriter.Flush(); err != nil {
+		h.rmHash(uploadID)
 		h.metrics.TrackUploadFailed()
 		h.log.Printf("FAILED TO FLUSH BUFFER: %v", err)
 		http.Error(w, "FAILED TO SAVE UPLOAD", http.StatusInternalServerError)
@@ -723,7 +773,12 @@ func (h *RepositoryHandler) GetBlobUploadOffset(w http.ResponseWriter, r *http.R
 }
 
 func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Request) {
+	// METRICS
+	h.metrics.TrackUploadStart()
+	startTime := time.Now()
+
 	vars := mux.Vars(r)
+
 	// NORMALIZE NAME
 	name := strings.TrimPrefix(vars["name"], "/")
 	name = strings.TrimSuffix(name, "/")
@@ -734,37 +789,55 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 		return
 	}
 	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
-	h.uploadHashes.Lock()
+
 	// TRY GET HASH WE BUILT INCREMENTALLY
-	hasher, ok := h.uploadHashes.hashes[uploadID]
-	if !ok {
-		hasher = sha256.New()
-		h.uploadHashes.hashes[uploadID] = hasher
+	h.uploadHashes.Lock()
+	hashInfo, ok := h.uploadHashes.hashes[uploadID]
+	if ok {
+		delete(h.uploadHashes.hashes, uploadID) // REMOVE IMMEDIATELY
 	}
 	h.uploadHashes.Unlock()
+
+	if !ok {
+		// NO EXISTING HASH, CREATE NEW ONE FOR FINAL DATA
+		hashInfo = &struct {
+			hash     hash.Hash
+			lastUsed time.Time
+		}{
+			hash:     sha256.New(),
+			lastUsed: time.Now(),
+		}
+	}
+
 	file, err := os.OpenFile(uploadPath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		http.Error(w, "UPLOAD NOT FOUND", http.StatusNotFound)
 		return
 	}
 	defer file.Close()
-	_, err = io.Copy(io.MultiWriter(file, hasher), r.Body)
+
+	// WRITE FILE AND HASH
+	written, err := io.Copy(io.MultiWriter(file, hashInfo.hash), r.Body)
 	if err != nil {
 		http.Error(w, "UPLOAD FAILED", http.StatusInternalServerError)
 		return
 	}
-	h.uploadHashes.Lock()
-	actual := fmt.Sprintf("sha256:%x", hasher.Sum(nil))
-	delete(h.uploadHashes.hashes, uploadID)
-	h.uploadHashes.Unlock()
+
+	// NOW RM HASH
+	actual := fmt.Sprintf("sha256:%x", hashInfo.hash.Sum(nil))
+	h.rmHash(uploadID)
+
 	if actual != expected {
 		os.Remove(uploadPath)
+		h.metrics.TrackUploadFailed()
 		http.Error(w, "Digest mismatch", http.StatusBadRequest)
 		return
 	}
+
 	blobDir := filepath.Join(h.config.Storage.RootDirectory, "blobs", "sha256")
 	if err := os.MkdirAll(blobDir, 0755); err != nil {
 		os.Remove(uploadPath)
+		h.metrics.TrackUploadFailed()
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
@@ -774,6 +847,7 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 	if err := os.Rename(uploadPath, blobPath); err != nil {
 		if err2 := copyFile(uploadPath, blobPath); err2 != nil {
 			os.Remove(uploadPath)
+			h.metrics.TrackUploadFailed()
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
@@ -790,13 +864,17 @@ func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Re
 	)
 	if err := os.MkdirAll(linkDir, 0755); err != nil {
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		h.metrics.TrackUploadFailed()
 		return
 	}
 	linkPath := filepath.Join(linkDir, "link")
 	if err := os.WriteFile(linkPath, []byte(expected), 0644); err != nil {
+		h.metrics.TrackUploadFailed()
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
+
+	h.metrics.TrackUploadComplete(written, time.Since(startTime))
 	w.Header().Set("Docker-Content-Digest", expected)
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/%s", name, expected))
 	w.WriteHeader(http.StatusCreated)
