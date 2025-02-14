@@ -305,6 +305,8 @@ func (s *Server) setupRoutes() error {
 	// BLOB OPERATIONS
 	regAPI.Handle("/{name:.*}/blobs/{digest}", requirePermission(s.authService, models.ActionPull, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.GetBlob))).Methods("GET", "HEAD")
+	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", // NO AUTH HERE FOR OFFSET CHECK
+		http.HandlerFunc(repoHandler.GetBlobUploadOffset)).Methods("HEAD")
 	regAPI.Handle("/{name:.*}/blobs/uploads/", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
 		http.HandlerFunc(repoHandler.InitiateBlobUpload))).Methods("POST")
 	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(

@@ -660,22 +660,6 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
 	defer cancel()
 
-	// FLUSH HANLDING
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				bufWriter.Flush()
-			case <-done:
-				return
-			}
-		}
-	}()
-
 	// COPY DATA FROM BODY
 	written, err := io.Copy(io.MultiWriter(bufWriter, hash), r.Body)
 	if err != nil {
@@ -712,6 +696,30 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Range", fmt.Sprintf("0-%d", currentSize+written-1))
 	w.Header().Set("Location", fmt.Sprintf("/v2/%s/blobs/uploads/%s", name, uploadID))
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (h *RepositoryHandler) GetBlobUploadOffset(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	uploadID := vars["uuid"]
+	uploadPath := filepath.Join(h.config.Storage.RootDirectory, "_uploads", uploadID)
+
+	info, err := os.Stat(uploadPath)
+	if os.IsNotExist(err) {
+		http.Error(w, "UPLOAD NOT FOUND", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		return
+	}
+
+	offset := info.Size()
+	w.Header().Set("Docker-Upload-UUID", uploadID)
+	if offset > 0 {
+		w.Header().Set("Range", fmt.Sprintf("0-%d", offset-1))
+	} else {
+		w.Header().Set("Range", "0-0")
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *RepositoryHandler) CompleteBlobUpload(w http.ResponseWriter, r *http.Request) {
