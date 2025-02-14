@@ -609,7 +609,7 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	// METRICS
 	h.metrics.TrackUploadStart()
 	startTime := time.Now()
-	const bufSize = 32 * 1024 * 1024
+	const bufSize = 64 * 1024
 
 	vars := mux.Vars(r)
 	name := vars["name"]
@@ -802,7 +802,7 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	name := vars["name"]
 	digest := vars["digest"]
-	bufSize := 32 * 1024 * 1024 // 32MB BUFFER
+	bufSize := 64 * 1024
 
 	// VERIFY BLOB EXISTS AND IS LINKED TO REPOSITORY
 	layerLink := filepath.Join(
