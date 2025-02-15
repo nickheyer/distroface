@@ -35,27 +35,36 @@ const state = $state<{
 // COMPUTED
 const filteredRepositories = $derived(() => {
   const searchLower = state.repoSearchTerm.toLowerCase();
-  return state.repositories.filter((repo) =>
+  return state.repositories
+    .filter((repo) =>
       repo.name.toLowerCase().includes(searchLower) ||
       repo.description.toLowerCase().includes(searchLower)
-  );
+    )
+    .sort((a, b) => a.name.localeCompare(b.name));
 });
 
 const filteredArtifacts = $derived(() => {
   const searchLower = state.fileSearchTerm.toLowerCase();
   if (!state.currentRepo?.id) {
-    console.log('No repo id set: ', state.currentRepo);
     return {};
   }
 
-  if (searchLower === '') {
-    return state.artifacts;
+  const tmpArtifacts = { ...state.artifacts };
+  
+  if (state.currentRepo.id in tmpArtifacts) {
+    tmpArtifacts[state.currentRepo.id] = searchLower === '' 
+      ? [...state.artifacts[state.currentRepo.id]]
+      : state.artifacts[state.currentRepo.id].filter((artifact) =>
+          artifact.name.toLowerCase().includes(searchLower)
+        );
+    
+    // SORT BY PATH AND VERSION
+    tmpArtifacts[state.currentRepo.id].sort((a, b) => {
+      const pathCompare = a.path.localeCompare(b.path);
+      if (pathCompare !== 0) return pathCompare;
+      return b.version.localeCompare(a.version); // NEWEST VERSION FIRST
+    });
   }
-
-  const tmpArtifacts = Object.assign({}, state.artifacts);
-  tmpArtifacts[state.currentRepo.id] = state.artifacts[state.currentRepo.id].filter((artifact) =>
-      artifact.name.toLowerCase().includes(searchLower)
-  );
 
   return tmpArtifacts;
 });

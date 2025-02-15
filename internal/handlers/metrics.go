@@ -3,9 +3,11 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/nickheyer/distroface/internal/logging"
 	"github.com/nickheyer/distroface/internal/metrics"
+	"github.com/nickheyer/distroface/internal/models"
 )
 
 type MetricsHandler struct {
@@ -28,4 +30,17 @@ func (h *MetricsHandler) GetMetrics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to encode metrics", http.StatusInternalServerError)
 		return
 	}
+}
+
+func (h *MetricsHandler) LogAccess(username string, action string, resource string, r *http.Request, status int) {
+	entry := models.AccessLogEntry{
+		Timestamp: time.Now(),
+		Username:  username,
+		Action:    action,
+		Resource:  resource,
+		Path:      r.URL.Path,
+		Method:    r.Method,
+		Status:    status,
+	}
+	h.metrics.AddAccessLog(entry)
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Settings, Package, Server, Shield, Users, Key, Cog, ChartBarStacked } from "lucide-svelte";
+  import { Settings, Package, FileText, Shield, Users, Key, Cog, ChartBarStacked } from "lucide-svelte";
   import { auth } from "$lib/stores/auth.svelte";
   import ArtifactSettings from "./ArtifactSettings.svelte";
   import RoleSettings from "./RoleSettings.svelte";
@@ -7,6 +7,7 @@
   import AuthSettings from "./AuthSettings.svelte";
   import SystemSettings from "./SystemSettings.svelte";
   import MetricsPanel from "./MetricsPanel.svelte";
+  import AccessLogPanel from "./AccessLogPanel.svelte";
 
   let activeTab = $state("config");
   let loading = $state(false);
@@ -60,7 +61,15 @@
       description: "Real-time performance monitoring",
       component: MetricsPanel,
       roles: ['admins']
-    }
+    },
+    {
+        id: "access-logs",
+        title: "Access Logs",
+        icon: FileText,
+        description: "View system access logs and activity",
+        component: AccessLogPanel,
+        roles: ['admins']
+    },
   ];
 
   // FILTER TABS BASED ON ROLE

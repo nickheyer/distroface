@@ -27,6 +27,8 @@ import (
 	"github.com/opencontainers/go-digest"
 )
 
+const bufSize = 1024 * 1024
+
 type RepositoryHandler struct {
 	repo         repository.Repository
 	config       *models.Config
@@ -650,8 +652,6 @@ func (h *RepositoryHandler) HandleBlobUpload(w http.ResponseWriter, r *http.Requ
 	// METRICS
 	h.metrics.TrackUploadStart()
 	startTime := time.Now()
-	const bufSize = 64 * 1024
-
 	vars := mux.Vars(r)
 	name := vars["name"]
 	name = strings.TrimPrefix(name, "/")
@@ -884,11 +884,9 @@ func (h *RepositoryHandler) GetBlob(w http.ResponseWriter, r *http.Request) {
 	// METRICS: MARK DL START AND STATT TIME
 	h.metrics.TrackDownloadStart()
 	startTime := time.Now()
-
 	vars := mux.Vars(r)
 	name := vars["name"]
 	digest := vars["digest"]
-	bufSize := 64 * 1024
 
 	// VERIFY BLOB EXISTS AND IS LINKED TO REPOSITORY
 	layerLink := filepath.Join(

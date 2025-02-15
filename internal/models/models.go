@@ -289,9 +289,20 @@ type MetricsData struct {
 	BlobDownloads  BlobMetrics        `json:"blobDownloads"`
 	Performance    PerformanceMetrics `json:"performance"`
 	TimeseriesData []TimeSeriesPoint  `json:"timeseriesData"`
+	AccessLogs     []AccessLogEntry   `json:"access_logs"`
 }
 
 type DiskInfo struct {
 	DiskTotal     int64
 	DiskAvailable int64
+}
+
+type AccessLogEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	Username  string    `json:"username"`
+	Action    string    `json:"action"`
+	Resource  string    `json:"resource"`
+	Path      string    `json:"path"`
+	Method    string    `json:"method"`
+	Status    int       `json:"status"`
 }

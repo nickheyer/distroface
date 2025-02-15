@@ -25,10 +25,18 @@ const state = $state<{
 
 // COMPUTED
 const filteredRepositories = $derived(() => {
-    const searchLower = state.searchTerm.toLowerCase();
-    return state.repositories.filter(repo => 
-        repo.name.toLowerCase().includes(searchLower)
-    );
+  const searchLower = state.searchTerm.toLowerCase();
+  return state.repositories
+      .filter(repo => 
+          repo.name.toLowerCase().includes(searchLower)
+      )
+      .sort((a, b) => {
+          // SORT BY PRIVATE STATUS THEN NAME
+          if (a.private !== b.private) {
+              return a.private ? 1 : -1;
+          }
+          return a.name.localeCompare(b.name);
+      });
 });
 
 // ACTIONS

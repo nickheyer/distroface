@@ -206,96 +206,96 @@ func (s *Server) setupRoutes() error {
 	api.Use(s.authMiddleware.AuthMiddleware)
 
 	// SETTINGS ROUTES
-	api.Handle("/settings", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+	api.Handle("/settings", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem, metricsHandler)(
 		http.HandlerFunc(settingsHandler.GetSettings))).Methods("GET")
-	api.Handle("/settings/metrics", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+	api.Handle("/settings/metrics", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem, nil)(
 		http.HandlerFunc(metricsHandler.GetMetrics))).Methods("GET")
-	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem, metricsHandler)(
 		http.HandlerFunc(settingsHandler.GetSettings))).Methods("GET")
-	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+	api.Handle("/settings/{section}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem, metricsHandler)(
 		http.HandlerFunc(settingsHandler.UpdateSettings))).Methods("PUT")
-	api.Handle("/settings/{section}/reset", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+	api.Handle("/settings/{section}/reset", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem, metricsHandler)(
 		http.HandlerFunc(settingsHandler.ResetSettings))).Methods("POST")
 
 	// REPOSITORY ROUTES
-	api.Handle("/repositories", requirePermission(s.authService, models.ActionView, models.ResourceWebUI)(
+	api.Handle("/repositories", requirePermission(s.authService, models.ActionView, models.ResourceWebUI, metricsHandler)(
 		http.HandlerFunc(repoHandler.ListRepositories))).Methods("GET")
-	api.Handle("/repositories/{name}/tags/{tag}", requirePermission(s.authService, models.ActionDelete, models.ResourceTag)(
+	api.Handle("/repositories/{name}/tags/{tag}", requirePermission(s.authService, models.ActionDelete, models.ResourceTag, metricsHandler)(
 		http.HandlerFunc(repoHandler.DeleteTag))).Methods("DELETE")
-	api.Handle("/repositories/public", requirePermission(s.authService, models.ActionView, models.ResourceWebUI)(
+	api.Handle("/repositories/public", requirePermission(s.authService, models.ActionView, models.ResourceWebUI, metricsHandler)(
 		http.HandlerFunc(repoHandler.ListGlobalRepositories))).Methods("GET")
-	api.Handle("/repositories/visibility", requirePermission(s.authService, models.ActionUpdate, models.ResourceWebUI)(
+	api.Handle("/repositories/visibility", requirePermission(s.authService, models.ActionUpdate, models.ResourceWebUI, metricsHandler)(
 		http.HandlerFunc(repoHandler.UpdateImageVisibility))).Methods("POST")
 
 	// USER MANAGEMENT
-	api.Handle("/users", requirePermission(s.authService, models.ActionCreate, models.ResourceUser)(
+	api.Handle("/users", requirePermission(s.authService, models.ActionCreate, models.ResourceUser, metricsHandler)(
 		http.HandlerFunc(userHandler.CreateUser))).Methods("POST")
-	api.Handle("/users/groups", requirePermission(s.authService, models.ActionUpdate, models.ResourceUser)(
+	api.Handle("/users/groups", requirePermission(s.authService, models.ActionUpdate, models.ResourceUser, metricsHandler)(
 		http.HandlerFunc(userHandler.UpdateUserGroups))).Methods("PUT")
-	api.Handle("/users", requirePermission(s.authService, models.ActionView, models.ResourceUser)(
+	api.Handle("/users", requirePermission(s.authService, models.ActionView, models.ResourceUser, metricsHandler)(
 		http.HandlerFunc(userHandler.ListUsers))).Methods("GET")
 	api.HandleFunc("/users/me", userHandler.GetUser).Methods("GET")
-	api.Handle("/users/{username}", requirePermission(s.authService, models.ActionView, models.ResourceUser)(
+	api.Handle("/users/{username}", requirePermission(s.authService, models.ActionView, models.ResourceUser, metricsHandler)(
 		http.HandlerFunc(userHandler.GetUser))).Methods("GET")
-	api.Handle("/users/{username}", requirePermission(s.authService, models.ActionDelete, models.ResourceUser)(
+	api.Handle("/users/{username}", requirePermission(s.authService, models.ActionDelete, models.ResourceUser, metricsHandler)(
 		http.HandlerFunc(userHandler.DeleteUser))).Methods("DELETE")
 
 	// ROLE MANAGEMENT
-	api.Handle("/roles", requirePermission(s.authService, models.ActionView, models.ResourceSystem)(
+	api.Handle("/roles", requirePermission(s.authService, models.ActionView, models.ResourceSystem, metricsHandler)(
 		http.HandlerFunc(roleHandler.ListRoles))).Methods("GET")
-	api.Handle("/roles", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+	api.Handle("/roles", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem, metricsHandler)(
 		http.HandlerFunc(roleHandler.CreateRole))).Methods("POST")
-	api.Handle("/roles/{name}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+	api.Handle("/roles/{name}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem, metricsHandler)(
 		http.HandlerFunc(roleHandler.UpdateRole))).Methods("PUT")
-	api.Handle("/roles/{name}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem)(
+	api.Handle("/roles/{name}", requirePermission(s.authService, models.ActionAdmin, models.ResourceSystem, metricsHandler)(
 		http.HandlerFunc(roleHandler.DeleteRole))).Methods("DELETE")
 
 	// GROUP MANAGEMENT
-	api.Handle("/groups", requirePermission(s.authService, models.ActionView, models.ResourceGroup)(
+	api.Handle("/groups", requirePermission(s.authService, models.ActionView, models.ResourceGroup, metricsHandler)(
 		http.HandlerFunc(groupHandler.ListGroups))).Methods("GET")
-	api.Handle("/groups/{name}", requirePermission(s.authService, models.ActionUpdate, models.ResourceGroup)(
+	api.Handle("/groups/{name}", requirePermission(s.authService, models.ActionUpdate, models.ResourceGroup, metricsHandler)(
 		http.HandlerFunc(groupHandler.UpdateGroup))).Methods("PUT")
-	api.Handle("/groups/{name}", requirePermission(s.authService, models.ActionDelete, models.ResourceGroup)(
+	api.Handle("/groups/{name}", requirePermission(s.authService, models.ActionDelete, models.ResourceGroup, metricsHandler)(
 		http.HandlerFunc(groupHandler.DeleteGroup))).Methods("DELETE")
 
 	// MIGRATION ROUTES
-	api.Handle("/registry/migrate", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask)(
+	api.Handle("/registry/migrate", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask, metricsHandler)(
 		http.HandlerFunc(repoHandler.MigrateImages))).Methods("POST")
-	api.Handle("/registry/migrate/status", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask)(
+	api.Handle("/registry/migrate/status", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask, metricsHandler)(
 		http.HandlerFunc(repoHandler.GetMigrationStatus))).Methods("GET")
-	api.Handle("/registry/proxy/catalog", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask)(
+	api.Handle("/registry/proxy/catalog", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask, metricsHandler)(
 		http.HandlerFunc(repoHandler.ProxyCatalog))).Methods("GET")
-	api.Handle("/registry/proxy/tags", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask)(
+	api.Handle("/registry/proxy/tags", requirePermission(s.authService, models.ActionMigrate, models.ResourceTask, metricsHandler)(
 		http.HandlerFunc(repoHandler.ProxyTags))).Methods("GET")
 
 	// ARTIFACT ROUTES
-	api.Handle("/artifacts/repos", requirePermission(s.authService, models.ActionCreate, models.ResourceRepo)(
+	api.Handle("/artifacts/repos", requirePermission(s.authService, models.ActionCreate, models.ResourceRepo, metricsHandler)(
 		http.HandlerFunc(artifactHandler.CreateRepository))).Methods("POST")
-	api.Handle("/artifacts/repos", requirePermission(s.authService, models.ActionView, models.ResourceRepo)(
+	api.Handle("/artifacts/repos", requirePermission(s.authService, models.ActionView, models.ResourceRepo, metricsHandler)(
 		http.HandlerFunc(artifactHandler.ListRepositories))).Methods("GET")
-	api.Handle("/artifacts/repos/{repo}", requirePermission(s.authService, models.ActionDelete, models.ResourceRepo)(
+	api.Handle("/artifacts/repos/{repo}", requirePermission(s.authService, models.ActionDelete, models.ResourceRepo, metricsHandler)(
 		http.HandlerFunc(artifactHandler.DeleteRepository))).Methods("DELETE")
-	api.Handle("/artifacts/{repo}/upload", requirePermission(s.authService, models.ActionUpload, models.ResourceArtifact)(
+	api.Handle("/artifacts/{repo}/upload", requirePermission(s.authService, models.ActionUpload, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.InitiateUpload))).Methods("POST")
 	api.Handle("/artifacts/{repo}/upload/{uuid}", // NO CHECKS PER CHUNK
 		http.HandlerFunc(artifactHandler.HandleUpload)).Methods("PATCH")
-	api.Handle("/artifacts/{repo}/upload/{uuid}", requirePermission(s.authService, models.ActionUpload, models.ResourceArtifact)(
+	api.Handle("/artifacts/{repo}/upload/{uuid}", requirePermission(s.authService, models.ActionUpload, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.CompleteUpload))).Methods("PUT")
-	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact)(
+	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.DownloadArtifact))).Methods("GET")
-	api.Handle("/artifacts/{repo}/query", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact)(
+	api.Handle("/artifacts/{repo}/query", requirePermission(s.authService, models.ActionDownload, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.QueryDownloadArtifacts))).Methods("GET")
-	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDelete, models.ResourceArtifact)(
+	api.Handle("/artifacts/{repo}/{version}/{path:.*}", requirePermission(s.authService, models.ActionDelete, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.DeleteArtifact))).Methods("DELETE")
-	api.Handle("/artifacts/{repo}/versions", requirePermission(s.authService, models.ActionView, models.ResourceArtifact)(
+	api.Handle("/artifacts/{repo}/versions", requirePermission(s.authService, models.ActionView, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.ListVersions))).Methods("GET")
-	api.Handle("/artifacts/{repo}/{id}/metadata", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact)(
+	api.Handle("/artifacts/{repo}/{id}/metadata", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.UpdateMetadata))).Methods("PUT")
-	api.Handle("/artifacts/{repo}/{id}/properties", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact)(
+	api.Handle("/artifacts/{repo}/{id}/properties", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.UpdateProperties))).Methods("PUT")
-	api.Handle("/artifacts/search", requirePermission(s.authService, models.ActionView, models.ResourceArtifact)(
+	api.Handle("/artifacts/search", requirePermission(s.authService, models.ActionView, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.SearchArtifacts))).Methods("GET")
-	api.Handle("/artifacts/{repo}/{id}/rename", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact)(
+	api.Handle("/artifacts/{repo}/{id}/rename", requirePermission(s.authService, models.ActionUpdate, models.ResourceArtifact, metricsHandler)(
 		http.HandlerFunc(artifactHandler.RenameArtifact))).Methods("PUT")
 
 	// REGISTRY ROUTES
@@ -303,37 +303,37 @@ func (s *Server) setupRoutes() error {
 	regAPI.Use(s.authMiddleware.RegistryAuthMiddleware)
 
 	// MANIFEST OPERATIONS
-	regAPI.Handle("/{name:.*}/manifests/{reference}", requirePermission(s.authService, models.ActionPull, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/manifests/{reference}", requirePermission(s.authService, models.ActionPull, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.HandleManifest))).Methods("GET", "HEAD")
-	regAPI.Handle("/{name:.*}/manifests/{reference}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/manifests/{reference}", requirePermission(s.authService, models.ActionPush, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.HandleManifest))).Methods("PUT")
 
 	// CATALOGUE OPERATIONS
-	regAPI.Handle("/", requirePermission(s.authService, models.ActionView, models.ResourceImage)(
+	regAPI.Handle("/", requirePermission(s.authService, models.ActionView, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.ListRepositories))).Methods("GET")
 
 	// BLOB OPERATIONS
-	regAPI.Handle("/{name:.*}/blobs/{digest}", requirePermission(s.authService, models.ActionPull, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/{digest}", requirePermission(s.authService, models.ActionPull, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.GetBlob))).Methods("GET", "HEAD")
 	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", // NO AUTH HERE FOR OFFSET CHECK
 		http.HandlerFunc(repoHandler.GetBlobUploadOffset)).Methods("HEAD")
-	regAPI.Handle("/{name:.*}/blobs/uploads/", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/uploads/", requirePermission(s.authService, models.ActionPush, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.InitiateBlobUpload))).Methods("POST")
-	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.HandleBlobUpload))).Methods("PATCH")
-	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.CompleteBlobUpload))).Methods("PUT")
 
 	// TAG OPERATIONS
-	regAPI.Handle("/{name:.*}/tags/list", requirePermission(s.authService, models.ActionView, models.ResourceTag)(
+	regAPI.Handle("/{name:.*}/tags/list", requirePermission(s.authService, models.ActionView, models.ResourceTag, metricsHandler)(
 		http.HandlerFunc(repoHandler.ListTags))).Methods("GET")
 
 	// ALL V2 DELETE OPERATIONS
-	regAPI.Handle("/{name:.*}/manifests/{reference}", requirePermission(s.authService, models.ActionDelete, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/manifests/{reference}", requirePermission(s.authService, models.ActionDelete, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.DeleteManifest))).Methods("DELETE")
-	regAPI.Handle("/{name:.*}/blobs/{digest}", requirePermission(s.authService, models.ActionDelete, models.ResourceImage)(
+	regAPI.Handle("/{name:.*}/blobs/{digest}", requirePermission(s.authService, models.ActionDelete, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.DeleteBlob))).Methods("DELETE")
-	regAPI.Handle("/{name:.*}/tags/{tag}", requirePermission(s.authService, models.ActionDelete, models.ResourceTag)(
+	regAPI.Handle("/{name:.*}/tags/{tag}", requirePermission(s.authService, models.ActionDelete, models.ResourceTag, metricsHandler)(
 		http.HandlerFunc(repoHandler.DeleteBlob))).Methods("DELETE")
 
 	// STATIC FILES
@@ -349,21 +349,44 @@ func (s *Server) setupRoutes() error {
 	return nil
 }
 
-func requirePermission(auth auth.AuthService, action models.Action, resource models.Resource) func(http.Handler) http.Handler {
+// FOR ROUTE AUTH + ACCESS LOG
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if rw.status == 0 {
+		rw.status = 200
+	}
+	return rw.ResponseWriter.Write(b)
+}
+
+func requirePermission(auth auth.AuthService, action models.Action, resource models.Resource, m *handlers.MetricsHandler) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			username := r.Context().Value(constants.UsernameKey).(string)
-			fmt.Printf("\nPERMISSION CHECK STARTED: USER: %v ACTION: %v RESOURCE: %v\n\n", username, action, resource)
+			rw := &responseWriter{ResponseWriter: w}
 			if !auth.HasPermission(r.Context(), username, models.Permission{
 				Action:   action,
 				Resource: resource,
 			}) {
-				fmt.Printf("\nPERMISSION CHECK FAILED: USER: %v ACTION: %v RESOURCE: %v\n\n", username, action, resource)
+				if m != nil {
+					m.LogAccess(username, string(action), string(resource), r, http.StatusForbidden)
+				}
+
 				http.Error(w, "FORBIDDEN", http.StatusForbidden)
 				return
 			}
-			fmt.Printf("\nPERMISSION CHECK PASSED: USER: %v ACTION: %v RESOURCE: %v\n\n", username, action, resource)
-			next.ServeHTTP(w, r)
+			next.ServeHTTP(rw, r)
+			if m != nil {
+				m.LogAccess(username, string(action), string(resource), r, rw.status)
+			}
 		})
 	}
 }

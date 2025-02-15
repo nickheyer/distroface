@@ -37,6 +37,9 @@ type MetricsService struct {
 	}
 	timeseriesData []models.TimeSeriesPoint
 	dataDir        string
+	accessLogs     []models.AccessLogEntry
+	maxLogs        int // Maximum number of logs to keep
+	logMutex       sync.RWMutex
 }
 
 func NewMetricsService(log *logging.LogService, dataDir string) *MetricsService {
@@ -51,6 +54,9 @@ func NewMetricsService(log *logging.LogService, dataDir string) *MetricsService 
 			upload:   make([]float64, 0, MAX_SPEED_SAMPLES),
 			download: make([]float64, 0, MAX_SPEED_SAMPLES),
 		},
+		accessLogs: make([]models.AccessLogEntry, 0),
+		maxLogs:    1000, // KEEP LAST 1K ENTRIES
+		logMutex:   sync.RWMutex{},
 	}
 	go ms.collectMetrics()
 	return ms
@@ -203,7 +209,31 @@ func (ms *MetricsService) GetMetrics() models.MetricsData {
 		BlobDownloads:  ms.data.BlobDownloads,
 		Performance:    ms.data.Performance,
 		TimeseriesData: make([]models.TimeSeriesPoint, len(ms.timeseriesData)),
+		AccessLogs:     ms.GetAccessLogs(),
 	}
 	copy(dataCopy.TimeseriesData, ms.timeseriesData)
 	return dataCopy
+}
+
+func (ms *MetricsService) AddAccessLog(entry models.AccessLogEntry) {
+	ms.logMutex.Lock()
+	defer ms.logMutex.Unlock()
+
+	// ADD NEW ENTRIES TO THE BEGINNING
+	ms.accessLogs = append([]models.AccessLogEntry{entry}, ms.accessLogs...)
+
+	// TRIM EXCESS
+	if len(ms.accessLogs) > ms.maxLogs {
+		ms.accessLogs = ms.accessLogs[:ms.maxLogs]
+	}
+}
+
+func (ms *MetricsService) GetAccessLogs() []models.AccessLogEntry {
+	ms.logMutex.RLock()
+	defer ms.logMutex.RUnlock()
+
+	// GET COPY ONLY, WE ARENT MODIFYING THE SOURCE ITEM
+	logs := make([]models.AccessLogEntry, len(ms.accessLogs))
+	copy(logs, ms.accessLogs)
+	return logs
 }
