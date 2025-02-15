@@ -102,7 +102,7 @@ build-cli:
 	@echo "Building CLI..."
 	rm -rf $(CLI_BINARY)
 	mkdir -p $(BUILD_DIR_DFCLI)
-	$(GOBUILD) -o $(CLI_BINARY) $(CLI_CMD_PATH)
+	CGO_ENABLED=0 $(GOBUILD) -o $(CLI_BINARY) $(CLI_CMD_PATH)
 
 deps: build-cli
 	@echo "Tidying Go modules and installing NPM modules..."

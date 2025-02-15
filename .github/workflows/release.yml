@@ -133,6 +133,14 @@ jobs:
         run: |
           mkdir -p dist
           go build -o dist/distroface${{ matrix.binary_ext }} ./cmd/distroface/main.go
+
+      - name: Build Dfcli
+        env:
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matrix.arch }}
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
           go build -o dist/dfcli${{ matrix.binary_ext }} ./cmd/dfcli/main.go
 
       - name: Prepare release artifacts
