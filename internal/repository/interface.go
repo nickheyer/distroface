@@ -54,11 +54,13 @@ type Repository interface {
 	ListArtifacts(repoID int) ([]models.Artifact, error)
 	UpdateArtifactMetadata(id string, metadata string) error
 	UpdateArtifactPath(id string, name string, path string, version string) error
-	DeleteArtifact(repoID int, version string, id string) error
-	DeleteArtifactByPath(repoID int, version string, path string) error
+	DeleteArtifact(repoID int, version string, id string) (models.Artifact, error)
+	DeleteArtifactByPath(repoID int, version string, path string) (models.Artifact, error)
+	DeleteArtifactByUploadID(repoID int, uploadID string) (models.Artifact, error)
 	SetArtifactProperties(artifactID string, properties map[string]string) error
 	GetArtifactProperties(artifactID string) (map[string]string, error)
 	GetArtifact(artifactID string) (models.Artifact, error)
+	GetArtifactByPath(repoID int, path string) (models.Artifact, error)
 	SearchArtifacts(criteria models.ArtifactSearchCriteria) ([]models.Artifact, error)
 
 	// SETTINGS OPS

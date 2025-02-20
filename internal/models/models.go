@@ -187,6 +187,7 @@ type Artifact struct {
 	RepoID     int               `json:"repo_id"`
 	Name       string            `json:"name"`
 	Path       string            `json:"path"`
+	UploadID   string            `json:"upload_id"`
 	Version    string            `json:"version"`
 	Size       int64             `json:"size"`
 	MimeType   string            `json:"mime_type"`

@@ -912,7 +912,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version filter")
 	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
-	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value)")
+	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value, key=value,...)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output path (file or directory if --unpack)")
 	cmd.Flags().IntVar(&num, "num", 1, "Number of matching artifacts to retrieve")
 	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")

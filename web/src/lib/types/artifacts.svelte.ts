@@ -13,6 +13,7 @@ export interface Artifact {
   repo_id: number;
   name: string;
   path: string;
+  upload_id: string;
   version: string;
   size: number;
   mime_type: string;

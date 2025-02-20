@@ -805,9 +805,9 @@ func (r *SQLiteRepository) CreateArtifact(artifact *models.Artifact) error {
 		artifact.ID = uuid.New().String()
 	}
 	_, err := r.db.Exec(
-		`INSERT INTO artifacts (id, repo_id, name, path, version, size, mime_type, metadata)
-		     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		artifact.ID, artifact.RepoID, artifact.Name, artifact.Path,
+		`INSERT INTO artifacts (id, repo_id, name, path, upload_id, version, size, mime_type, metadata)
+		     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		artifact.ID, artifact.RepoID, artifact.Name, artifact.Path, artifact.UploadID,
 		artifact.Version, artifact.Size, artifact.MimeType, artifact.Metadata,
 	)
 	return err
@@ -815,7 +815,7 @@ func (r *SQLiteRepository) CreateArtifact(artifact *models.Artifact) error {
 
 func (r *SQLiteRepository) ListArtifacts(repoID int) ([]models.Artifact, error) {
 	rows, err := r.db.Query( // GOOGLE TOLD ME THIS WAS OK
-		`SELECT COALESCE(id, ''), repo_id, name, path, version, size, 
+		`SELECT COALESCE(id, ''), repo_id, name, path, upload_id, version, size, 
 			 COALESCE(mime_type, ''), COALESCE(metadata, '{}'), created_at, updated_at 
 			 FROM artifacts WHERE repo_id = ?`,
 		repoID,
@@ -833,6 +833,7 @@ func (r *SQLiteRepository) ListArtifacts(repoID int) ([]models.Artifact, error) 
 			&artifact.RepoID,
 			&artifact.Name,
 			&artifact.Path,
+			&artifact.UploadID,
 			&artifact.Version,
 			&artifact.Size,
 			&artifact.MimeType,
@@ -876,25 +877,114 @@ func (r *SQLiteRepository) UpdateArtifactMetadata(id string, metadata string) er
 	return err
 }
 
-func (r *SQLiteRepository) DeleteArtifact(repoID int, version string, id string) error {
-	_, err := r.db.Exec(
-		"DELETE FROM artifacts WHERE repo_id = ? AND version = ? AND id = ?",
+func (r *SQLiteRepository) DeleteArtifact(repoID int, version string, id string) (models.Artifact, error) {
+	var artifact models.Artifact
+	err := r.db.QueryRow(
+		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
+         FROM artifacts WHERE repo_id = ? AND version = ? AND id = ?`,
 		repoID, version, id,
+	).Scan(
+		&artifact.ID,
+		&artifact.RepoID,
+		&artifact.Name,
+		&artifact.Path,
+		&artifact.UploadID,
+		&artifact.Version,
+		&artifact.Size,
+		&artifact.MimeType,
+		&artifact.Metadata,
+		&artifact.CreatedAt,
+		&artifact.UpdatedAt,
 	)
-	return err
+
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
+	}
+
+	// GET PROPS
+	properties, err := r.GetArtifactProperties(id)
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
+	}
+	artifact.Properties = properties
+
+	_, err = r.db.Exec("DELETE FROM artifacts WHERE id = ?", id)
+	return artifact, err
 }
 
-func (r *SQLiteRepository) DeleteArtifactByPath(repoID int, version string, path string) error {
-	_, err := r.db.Exec(
-		"DELETE FROM artifacts WHERE repo_id = ? AND version = ? AND path = ?",
+func (r *SQLiteRepository) DeleteArtifactByPath(repoID int, version string, path string) (models.Artifact, error) {
+	var artifact models.Artifact
+	err := r.db.QueryRow(
+		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
+         FROM artifacts WHERE repo_id = ? AND version = ? AND path = ?`,
 		repoID, version, path,
+	).Scan(
+		&artifact.ID,
+		&artifact.RepoID,
+		&artifact.Name,
+		&artifact.Path,
+		&artifact.UploadID,
+		&artifact.Version,
+		&artifact.Size,
+		&artifact.MimeType,
+		&artifact.Metadata,
+		&artifact.CreatedAt,
+		&artifact.UpdatedAt,
 	)
-	return err
+
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
+	}
+
+	// GET PROPS
+	properties, err := r.GetArtifactProperties(artifact.ID)
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
+	}
+	artifact.Properties = properties
+
+	_, err = r.db.Exec("DELETE FROM artifacts WHERE id = ?", artifact.ID)
+	return artifact, err
+}
+
+func (r *SQLiteRepository) DeleteArtifactByUploadID(repoID int, uploadID string) (models.Artifact, error) {
+	var artifact models.Artifact
+	err := r.db.QueryRow(
+		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
+         FROM artifacts WHERE repo_id = ? AND upload_id = ?`,
+		repoID, uploadID,
+	).Scan(
+		&artifact.ID,
+		&artifact.RepoID,
+		&artifact.Name,
+		&artifact.Path,
+		&artifact.UploadID,
+		&artifact.Version,
+		&artifact.Size,
+		&artifact.MimeType,
+		&artifact.Metadata,
+		&artifact.CreatedAt,
+		&artifact.UpdatedAt,
+	)
+
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
+	}
+
+	// GET PROPS
+	properties, err := r.GetArtifactProperties(artifact.ID)
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
+	}
+	artifact.Properties = properties
+
+	_, err = r.db.Exec("DELETE FROM artifacts WHERE id = ?", artifact.ID)
+	return artifact, err
 }
 
 func (r *SQLiteRepository) SearchArtifacts(criteria models.ArtifactSearchCriteria) ([]models.Artifact, error) {
 	baseQuery := `
-			SELECT DISTINCT a.id, a.repo_id, a.name, a.path, a.version, 
+			SELECT DISTINCT a.id, a.repo_id, a.name, a.path, a.upload_id, a.version, 
 						 a.size, a.mime_type, a.metadata, a.created_at, a.updated_at
 			FROM artifacts a
 			JOIN artifact_repositories ar ON a.repo_id = ar.id
@@ -993,6 +1083,7 @@ func (r *SQLiteRepository) SearchArtifacts(criteria models.ArtifactSearchCriteri
 			&a.RepoID,
 			&a.Name,
 			&a.Path,
+			&a.UploadID,
 			&a.Version,
 			&a.Size,
 			&a.MimeType,
@@ -1019,7 +1110,7 @@ func (r *SQLiteRepository) SearchArtifacts(criteria models.ArtifactSearchCriteri
 func (r *SQLiteRepository) GetArtifact(artifactID string) (models.Artifact, error) {
 	var artifact models.Artifact
 	err := r.db.QueryRow(
-		`SELECT id, repo_id, name, path, version, size, mime_type, metadata, created_at, updated_at 
+		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
          FROM artifacts WHERE id = ?`,
 		artifactID,
 	).Scan(
@@ -1027,6 +1118,7 @@ func (r *SQLiteRepository) GetArtifact(artifactID string) (models.Artifact, erro
 		&artifact.RepoID,
 		&artifact.Name,
 		&artifact.Path,
+		&artifact.UploadID,
 		&artifact.Version,
 		&artifact.Size,
 		&artifact.MimeType,
@@ -1040,6 +1132,39 @@ func (r *SQLiteRepository) GetArtifact(artifactID string) (models.Artifact, erro
 
 	// GET PROPS
 	properties, err := r.GetArtifactProperties(artifactID)
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
+	}
+	artifact.Properties = properties
+
+	return artifact, nil
+}
+
+func (r *SQLiteRepository) GetArtifactByPath(repoID int, path string) (models.Artifact, error) {
+	var artifact models.Artifact
+	err := r.db.QueryRow(
+		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
+         FROM artifacts WHERE repo_id = ? AND path = ?`,
+		repoID, path,
+	).Scan(
+		&artifact.ID,
+		&artifact.RepoID,
+		&artifact.Name,
+		&artifact.Path,
+		&artifact.UploadID,
+		&artifact.Version,
+		&artifact.Size,
+		&artifact.MimeType,
+		&artifact.Metadata,
+		&artifact.CreatedAt,
+		&artifact.UpdatedAt,
+	)
+	if err != nil {
+		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
+	}
+
+	// GET PROPS
+	properties, err := r.GetArtifactProperties(artifact.ID)
 	if err != nil {
 		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
 	}

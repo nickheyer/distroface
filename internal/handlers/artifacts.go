@@ -174,7 +174,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	finalPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifactPath)
+	finalPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", uploadID, artifactPath)
 
 	// VERIFY REPO ACCESS
 	repo, err := h.repo.GetArtifactRepository(repoName)
@@ -297,6 +297,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		RepoID:    repo.ID,
 		Name:      filepath.Base(artifactPath),
 		Path:      artifactPath,
+		UploadID:  uploadID,
 		Version:   version,
 		Size:      fi.Size(),
 		MimeType:  mimeType,
@@ -359,7 +360,14 @@ func (h *ArtifactHandler) DownloadArtifact(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	filePath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifactPath)
+	artifact, err := h.repo.GetArtifactByPath(repo.ID, artifactPath)
+	if err != nil {
+		h.metrics.TrackDownloadFailed()
+		http.Error(w, "Artifact not found", http.StatusNotFound)
+		return
+	}
+
+	filePath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifact.UploadID, artifact.Path)
 
 	// VERIFY ARTIFACT ACTUALLY EXISTS
 	fileInfo, err := os.Stat(filePath)
@@ -439,7 +447,7 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 	// ADD PROPERTY FILTERS
 	for key, values := range queryParams {
 		switch key {
-		case "num", "archive", "format", "name", "version", "path", "sort", "order", "flat":
+		case "num", "archive", "format", "name", "version", "upload_id", "path", "sort", "order", "flat":
 			continue
 		default:
 			if len(values) > 0 {
@@ -479,6 +487,7 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 			"versions",
 			artifact.Version,
 			"files",
+			artifact.UploadID,
 			artifact.Path,
 		)
 
@@ -518,6 +527,7 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 			"versions",
 			artifact.Version,
 			"files",
+			artifact.UploadID,
 			artifact.Path,
 		)
 
@@ -742,14 +752,15 @@ func (h *ArtifactHandler) DeleteArtifact(w http.ResponseWriter, r *http.Request)
 	}
 
 	// DELETE ROW IN DB
-	if err := h.repo.DeleteArtifactByPath(repo.ID, version, artifactPath); err != nil {
+	artifact, err := h.repo.DeleteArtifactByPath(repo.ID, version, artifactPath)
+	if err != nil {
 		h.log.Printf("Failed to delete artifact from db: %v", err)
 		http.Error(w, "Failed to delete artifact from db", http.StatusInternalServerError)
 		return
 	}
 
 	// DELETE FILE
-	filePath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifactPath)
+	filePath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", version, "files", artifact.UploadID)
 	if err := h.validatePath(filePath, true); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -994,8 +1005,8 @@ func (h *ArtifactHandler) RenameArtifact(w http.ResponseWriter, r *http.Request)
 	}
 
 	// BUILD FULL PATH
-	oldPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", artifact.Version, "files", artifact.Path)
-	newPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", updateReq.Version, "files", updateReq.Path)
+	oldPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", artifact.Version, "files", artifact.UploadID, artifact.Path)
+	newPath := filepath.Join(h.config.Storage.RootDirectory, "artifacts", "repos", repoName, "versions", updateReq.Version, "files", artifact.UploadID, updateReq.Path)
 
 	// NEW DIR
 	if err := os.MkdirAll(filepath.Dir(newPath), 0755); err != nil {
@@ -1218,7 +1229,7 @@ func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.Rete
 		}
 
 		// CREATE PROP KEY (LIKE JENKINS...)
-		key := createGroupKey(props)
+		key := createGroupKey(props, artifact.Version)
 		groups[key] = append(groups[key], artifact)
 	}
 
@@ -1236,36 +1247,47 @@ func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.Rete
 		}
 
 		// DELETE EXCESS
-		for i := start + retention.MaxVersions; i < len(group); i++ {
+		for i := start; i < len(group); i++ {
 			artifact := group[i]
+
+			toDelete := false
 
 			// CHECK AGE
 			if retention.MaxAge > 0 {
 				age := time.Since(artifact.CreatedAt)
-				if age.Hours() < float64(retention.MaxAge*24) {
-					continue
+				if age.Hours() > float64(retention.MaxAge*24) {
+					toDelete = true
 				}
 			}
 
-			// DELETE ARTIFACTS FROM DB
-			if err := h.repo.DeleteArtifact(artifact.RepoID, artifact.Version, artifact.ID); err != nil {
-				h.log.Printf("Failed to delete artifact %s during retention: %v", artifact.ID, err)
+			if i >= retention.MaxVersions {
+				toDelete = true
 			}
 
-			// DELETE ARTIFACTS FROM FILESYSTEM
-			repo, _ := h.repo.GetArtifactRepositoryByID(fmt.Sprintf("%v", artifact.RepoID))
-			versionPath := filepath.Join(
-				h.config.Storage.RootDirectory,
-				"artifacts",
-				"repos",
-				repo.Name,
-				"versions",
-				artifact.Version,
-			)
+			if toDelete {
+				// DELETE ARTIFACTS FROM DB
+				artifact, err := h.repo.DeleteArtifact(artifact.RepoID, artifact.Version, artifact.ID)
+				if err != nil {
+					h.log.Printf("Failed to delete artifact %s during retention: %v", artifact.ID, err)
+				}
 
-			if err := os.RemoveAll(versionPath); err != nil && !os.IsNotExist(err) {
-				h.log.Printf("Failed to prune version path: %v", err)
-				return
+				// DELETE ARTIFACTS FROM FILESYSTEM
+				repo, _ := h.repo.GetArtifactRepositoryByID(fmt.Sprintf("%v", artifact.RepoID))
+				versionPath := filepath.Join(
+					h.config.Storage.RootDirectory,
+					"artifacts",
+					"repos",
+					repo.Name,
+					"versions",
+					artifact.Version,
+					"files",
+					artifact.UploadID,
+				)
+
+				if err := os.RemoveAll(versionPath); err != nil && !os.IsNotExist(err) {
+					h.log.Printf("Failed to prune version path: %v", err)
+					return
+				}
 			}
 		}
 	}
@@ -1280,12 +1302,11 @@ func (h *ArtifactHandler) getSettings() (*models.ArtifactSettings, error) {
 	return settings, nil
 }
 
-func createGroupKey(properties map[string]string) string {
-	var parts []string
-	for _, key := range []string{"branch", "buildType"} {
-		if val, ok := properties[key]; ok {
-			parts = append(parts, val)
-		}
+func createGroupKey(properties map[string]string, version string) string {
+	parts := []string{version}
+	keys := make([]string, 0, len(properties))
+	for _, key := range keys {
+		parts = append(parts, properties[key])
 	}
 	return strings.Join(parts, "-")
 }
