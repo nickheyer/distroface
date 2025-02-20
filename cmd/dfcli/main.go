@@ -188,10 +188,24 @@ func initConfig() {
 
 	viper.AutomaticEnv()
 
-	if err := viper.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			fmt.Fprintf(os.Stderr, "Failed to read config file: %v\n", err)
+	// THIS OCCASIONALLY FAILS TO UNMARSHALL JSON CONFIG IN PARALLEL USAGE
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := viper.ReadInConfig(); err != nil {
+			if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+				return
+			}
+			lastErr = err
+			time.Sleep(time.Duration(100) * time.Millisecond)
+			continue
 		}
+		return
+	}
+
+	// EXIT IF ALL RETRIES FAILED
+	if lastErr != nil {
+		fmt.Fprintf(os.Stderr, "Failed to read config file after %d attempts: %v\n", 3, lastErr)
+		os.Exit(1)
 	}
 }
 
