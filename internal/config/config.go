@@ -57,19 +57,21 @@ func NewDefaultConfig() *models.Config {
 			Issuer:  "registry-auth-server",
 		},
 		Init: struct {
-			Drop     bool   `json:"drop" yaml:"drop"`
-			Roles    bool   `json:"roles" yaml:"roles"`
-			Groups   bool   `json:"groups" yaml:"groups"`
-			User     bool   `json:"user" yaml:"user"`
-			Username string `json:"username" yaml:"username"`
-			Password string `json:"password" yaml:"password"`
+			Drop       bool   `json:"drop" yaml:"drop"`
+			Roles      bool   `json:"roles" yaml:"roles"`
+			Groups     bool   `json:"groups" yaml:"groups"`
+			User       bool   `json:"user" yaml:"user"`
+			Username   string `json:"username" yaml:"username"`
+			Password   string `json:"password" yaml:"password"`
+			Migrations bool   `json:"migrations" yaml:"migrations"`
 		}{
-			Drop:     false,
-			Roles:    true,
-			Groups:   true,
-			User:     true,
-			Username: "admin",
-			Password: "admin",
+			Drop:       false,
+			Roles:      true,
+			Groups:     true,
+			User:       true,
+			Username:   "admin",
+			Password:   "admin",
+			Migrations: true,
 		},
 	}
 }

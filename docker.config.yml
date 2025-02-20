@@ -22,3 +22,4 @@ init:
   user: true
   username: admin
   password: admin
+  migrations: true

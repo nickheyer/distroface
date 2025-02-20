@@ -166,6 +166,12 @@ func initDB(cfg *models.Config) (*sql.DB, error) {
 		return nil, fmt.Errorf("init data error: %w", err)
 	}
 
+	// RUN MIGRATIONS
+	if err := db.RunMigrations(database, cfg); err != nil {
+		database.Close()
+		return nil, fmt.Errorf("migrations error: %w", err)
+	}
+
 	return database, nil
 }
 
