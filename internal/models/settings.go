@@ -73,7 +73,7 @@ func (s *ArtifactSettings) GetDefaults() Settings {
 			Enabled:       false,
 			MaxVersions:   5,
 			MaxAge:        30,
-			ExcludeLatest: true,
+			ExcludeLatest: false,
 		},
 		Storage: StorageConfig{
 			MaxFileSize:        1024 * 10, // 10GB

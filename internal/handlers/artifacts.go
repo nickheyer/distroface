@@ -1228,31 +1228,35 @@ func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.Rete
 			continue
 		}
 
-		// CREATE PROP KEY (LIKE JENKINS...)
 		key := createGroupKey(props, artifact.Version)
 		groups[key] = append(groups[key], artifact)
 	}
 
-	// APPLY RETENTION
+	// APPLY RETENTION TO EACH GROUP
 	for _, group := range groups {
-		// SORT BY: TODO - USE OUR SORT BY SETTING
+		// SORT BY CREATION TIME
 		sort.Slice(group, func(i, j int) bool {
 			return group[i].CreatedAt.After(group[j].CreatedAt)
 		})
 
-		// KEEP LATEST UNLESS CONFIGURED
-		start := 0
+		// DETERMINE START INDEX FOR THIS GROUP
+		startIdx := 0
 		if retention.ExcludeLatest && len(group) > 0 {
-			start = 1
+			startIdx = 1
 		}
 
-		// DELETE EXCESS
-		for i := start; i < len(group); i++ {
-			artifact := group[i]
+		// GET MAX VERSIONS FOR THIS GROUP
+		maxVersions := retention.MaxVersions
+		if maxVersions <= 0 {
+			maxVersions = 1
+		}
 
+		// PROCESS EACH ARTIFACT IN GROUP
+		for i := startIdx; i < len(group); i++ {
+			artifact := group[i]
 			toDelete := false
 
-			// CHECK AGE
+			// CHECK AGE IF CONFIGURED
 			if retention.MaxAge > 0 {
 				age := time.Since(artifact.CreatedAt)
 				if age.Hours() > float64(retention.MaxAge*24) {
@@ -1260,18 +1264,20 @@ func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.Rete
 				}
 			}
 
-			if i >= retention.MaxVersions {
+			// CHECK IF BEYOND MAX VERSIONS FOR THIS GROUP
+			if i >= startIdx+maxVersions {
 				toDelete = true
 			}
 
 			if toDelete {
-				// DELETE ARTIFACTS FROM DB
+				// DELETE FROM DB
 				artifact, err := h.repo.DeleteArtifact(artifact.RepoID, artifact.Version, artifact.ID)
 				if err != nil {
 					h.log.Printf("Failed to delete artifact %s during retention: %v", artifact.ID, err)
+					continue
 				}
 
-				// DELETE ARTIFACTS FROM FILESYSTEM
+				// DELETE FROM FILESYSTEM
 				repo, _ := h.repo.GetArtifactRepositoryByID(fmt.Sprintf("%v", artifact.RepoID))
 				versionPath := filepath.Join(
 					h.config.Storage.RootDirectory,
@@ -1286,7 +1292,6 @@ func (h *ArtifactHandler) applyRetentionPolicy(repoID int, retention models.Rete
 
 				if err := os.RemoveAll(versionPath); err != nil && !os.IsNotExist(err) {
 					h.log.Printf("Failed to prune version path: %v", err)
-					return
 				}
 			}
 		}
@@ -1303,10 +1308,18 @@ func (h *ArtifactHandler) getSettings() (*models.ArtifactSettings, error) {
 }
 
 func createGroupKey(properties map[string]string, version string) string {
-	parts := []string{version}
+	// GET SORTED PROPERTY KEYS
 	keys := make([]string, 0, len(properties))
+	for k := range properties {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	// BUILD KEY FROM ALL PROPERTIES INCLUDING VERSION
+	parts := make([]string, 0, len(keys)+2)
+	parts = append(parts, "version", version)
 	for _, key := range keys {
-		parts = append(parts, properties[key])
+		parts = append(parts, key, properties[key])
 	}
 	return strings.Join(parts, "-")
 }
