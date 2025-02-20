@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"database/sql"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -132,10 +133,34 @@ func NewServer(cfg *models.Config) (*Server, error) {
 }
 
 func initDB(cfg *models.Config) (*sql.DB, error) {
-	// ENSURE DB EXISTS
+	// ENSURE DB PATH EXISTS
 	dir := filepath.Dir(cfg.Database.Path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create DB directory: %w", err)
+	}
+
+	// CREATE ONE-TIME BACKUP IF DB EXISTS AND BACKUP DOESN'T
+	dbPath := cfg.Database.Path
+	backupPath := dbPath + ".backup"
+
+	if _, err := os.Stat(dbPath); err == nil {
+		if _, err := os.Stat(backupPath); err != nil {
+			srcFile, err := os.Open(dbPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to open DB for backup: %w", err)
+			}
+			defer srcFile.Close()
+
+			dstFile, err := os.Create(backupPath)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create backup file: %w", err)
+			}
+			defer dstFile.Close()
+
+			if _, err := io.Copy(dstFile, srcFile); err != nil {
+				return nil, fmt.Errorf("failed to copy DB to backup: %w", err)
+			}
+		}
 	}
 
 	// OPEN DB
