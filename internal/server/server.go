@@ -76,7 +76,7 @@ func NewServer(cfg *models.Config) (*Server, error) {
 	)
 
 	// INIT AUTH MIDDLEWARE
-	authMiddleware := auth.NewMiddleware(authService, cfg)
+	authMiddleware := auth.NewMiddleware(authService, cfg, log)
 
 	// INIT DISTRIBUTION CONFIG
 	distConfig := &dconfig.Configuration{

@@ -174,8 +174,14 @@ func (h *AuthHandler) HandleWebLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response, err := h.auth.Authenticate(r.Context(), authReq)
+	if err != nil {
+		h.log.Error("ATTEMPTED LOGIN WITH INVALID CREDENTIALS", err)
+		http.Error(w, "INVALID CREDENTIALS", http.StatusUnauthorized)
+		return
+	}
+
 	webResponse, ok := response.(*auth.WebAuthResponse)
-	if !ok || err != nil {
+	if !ok {
 		h.log.Error("ERROR CONVERTING WEB AUTH RESPONSE", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return

@@ -13,6 +13,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth/permissions"
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
+	"github.com/nickheyer/distroface/internal/utils"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -63,19 +64,19 @@ type RegAuthResponse struct {
 }
 
 type WebAuthResponse struct {
-	Token     string    `json:"token"`
-	ExpiresIn int       `json:"expires_in"`
-	IssuedAt  time.Time `json:"issued_at"`
-	Username  string    `json:"username"`
-	Groups    []string  `json:"groups"`
+	Token     string    `json:"token,omitempty"`
+	ExpiresIn int       `json:"expires_in,omitempty"`
+	IssuedAt  time.Time `json:"issued_at,omitempty"`
+	Username  string    `json:"username,omitempty"`
+	Groups    []string  `json:"groups,omitempty"`
 }
 
 type AuthRequest struct {
-	Username string
-	Password string
-	Scope    string
-	Service  string
-	Type     AuthType
+	Username string   `json:"username,omitempty"`
+	Password string   `json:"password,omitempty"`
+	Scope    string   `json:"scope,omitempty"`
+	Service  string   `json:"service,omitempty"`
+	Type     AuthType `json:"type,omitempty"`
 }
 
 type authService struct {
@@ -158,9 +159,15 @@ func (s *authService) Authenticate(ctx context.Context, req AuthRequest) (interf
 
 	// GET OR CREATE USER
 	if req.Username == "anonymous" || req.Username == "" {
-		user = &models.User{
-			Username: "anonymous",
-			Groups:   []string{"anonymous"},
+		settings, err := utils.GetSettings[*models.AuthSettings](s.repo, "auth")
+
+		if err == nil && settings.AllowAnonymous {
+			user = &models.User{
+				Username: "anonymous",
+				Groups:   []string{"anonymous"},
+			}
+		} else {
+			return nil, ErrInvalidCredentials
 		}
 	} else {
 		user, err = s.repo.GetUser(req.Username)

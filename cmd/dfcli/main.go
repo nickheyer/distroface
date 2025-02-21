@@ -799,7 +799,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 		num     int
 		sortBy  string
 		order   string
-		useZip  bool
+		tarFile bool
 		unpack  bool
 		flat    bool
 	)
@@ -828,10 +828,10 @@ func newArtifactDownloadCmd() *cobra.Command {
 			if order != "" {
 				q.Set("order", order)
 			}
-			if useZip {
-				q.Set("format", "zip")
-			} else {
+			if tarFile {
 				q.Set("format", "tar.gz")
+			} else {
+				q.Set("format", "zip")
 			}
 			if flat {
 				q.Set("flat", "1")
@@ -853,9 +853,9 @@ func newArtifactDownloadCmd() *cobra.Command {
 				outputPath = output
 			} else {
 				// DEFAULT NAME BASED ON REPO + VERSION
-				suffix := ".tar.gz"
-				if useZip {
-					suffix = ".zip"
+				suffix := ".zip"
+				if tarFile {
+					suffix = ".tar.gz"
 				}
 
 				if version != "" {
@@ -909,13 +909,13 @@ func newArtifactDownloadCmd() *cobra.Command {
 
 				fmt.Printf("Unpacking to %s\n", unpackDir)
 
-				if useZip {
-					if err := unpackZip(tempFile.Name(), unpackDir, flat); err != nil {
-						return fmt.Errorf("failed to unpack zip: %v", err)
-					}
-				} else {
+				if tarFile {
 					if err := unpackTarGz(tempFile.Name(), unpackDir, flat); err != nil {
 						return fmt.Errorf("failed to unpack tar.gz: %v", err)
+					}
+				} else {
+					if err := unpackZip(tempFile.Name(), unpackDir, flat); err != nil {
+						return fmt.Errorf("failed to unpack zip: %v", err)
 					}
 				}
 			}
@@ -931,7 +931,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 	cmd.Flags().IntVar(&num, "num", 1, "Number of matching artifacts to retrieve")
 	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")
 	cmd.Flags().StringVar(&order, "order", "", "Sort order (ASC or DESC)")
-	cmd.Flags().BoolVar(&useZip, "zip", false, "Use ZIP format instead of TAR.GZ")
+	cmd.Flags().BoolVar(&tarFile, "tar", false, "Package into tar.gz file (Zip file by default)")
 	cmd.Flags().BoolVar(&unpack, "unpack", false, "Automatically unpack archive")
 	cmd.Flags().BoolVar(&flat, "flat", false, "Flatten directory structure when unpacking")
 

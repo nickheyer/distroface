@@ -81,6 +81,11 @@ func (h *ArtifactHandler) ListRepositories(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// ENSURE NON-NIL SLICE
+	if repos == nil {
+		repos = make([]models.ArtifactRepository, 0)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(repos)
 }
@@ -447,7 +452,7 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 	// ADD PROPERTY FILTERS
 	for key, values := range queryParams {
 		switch key {
-		case "num", "archive", "format", "name", "version", "upload_id", "path", "sort", "order", "flat":
+		case "num", "format", "name", "version", "upload_id", "path", "sort", "order", "flat":
 			continue
 		default:
 			if len(values) > 0 {
@@ -468,34 +473,6 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 	if len(artifacts) == 0 {
 		h.metrics.TrackDownloadFailed()
 		http.Error(w, "No matching artifacts found", http.StatusNotFound)
-		return
-	}
-
-	// DETERMINE IF WE SHOULD CREATE AN ARCHIVE
-	forceArchive := queryParams.Get("archive") == "1"
-	numRequested, _ := strconv.Atoi(queryParams.Get("num"))
-	shouldArchive := forceArchive || len(artifacts) > 1 || numRequested > 1
-
-	// IF SINGLE FILE AND NO ARCHIVE FORCED
-	if len(artifacts) == 1 && !shouldArchive {
-		artifact := artifacts[0]
-		filePath := filepath.Join(
-			h.config.Storage.RootDirectory,
-			"artifacts",
-			"repos",
-			repoName,
-			"versions",
-			artifact.Version,
-			"files",
-			artifact.UploadID,
-			artifact.Path,
-		)
-
-		// SET CONTENT DISPOSITION WITH ORIGINAL FILENAME
-		h.metrics.TrackDownloadComplete(artifact.Size, time.Since(start))
-		w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filepath.Base(artifact.Path)))
-		w.Header().Set("Content-Type", artifact.MimeType)
-		http.ServeFile(w, r, filePath)
 		return
 	}
 
@@ -929,8 +906,7 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 
 	numRes := len(artifacts)
 	if numRes == 0 {
-		http.Error(w, "No matching artifacts found", http.StatusNotFound)
-		return
+		artifacts = []models.Artifact{}
 	}
 
 	// BUILD RESPONSE
