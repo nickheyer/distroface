@@ -981,8 +981,6 @@ func newArtifactSearchCmd() *cobra.Command {
 				q.Set(key, value)
 			}
 
-			fmt.Printf("\nQUERY: %v\n", q)
-
 			search, err := client.searchArtifacts(q)
 			if table {
 				if err != nil {
