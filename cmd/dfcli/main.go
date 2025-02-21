@@ -795,7 +795,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 		version string
 		artPath string
 		output  string
-		props   []string
+		props   map[string]string
 		num     int
 		sortBy  string
 		order   string
@@ -838,11 +838,8 @@ func newArtifactDownloadCmd() *cobra.Command {
 			}
 
 			// ADD PROPS
-			for _, p := range props {
-				parts := strings.SplitN(p, "=", 2)
-				if len(parts) == 2 {
-					q.Set(parts[0], parts[1])
-				}
+			for key, value := range props {
+				q.Set(key, value)
 			}
 
 			// DETERMINE OUTPUT PATH
@@ -926,7 +923,7 @@ func newArtifactDownloadCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version filter")
 	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
-	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value, key=value,...)")
+	cmd.Flags().StringToStringVar(&props, "property", nil, "Properties (key=value,key=value,...)")
 	cmd.Flags().StringVarP(&output, "output", "o", "", "Output path (file or directory if --unpack)")
 	cmd.Flags().IntVar(&num, "num", 1, "Number of matching artifacts to retrieve")
 	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")
@@ -943,7 +940,7 @@ func newArtifactSearchCmd() *cobra.Command {
 		repo    string
 		version string
 		artPath string
-		props   []string
+		props   map[string]string
 		num     int
 		offset  int
 		sortBy  string
@@ -979,12 +976,12 @@ func newArtifactSearchCmd() *cobra.Command {
 				q.Set("order", order)
 			}
 
-			for _, p := range props {
-				parts := strings.SplitN(p, "=", 2)
-				if len(parts) == 2 {
-					q.Set(parts[0], parts[1])
-				}
+			// ADD PROPS
+			for key, value := range props {
+				q.Set(key, value)
 			}
+
+			fmt.Printf("\nQUERY: %v\n", q)
 
 			search, err := client.searchArtifacts(q)
 			if table {
@@ -1016,7 +1013,7 @@ func newArtifactSearchCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&repo, "repo", "r", "", "Artifact repository name")
 	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version filter")
 	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
-	cmd.Flags().StringArrayVarP(&props, "property", "P", nil, "Artifact property filter (key=value, key=value,...)")
+	cmd.Flags().StringToStringVar(&props, "property", nil, "Properties (key=value,key=value,...)")
 	cmd.Flags().IntVar(&num, "num", 0, "Max number of matching artifacts to retrieve (default 1)")
 	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")
 	cmd.Flags().StringVar(&order, "order", "", "Sort order (ASC or DESC)")
