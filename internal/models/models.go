@@ -250,9 +250,10 @@ type CustomClaims struct {
 }
 
 type AuthConfig struct {
-	Token    string `json:"token"`
-	Username string `json:"username"`
-	Server   string `json:"server"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Username  string    `json:"username"`
+	Server    string    `json:"server"`
 }
 
 func (c CustomClaims) Valid() error {
