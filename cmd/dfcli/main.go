@@ -101,10 +101,12 @@ func main() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ~/.dfcli/config.json)")
 	rootCmd.PersistentFlags().String("server", defaultServerURL, "DistroFace server URL")
 	rootCmd.PersistentFlags().String("timeout", "5m", "Request timeout (30s, 5m, 1h, etc.)")
+	rootCmd.PersistentFlags().Bool("debug", false, "Enable debug output")
 
 	// BIND FLAGS TO VIPER
 	viper.BindPFlag("server", rootCmd.PersistentFlags().Lookup("server"))
 	viper.BindPFlag("timeout", rootCmd.PersistentFlags().Lookup("timeout"))
+	viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 
 	// AUTH COMMANDS
 	rootCmd.AddCommand(newLoginCmd())
@@ -243,6 +245,7 @@ func initConfig() {
 }
 
 func initClient() error {
+	// READ AUTH CONFIG FROM FILE DIRECTLY
 	var config models.AuthConfig
 	data, err := os.ReadFile(getConfigPath())
 	if err == nil {
@@ -290,10 +293,24 @@ func getConfigPath() string {
 
 // HELPERS
 func (c *APIClient) refreshToken() error {
+	if viper.GetBool("debug") {
+		fmt.Println("Refreshing access token...")
+	}
+
+	// GET EXISTING CONFIG TO PRESERVE USERNAME
+	var existingConfig models.AuthConfig
+	configData, err := os.ReadFile(getConfigPath())
+	if err == nil {
+		if err := json.Unmarshal(configData, &existingConfig); err == nil {
+			// Successfully read existing config
+		}
+	}
+
+	// PREPARE REFRESH REQUEST
 	req := struct {
 		RefreshToken string `json:"refresh_token"`
 	}{
-		RefreshToken: c.TokenManager.GetToken(), // We use the same token for refresh
+		RefreshToken: c.TokenManager.GetToken(), // Use existing token as refresh token
 	}
 
 	jsonData, err := json.Marshal(req)
@@ -301,6 +318,7 @@ func (c *APIClient) refreshToken() error {
 		return fmt.Errorf("failed to marshal refresh request: %v", err)
 	}
 
+	// MAKE REQUEST
 	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/v1/auth/refresh", "application/json", bytes.NewBuffer(jsonData))
 	if err != nil {
 		return fmt.Errorf("refresh request failed: %v", err)
@@ -321,6 +339,8 @@ func (c *APIClient) refreshToken() error {
 		Token     string    `json:"token"`
 		ExpiresIn int       `json:"expires_in"`
 		IssuedAt  time.Time `json:"issued_at"`
+		Username  string    `json:"username,omitempty"`
+		Groups    []string  `json:"groups,omitempty"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -331,58 +351,103 @@ func (c *APIClient) refreshToken() error {
 		return fmt.Errorf("no token in refresh response")
 	}
 
-	c.TokenManager.mu.Lock()
-	c.TokenManager.token = result.Token
-	c.TokenManager.expiresAt = time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
-	c.TokenManager.mu.Unlock()
+	// UPDATE TOKEN MANAGER
+	expiresAt := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
+	c.TokenManager.SetToken(result.Token, expiresAt)
 
+	// PRESERVE USERNAME
+	username := result.Username
+	if username == "" {
+		username = existingConfig.Username
+	}
+
+	// SAVE UPDATED CONFIG WITH PRESERVED USERNAME
 	return saveConfig(models.AuthConfig{
 		Token:     result.Token,
-		ExpiresAt: c.TokenManager.expiresAt,
-		Username:  "", // Will be preserved from existing config
+		ExpiresAt: expiresAt,
+		Username:  username,
 		Server:    c.BaseURL,
 	})
 }
 
 func (c *APIClient) doRequest(method, path string, body interface{}) (*http.Response, error) {
+	// HANDLE STREAMING UPLOADS DIFFERENTLY (PATCH)
+	if method == "PATCH" && body != nil {
+		if reader, ok := body.(io.Reader); ok {
+			req, err := http.NewRequest(method, c.BaseURL+path, reader)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create PATCH request: %w", err)
+			}
+
+			if token := c.TokenManager.GetToken(); token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+
+			return c.HTTPClient.Do(req)
+		}
+	}
+
+	// FOR STANDARD REQUESTS, HANDLE BODY
 	var bodyReader io.Reader
 	if body != nil {
 		var bodyBytes []byte
 		var err error
 		switch v := body.(type) {
 		case io.Reader:
-			bodyReader = v
+			// BUFFER THE READER TO ALLOW MULTIPLE READS
+			var buf bytes.Buffer
+			if _, err := io.Copy(&buf, v); err != nil {
+				return nil, fmt.Errorf("failed to read request body: %w", err)
+			}
+			bodyBytes = buf.Bytes()
 		default:
 			bodyBytes, err = json.Marshal(body)
 			if err != nil {
 				return nil, fmt.Errorf("failed to marshal request body: %w", err)
 			}
-			bodyReader = bytes.NewBuffer(bodyBytes)
 		}
+		bodyReader = bytes.NewReader(bodyBytes)
 	}
 
-	// HANDLE TOKEN AND RETRIES
+	// ATTEMPT REQUEST WITH RETRY LOGIC
 	var resp *http.Response
 	for retries := 0; retries < 2; retries++ {
+		// RESET BODY READER POSITION IF NEEDED
+		if bodyReader != nil {
+			if seeker, ok := bodyReader.(io.ReadSeeker); ok {
+				if _, err := seeker.Seek(0, io.SeekStart); err != nil {
+					return nil, fmt.Errorf("failed to reset request body: %w", err)
+				}
+			}
+		}
+
+		// CREATE REQUEST
 		req, err := http.NewRequest(method, c.BaseURL+path, bodyReader)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 
-		if token := c.TokenManager.GetToken(); token != "" {
-			if retries == 0 && c.TokenManager.IsExpired() {
-				if err := c.refreshToken(); err != nil {
-					return nil, fmt.Errorf("token refresh failed: %w", err)
-				}
-				token = c.TokenManager.GetToken()
+		// CHECK IF TOKEN EXPIRED BEFORE FIRST ATTEMPT
+		if retries == 0 && c.TokenManager.IsExpired() {
+			if viper.GetBool("debug") {
+				fmt.Println("Token expired, refreshing before request...")
 			}
+			if err := c.refreshToken(); err != nil {
+				return nil, fmt.Errorf("token refresh failed: %w", err)
+			}
+		}
+
+		// ADD AUTH HEADER
+		if token := c.TokenManager.GetToken(); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
 
+		// SET CONTENT TYPE FOR JSON BODIES
 		if body != nil && method != "PATCH" {
 			req.Header.Set("Content-Type", "application/json")
 		}
 
+		// EXECUTE REQUEST
 		resp, err = c.HTTPClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("request failed: %w", err)
@@ -393,13 +458,17 @@ func (c *APIClient) doRequest(method, path string, body interface{}) (*http.Resp
 			break
 		}
 
-		// ON FIRST 401, TRY REFRESH AND RETRY
+		// ON FIRST 401, REFRESH TOKEN AND RETRY
 		resp.Body.Close()
+		if viper.GetBool("debug") {
+			fmt.Println("Received 401 Unauthorized, refreshing token and retrying...")
+		}
 		if err := c.refreshToken(); err != nil {
-			return nil, fmt.Errorf("token refresh failed: %w", err)
+			return nil, fmt.Errorf("token refresh failed after 401: %w", err)
 		}
 	}
 
+	// CHECK FOR ERROR RESPONSE
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -435,7 +504,20 @@ func saveConfig(config models.AuthConfig) error {
 	}
 
 	configPath := filepath.Join(configDir, "config.json")
-	data, err := json.MarshalIndent(config, "", "  ")
+
+	// READ EXISTING CONFIG TO PRESERVE NON-OVERRIDDEN FIELDS
+	var existingConfig models.AuthConfig
+	data, err := os.ReadFile(configPath)
+	if err == nil {
+		if err := json.Unmarshal(data, &existingConfig); err == nil {
+			// PRESERVE USERNAME IF NOT BEING EXPLICITLY SET
+			if config.Username == "" {
+				config.Username = existingConfig.Username
+			}
+		}
+	}
+
+	data, err = json.MarshalIndent(config, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal config: %v", err)
 	}
