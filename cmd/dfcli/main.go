@@ -302,72 +302,127 @@ func (c *APIClient) refreshToken() error {
 	configData, err := os.ReadFile(getConfigPath())
 	if err == nil {
 		if err := json.Unmarshal(configData, &existingConfig); err == nil {
-			// Successfully read existing config
+			// READ CONFIG
+		}
+	} else {
+		initConfig()
+	}
+
+	var auth models.AuthConfig
+
+	existing := c.TokenManager.GetToken()
+	if existing == "" {
+		resp, err := c.HTTPClient.Post(c.BaseURL+"/auth/token", "application/json", nil)
+		if err != nil {
+			return fmt.Errorf("refresh request failed: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("refresh failed with status %d: %s", resp.StatusCode, string(body))
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read refresh response: %v", err)
+		}
+
+		var result struct {
+			Token     string    `json:"access_token"`
+			ExpiresIn int       `json:"expires_in"`
+			IssuedAt  time.Time `json:"issued_at"`
+			Type      string    `json:"token_type"`
+		}
+
+		if err := json.Unmarshal(body, &result); err != nil {
+			return fmt.Errorf("failed to parse refresh response: %v", err)
+		}
+
+		if result.Token == "" {
+			return fmt.Errorf("no token in refresh response")
+		}
+
+		// UPDATE TOKEN MANAGER
+		expiresAt := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
+		c.TokenManager.SetToken(result.Token, expiresAt)
+
+		// PRESERVE USERNAME
+		username := existingConfig.Username
+		if username == "" {
+			username = "anonymous"
+		}
+
+		auth = models.AuthConfig{
+			Token:     result.Token,
+			ExpiresAt: expiresAt,
+			Username:  username,
+			Server:    c.BaseURL,
+		}
+	} else {
+		req := struct {
+			RefreshToken string `json:"refresh_token"`
+		}{
+			RefreshToken: existing, // USE EXISTING IF POSSIBLE
+		}
+
+		jsonData, err := json.Marshal(req)
+		if err != nil {
+			return fmt.Errorf("failed to marshal refresh request: %v", err)
+		}
+
+		// MAKE REQUEST
+		resp, err := c.HTTPClient.Post(c.BaseURL+"/api/v1/auth/refresh", "application/json", bytes.NewBuffer(jsonData))
+		if err != nil {
+			return fmt.Errorf("refresh request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(resp.Body)
+			return fmt.Errorf("refresh failed with status %d: %s", resp.StatusCode, string(body))
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read refresh response: %v", err)
+		}
+
+		var result struct {
+			Token     string    `json:"token"`
+			ExpiresIn int       `json:"expires_in"`
+			IssuedAt  time.Time `json:"issued_at"`
+			Username  string    `json:"username,omitempty"`
+			Groups    []string  `json:"groups,omitempty"`
+		}
+
+		if err := json.Unmarshal(body, &result); err != nil {
+			return fmt.Errorf("failed to parse refresh response: %v", err)
+		}
+
+		if result.Token == "" {
+			return fmt.Errorf("no token in refresh response")
+		}
+
+		// UPDATE TOKEN MANAGER
+		expiresAt := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
+		c.TokenManager.SetToken(result.Token, expiresAt)
+
+		// PRESERVE USERNAME
+		username := result.Username
+		if username == "" {
+			username = existingConfig.Username
+		}
+
+		auth = models.AuthConfig{
+			Token:     result.Token,
+			ExpiresAt: expiresAt,
+			Username:  username,
+			Server:    c.BaseURL,
 		}
 	}
 
-	// PREPARE REFRESH REQUEST
-	req := struct {
-		RefreshToken string `json:"refresh_token"`
-	}{
-		RefreshToken: c.TokenManager.GetToken(), // Use existing token as refresh token
-	}
-
-	jsonData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("failed to marshal refresh request: %v", err)
-	}
-
-	// MAKE REQUEST
-	resp, err := c.HTTPClient.Post(c.BaseURL+"/api/v1/auth/refresh", "application/json", bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("refresh request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("refresh failed with status %d: %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read refresh response: %v", err)
-	}
-
-	var result struct {
-		Token     string    `json:"token"`
-		ExpiresIn int       `json:"expires_in"`
-		IssuedAt  time.Time `json:"issued_at"`
-		Username  string    `json:"username,omitempty"`
-		Groups    []string  `json:"groups,omitempty"`
-	}
-
-	if err := json.Unmarshal(body, &result); err != nil {
-		return fmt.Errorf("failed to parse refresh response: %v", err)
-	}
-
-	if result.Token == "" {
-		return fmt.Errorf("no token in refresh response")
-	}
-
-	// UPDATE TOKEN MANAGER
-	expiresAt := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
-	c.TokenManager.SetToken(result.Token, expiresAt)
-
-	// PRESERVE USERNAME
-	username := result.Username
-	if username == "" {
-		username = existingConfig.Username
-	}
-
 	// SAVE UPDATED CONFIG WITH PRESERVED USERNAME
-	return saveConfig(models.AuthConfig{
-		Token:     result.Token,
-		ExpiresAt: expiresAt,
-		Username:  username,
-		Server:    c.BaseURL,
-	})
+	return saveConfig(auth)
 }
 
 func (c *APIClient) doRequest(method, path string, body interface{}) (*http.Response, error) {
