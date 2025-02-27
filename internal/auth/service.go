@@ -253,9 +253,17 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*W
 	}
 
 	// GET USER FOR GROUPS
-	user, err := s.repo.GetUser(username)
-	if err != nil {
-		return nil, err
+	var groups []string
+	if username == "" || username == "anonymous" {
+		fmt.Printf("Providing token for anonymous user\n")
+		username = "anonymous"
+		groups = []string{"anonymous"}
+	} else {
+		user, err := s.repo.GetUser(username)
+		if err != nil {
+			fmt.Printf("Failed to find user for username %s: %v\n Defaulting to anonymous\n", username, err)
+		}
+		groups = user.Groups
 	}
 
 	claims := &Claims{
@@ -276,8 +284,8 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*W
 		Token:     token,
 		ExpiresIn: int(time.Until(claims.ExpiresAt.Time).Seconds()),
 		IssuedAt:  claims.IssuedAt.Time,
-		Username:  user.Username,
-		Groups:    user.Groups,
+		Username:  username,
+		Groups:    groups,
 	}, nil
 }
 
