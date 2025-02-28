@@ -247,12 +247,13 @@ func (s *authService) ValidateToken(ctx context.Context, token string) (*Claims,
 }
 
 func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*WebAuthResponse, error) {
-	username, err := s.tokenManager.ValidateRefreshToken(refreshToken)
+	claim, err := s.tokenManager.ValidateToken(refreshToken)
 	if err != nil {
 		return nil, err
 	}
 
 	// GET USER FOR GROUPS
+	username := claim.Subject
 	var groups []string
 	if username == "" || username == "anonymous" {
 		fmt.Printf("Providing token for anonymous user\n")
@@ -343,17 +344,19 @@ func (tm *TokenManager) GenerateToken(claims *Claims) (string, error) {
 
 func (tm *TokenManager) GenerateRefreshToken(username string) (string, error) {
 	now := time.Now()
-	claims := jwt.RegisteredClaims{
+	claims := Claims{
 		Subject:   username,
 		IssuedAt:  jwt.NewNumericDate(now),
 		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour * 24 * 7)),
 	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	return token.SignedString(tm.signKey)
 }
 
 func (tm *TokenManager) ValidateToken(tokenString string) (*Claims, error) {
 	if tm.blacklist.isRevoked(tokenString) {
+		fmt.Printf("TOKEN FOUND IN REVOKED (BLACKLIST): %s\n", tokenString)
 		return nil, ErrInvalidToken
 	}
 
@@ -365,6 +368,7 @@ func (tm *TokenManager) ValidateToken(tokenString string) (*Claims, error) {
 	})
 
 	if err != nil {
+		fmt.Printf("UNABLE TO PARSE CLAIMS FROM TOKEN: %v\n", err)
 		return nil, ErrInvalidToken
 	}
 
@@ -372,27 +376,8 @@ func (tm *TokenManager) ValidateToken(tokenString string) (*Claims, error) {
 		return claims, nil
 	}
 
+	fmt.Printf("COULD NOT CAST STRUCT TO CLAIMS TYPE AND/OR NOT VALID CLAIMS STRUCT: %v\n", err)
 	return nil, ErrInvalidToken
-}
-
-func (tm *TokenManager) ValidateRefreshToken(tokenString string) (string, error) {
-	if tm.blacklist.isRevoked(tokenString) {
-		return "", ErrInvalidToken
-	}
-
-	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return tm.verifyKey, nil
-	})
-
-	if err != nil || !token.Valid {
-		return "", ErrInvalidToken
-	}
-
-	if claims, ok := token.Claims.(*jwt.RegisteredClaims); ok {
-		return claims.Subject, nil
-	}
-
-	return "", ErrInvalidToken
 }
 
 func (tm *TokenManager) RevokeToken(token string) error {
