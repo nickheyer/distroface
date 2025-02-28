@@ -26,13 +26,14 @@ var (
 
 type Claims struct {
 	// STANDARD CLAIM
-	Subject   string           `json:"sub"`
-	Audience  string           `json:"aud"`
-	ExpiresAt *jwt.NumericDate `json:"exp"`
-	IssuedAt  *jwt.NumericDate `json:"iat"`
-	NotBefore *jwt.NumericDate `json:"nbf,omitempty"`
-	Issuer    string           `json:"iss"`
-	JwtID     string           `json:"jti,omitempty"`
+	Subject      string           `json:"sub"`
+	Audience     string           `json:"aud"`
+	ExpiresAt    *jwt.NumericDate `json:"exp"`
+	IssuedAt     *jwt.NumericDate `json:"iat"`
+	NotBefore    *jwt.NumericDate `json:"nbf,omitempty"`
+	Issuer       string           `json:"iss"`
+	JwtID        string           `json:"jti,omitempty"`
+	AllowReissue bool             `json:"allow_reissue,omitempty"`
 
 	// REGISTRY CLAIM
 	Access []models.ResourceActions `json:"access"`
@@ -40,7 +41,7 @@ type Claims struct {
 
 func (c Claims) Valid() error {
 	now := time.Now()
-	if now.After(c.ExpiresAt.Time) {
+	if !c.AllowReissue && now.After(c.ExpiresAt.Time) {
 		return ErrTokenExpired
 	}
 	if now.Before(c.IssuedAt.Time) {
@@ -182,12 +183,13 @@ func (s *authService) Authenticate(ctx context.Context, req AuthRequest) (interf
 	// HANDLE WEB UI AUTH
 	if req.Type == AuthTypeWeb {
 		claims := &Claims{
-			Subject:   user.Username,
-			Audience:  req.Service,
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			NotBefore: jwt.NewNumericDate(time.Now()),
-			Issuer:    s.config.Auth.Issuer,
+			Subject:      user.Username,
+			Audience:     req.Service,
+			ExpiresAt:    jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:     jwt.NewNumericDate(time.Now()),
+			NotBefore:    jwt.NewNumericDate(time.Now()),
+			Issuer:       s.config.Auth.Issuer,
+			AllowReissue: true,
 		}
 
 		token, err := s.tokenManager.GenerateToken(claims)
@@ -213,13 +215,14 @@ func (s *authService) Authenticate(ctx context.Context, req AuthRequest) (interf
 		}
 
 		claims := &Claims{
-			Subject:   user.Username,
-			Audience:  req.Service,
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-			NotBefore: jwt.NewNumericDate(time.Now()),
-			Issuer:    s.config.Auth.Issuer,
-			Access:    resourceActions,
+			Subject:      user.Username,
+			Audience:     req.Service,
+			ExpiresAt:    jwt.NewNumericDate(time.Now().Add(time.Hour)),
+			IssuedAt:     jwt.NewNumericDate(time.Now()),
+			NotBefore:    jwt.NewNumericDate(time.Now()),
+			Issuer:       s.config.Auth.Issuer,
+			Access:       resourceActions,
+			AllowReissue: true,
 		}
 
 		fmt.Printf("Generated access claims: %+v\n", claims.Access)
@@ -268,12 +271,13 @@ func (s *authService) RefreshToken(ctx context.Context, refreshToken string) (*W
 	}
 
 	claims := &Claims{
-		Subject:   username,
-		Audience:  s.config.Auth.Service,
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour)),
-		IssuedAt:  jwt.NewNumericDate(time.Now()),
-		NotBefore: jwt.NewNumericDate(time.Now()),
-		Issuer:    s.config.Auth.Issuer,
+		Subject:      username,
+		Audience:     s.config.Auth.Service,
+		ExpiresAt:    jwt.NewNumericDate(time.Now().Add(time.Hour)),
+		IssuedAt:     jwt.NewNumericDate(time.Now()),
+		NotBefore:    jwt.NewNumericDate(time.Now()),
+		Issuer:       s.config.Auth.Issuer,
+		AllowReissue: true,
 	}
 
 	token, err := s.tokenManager.GenerateToken(claims)
@@ -338,18 +342,6 @@ func NewTokenManager(signKey *rsa.PrivateKey, verifyKey *rsa.PublicKey) *TokenMa
 }
 
 func (tm *TokenManager) GenerateToken(claims *Claims) (string, error) {
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	return token.SignedString(tm.signKey)
-}
-
-func (tm *TokenManager) GenerateRefreshToken(username string) (string, error) {
-	now := time.Now()
-	claims := Claims{
-		Subject:   username,
-		IssuedAt:  jwt.NewNumericDate(now),
-		ExpiresAt: jwt.NewNumericDate(now.Add(time.Hour * 24 * 7)),
-	}
-
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
 	return token.SignedString(tm.signKey)
 }
