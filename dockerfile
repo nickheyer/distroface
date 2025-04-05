@@ -17,7 +17,7 @@ RUN npm run build
 # ---------------------------
 # 2) BUILD STAGE FOR GO BACKEND
 # ---------------------------
-  FROM --platform=$TARGETPLATFORM golang:1.22-bullseye AS go-builder
+  FROM --platform=$TARGETPLATFORM golang:1.23-bullseye AS go-builder
 
   WORKDIR /app
   
