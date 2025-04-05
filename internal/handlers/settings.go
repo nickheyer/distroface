@@ -43,7 +43,7 @@ func (h *SettingsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(settings)
 }
 
-func (h *SettingsHandler) getSettingsForSection(section string) (interface{}, error) {
+func (h *SettingsHandler) getSettingsForSection(section string) (any, error) {
 	// GET DEFAULTS
 	settings, err := models.GetSettingsWithDefaults(section)
 	if err != nil {

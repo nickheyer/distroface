@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/rsa"
 	"crypto/tls"
-	"database/sql"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,6 +18,10 @@ import (
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/auth/permissions"
 	"github.com/nickheyer/distroface/internal/constants"
@@ -35,7 +39,7 @@ type Server struct {
 	distConfig     *dconfig.Configuration
 	router         *mux.Router
 	ctx            context.Context
-	db             *sql.DB
+	db             *gorm.DB
 	authService    auth.AuthService
 	authMiddleware *auth.Middleware
 	permManager    *permissions.PermissionManager
@@ -57,7 +61,8 @@ func NewServer(cfg *models.Config) (*Server, error) {
 	if err != nil {
 		return nil, log.Errorf("DATABASE INIT FAILED", err)
 	}
-	repo := repository.NewSQLiteRepository(db)
+
+	repo := repository.NewGormRepository(db)
 	permManager := permissions.NewPermissionManager(repo, db)
 
 	// READ RSA KEYS
@@ -125,14 +130,13 @@ func NewServer(cfg *models.Config) (*Server, error) {
 	}
 
 	if err := s.setupRoutes(); err != nil {
-		db.Close()
 		return nil, log.Errorf("ROUTE SETUP FAILED", err)
 	}
 
 	return s, nil
 }
 
-func initDB(cfg *models.Config) (*sql.DB, error) {
+func initDB(cfg *models.Config) (*gorm.DB, error) {
 	// ENSURE DB PATH EXISTS
 	dir := filepath.Dir(cfg.Database.Path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -163,41 +167,61 @@ func initDB(cfg *models.Config) (*sql.DB, error) {
 		}
 	}
 
-	// OPEN DB
-	database, err := sql.Open("sqlite3", cfg.Database.Path)
+	// GORM LOGGER INIT
+	gormLogger := logger.New(
+		log.New(os.Stdout, "\r\n", log.LstdFlags),
+		logger.Config{
+			SlowThreshold:             200 * time.Millisecond,
+			LogLevel:                  logger.Warn,
+			IgnoreRecordNotFoundError: true,
+			Colorful:                  true,
+		},
+	)
+
+	// OPEN GORM DB CONNECTION
+	gormDB, err := gorm.Open(sqlite.Open(cfg.Database.Path), &gorm.Config{
+		Logger: gormLogger,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to open DB: %w", err)
 	}
 
+	// GET UNDERLYING SQL
+	sqlDB, err := gormDB.DB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get SQL DB: %w", err)
+	}
+
+	// DB POOL
+	sqlDB.SetMaxIdleConns(10)
+	sqlDB.SetMaxOpenConns(100)
+	sqlDB.SetConnMaxLifetime(time.Hour)
+
 	// PING DB FOR HEALTHCHECK
-	if err := database.Ping(); err != nil {
-		database.Close()
+	if err := sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("DB PING FAILED: %v", err)
 	}
 
 	// WAL MODE FOR CONCURRENCY
-	_, _ = database.Exec("PRAGMA journal_mode=WAL;")
-	_, _ = database.Exec("PRAGMA busy_timeout=5000;")
+	_, _ = sqlDB.Exec("PRAGMA journal_mode=WAL;")
+	_, _ = sqlDB.Exec("PRAGMA busy_timeout=5000;")
 
-	// RUN SCHEMA
-	if err := db.RunSchema(database, cfg); err != nil {
-		database.Close()
+	// RUN SCHEMA SETUP (AUTO MIGRATIONS)
+	if err := db.RunSchema(gormDB, cfg); err != nil {
 		return nil, fmt.Errorf("schema init error: %w", err)
 	}
 
-	// INSERT INITIAL VALUES VIA CONFIG
-	if err := db.RunInit(database, cfg); err != nil {
-		database.Close()
+	// INSERT INITIAL VALUES
+	if err := db.RunInit(gormDB, cfg); err != nil {
 		return nil, fmt.Errorf("init data error: %w", err)
 	}
 
 	// RUN MIGRATIONS
-	if err := db.RunMigrations(database, cfg); err != nil {
-		database.Close()
+	if err := db.RunMigrations(gormDB, cfg); err != nil {
 		return nil, fmt.Errorf("migrations error: %w", err)
 	}
 
-	return database, nil
+	return gormDB, nil
 }
 
 func (s *Server) notFoundHandler() http.HandlerFunc {
@@ -216,7 +240,7 @@ func (s *Server) setupRoutes() error {
 
 	// INIT HANDLERS + MISC SERVICES
 	metricsSrv := metrics.NewMetricsService(s.log, s.config.Storage.RootDirectory)
-	repo := repository.NewSQLiteRepository(s.db)
+	repo := repository.NewGormRepository(s.db)
 	authHandler := handlers.NewAuthHandler(s.config, s.authService, s.log)
 	userHandler := handlers.NewUserHandler(repo, s.permManager, s.log)
 	repoHandler := handlers.NewRepositoryHandler(repo, s.config, s.log, metricsSrv)
@@ -492,6 +516,9 @@ func (s *Server) Start() error {
 
 func (s *Server) Shutdown() {
 	if s.db != nil {
-		s.db.Close()
+		sqlDB, _ := s.db.DB()
+		if sqlDB != nil {
+			sqlDB.Close()
+		}
 	}
 }

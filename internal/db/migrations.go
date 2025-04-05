@@ -1,99 +1,62 @@
 package db
 
 import (
-	"database/sql"
 	"fmt"
 
 	"github.com/nickheyer/distroface/internal/models"
+	"gorm.io/gorm"
 )
 
-func RunMigrations(db *sql.DB, cfg *models.Config) error {
+func RunMigrations(db *gorm.DB, cfg *models.Config) error {
 	if !cfg.Init.Migrations {
 		return nil
 	}
-
-	// ENSURE MIGRATION TABLE
-	if err := ensureMigrationTable(db); err != nil {
-		return fmt.Errorf("failed to create migration table: %w", err)
-	}
-
-	// RUN IN ORDER
 	for _, m := range migrations {
-		if err := runMigration(db, m); err != nil {
-			return fmt.Errorf("failed to run migration %s: %w", m.id, err)
+		if err := applyMigration(db, m); err != nil {
+			return fmt.Errorf("failed to run migration %s: %w", m.ID, err)
 		}
 	}
 
 	return nil
 }
 
-type migration struct {
-	id   string
-	stmt string
+type Migration struct {
+	ID       string
+	Migrate  func(*gorm.DB) error
+	Rollback func(*gorm.DB) error
 }
 
-func ensureMigrationTable(db *sql.DB) error {
-	_, err := db.Exec(`
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			id TEXT PRIMARY KEY,
-			applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
-		)
-	`)
-	return err
-}
-
-func runMigration(db *sql.DB, m migration) error {
+func applyMigration(db *gorm.DB, m Migration) error {
 	// CHECK IF MIGRATION APPLIED
-	var exists bool
-	err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE id = ?)", m.id).Scan(&exists)
-	if err != nil {
-		return err
-	}
-	if exists {
+	var migration models.SchemaMigration
+	result := db.Where("id = ?", m.ID).First(&migration)
+
+	// IF APPLIED, SKIP IT
+	if result.Error == nil {
 		return nil
 	}
 
-	// RUN MIGRATION IN TX
-	tx, err := db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec(m.stmt); err != nil {
-		return err
+	if result.Error != gorm.ErrRecordNotFound {
+		return result.Error
 	}
 
-	if _, err := tx.Exec("INSERT INTO schema_migrations (id) VALUES (?)", m.id); err != nil {
-		return err
-	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := m.Migrate(tx); err != nil {
+			return err
+		}
 
-	return tx.Commit()
+		return tx.Create(&models.SchemaMigration{ID: m.ID}).Error
+	})
 }
 
-var migrations = []migration{
+var migrations = []Migration{
 	{
-		id: "001_add_upload_id",
-		stmt: `
-			ALTER TABLE artifacts ADD COLUMN upload_id TEXT;
-			UPDATE artifacts SET upload_id = hex(randomblob(16)) WHERE upload_id IS NULL;
-			CREATE TABLE artifacts_new (
-				id TEXT PRIMARY KEY,
-				repo_id INTEGER NOT NULL,
-				name TEXT NOT NULL,
-				path TEXT NOT NULL,
-				upload_id TEXT NOT NULL,
-				version TEXT NOT NULL,
-				size INTEGER NOT NULL,
-				mime_type TEXT,
-				metadata TEXT,
-				created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-				updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-				FOREIGN KEY(repo_id) REFERENCES artifact_repositories(id)
-			);
-			INSERT INTO artifacts_new SELECT * FROM artifacts;
-			DROP TABLE artifacts;
-			ALTER TABLE artifacts_new RENAME TO artifacts;
-		`,
+		ID: "001_initial_setup",
+		Migrate: func(tx *gorm.DB) error {
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
 	},
 }

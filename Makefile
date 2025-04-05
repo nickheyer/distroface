@@ -62,7 +62,6 @@ clean:
 	@echo "Cleaning build artifacts..."
 	$(GOCLEAN)
 	rm -rf $(WEB_DIR)/dist $(BINARY) $(STORAGE_ROOT) $(DB_PATH) $(BUILD_DIR)
-	find . -name ".DS_Store" -delete 
 
 
 ## -----------------------

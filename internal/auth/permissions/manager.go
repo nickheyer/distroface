@@ -2,8 +2,6 @@ package permissions
 
 import (
 	"context"
-	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -12,15 +10,16 @@ import (
 	"github.com/nickheyer/distroface/internal/models"
 	"github.com/nickheyer/distroface/internal/repository"
 	"github.com/nickheyer/distroface/internal/utils"
+	"gorm.io/gorm"
 )
 
 type PermissionManager struct {
-	db    *sql.DB
+	db    *gorm.DB
 	cache PermissionCache
 	repo  repository.Repository
 }
 
-func NewPermissionManager(repo repository.Repository, db *sql.DB) *PermissionManager {
+func NewPermissionManager(repo repository.Repository, db *gorm.DB) *PermissionManager {
 	pm := &PermissionManager{
 		db:    db,
 		cache: NewInMemoryCache(),
@@ -77,19 +76,13 @@ func (pm *PermissionManager) HasPermission(ctx context.Context, username string,
 }
 
 func (pm *PermissionManager) getUserGroups(username string) ([]models.Group, error) {
-	var groupsJSON string
-	err := pm.db.QueryRow("SELECT groups FROM users WHERE username = ?", username).Scan(&groupsJSON)
-	if err != nil {
+	var user models.User
+	if err := pm.db.Where("username = ?", username).Select("groups").First(&user).Error; err != nil {
 		return nil, fmt.Errorf("failed to get user groups: %v", err)
 	}
 
-	var groupNames []string
-	if err := json.Unmarshal([]byte(groupsJSON), &groupNames); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal groups: %v", err)
-	}
-
 	var groups []models.Group
-	for _, name := range groupNames {
+	for _, name := range user.Groups {
 		// GROUP NAME TO LOWERCASE
 		group, err := pm.getGroup(strings.ToLower(name))
 		if err != nil {
@@ -104,21 +97,9 @@ func (pm *PermissionManager) getUserGroups(username string) ([]models.Group, err
 
 func (pm *PermissionManager) getGroup(name string) (models.Group, error) {
 	var group models.Group
-	var rolesJSON string
-
-	err := pm.db.QueryRow(
-		"SELECT name, description, roles, scope FROM groups WHERE name = ?",
-		name,
-	).Scan(&group.Name, &group.Description, &rolesJSON, &group.Scope)
-
-	if err != nil {
+	if err := pm.db.Where("name = ?", name).Select("name, description, roles, scope").First(&group).Error; err != nil {
 		return models.Group{}, err
 	}
-
-	if err := json.Unmarshal([]byte(rolesJSON), &group.Roles); err != nil {
-		return models.Group{}, err
-	}
-
 	return group, nil
 }
 
@@ -140,21 +121,9 @@ func (pm *PermissionManager) groupHasPermission(group models.Group, perm models.
 
 func (pm *PermissionManager) getRole(name string) (models.Role, error) {
 	var role models.Role
-	var permissionsJSON string
-
-	err := pm.db.QueryRow(
-		"SELECT name, description, permissions FROM roles WHERE name = ?",
-		name,
-	).Scan(&role.Name, &role.Description, &permissionsJSON)
-
-	if err != nil {
+	if err := pm.db.Where("name = ?", name).Select("name, description, permissions").First(&role).Error; err != nil {
 		return models.Role{}, fmt.Errorf("failed to get role: %v", err)
 	}
-
-	if err := json.Unmarshal([]byte(permissionsJSON), &role.Permissions); err != nil {
-		return models.Role{}, fmt.Errorf("failed to parse permissions: %v", err)
-	}
-
 	return role, nil
 }
 

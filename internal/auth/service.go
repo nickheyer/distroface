@@ -88,7 +88,7 @@ type authService struct {
 }
 
 type AuthService interface {
-	Authenticate(ctx context.Context, req AuthRequest) (interface{}, error)
+	Authenticate(ctx context.Context, req AuthRequest) (any, error)
 	ValidateToken(ctx context.Context, token string) (*Claims, error)
 	RefreshToken(ctx context.Context, refreshToken string) (*WebAuthResponse, error)
 	RevokeToken(ctx context.Context, token string) error
@@ -151,7 +151,7 @@ func NewAuthService(
 	}
 }
 
-func (s *authService) Authenticate(ctx context.Context, req AuthRequest) (interface{}, error) {
+func (s *authService) Authenticate(ctx context.Context, req AuthRequest) (any, error) {
 	fmt.Printf("Authenticating request - Type: %s, Username: %s, Service: %s, Scope: %s\n",
 		req.Type, req.Username, req.Service, req.Scope)
 
@@ -352,7 +352,7 @@ func (tm *TokenManager) ValidateToken(tokenString string) (*Claims, error) {
 		return nil, ErrInvalidToken
 	}
 
-	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (any, error) {
 		if _, ok := token.Method.(*jwt.SigningMethodRSA); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}

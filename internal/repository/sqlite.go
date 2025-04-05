@@ -1,289 +1,151 @@
 package repository
 
 import (
-	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
-	"strings"
-	"time"
+
+	"slices"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/models"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
-type SQLiteRepository struct {
-	db *sql.DB
+type GormRepository struct {
+	db *gorm.DB
 }
 
-func NewSQLiteRepository(db *sql.DB) *SQLiteRepository {
-	return &SQLiteRepository{db: db}
+func NewGormRepository(db *gorm.DB) Repository {
+	return &GormRepository{db: db}
 }
 
 // USER OPERATIONS
-func (r *SQLiteRepository) GetUser(username string) (*models.User, error) {
+func (r *GormRepository) GetUser(username string) (*models.User, error) {
 	var user models.User
-	var groupsJSON string
-	var createdAt string
-
-	err := r.db.QueryRow(
-		"SELECT id, username, password, groups, created_at FROM users WHERE username = ?",
-		username,
-	).Scan(&user.ID, &user.Username, &user.Password, &groupsJSON, &createdAt)
-
-	if err != nil {
-		return nil, err
+	result := r.db.Where("username = ?", username).First(&user)
+	if result.Error != nil {
+		return nil, result.Error
 	}
-
-	// JSON TO GROUPS
-	if err := json.Unmarshal([]byte(groupsJSON), &user.Groups); err != nil {
-		return nil, fmt.Errorf("failed to parse groups: %v", err)
-	}
-
-	user.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	return &user, nil
 }
 
-func (r *SQLiteRepository) CreateUser(user *models.User) error {
-	// GROUPS TO JSON
-	groupsJSON, err := json.Marshal(user.Groups)
-	if err != nil {
-		return fmt.Errorf("failed to marshal groups: %v", err)
-	}
-
-	_, err = r.db.Exec(
-		`INSERT INTO users (username, password, groups, created_at) 
-         VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
-		user.Username, user.Password, string(groupsJSON),
-	)
-	return err
+func (r *GormRepository) CreateUser(user *models.User) error {
+	return r.db.Create(user).Error
 }
 
-func (r *SQLiteRepository) UpdateUser(user *models.User) error {
-	groupsJSON, err := json.Marshal(user.Groups)
-	if err != nil {
-		return fmt.Errorf("failed to marshal groups: %v", err)
+func (r *GormRepository) UpdateUser(user *models.User) error {
+	result := r.db.Model(&models.User{}).Where("username = ?", user.Username).Updates(map[string]any{
+		"password": user.Password,
+		"groups":   user.Groups,
+	})
+	if result.Error != nil {
+		return result.Error
 	}
-
-	result, err := r.db.Exec(
-		`UPDATE users SET password = ?, groups = ? WHERE username = ?`,
-		user.Password, string(groupsJSON), user.Username,
-	)
-	if err != nil {
-		return err
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("user not found: %s", user.Username)
 	}
 	return nil
 }
 
-func (r *SQLiteRepository) UpdateUserGroups(username string, groups []string) error {
-	groupsJSON, err := json.Marshal(groups)
-	if err != nil {
-		return fmt.Errorf("failed to marshal groups: %v", err)
+func (r *GormRepository) UpdateUserGroups(username string, groups []string) error {
+	result := r.db.Model(&models.User{}).Where("username = ?", username).Update("groups", models.StringArray(groups))
+	if result.Error != nil {
+		return result.Error
 	}
-
-	result, err := r.db.Exec(
-		"UPDATE users SET groups = ? WHERE username = ?",
-		groupsJSON, username,
-	)
-	if err != nil {
-		return err
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("user not found: %s", username)
 	}
 	return nil
 }
 
-func (r *SQLiteRepository) DeleteUser(username string) error {
-	result, err := r.db.Exec("DELETE FROM users WHERE username = ?", username)
-	if err != nil {
-		return err
+func (r *GormRepository) DeleteUser(username string) error {
+	result := r.db.Where("username = ?", username).Delete(&models.User{})
+	if result.Error != nil {
+		return result.Error
 	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("user not found: %s", username)
 	}
 	return nil
 }
 
-func (r *SQLiteRepository) ListUsers() ([]*models.User, error) {
-	rows, err := r.db.Query("SELECT id, username, groups FROM users")
-	if err != nil {
+func (r *GormRepository) ListUsers() ([]*models.User, error) {
+	var users []*models.User
+	if err := r.db.Find(&users).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var users []*models.User
-	for rows.Next() {
-		var user models.User
-		var groupsJSON string
-
-		if err := rows.Scan(&user.ID, &user.Username, &groupsJSON); err != nil {
-			return nil, err
-		}
-
-		if err := json.Unmarshal([]byte(groupsJSON), &user.Groups); err != nil {
-			return nil, fmt.Errorf("failed to parse groups: %v", err)
-		}
-
-		users = append(users, &user)
-	}
-
 	return users, nil
 }
 
 // GROUP OPERATIONS
-func (r *SQLiteRepository) GetGroup(name string) (*models.Group, error) {
+func (r *GormRepository) GetGroup(name string) (*models.Group, error) {
 	var group models.Group
-	var rolesJSON string
-	var createdAt string
-
-	err := r.db.QueryRow(
-		"SELECT id, name, description, roles, scope, created_at FROM groups WHERE name = ?",
-		name,
-	).Scan(&group.ID, &group.Name, &group.Description, &rolesJSON, &group.Scope, &createdAt)
-
-	if err != nil {
-		return nil, err
+	result := r.db.Where("name = ?", name).First(&group)
+	if result.Error != nil {
+		return nil, result.Error
 	}
-
-	if err := json.Unmarshal([]byte(rolesJSON), &group.Roles); err != nil {
-		return nil, fmt.Errorf("failed to parse roles: %v", err)
-	}
-
-	group.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	return &group, nil
 }
 
-func (r *SQLiteRepository) CreateGroup(group *models.Group) error {
-	rolesJSON, err := json.Marshal(group.Roles)
-	if err != nil {
-		return fmt.Errorf("failed to marshal roles: %v", err)
-	}
-
+func (r *GormRepository) CreateGroup(group *models.Group) error {
+	// Set default scope if not provided
 	if group.Scope == "" {
 		group.Scope = "system:default"
 	}
-
-	_, err = r.db.Exec(
-		`INSERT INTO groups (name, description, roles, scope, created_at) 
-         VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-		group.Name, group.Description, string(rolesJSON), group.Scope,
-	)
-	return err
+	return r.db.Create(group).Error
 }
 
-func (r *SQLiteRepository) UpdateGroup(group *models.Group) error {
-	rolesJSON, err := json.Marshal(group.Roles)
-	if err != nil {
-		return fmt.Errorf("failed to marshal roles: %v", err)
+func (r *GormRepository) UpdateGroup(group *models.Group) error {
+	result := r.db.Model(&models.Group{}).Where("name = ?", group.Name).Updates(map[string]any{
+		"description": group.Description,
+		"roles":       group.Roles,
+		"scope":       group.Scope,
+	})
+	if result.Error != nil {
+		return result.Error
 	}
-
-	result, err := r.db.Exec(
-		`UPDATE groups SET description = ?, roles = ?, scope = ? WHERE name = ?`,
-		group.Description, string(rolesJSON), group.Scope, group.Name,
-	)
-	if err != nil {
-		return err
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("group not found: %s", group.Name)
 	}
 	return nil
 }
 
-func (r *SQLiteRepository) DeleteGroup(name string) error {
-	result, err := r.db.Exec("DELETE FROM groups WHERE name = ?", name)
-	if err != nil {
-		return err
+func (r *GormRepository) DeleteGroup(name string) error {
+	result := r.db.Where("name = ?", name).Delete(&models.Group{})
+	if result.Error != nil {
+		return result.Error
 	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("group not found: %s", name)
 	}
 	return nil
 }
 
-func (r *SQLiteRepository) ListGroups() ([]*models.Group, error) {
-	rows, err := r.db.Query("SELECT id, name, description, roles, scope, created_at FROM groups")
-	if err != nil {
+func (r *GormRepository) ListGroups() ([]*models.Group, error) {
+	var groups []*models.Group
+	if err := r.db.Find(&groups).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var groups []*models.Group
-	for rows.Next() {
-		var group models.Group
-		var rolesJSON string
-		var createdAt string
-
-		if err := rows.Scan(&group.ID, &group.Name, &group.Description, &rolesJSON, &group.Scope, &createdAt); err != nil {
-			return nil, err
-		}
-
-		if err := json.Unmarshal([]byte(rolesJSON), &group.Roles); err != nil {
-			return nil, fmt.Errorf("failed to parse roles: %v", err)
-		}
-
-		group.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		groups = append(groups, &group)
-	}
-
 	return groups, nil
 }
 
-func (r *SQLiteRepository) AddUserToGroup(username string, groupName string) error {
+func (r *GormRepository) AddUserToGroup(username string, groupName string) error {
 	user, err := r.GetUser(username)
 	if err != nil {
 		return err
 	}
 
-	for _, g := range user.Groups {
-		if g == groupName {
-			return nil // ALREADY IN GROUP
-		}
+	if slices.Contains(user.Groups, groupName) {
+		return nil
 	}
 
 	user.Groups = append(user.Groups, groupName)
-	groupsJSON, err := json.Marshal(user.Groups)
-	if err != nil {
-		return err
-	}
 
-	_, err = r.db.Exec(
-		"UPDATE users SET groups = ? WHERE username = ?",
-		string(groupsJSON), username,
-	)
-	return err
+	return r.db.Model(&models.User{}).Where("username = ?", username).Update("groups", user.Groups).Error
 }
 
-func (r *SQLiteRepository) RemoveUserFromGroup(username string, groupName string) error {
+func (r *GormRepository) RemoveUserFromGroup(username string, groupName string) error {
 	user, err := r.GetUser(username)
 	if err != nil {
 		return err
@@ -296,325 +158,124 @@ func (r *SQLiteRepository) RemoveUserFromGroup(username string, groupName string
 		}
 	}
 
-	groupsJSON, err := json.Marshal(newGroups)
-	if err != nil {
-		return err
-	}
-
-	_, err = r.db.Exec(
-		"UPDATE users SET groups = ? WHERE username = ?",
-		string(groupsJSON), username,
-	)
-	return err
+	return r.db.Model(&models.User{}).Where("username = ?", username).Update("groups", models.StringArray(newGroups)).Error
 }
 
-func (r *SQLiteRepository) GetUserGroups(username string) ([]string, error) {
-	var groupsJSON string
-	err := r.db.QueryRow(
-		"SELECT groups FROM users WHERE username = ?",
-		username,
-	).Scan(&groupsJSON)
-
-	if err != nil {
+func (r *GormRepository) GetUserGroups(username string) ([]string, error) {
+	var user models.User
+	if err := r.db.Select("groups").Where("username = ?", username).First(&user).Error; err != nil {
 		return nil, err
 	}
-
-	var groups []string
-	if err := json.Unmarshal([]byte(groupsJSON), &groups); err != nil {
-		return nil, err
-	}
-
-	return groups, nil
+	return user.Groups, nil
 }
 
 // ROLE OPERATIONS
-func (r *SQLiteRepository) ListRoles() ([]*models.Role, error) {
-	rows, err := r.db.Query("SELECT id, name, description, permissions, created_at FROM roles")
-	if err != nil {
+func (r *GormRepository) ListRoles() ([]*models.Role, error) {
+	var roles []*models.Role
+	if err := r.db.Find(&roles).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var roles []*models.Role
-	for rows.Next() {
-		var role models.Role
-		var permissionsJSON string
-		var createdAt string
-
-		if err := rows.Scan(&role.ID, &role.Name, &role.Description, &permissionsJSON, &createdAt); err != nil {
-			return nil, err
-		}
-
-		if err := json.Unmarshal([]byte(permissionsJSON), &role.Permissions); err != nil {
-			log.Printf("Raw permissions JSON: %s", permissionsJSON)
-			return nil, fmt.Errorf("failed to parse permissions: %v", err)
-		}
-
-		role.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		roles = append(roles, &role)
-	}
-
 	return roles, nil
 }
 
-func (r *SQLiteRepository) GetRole(name string) (*models.Role, error) {
+func (r *GormRepository) GetRole(name string) (*models.Role, error) {
 	var role models.Role
-	var permissionsJSON string
-	var createdAt string
-
-	err := r.db.QueryRow(
-		"SELECT id, name, description, permissions, created_at FROM roles WHERE name = ?",
-		name,
-	).Scan(&role.ID, &role.Name, &role.Description, &permissionsJSON, &createdAt)
-
-	if err != nil {
+	if err := r.db.Where("name = ?", name).First(&role).Error; err != nil {
 		return nil, err
 	}
-
-	if err := json.Unmarshal([]byte(permissionsJSON), &role.Permissions); err != nil {
-		log.Printf("Raw permissions JSON: %s", permissionsJSON)
-		return nil, fmt.Errorf("failed to parse permissions: %v", err)
-	}
-
-	role.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	return &role, nil
 }
 
-func (r *SQLiteRepository) CreateRole(role *models.Role) error {
-	permissionsJSON, err := json.Marshal(role.Permissions)
-	if err != nil {
-		return fmt.Errorf("failed to marshal permissions: %v", err)
-	}
-
-	_, err = r.db.Exec(
-		`INSERT INTO roles (name, description, permissions, created_at) 
-         VALUES (?, ?, ?, CURRENT_TIMESTAMP)`,
-		role.Name, role.Description, string(permissionsJSON),
-	)
-	return err
+func (r *GormRepository) CreateRole(role *models.Role) error {
+	return r.db.Create(role).Error
 }
 
-func (r *SQLiteRepository) UpdateRole(role *models.Role) error {
-	permissionsJSON, err := json.Marshal(role.Permissions)
-	if err != nil {
-		return fmt.Errorf("failed to marshal permissions: %v", err)
+func (r *GormRepository) UpdateRole(role *models.Role) error {
+	result := r.db.Model(&models.Role{}).Where("name = ?", role.Name).Updates(map[string]any{
+		"description": role.Description,
+		"permissions": role.Permissions,
+	})
+	if result.Error != nil {
+		return result.Error
 	}
-
-	result, err := r.db.Exec(
-		`UPDATE roles SET description = ?, permissions = ? WHERE name = ?`,
-		role.Description, string(permissionsJSON), role.Name,
-	)
-	if err != nil {
-		return err
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("role not found: %s", role.Name)
 	}
 	return nil
 }
 
-func (r *SQLiteRepository) DeleteRole(name string) error {
-	result, err := r.db.Exec("DELETE FROM roles WHERE name = ?", name)
-	if err != nil {
-		return err
+func (r *GormRepository) DeleteRole(name string) error {
+	result := r.db.Where("name = ?", name).Delete(&models.Role{})
+	if result.Error != nil {
+		return result.Error
 	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("role not found: %s", name)
 	}
 	return nil
 }
 
 // IMAGE OPERATIONS
-func (r *SQLiteRepository) ListImageMetadata(owner string) ([]*models.ImageMetadata, error) {
-	log.Printf("Fetching image metadata for owner: %s", owner)
-
-	rows, err := r.db.Query(
-		`SELECT id, name, tags, size, owner, labels, CASE private 
-            WHEN 1 THEN true 
-            ELSE false 
-         END as private, created_at, updated_at 
-         FROM image_metadata WHERE owner = ?`,
-		owner,
-	)
-	if err != nil {
+func (r *GormRepository) ListImageMetadata(owner string) ([]*models.ImageMetadata, error) {
+	var metadata []*models.ImageMetadata
+	if err := r.db.Where("owner = ?", owner).Find(&metadata).Error; err != nil {
 		return nil, fmt.Errorf("query failed: %v", err)
 	}
-	defer rows.Close()
-
-	var metadata []*models.ImageMetadata
-	for rows.Next() {
-		var img models.ImageMetadata
-		var tagsJSON, labelsJSON string
-
-		err := rows.Scan(
-			&img.ID,
-			&img.Name,
-			&tagsJSON,
-			&img.Size,
-			&img.Owner,
-			&labelsJSON,
-			&img.Private,
-			&img.CreatedAt,
-			&img.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("row scan failed: %v", err)
-		}
-
-		if err := json.Unmarshal([]byte(tagsJSON), &img.Tags); err != nil {
-			return nil, fmt.Errorf("failed to parse tags: %v", err)
-		}
-		if err := json.Unmarshal([]byte(labelsJSON), &img.Labels); err != nil {
-			return nil, fmt.Errorf("failed to parse labels: %v", err)
-		}
-
-		metadata = append(metadata, &img)
-	}
-
 	return metadata, nil
 }
 
-func (r *SQLiteRepository) GetImageMetadata(id string) (*models.ImageMetadata, error) {
+func (r *GormRepository) GetImageMetadata(id string) (*models.ImageMetadata, error) {
 	var metadata models.ImageMetadata
-	var tagsJSON, labelsJSON string
-	var createdAt, updatedAt string
-
-	err := r.db.QueryRow(
-		`SELECT id, name, tags, size, owner, labels, created_at, updated_at 
-         FROM image_metadata WHERE id = ?`,
-		id,
-	).Scan(&metadata.ID, &metadata.Name, &tagsJSON, &metadata.Size,
-		&metadata.Owner, &labelsJSON, &createdAt, &updatedAt)
-
-	if err != nil {
+	if err := r.db.Where("id = ?", id).First(&metadata).Error; err != nil {
 		return nil, err
 	}
-
-	if err := json.Unmarshal([]byte(tagsJSON), &metadata.Tags); err != nil {
-		return nil, fmt.Errorf("failed to parse tags: %v", err)
-	}
-
-	if err := json.Unmarshal([]byte(labelsJSON), &metadata.Labels); err != nil {
-		return nil, fmt.Errorf("failed to parse labels: %v", err)
-	}
-
-	metadata.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-	metadata.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
-
 	return &metadata, nil
 }
 
-func (r *SQLiteRepository) CreateImageMetadata(metadata *models.ImageMetadata) error {
-	tagsJSON, err := json.Marshal(metadata.Tags)
-	if err != nil {
-		return fmt.Errorf("failed to marshal tags: %v", err)
-	}
-
-	labelsJSON, err := json.Marshal(metadata.Labels)
-	if err != nil {
-		return fmt.Errorf("failed to marshal labels: %v", err)
-	}
-
-	_, err = r.db.Exec(
-		`INSERT INTO image_metadata 
-         (id, name, tags, size, owner, labels, created_at, updated_at) 
-         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-		metadata.ID, metadata.Name, string(tagsJSON), metadata.Size,
-		metadata.Owner, string(labelsJSON),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to insert image metadata: %v", err)
-	}
-
-	return nil
+func (r *GormRepository) CreateImageMetadata(metadata *models.ImageMetadata) error {
+	return r.db.Create(metadata).Error
 }
 
-func (r *SQLiteRepository) UpdateImageMetadata(metadata *models.ImageMetadata) error {
-	tagsJSON, err := json.Marshal(metadata.Tags)
-	if err != nil {
-		return fmt.Errorf("failed to marshal tags: %v", err)
+func (r *GormRepository) UpdateImageMetadata(metadata *models.ImageMetadata) error {
+	result := r.db.Model(&models.ImageMetadata{}).Where("id = ? AND owner = ?", metadata.ID, metadata.Owner).Updates(map[string]any{
+		"name":   metadata.Name,
+		"tags":   metadata.Tags,
+		"size":   metadata.Size,
+		"labels": metadata.Labels,
+	})
+	if result.Error != nil {
+		return fmt.Errorf("failed to update image metadata: %v", result.Error)
 	}
-
-	labelsJSON, err := json.Marshal(metadata.Labels)
-	if err != nil {
-		return fmt.Errorf("failed to marshal labels: %v", err)
-	}
-
-	result, err := r.db.Exec(
-		`UPDATE image_metadata SET 
-         name = ?, tags = ?, size = ?, labels = ?, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = ? AND owner = ?`,
-		metadata.Name, string(tagsJSON), metadata.Size, string(labelsJSON),
-		metadata.ID, metadata.Owner,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update image metadata: %v", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("image not found: %s", metadata.ID)
 	}
-
 	return nil
 }
 
-func (r *SQLiteRepository) DeleteImageMetadata(id string) error {
-	result, err := r.db.Exec("DELETE FROM image_metadata WHERE id = ?", id)
-	if err != nil {
-		return fmt.Errorf("failed to delete image metadata: %v", err)
+func (r *GormRepository) DeleteImageMetadata(id string) error {
+	result := r.db.Delete(&models.ImageMetadata{}, "id = ?", id)
+	if result.Error != nil {
+		return fmt.Errorf("failed to delete image metadata: %v", result.Error)
 	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("image metadata not found: %s", id)
 	}
 	return nil
 }
 
-func (r *SQLiteRepository) DeleteImageTag(repository string, tag string, owner string) error {
+func (r *GormRepository) DeleteImageTag(repository string, tag string, owner string) error {
 	var metadata models.ImageMetadata
-	var tagsJSON string
-
-	err := r.db.QueryRow(
-		`SELECT id, tags FROM image_metadata 
-         WHERE name = ? AND owner = ?`,
-		repository, owner,
-	).Scan(&metadata.ID, &tagsJSON)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
+	if err := r.db.Where("name = ? AND owner = ?", repository, owner).First(&metadata).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
 			return fmt.Errorf("repository not found: %s", repository)
 		}
 		return fmt.Errorf("failed to fetch repository: %v", err)
 	}
 
-	// UNMARSHALL CURRENT TAGS
-	var currentTags []string
-	if err := json.Unmarshal([]byte(tagsJSON), &currentTags); err != nil {
-		return fmt.Errorf("failed to parse tags: %v", err)
-	}
-
-	// RM SPECIFIC TAG
-	newTags := make([]string, 0)
+	// RM TAG FROM TAGS
+	var newTags []string
 	tagFound := false
-	for _, t := range currentTags {
+	for _, t := range metadata.Tags {
 		if t != tag {
 			newTags = append(newTags, t)
 		} else {
@@ -626,684 +287,365 @@ func (r *SQLiteRepository) DeleteImageTag(repository string, tag string, owner s
 		return fmt.Errorf("tag not found: %s", tag)
 	}
 
-	// MARSHALL NEW TAGS
-	newTagsJSON, err := json.Marshal(newTags)
-	if err != nil {
-		return fmt.Errorf("failed to marshal new tags: %v", err)
+	// UPDATE TAGS
+	result := r.db.Model(&metadata).Update("tags", models.StringArray(newTags))
+	if result.Error != nil {
+		return fmt.Errorf("failed to update tags: %v", result.Error)
 	}
-
-	// UPDATE METADATA
-	result, err := r.db.Exec(
-		`UPDATE image_metadata 
-         SET tags = ?, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = ? AND owner = ?`,
-		string(newTagsJSON), metadata.ID, owner,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update tags: %v", err)
-	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("failed to update repository: %s", repository)
 	}
 
 	return nil
 }
 
-func (r *SQLiteRepository) ListPublicImageMetadata() ([]*models.ImageMetadata, error) {
-	query := `
-					SELECT id, name, tags, size, owner, labels, private, created_at, updated_at
-					FROM image_metadata 
-					WHERE private = FALSE OR private IS NULL
-					ORDER BY created_at DESC
-	`
-
-	rows, err := r.db.Query(query)
-	if err != nil {
+func (r *GormRepository) ListPublicImageMetadata() ([]*models.ImageMetadata, error) {
+	var metadata []*models.ImageMetadata
+	if err := r.db.Where("private = ? OR private IS NULL", false).
+		Order("created_at DESC").
+		Find(&metadata).Error; err != nil {
 		return nil, fmt.Errorf("failed to query public images: %v", err)
 	}
-	defer rows.Close()
-
-	var metadata []*models.ImageMetadata
-	for rows.Next() {
-		var img models.ImageMetadata
-		var tagsJSON, labelsJSON string
-
-		err := rows.Scan(
-			&img.ID,
-			&img.Name,
-			&tagsJSON,
-			&img.Size,
-			&img.Owner,
-			&labelsJSON,
-			&img.Private,
-			&img.CreatedAt,
-			&img.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan row: %v", err)
-		}
-
-		if err := json.Unmarshal([]byte(tagsJSON), &img.Tags); err != nil {
-			return nil, fmt.Errorf("failed to parse tags: %v", err)
-		}
-		if err := json.Unmarshal([]byte(labelsJSON), &img.Labels); err != nil {
-			return nil, fmt.Errorf("failed to parse labels: %v", err)
-		}
-
-		metadata = append(metadata, &img)
-	}
-
 	return metadata, nil
 }
 
-func (r *SQLiteRepository) UpdateImageVisibility(id string, private bool) error {
-	result, err := r.db.Exec(
-		"UPDATE image_metadata SET private = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-		private, id,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to update visibility: %v", err)
+func (r *GormRepository) UpdateImageVisibility(id string, private bool) error {
+	result := r.db.Model(&models.ImageMetadata{}).Where("id = ?", id).Update("private", private)
+	if result.Error != nil {
+		return fmt.Errorf("failed to update visibility: %v", result.Error)
 	}
-
-	rows, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if rows == 0 {
+	if result.RowsAffected == 0 {
 		return fmt.Errorf("image not found: %s", id)
 	}
-
 	return nil
 }
 
-func (r *SQLiteRepository) CreateArtifactRepository(repo *models.ArtifactRepository) error {
-	_, err := r.db.Exec(
-		`INSERT INTO artifact_repositories (name, description, owner, private) 
-		 VALUES (?, ?, ?, ?)`,
-		repo.Name, repo.Description, repo.Owner, repo.Private,
-	)
-	return err
+// ARTIFACT REPOSITORY OPERATIONS
+func (r *GormRepository) CreateArtifactRepository(repo *models.ArtifactRepository) error {
+	return r.db.Create(repo).Error
 }
 
-func (r *SQLiteRepository) GetArtifactRepository(name string) (*models.ArtifactRepository, error) {
-	repo := &models.ArtifactRepository{}
-	err := r.db.QueryRow(
-		`SELECT id, name, description, owner, private, created_at, updated_at 
-		 FROM artifact_repositories WHERE name = ?`,
-		name,
-	).Scan(&repo.ID, &repo.Name, &repo.Description, &repo.Owner, &repo.Private,
-		&repo.CreatedAt, &repo.UpdatedAt)
-	if err != nil {
+func (r *GormRepository) GetArtifactRepository(name string) (*models.ArtifactRepository, error) {
+	var repo models.ArtifactRepository
+	if err := r.db.Where("name = ?", name).First(&repo).Error; err != nil {
 		return nil, err
 	}
-	return repo, nil
+	return &repo, nil
 }
 
-func (r *SQLiteRepository) GetArtifactRepositoryByID(repoID string) (*models.ArtifactRepository, error) {
-	repo := &models.ArtifactRepository{}
-	err := r.db.QueryRow(
-		`SELECT id, name, description, owner, private, created_at, updated_at 
-		 FROM artifact_repositories WHERE id = ?`,
-		repoID,
-	).Scan(&repo.ID, &repo.Name, &repo.Description, &repo.Owner, &repo.Private,
-		&repo.CreatedAt, &repo.UpdatedAt)
-	if err != nil {
+func (r *GormRepository) GetArtifactRepositoryByID(repoID string) (*models.ArtifactRepository, error) {
+	var repo models.ArtifactRepository
+	if err := r.db.Where("id = ?", repoID).First(&repo).Error; err != nil {
 		return nil, err
 	}
-	return repo, nil
+	return &repo, nil
 }
 
-func (r *SQLiteRepository) ListArtifactRepositories(username string) ([]models.ArtifactRepository, error) {
-	rows, err := r.db.Query(
-		`SELECT id, name, description, owner, private, created_at, updated_at 
-		 FROM artifact_repositories 
-		 WHERE owner = ? OR (private = false)`,
-		username,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
+func (r *GormRepository) ListArtifactRepositories(username string) ([]models.ArtifactRepository, error) {
 	var repos []models.ArtifactRepository
-	for rows.Next() {
-		var repo models.ArtifactRepository
-		err := rows.Scan(&repo.ID, &repo.Name, &repo.Description, &repo.Owner,
-			&repo.Private, &repo.CreatedAt, &repo.UpdatedAt)
-		if err != nil {
-			return nil, err
-		}
-		repos = append(repos, repo)
+	if err := r.db.Where("owner = ? OR (private = ?)", username, false).Find(&repos).Error; err != nil {
+		return nil, err
 	}
-
-	fmt.Printf("FOUND REPOS: %v\n\n", repos)
 	return repos, nil
 }
 
-func (r *SQLiteRepository) DeleteArtifactRepository(name string) error {
-	_, err := r.db.Exec("DELETE FROM artifact_repositories WHERE name = ?", name)
-	if err != nil {
-		return err
-	}
+func (r *GormRepository) DeleteArtifactRepository(name string) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// GET REPO ID
+		var repo models.ArtifactRepository
+		if err := tx.Where("name = ?", name).First(&repo).Error; err != nil {
+			return err
+		}
 
-	// DELETE ALL ARTIFACTS IN THIS REPO
-	_, err = r.db.Exec(
-		`DELETE FROM artifacts WHERE repo_id IN 
-		 (SELECT id FROM artifact_repositories WHERE name = ?)`,
-		name,
-	)
-	return err
+		if err := tx.Where("repo_id = ?", repo.ID).Delete(&models.Artifact{}).Error; err != nil {
+			return err
+		}
+
+		// DELETE REPO
+		return tx.Delete(&repo).Error
+	})
 }
 
-func (r *SQLiteRepository) CreateArtifact(artifact *models.Artifact) error {
+// ARTIFACT OPERATIONS
+func (r *GormRepository) CreateArtifact(artifact *models.Artifact) error {
 	if artifact.ID == "" {
 		artifact.ID = uuid.New().String()
 	}
-	_, err := r.db.Exec(
-		`INSERT INTO artifacts (id, repo_id, name, path, upload_id, version, size, mime_type, metadata)
-		     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		artifact.ID, artifact.RepoID, artifact.Name, artifact.Path, artifact.UploadID,
-		artifact.Version, artifact.Size, artifact.MimeType, artifact.Metadata,
-	)
-	return err
+	return r.db.Create(artifact).Error
 }
 
-func (r *SQLiteRepository) ListArtifacts(repoID int) ([]models.Artifact, error) {
-	rows, err := r.db.Query( // GOOGLE TOLD ME THIS WAS OK
-		`SELECT COALESCE(id, ''), repo_id, name, path, upload_id, version, size, 
-			 COALESCE(mime_type, ''), COALESCE(metadata, '{}'), created_at, updated_at 
-			 FROM artifacts WHERE repo_id = ?`,
-		repoID,
-	)
-	if err != nil {
+func (r *GormRepository) ListArtifacts(repoID int) ([]models.Artifact, error) {
+	var artifacts []models.Artifact
+
+	// Find artifacts with preloaded properties
+	if err := r.db.Where("repo_id = ?", repoID).
+		Preload("Properties").
+		Find(&artifacts).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var artifacts []models.Artifact
-	for rows.Next() {
-		var artifact models.Artifact
-		err := rows.Scan(
-			&artifact.ID,
-			&artifact.RepoID,
-			&artifact.Name,
-			&artifact.Path,
-			&artifact.UploadID,
-			&artifact.Version,
-			&artifact.Size,
-			&artifact.MimeType,
-			&artifact.Metadata,
-			&artifact.CreatedAt,
-			&artifact.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan artifact: %v", err)
-		}
-		// GENERATE NEW UUID IF EMPTY
-		if artifact.ID == "" {
-			artifact.ID = uuid.New().String()
-			_, err = r.db.Exec(
-				"UPDATE artifacts SET id = ? WHERE repo_id = ? AND version = ? AND name = ?",
-				artifact.ID, artifact.RepoID, artifact.Version, artifact.Name,
-			)
-			if err != nil {
+	// Ensure all artifacts have an ID (legacy support)
+	for i := range artifacts {
+		if artifacts[i].ID == "" {
+			artifacts[i].ID = uuid.New().String()
+			if err := r.db.Model(&artifacts[i]).Update("id", artifacts[i].ID).Error; err != nil {
 				return nil, fmt.Errorf("failed to update artifact ID: %v", err)
 			}
 		}
-
-		// GET PROPS
-		properties, err := r.GetArtifactProperties(artifact.ID)
-		if err != nil {
-			fmt.Printf("Coudn't get props for artifact: %v\n", artifact.ID)
-		} else {
-			artifact.Properties = properties
-		}
-
-		artifacts = append(artifacts, artifact)
 	}
+
 	return artifacts, nil
 }
 
-func (r *SQLiteRepository) UpdateArtifactMetadata(id string, metadata string) error {
-	_, err := r.db.Exec(
-		"UPDATE artifacts SET metadata = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-		metadata, id,
-	)
-	return err
+func (r *GormRepository) UpdateArtifactMetadata(id string, metadata string) error {
+	result := r.db.Model(&models.Artifact{}).Where("id = ?", id).Update("metadata", metadata)
+	return result.Error
 }
 
-func (r *SQLiteRepository) DeleteArtifact(repoID int, version string, id string) (models.Artifact, error) {
+func (r *GormRepository) DeleteArtifact(repoID int, version string, id string) (models.Artifact, error) {
 	var artifact models.Artifact
-	err := r.db.QueryRow(
-		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
-         FROM artifacts WHERE repo_id = ? AND version = ? AND id = ?`,
-		repoID, version, id,
-	).Scan(
-		&artifact.ID,
-		&artifact.RepoID,
-		&artifact.Name,
-		&artifact.Path,
-		&artifact.UploadID,
-		&artifact.Version,
-		&artifact.Size,
-		&artifact.MimeType,
-		&artifact.Metadata,
-		&artifact.CreatedAt,
-		&artifact.UpdatedAt,
-	)
 
-	if err != nil {
+	// Load artifact with properties before deletion
+	if err := r.db.Where("repo_id = ? AND version = ? AND id = ?", repoID, version, id).
+		Preload("Properties").
+		First(&artifact).Error; err != nil {
 		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
 	}
 
-	// GET PROPS
-	properties, err := r.GetArtifactProperties(id)
-	if err != nil {
-		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
+	// DELETE ARTIFACT (WILL CASCADE DELETE PROPS)
+	if err := r.db.Delete(&artifact).Error; err != nil {
+		return models.Artifact{}, err
 	}
-	artifact.Properties = properties
 
-	_, err = r.db.Exec("DELETE FROM artifacts WHERE id = ?", id)
-	return artifact, err
+	return artifact, nil
 }
 
-func (r *SQLiteRepository) DeleteArtifactByPath(repoID int, version string, path string) (models.Artifact, error) {
+func (r *GormRepository) DeleteArtifactByPath(repoID int, version string, path string) (models.Artifact, error) {
 	var artifact models.Artifact
-	err := r.db.QueryRow(
-		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
-         FROM artifacts WHERE repo_id = ? AND version = ? AND path = ?`,
-		repoID, version, path,
-	).Scan(
-		&artifact.ID,
-		&artifact.RepoID,
-		&artifact.Name,
-		&artifact.Path,
-		&artifact.UploadID,
-		&artifact.Version,
-		&artifact.Size,
-		&artifact.MimeType,
-		&artifact.Metadata,
-		&artifact.CreatedAt,
-		&artifact.UpdatedAt,
-	)
 
-	if err != nil {
+	if err := r.db.Where("repo_id = ? AND version = ? AND path = ?", repoID, version, path).
+		Preload("Properties").
+		First(&artifact).Error; err != nil {
 		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
 	}
 
-	// GET PROPS
-	properties, err := r.GetArtifactProperties(artifact.ID)
-	if err != nil {
-		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
+	if err := r.db.Delete(&artifact).Error; err != nil {
+		return models.Artifact{}, err
 	}
-	artifact.Properties = properties
 
-	_, err = r.db.Exec("DELETE FROM artifacts WHERE id = ?", artifact.ID)
-	return artifact, err
+	return artifact, nil
 }
 
-func (r *SQLiteRepository) DeleteArtifactByUploadID(repoID int, uploadID string) (models.Artifact, error) {
+func (r *GormRepository) DeleteArtifactByUploadID(repoID int, uploadID string) (models.Artifact, error) {
 	var artifact models.Artifact
-	err := r.db.QueryRow(
-		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
-         FROM artifacts WHERE repo_id = ? AND upload_id = ?`,
-		repoID, uploadID,
-	).Scan(
-		&artifact.ID,
-		&artifact.RepoID,
-		&artifact.Name,
-		&artifact.Path,
-		&artifact.UploadID,
-		&artifact.Version,
-		&artifact.Size,
-		&artifact.MimeType,
-		&artifact.Metadata,
-		&artifact.CreatedAt,
-		&artifact.UpdatedAt,
-	)
 
-	if err != nil {
+	if err := r.db.Where("repo_id = ? AND upload_id = ?", repoID, uploadID).
+		Preload("Properties").
+		First(&artifact).Error; err != nil {
 		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
 	}
 
-	// GET PROPS
-	properties, err := r.GetArtifactProperties(artifact.ID)
-	if err != nil {
-		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
+	if err := r.db.Delete(&artifact).Error; err != nil {
+		return models.Artifact{}, err
 	}
-	artifact.Properties = properties
 
-	_, err = r.db.Exec("DELETE FROM artifacts WHERE id = ?", artifact.ID)
-	return artifact, err
+	return artifact, nil
 }
 
-func (r *SQLiteRepository) SearchArtifacts(criteria models.ArtifactSearchCriteria) ([]models.Artifact, error) {
-	baseQuery := `
-			SELECT DISTINCT a.id, a.repo_id, a.name, a.path, a.upload_id, a.version, 
-						 a.size, a.mime_type, a.metadata, a.created_at, a.updated_at
-			FROM artifacts a
-			JOIN artifact_repositories ar ON a.repo_id = ar.id
-	`
+func (r *GormRepository) SearchArtifacts(criteria models.ArtifactSearchCriteria) ([]models.Artifact, error) {
+	query := r.db.Model(&models.Artifact{}).
+		Joins("JOIN artifact_repositories ON artifacts.repo_id = artifact_repositories.id").
+		Where("(artifact_repositories.owner = ? OR artifact_repositories.private = ?)", criteria.Username, false)
 
-	// ONLY JOIN PROPERTIES TABLE IF WE HAVE PROPERTY FILTERS
-	if len(criteria.Properties) > 0 {
-		baseQuery = baseQuery + " JOIN artifact_properties p ON a.id = p.artifact_id"
-	}
-
-	// BUILD WHERE CLAUSE AND ARGS
-	whereClause := []string{"(ar.owner = ? OR ar.private = FALSE)"} // REPO ACCESS CHECK
-
-	// WE REALLY SHOULDNT BE HITTING THIS, SINCE WE SET ANONYMOUS USER IN HANDLER
-	if criteria.Username == "" {
-		return nil, fmt.Errorf("no username provided to search")
-	}
-
-	args := []interface{}{criteria.Username}
-
+	// ADD FILTERS
 	if criteria.RepoID != nil {
-		whereClause = append(whereClause, "a.repo_id = ?")
-		args = append(args, *criteria.RepoID)
+		query = query.Where("artifacts.repo_id = ?", *criteria.RepoID)
 	}
 
 	if criteria.Name != nil {
-		whereClause = append(whereClause, "a.name LIKE ?")
-		args = append(args, *criteria.Name)
+		query = query.Where("artifacts.name LIKE ?", *criteria.Name)
 	}
 
 	if criteria.Version != nil {
-		whereClause = append(whereClause, "a.version LIKE ?")
-		args = append(args, *criteria.Version)
+		query = query.Where("artifacts.version LIKE ?", *criteria.Version)
 	}
 
 	if criteria.Path != nil {
-		whereClause = append(whereClause, "a.path LIKE ?")
-		args = append(args, *criteria.Path)
+		query = query.Where("artifacts.path LIKE ?", *criteria.Path)
 	}
 
-	// ADD PROPERTY FILTERS
-	if len(criteria.Properties) > 0 {
-		for key, value := range criteria.Properties {
-			whereClause = append(whereClause,
-				"EXISTS (SELECT 1 FROM artifact_properties p2 WHERE p2.artifact_id = a.id AND p2.key = ? AND p2.value = ?)")
-			args = append(args, key, value)
-		}
-	}
-
-	// COMBINE QUERY PARTS
-	query := baseQuery + " WHERE " + strings.Join(whereClause, " AND ")
-
-	// ADD SORTING
-	if criteria.Sort != "" {
-		// VALIDATE SORT FIELD TO PREVENT SQL INJECTION
-		validSortFields := map[string]bool{
-			"name": true, "version": true, "path": true, "size": true,
-			"created_at": true, "updated_at": true,
-		}
-
-		if !validSortFields[criteria.Sort] {
-			return nil, fmt.Errorf("invalid sort field: %s", criteria.Sort)
-		}
-
-		order := strings.ToUpper(criteria.Order)
-		if order != "ASC" && order != "DESC" {
-			order = "DESC"
-		}
-
-		query += fmt.Sprintf(" ORDER BY a.%s %s", criteria.Sort, order)
-	}
-
-	// ADD LIMIT AND OFFSET
-	if criteria.Limit > 0 {
-		query += " LIMIT ?"
-		args = append(args, criteria.Limit)
-	}
-
-	if criteria.Offset > 0 {
-		query += " OFFSET ?"
-		args = append(args, criteria.Offset)
-	}
-
-	// EXECUTE QUERY
-	rows, err := r.db.Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to execute search query: %w", err)
-	}
-	defer rows.Close()
+	query = query.Preload("Properties")
 
 	var artifacts []models.Artifact
-	for rows.Next() {
-		var a models.Artifact
-		err := rows.Scan(
-			&a.ID,
-			&a.RepoID,
-			&a.Name,
-			&a.Path,
-			&a.UploadID,
-			&a.Version,
-			&a.Size,
-			&a.MimeType,
-			&a.Metadata,
-			&a.CreatedAt,
-			&a.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan artifact row: %w", err)
-		}
+	if err := query.Find(&artifacts).Error; err != nil {
+		return nil, fmt.Errorf("failed to execute search query: %w", err)
+	}
 
-		properties, err := r.GetArtifactProperties(a.ID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get artifact properties: %w", err)
-		}
-		a.Properties = properties
+	if len(criteria.Properties) > 0 {
+		var filteredArtifacts []models.Artifact
+		for _, artifact := range artifacts {
+			matches := true
+			props := artifact.PropertiesMap()
 
-		artifacts = append(artifacts, a)
+			for key, value := range criteria.Properties {
+				if propValue, exists := props[key]; !exists || propValue != value {
+					matches = false
+					break
+				}
+			}
+
+			if matches {
+				filteredArtifacts = append(filteredArtifacts, artifact)
+			}
+		}
+		artifacts = filteredArtifacts
+	}
+
+	// Apply sorting (client-side since we already have the data)
+	// TODO: implement proper server-side sorting for large result sets
+
+	// Apply pagination if needed
+	if criteria.Limit > 0 {
+		endIdx := min(criteria.Offset+criteria.Limit, len(artifacts))
+
+		if criteria.Offset < len(artifacts) {
+			artifacts = artifacts[criteria.Offset:endIdx]
+		} else {
+			artifacts = []models.Artifact{}
+		}
 	}
 
 	return artifacts, nil
 }
 
-func (r *SQLiteRepository) GetArtifact(artifactID string) (models.Artifact, error) {
+func (r *GormRepository) GetArtifact(artifactID string) (models.Artifact, error) {
 	var artifact models.Artifact
-	err := r.db.QueryRow(
-		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
-         FROM artifacts WHERE id = ?`,
-		artifactID,
-	).Scan(
-		&artifact.ID,
-		&artifact.RepoID,
-		&artifact.Name,
-		&artifact.Path,
-		&artifact.UploadID,
-		&artifact.Version,
-		&artifact.Size,
-		&artifact.MimeType,
-		&artifact.Metadata,
-		&artifact.CreatedAt,
-		&artifact.UpdatedAt,
-	)
-	if err != nil {
+	if err := r.db.Where("id = ?", artifactID).
+		Preload("Properties").
+		First(&artifact).Error; err != nil {
 		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
 	}
-
-	// GET PROPS
-	properties, err := r.GetArtifactProperties(artifactID)
-	if err != nil {
-		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
-	}
-	artifact.Properties = properties
-
 	return artifact, nil
 }
 
-func (r *SQLiteRepository) GetArtifactByPath(repoID int, path string) (models.Artifact, error) {
+func (r *GormRepository) GetArtifactByPath(repoID int, path string) (models.Artifact, error) {
 	var artifact models.Artifact
-	err := r.db.QueryRow(
-		`SELECT id, repo_id, name, path, upload_id, version, size, mime_type, metadata, created_at, updated_at 
-         FROM artifacts WHERE repo_id = ? AND path = ?`,
-		repoID, path,
-	).Scan(
-		&artifact.ID,
-		&artifact.RepoID,
-		&artifact.Name,
-		&artifact.Path,
-		&artifact.UploadID,
-		&artifact.Version,
-		&artifact.Size,
-		&artifact.MimeType,
-		&artifact.Metadata,
-		&artifact.CreatedAt,
-		&artifact.UpdatedAt,
-	)
-	if err != nil {
+	if err := r.db.Where("repo_id = ? AND path = ?", repoID, path).
+		Preload("Properties").
+		First(&artifact).Error; err != nil {
 		return models.Artifact{}, fmt.Errorf("failed to get artifact: %v", err)
 	}
-
-	// GET PROPS
-	properties, err := r.GetArtifactProperties(artifact.ID)
-	if err != nil {
-		return models.Artifact{}, fmt.Errorf("failed to get artifact properties: %v", err)
-	}
-	artifact.Properties = properties
-
 	return artifact, nil
 }
 
-func (r *SQLiteRepository) UpdateArtifactPath(id string, name string, path string, version string) error {
-	_, err := r.db.Exec(
-		"UPDATE artifacts SET name = ?, path = ?, version = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-		name, path, version, id,
-	)
-	return err
+func (r *GormRepository) UpdateArtifactPath(id string, name string, path string, version string) error {
+	return r.db.Model(&models.Artifact{}).Where("id = ?", id).Updates(map[string]any{
+		"name":    name,
+		"path":    path,
+		"version": version,
+	}).Error
 }
 
-func (r *SQLiteRepository) GetAllSettings() (map[string]json.RawMessage, error) {
-	rows, err := r.db.Query("SELECT key, value FROM settings")
-	fmt.Printf("ROWS: %v", rows)
-	if err != nil {
-		fmt.Printf("ERROR: %v", err)
+// ARTIFACT PROPERTY OPERATIONS
+func (r *GormRepository) SetArtifactProperties(artifactID string, properties map[string]string) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// Delete existing properties
+		if err := tx.Where("artifact_id = ?", artifactID).Delete(&models.ArtifactProperty{}).Error; err != nil {
+			return err
+		}
+
+		// Create new properties
+		for key, value := range properties {
+			prop := models.ArtifactProperty{
+				ArtifactID: artifactID,
+				Key:        key,
+				Value:      value,
+			}
+			if err := tx.Create(&prop).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (r *GormRepository) GetArtifactProperties(artifactID string) (map[string]string, error) {
+	var properties []models.ArtifactProperty
+	if err := r.db.Where("artifact_id = ?", artifactID).Find(&properties).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	settings := make(map[string]json.RawMessage)
-	for rows.Next() {
-		var key string
-		var value []byte
-		if err := rows.Scan(&key, &value); err != nil {
-			fmt.Printf("ERROR: %v", err)
-			return nil, err
-		}
-		settings[key] = json.RawMessage(value)
+	result := make(map[string]string)
+	for _, prop := range properties {
+		result[prop.Key] = prop.Value
 	}
 
-	return settings, nil
+	return result, nil
 }
 
-func (r *SQLiteRepository) GetSettingsSection(section string) (json.RawMessage, error) {
-	var value []byte
-	err := r.db.QueryRow("SELECT value FROM settings WHERE key = ?", section).Scan(&value)
-	if err != nil {
-		if err == sql.ErrNoRows {
-			// RETURN EMPTY JSON IS SETTING DOESNT EXIST
+// SETTINGS OPERATIONS
+func (r *GormRepository) GetAllSettings() (map[string]json.RawMessage, error) {
+	var settings []models.Setting
+	if err := r.db.Find(&settings).Error; err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]json.RawMessage)
+	for _, setting := range settings {
+		result[setting.Key] = json.RawMessage(setting.Value)
+	}
+
+	return result, nil
+}
+
+func (r *GormRepository) GetSettingsSection(section string) (json.RawMessage, error) {
+	var setting models.Setting
+	result := r.db.Where("key = ?", section).First(&setting)
+	if result.Error != nil {
+		if result.Error == gorm.ErrRecordNotFound {
 			return json.RawMessage("{}"), nil
 		}
-		return nil, err
+		return nil, result.Error
 	}
-	return json.RawMessage(value), nil
+	return json.RawMessage(setting.Value), nil
 }
 
-func (r *SQLiteRepository) UpdateSettingsSection(section string, settings json.RawMessage) error {
+func (r *GormRepository) UpdateSettingsSection(section string, settings json.RawMessage) error {
 	var js json.RawMessage
 	if err := json.Unmarshal(settings, &js); err != nil {
 		return fmt.Errorf("invalid JSON: %v", err)
 	}
 
-	_, err := r.db.Exec(`
-			INSERT INTO settings (key, value) 
-			VALUES (?, ?) 
-			ON CONFLICT(key) DO UPDATE SET 
-					value = excluded.value,
-					updated_at = CURRENT_TIMESTAMP
-	`, section, settings)
+	// UPSERT
+	setting := models.Setting{
+		Key:   section,
+		Value: string(settings),
+	}
 
-	return err
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+	}).Create(&setting).Error
 }
 
-func (r *SQLiteRepository) ResetSettingsSection(section string) error {
-	// GET MODEL DEFAULTS
+func (r *GormRepository) ResetSettingsSection(section string) error {
 	settings, err := models.GetSettingsWithDefaults(section)
 	if err != nil {
 		return fmt.Errorf("unknown settings section: %s", section)
 	}
 
-	// TO JSON
 	defaultValue, err := json.Marshal(settings)
 	if err != nil {
 		return fmt.Errorf("failed to marshal default settings: %v", err)
 	}
 
-	// UPDATE OR INSERT
-	_, err = r.db.Exec(`
-        INSERT INTO settings (key, value) 
-        VALUES (?, ?) 
-        ON CONFLICT(key) DO UPDATE SET 
-            value = excluded.value,
-            updated_at = CURRENT_TIMESTAMP
-    `, section, defaultValue)
-
-	return err
-}
-
-func (r *SQLiteRepository) SetArtifactProperties(artifactID string, properties map[string]string) error {
-	tx, err := r.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	// DELETE EXISTING PROPERTIES
-	_, err = tx.Exec("DELETE FROM artifact_properties WHERE artifact_id = ?", artifactID)
-	if err != nil {
-		return err
+	setting := models.Setting{
+		Key:   section,
+		Value: string(defaultValue),
 	}
 
-	// INSERT NEW PROPERTIES
-	stmt, err := tx.Prepare("INSERT INTO artifact_properties (artifact_id, key, value) VALUES (?, ?, ?)")
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
-
-	for key, value := range properties {
-		_, err = stmt.Exec(artifactID, key, value)
-		if err != nil {
-			return err
-		}
-	}
-
-	return tx.Commit()
-}
-
-func (r *SQLiteRepository) GetArtifactProperties(artifactID string) (map[string]string, error) {
-	rows, err := r.db.Query("SELECT key, value FROM artifact_properties WHERE artifact_id = ?", artifactID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	properties := make(map[string]string)
-	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
-			return nil, err
-		}
-		properties[key] = value
-	}
-
-	return properties, nil
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+	}).Create(&setting).Error
 }

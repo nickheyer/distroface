@@ -425,7 +425,7 @@ func (c *APIClient) refreshToken() error {
 	return saveConfig(auth)
 }
 
-func (c *APIClient) doRequest(method, path string, body interface{}) (*http.Response, error) {
+func (c *APIClient) doRequest(method, path string, body any) (*http.Response, error) {
 	// HANDLE STREAMING UPLOADS DIFFERENTLY (PATCH)
 	if method == "PATCH" && body != nil {
 		if reader, ok := body.(io.Reader); ok {
@@ -533,7 +533,7 @@ func (c *APIClient) doRequest(method, path string, body interface{}) (*http.Resp
 	return resp, nil
 }
 
-func printJSON(v interface{}) error {
+func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
@@ -613,7 +613,7 @@ func (c *APIClient) deleteImageTag(name, tag string) error {
 }
 
 func (c *APIClient) updateImageVisibility(name string, private bool) error {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"private": private,
 	}
 	_, err := c.doRequest("POST", fmt.Sprintf("/api/v1/repositories/%s/visibility", name), payload)
@@ -622,7 +622,7 @@ func (c *APIClient) updateImageVisibility(name string, private bool) error {
 
 // ARTIFACT OPERATIONS
 func (c *APIClient) createArtifactRepo(name string, description string, private bool) error {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"name":        name,
 		"description": description,
 		"private":     private,
@@ -752,7 +752,7 @@ func (c *APIClient) listUsers() ([]models.User, error) {
 }
 
 func (c *APIClient) createUser(username, password string, groups []string) error {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"username": username,
 		"password": password,
 		"groups":   groups,
@@ -767,7 +767,7 @@ func (c *APIClient) deleteUser(username string) error {
 }
 
 func (c *APIClient) updateUserGroups(username string, groups []string) error {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"username": username,
 		"groups":   groups,
 	}
@@ -788,7 +788,7 @@ func (c *APIClient) listGroups() ([]models.Group, error) {
 }
 
 func (c *APIClient) createGroup(name, description string, roles []string) error {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"name":        name,
 		"description": description,
 		"roles":       roles,
@@ -798,7 +798,7 @@ func (c *APIClient) createGroup(name, description string, roles []string) error 
 }
 
 func (c *APIClient) updateGroup(name string, description string, roles []string) error {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"description": description,
 		"roles":       roles,
 	}
@@ -824,7 +824,7 @@ func (c *APIClient) listRoles() ([]models.Role, error) {
 }
 
 func (c *APIClient) updateRole(name string, description string, permissions []models.Permission) error {
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"description": description,
 		"permissions": permissions,
 	}
@@ -838,18 +838,18 @@ func (c *APIClient) deleteRole(name string) error {
 }
 
 // SETTINGS OPERATIONS
-func (c *APIClient) getSettings(section string) (map[string]interface{}, error) {
+func (c *APIClient) getSettings(section string) (map[string]any, error) {
 	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/settings/%s", section), nil)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
 
-	var settings map[string]interface{}
+	var settings map[string]any
 	return settings, json.NewDecoder(resp.Body).Decode(&settings)
 }
 
-func (c *APIClient) updateSettings(section string, settings map[string]interface{}) error {
+func (c *APIClient) updateSettings(section string, settings map[string]any) error {
 	_, err := c.doRequest("PUT", fmt.Sprintf("/api/v1/settings/%s", section), settings)
 	return err
 }
@@ -1551,7 +1551,7 @@ func newSettingsUpdateCmd() *cobra.Command {
 		Short: "Update settings for a section",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			settings := make(map[string]interface{})
+			settings := make(map[string]any)
 			for _, v := range values {
 				parts := strings.Split(v, "=")
 				if len(parts) != 2 {

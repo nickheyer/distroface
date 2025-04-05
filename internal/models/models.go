@@ -1,7 +1,9 @@
 package models
 
 import (
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v4"
@@ -56,69 +58,81 @@ func (p Permission) String() string {
 	return string(p.Resource) + ":" + string(p.Action)
 }
 
+type StringArray []string
+
+func (sa *StringArray) Scan(value any) error {
+	bytes, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("failed to unmarshal StringArray value: %v", value)
+	}
+
+	return json.Unmarshal(bytes, sa)
+}
+
+func (sa StringArray) Value() (driver.Value, error) {
+	return json.Marshal(sa)
+}
+
+type PermissionArray []Permission
+
+func (pa *PermissionArray) Scan(value any) error {
+	bytes, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("failed to unmarshal PermissionArray value: %v", value)
+	}
+
+	return json.Unmarshal(bytes, pa)
+}
+
+func (pa PermissionArray) Value() (driver.Value, error) {
+	return json.Marshal(pa)
+}
+
+type StringMap map[string]string
+
+func (sm *StringMap) Scan(value any) error {
+	bytes, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("failed to unmarshal StringMap value: %v", value)
+	}
+
+	return json.Unmarshal(bytes, sm)
+}
+
+func (sm StringMap) Value() (driver.Value, error) {
+	return json.Marshal(sm)
+}
+
 // NAMED SET OF PERMISSIONS
 type Role struct {
-	ID          int          `json:"id"`
-	Name        string       `json:"name"`
-	Description string       `json:"description"`
-	Permissions []Permission `json:"permissions"`
-	CreatedAt   time.Time    `json:"created_at"`
-	UpdatedAt   time.Time    `json:"updated_at"`
-}
-
-// PERMISSIONS TO JSON
-func (r *Role) MarshalPermissions() (string, error) {
-	data, err := json.Marshal(r.Permissions)
-	return string(data), err
-}
-
-// JSON TO PERMISSIONS
-func (r *Role) UnmarshalPermissions(data string) error {
-	return json.Unmarshal([]byte(data), &r.Permissions)
+	ID          int             `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name        string          `json:"name" gorm:"uniqueIndex;not null"`
+	Description string          `json:"description" gorm:"not null"`
+	Permissions PermissionArray `json:"permissions" gorm:"type:text;not null"`
+	CreatedAt   time.Time       `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 // ROLES AND USERS
 type Group struct {
-	ID          int       `json:"id"`
-	Name        string    `json:"name"`
-	Description string    `json:"description"`
-	Roles       []string  `json:"roles"`
-	Scope       Scope     `json:"scope"`
-	Target      string    `json:"target,omitempty"` // OPT TARGET W/ SCOPE
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
-}
-
-// ROLES TO JSON
-func (g *Group) MarshalRoles() (string, error) {
-	data, err := json.Marshal(g.Roles)
-	return string(data), err
-}
-
-// JSON TO ROLES
-func (g *Group) UnmarshalRoles(data string) error {
-	return json.Unmarshal([]byte(data), &g.Roles)
+	ID          int         `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name        string      `json:"name" gorm:"uniqueIndex;not null"`
+	Description string      `json:"description" gorm:"not null"`
+	Roles       StringArray `json:"roles" gorm:"type:text;not null"`
+	Scope       string      `json:"scope" gorm:"index;not null;default:'system:default'"`
+	Target      string      `json:"target,omitempty" gorm:"default:null"`
+	CreatedAt   time.Time   `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time   `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 // SYSTEM USER WITH GROUPS
 type User struct {
-	ID        int       `json:"id"`
-	Username  string    `json:"username"`
-	Password  []byte    `json:"-,omitempty"`
-	Groups    []string  `json:"groups"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// GROUPS TO JSON
-func (u *User) MarshalGroups() (string, error) {
-	data, err := json.Marshal(u.Groups)
-	return string(data), err
-}
-
-// JSON TO GROUPS
-func (u *User) UnmarshalGroups(data string) error {
-	return json.Unmarshal([]byte(data), &u.Groups)
+	ID        int         `json:"id" gorm:"primaryKey;autoIncrement"`
+	Username  string      `json:"username" gorm:"uniqueIndex;not null"`
+	Password  []byte      `json:"-,omitempty" gorm:"not null"`
+	Groups    StringArray `json:"groups" gorm:"type:text;not null"`
+	CreatedAt time.Time   `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time   `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 // DEFAULT SYSTEM ROLES - TODO: USE THIS INSTEAD OF MANUAL MIGRATIONS
@@ -146,15 +160,15 @@ type ImageTag struct {
 }
 
 type ImageMetadata struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Tags      []string          `json:"tags"`
-	Size      int64             `json:"size"`
-	Owner     string            `json:"owner"`
-	Labels    map[string]string `json:"labels"`
-	Private   bool              `json:"private"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
+	ID        string      `json:"id" gorm:"primaryKey;type:text"`
+	Name      string      `json:"name" gorm:"index;not null"`
+	Tags      StringArray `json:"tags" gorm:"type:text;not null"`
+	Size      int64       `json:"size" gorm:"not null"`
+	Owner     string      `json:"owner" gorm:"index;not null"`
+	Labels    StringMap   `json:"labels" gorm:"type:text"`
+	Private   bool        `json:"private" gorm:"default:false"`
+	CreatedAt time.Time   `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time   `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type DockerManifest struct {
@@ -173,28 +187,44 @@ type DockerManifest struct {
 }
 
 type ArtifactRepository struct {
-	ID          int       `json:"id"`
-	Name        string    `json:"name"`
+	ID          int       `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name        string    `json:"name" gorm:"uniqueIndex;not null"`
 	Description string    `json:"description"`
-	Owner       string    `json:"owner"`
-	Private     bool      `json:"private"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	Owner       string    `json:"owner" gorm:"not null"`
+	Private     bool      `json:"private" gorm:"default:true"`
+	CreatedAt   time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type Artifact struct {
-	ID         string            `json:"id"`
-	RepoID     int               `json:"repo_id"`
-	Name       string            `json:"name"`
-	Path       string            `json:"path"`
-	UploadID   string            `json:"upload_id"`
-	Version    string            `json:"version"`
-	Size       int64             `json:"size"`
-	MimeType   string            `json:"mime_type"`
-	Metadata   string            `json:"metadata"`
-	Properties map[string]string `json:"properties"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
+	ID         string             `json:"id" gorm:"primaryKey;type:text"`
+	RepoID     int                `json:"repo_id" gorm:"not null;index"`
+	Name       string             `json:"name" gorm:"not null"`
+	Path       string             `json:"path" gorm:"not null"`
+	UploadID   string             `json:"upload_id" gorm:"not null"`
+	Version    string             `json:"version" gorm:"not null"`
+	Size       int64              `json:"size" gorm:"not null"`
+	MimeType   string             `json:"mime_type"`
+	Metadata   string             `json:"metadata"`
+	CreatedAt  time.Time          `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt  time.Time          `json:"updated_at" gorm:"autoUpdateTime"`
+	Properties []ArtifactProperty `json:"properties" gorm:"foreignKey:ArtifactID;references:ID"`
+}
+
+type ArtifactProperty struct {
+	ID         int       `json:"id" gorm:"primaryKey;autoIncrement"`
+	ArtifactID string    `json:"artifact_id" gorm:"index;not null"`
+	Key        string    `json:"key" gorm:"not null;index"`
+	Value      string    `json:"value" gorm:"not null;index"`
+	CreatedAt  time.Time `json:"created_at" gorm:"autoCreateTime"`
+}
+
+func (a *Artifact) PropertiesMap() map[string]string {
+	result := make(map[string]string)
+	for _, prop := range a.Properties {
+		result[prop.Key] = prop.Value
+	}
+	return result
 }
 
 type ArtifactSearchCriteria struct {
@@ -307,4 +337,17 @@ type AccessLogEntry struct {
 	Path      string    `json:"path"`
 	Method    string    `json:"method"`
 	Status    int       `json:"status"`
+}
+
+type Setting struct {
+	ID        int       `json:"id" gorm:"primaryKey;autoIncrement"`
+	Key       string    `json:"key" gorm:"uniqueIndex;not null"`
+	Value     string    `json:"value" gorm:"not null"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type SchemaMigration struct {
+	ID        string    `json:"id" gorm:"primaryKey;type:text"`
+	AppliedAt time.Time `json:"applied_at" gorm:"autoCreateTime"`
 }

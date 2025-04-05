@@ -625,7 +625,7 @@ func (h *ArtifactHandler) UpdateMetadata(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	var metadata map[string]interface{}
+	var metadata map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&metadata); err != nil {
 		http.Error(w, "Invalid metadata", http.StatusBadRequest)
 		return

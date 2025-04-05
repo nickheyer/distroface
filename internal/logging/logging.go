@@ -50,7 +50,7 @@ func (l *LogService) Errorf(msg string, err error, fields ...zap.Field) error {
 	return fmt.Errorf("Error: %v", err)
 }
 
-func (l *LogService) Printf(format string, args ...interface{}) {
+func (l *LogService) Printf(format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	l.Logger.Info(msg)
 }
