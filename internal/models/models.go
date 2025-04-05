@@ -120,7 +120,7 @@ type Group struct {
 	Description string      `json:"description" gorm:"not null"`
 	Roles       StringArray `json:"roles" gorm:"type:text;not null"`
 	Scope       string      `json:"scope" gorm:"index;not null;default:'system:default'"`
-	Target      string      `json:"target,omitempty" gorm:"default:null"`
+	Target      string      `json:"target,omitempty" gorm:"default:''"`
 	CreatedAt   time.Time   `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt   time.Time   `json:"updated_at" gorm:"autoUpdateTime"`
 }
