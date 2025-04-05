@@ -207,9 +207,9 @@ func initDB(cfg *models.Config) (*gorm.DB, error) {
 	_, _ = sqlDB.Exec("PRAGMA busy_timeout=5000;")
 
 	// RUN SCHEMA SETUP (AUTO MIGRATIONS)
-	if err := db.RunSchema(gormDB, cfg); err != nil {
-		return nil, fmt.Errorf("schema init error: %w", err)
-	}
+	// if err := db.RunSchema(gormDB, cfg); err != nil {
+	// 	return nil, fmt.Errorf("schema init error: %w", err)
+	// }
 
 	// INSERT INITIAL VALUES
 	if err := db.RunInit(gormDB, cfg); err != nil {

@@ -32,6 +32,11 @@ func RunInit(db *gorm.DB, cfg *models.Config) error {
 		}
 	}
 
+	// RUN MIGRATIONS
+	if err = RunMigrations(db, cfg); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
+	}
+
 	return nil
 }
 
@@ -137,6 +142,10 @@ func createDefaultRoles(db *gorm.DB) error {
 }
 
 func createDefaultGroups(db *gorm.DB) error {
+	if err := db.Exec("UPDATE groups SET scope = 'system:all' WHERE scope IS NULL OR scope = ''").Error; err != nil {
+		return err
+	}
+
 	groups := []models.Group{
 		{
 			Name:        "admins",

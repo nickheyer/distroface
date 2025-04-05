@@ -61,12 +61,17 @@ func (p Permission) String() string {
 type StringArray []string
 
 func (sa *StringArray) Scan(value any) error {
-	bytes, ok := value.([]byte)
-	if !ok {
-		return fmt.Errorf("failed to unmarshal StringArray value: %v", value)
+	switch v := value.(type) {
+	case []byte:
+		return json.Unmarshal(v, sa)
+	case string:
+		return json.Unmarshal([]byte(v), sa)
+	case nil:
+		*sa = make([]string, 0)
+		return nil
+	default:
+		return fmt.Errorf("failed to unmarshal StringArray, unsupported value type: %T", value)
 	}
-
-	return json.Unmarshal(bytes, sa)
 }
 
 func (sa StringArray) Value() (driver.Value, error) {
@@ -76,12 +81,17 @@ func (sa StringArray) Value() (driver.Value, error) {
 type PermissionArray []Permission
 
 func (pa *PermissionArray) Scan(value any) error {
-	bytes, ok := value.([]byte)
-	if !ok {
-		return fmt.Errorf("failed to unmarshal PermissionArray value: %v", value)
+	switch v := value.(type) {
+	case []byte:
+		return json.Unmarshal(v, pa)
+	case string:
+		return json.Unmarshal([]byte(v), pa)
+	case nil:
+		*pa = make([]Permission, 0)
+		return nil
+	default:
+		return fmt.Errorf("failed to unmarshal PermissionArray, unsupported value type: %T", value)
 	}
-
-	return json.Unmarshal(bytes, pa)
 }
 
 func (pa PermissionArray) Value() (driver.Value, error) {
@@ -91,12 +101,17 @@ func (pa PermissionArray) Value() (driver.Value, error) {
 type StringMap map[string]string
 
 func (sm *StringMap) Scan(value any) error {
-	bytes, ok := value.([]byte)
-	if !ok {
-		return fmt.Errorf("failed to unmarshal StringMap value: %v", value)
+	switch v := value.(type) {
+	case []byte:
+		return json.Unmarshal(v, sm)
+	case string:
+		return json.Unmarshal([]byte(v), sm)
+	case nil:
+		*sm = make(map[string]string)
+		return nil
+	default:
+		return fmt.Errorf("failed to unmarshal StringMap, unsupported value type: %T", value)
 	}
-
-	return json.Unmarshal(bytes, sm)
 }
 
 func (sm StringMap) Value() (driver.Value, error) {
@@ -119,7 +134,7 @@ type Group struct {
 	Name        string      `json:"name" gorm:"uniqueIndex;not null"`
 	Description string      `json:"description" gorm:"not null"`
 	Roles       StringArray `json:"roles" gorm:"type:text;not null"`
-	Scope       string      `json:"scope" gorm:"index;not null;default:'system:default'"`
+	Scope       string      `json:"scope" gorm:"index"`
 	Target      string      `json:"target,omitempty" gorm:"default:''"`
 	CreatedAt   time.Time   `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt   time.Time   `json:"updated_at" gorm:"autoUpdateTime"`
