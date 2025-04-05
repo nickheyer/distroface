@@ -3,6 +3,7 @@ package repository
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"slices"
 
@@ -18,6 +19,10 @@ type GormRepository struct {
 
 func NewGormRepository(db *gorm.DB) Repository {
 	return &GormRepository{db: db}
+}
+
+func (r *GormRepository) GetDB() *gorm.DB {
+	return r.db
 }
 
 // USER OPERATIONS
@@ -216,14 +221,6 @@ func (r *GormRepository) DeleteRole(name string) error {
 }
 
 // IMAGE OPERATIONS
-func (r *GormRepository) ListImageMetadata(owner string) ([]*models.ImageMetadata, error) {
-	var metadata []*models.ImageMetadata
-	if err := r.db.Where("owner = ?", owner).Find(&metadata).Error; err != nil {
-		return nil, fmt.Errorf("query failed: %v", err)
-	}
-	return metadata, nil
-}
-
 func (r *GormRepository) GetImageMetadata(id string) (*models.ImageMetadata, error) {
 	var metadata models.ImageMetadata
 	if err := r.db.Where("id = ?", id).First(&metadata).Error; err != nil {
@@ -236,23 +233,16 @@ func (r *GormRepository) CreateImageMetadata(metadata *models.ImageMetadata) err
 	return r.db.Create(metadata).Error
 }
 
-func (r *GormRepository) UpdateImageMetadata(metadata *models.ImageMetadata) error {
-	result := r.db.Model(&models.ImageMetadata{}).Where("id = ? AND owner = ?", metadata.ID, metadata.Owner).Updates(map[string]any{
-		"name":   metadata.Name,
-		"tags":   metadata.Tags,
-		"size":   metadata.Size,
-		"labels": metadata.Labels,
-	})
-	if result.Error != nil {
-		return fmt.Errorf("failed to update image metadata: %v", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("image not found: %s", metadata.ID)
-	}
-	return nil
-}
-
 func (r *GormRepository) DeleteImageMetadata(id string) error {
+	var count int64
+	if err := r.db.Model(&models.UserImage{}).Where("image_id = ?", id).Count(&count).Error; err != nil {
+		return fmt.Errorf("failed to check references to image metadata: %v", err)
+	}
+
+	if count > 0 {
+		return fmt.Errorf("cannot delete image metadata while %d user images reference it", count)
+	}
+
 	result := r.db.Delete(&models.ImageMetadata{}, "id = ?", id)
 	if result.Error != nil {
 		return fmt.Errorf("failed to delete image metadata: %v", result.Error)
@@ -263,59 +253,105 @@ func (r *GormRepository) DeleteImageMetadata(id string) error {
 	return nil
 }
 
-func (r *GormRepository) DeleteImageTag(repository string, tag string, owner string) error {
-	var metadata models.ImageMetadata
-	if err := r.db.Where("name = ? AND owner = ?", repository, owner).First(&metadata).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return fmt.Errorf("repository not found: %s", repository)
-		}
-		return fmt.Errorf("failed to fetch repository: %v", err)
+func (r *GormRepository) ListUserImages(username string) ([]*models.UserImage, error) {
+	var userImages []*models.UserImage
+	if err := r.db.Where("username = ?", username).Find(&userImages).Error; err != nil {
+		return nil, fmt.Errorf("query failed: %v", err)
+	}
+	return userImages, nil
+}
+
+func (r *GormRepository) GetUserImage(username string, name string, tag string) (*models.UserImage, error) {
+	var userImage models.UserImage
+	if err := r.db.Where("username = ? AND name = ? AND tag = ?", username, name, tag).First(&userImage).Error; err != nil {
+		return nil, err
+	}
+	return &userImage, nil
+}
+
+func (r *GormRepository) CreateUserImage(userImage *models.UserImage) error {
+	var count int64
+	if err := r.db.Model(&models.ImageMetadata{}).Where("id = ?", userImage.ImageID).Count(&count).Error; err != nil {
+		return fmt.Errorf("failed to check if image metadata exists: %v", err)
 	}
 
-	// RM TAG FROM TAGS
-	var newTags []string
-	tagFound := false
-	for _, t := range metadata.Tags {
-		if t != tag {
-			newTags = append(newTags, t)
-		} else {
-			tagFound = true
-		}
+	if count == 0 {
+		return fmt.Errorf("referenced image metadata with id %s does not exist", userImage.ImageID)
 	}
 
-	if !tagFound {
-		return fmt.Errorf("tag not found: %s", tag)
-	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "username"}, {Name: "name"}, {Name: "tag"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"image_id":   userImage.ImageID,
+			"private":    userImage.Private,
+			"updated_at": time.Now(),
+		}),
+	}).Create(userImage).Error
+}
 
-	// UPDATE TAGS
-	result := r.db.Model(&metadata).Update("tags", models.StringArray(newTags))
+func (r *GormRepository) UpdateUserImage(userImage *models.UserImage) error {
+	result := r.db.Model(&models.UserImage{}).Where("username = ? AND name = ? AND tag = ?",
+		userImage.Username, userImage.Name, userImage.Tag).Updates(map[string]any{
+		"image_id": userImage.ImageID,
+		"private":  userImage.Private,
+	})
+
 	if result.Error != nil {
-		return fmt.Errorf("failed to update tags: %v", result.Error)
+		return fmt.Errorf("failed to update user image: %v", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("failed to update repository: %s", repository)
+		return fmt.Errorf("user image not found for %s/%s:%s", userImage.Username, userImage.Name, userImage.Tag)
+	}
+	return nil
+}
+
+func (r *GormRepository) DeleteUserImage(username string, name string, tag string) error {
+	result := r.db.Where("username = ? AND name = ? AND tag = ?", username, name, tag).Delete(&models.UserImage{})
+	if result.Error != nil {
+		return fmt.Errorf("failed to delete user image: %v", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("user image not found for %s/%s:%s", username, name, tag)
+	}
+
+	// CHECK FOR METADATA WE NEED TO RM
+	var userImage models.UserImage
+	if err := r.db.Unscoped().Where("username = ? AND name = ? AND tag = ?", username, name, tag).First(&userImage).Error; err != nil {
+		// THIS SHOULDNT HAPPEN
+		return nil
+	}
+
+	// CHECK FOR OTHER USER REFS
+	var count int64
+	if err := r.db.Model(&models.UserImage{}).Where("image_id = ?", userImage.ImageID).Count(&count).Error; err != nil {
+		return nil
+	}
+
+	// IF NO REFS, DELETE METADATA TOO
+	if count == 0 {
+		r.db.Delete(&models.ImageMetadata{}, "id = ?", userImage.ImageID)
 	}
 
 	return nil
 }
 
-func (r *GormRepository) ListPublicImageMetadata() ([]*models.ImageMetadata, error) {
-	var metadata []*models.ImageMetadata
-	if err := r.db.Where("private = ? OR private IS NULL", false).
+func (r *GormRepository) ListPublicUserImages() ([]*models.UserImage, error) {
+	var userImages []*models.UserImage
+	if err := r.db.Where("private IS NULL OR private = ?", false).
 		Order("created_at DESC").
-		Find(&metadata).Error; err != nil {
-		return nil, fmt.Errorf("failed to query public images: %v", err)
+		Find(&userImages).Error; err != nil {
+		return nil, fmt.Errorf("failed to query public user images: %v", err)
 	}
-	return metadata, nil
+	return userImages, nil
 }
 
-func (r *GormRepository) UpdateImageVisibility(id string, private bool) error {
-	result := r.db.Model(&models.ImageMetadata{}).Where("id = ?", id).Update("private", private)
+func (r *GormRepository) UpdateUserImageVisibility(id int, private bool) error {
+	result := r.db.Model(&models.UserImage{}).Where("id = ?", id).Update("private", private)
 	if result.Error != nil {
 		return fmt.Errorf("failed to update visibility: %v", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("image not found: %s", id)
+		return fmt.Errorf("user image not found with id %d", id)
 	}
 	return nil
 }
@@ -343,7 +379,7 @@ func (r *GormRepository) GetArtifactRepositoryByID(repoID string) (*models.Artif
 
 func (r *GormRepository) ListArtifactRepositories(username string) ([]models.ArtifactRepository, error) {
 	var repos []models.ArtifactRepository
-	if err := r.db.Where("owner = ? OR (private = ?)", username, false).Find(&repos).Error; err != nil {
+	if err := r.db.Where("owner = ? OR (private IS NULL OR private = ?)", username, false).Find(&repos).Error; err != nil {
 		return nil, err
 	}
 	return repos, nil
@@ -376,15 +412,12 @@ func (r *GormRepository) CreateArtifact(artifact *models.Artifact) error {
 
 func (r *GormRepository) ListArtifacts(repoID int) ([]models.Artifact, error) {
 	var artifacts []models.Artifact
-
-	// Find artifacts with preloaded properties
 	if err := r.db.Where("repo_id = ?", repoID).
 		Preload("Properties").
 		Find(&artifacts).Error; err != nil {
 		return nil, err
 	}
 
-	// Ensure all artifacts have an ID (legacy support)
 	for i := range artifacts {
 		if artifacts[i].ID == "" {
 			artifacts[i].ID = uuid.New().String()
@@ -405,7 +438,7 @@ func (r *GormRepository) UpdateArtifactMetadata(id string, metadata string) erro
 func (r *GormRepository) DeleteArtifact(repoID int, version string, id string) (models.Artifact, error) {
 	var artifact models.Artifact
 
-	// Load artifact with properties before deletion
+	// LOAD ARTIFACT WITH PROPS PRIOR TO DELETE
 	if err := r.db.Where("repo_id = ? AND version = ? AND id = ?", repoID, version, id).
 		Preload("Properties").
 		First(&artifact).Error; err != nil {
@@ -453,9 +486,16 @@ func (r *GormRepository) DeleteArtifactByUploadID(repoID int, uploadID string) (
 }
 
 func (r *GormRepository) SearchArtifacts(criteria models.ArtifactSearchCriteria) ([]models.Artifact, error) {
+	// WE SHOULDNT HIT BECAUSE WE SET ANONYMOUS IN HANDLER
+	if criteria.Username == "" {
+		return nil, fmt.Errorf("no username provided to search")
+	}
+
+	// BASE QUERY
 	query := r.db.Model(&models.Artifact{}).
+		Distinct().
 		Joins("JOIN artifact_repositories ON artifacts.repo_id = artifact_repositories.id").
-		Where("(artifact_repositories.owner = ? OR artifact_repositories.private = ?)", criteria.Username, false)
+		Where("(artifact_repositories.owner = ? OR artifact_repositories.private IS NULL OR artifact_repositories.private = ?)", criteria.Username, false)
 
 	// ADD FILTERS
 	if criteria.RepoID != nil {
@@ -474,45 +514,59 @@ func (r *GormRepository) SearchArtifacts(criteria models.ArtifactSearchCriteria)
 		query = query.Where("artifacts.path LIKE ?", *criteria.Path)
 	}
 
+	// PROP FILTER SUBQUERIES
+	if len(criteria.Properties) > 0 {
+		for key, value := range criteria.Properties {
+			subQuery := r.db.Model(&models.ArtifactProperty{}).
+				Select("1").
+				Where("artifact_properties.artifact_id = artifacts.id").
+				Where("artifact_properties.key = ? AND artifact_properties.value = ?", key, value)
+
+			query = query.Where("EXISTS (?)", subQuery)
+		}
+	}
+
+	// APPLY SORT
+	if criteria.Sort != "" {
+		// VALIDATE SORT FIELDS
+		validSortFields := map[string]string{
+			"name":       "artifacts.name",
+			"version":    "artifacts.version",
+			"path":       "artifacts.path",
+			"size":       "artifacts.size",
+			"created_at": "artifacts.created_at",
+			"updated_at": "artifacts.updated_at",
+		}
+
+		if sortField, valid := validSortFields[criteria.Sort]; valid {
+			order := "DESC"
+			if criteria.Order == "asc" || criteria.Order == "ASC" {
+				order = "ASC"
+			}
+
+			query = query.Order(fmt.Sprintf("%s %s", sortField, order))
+		} else {
+			return nil, fmt.Errorf("invalid sort field: %s", criteria.Sort)
+		}
+	} else {
+		query = query.Order("artifacts.created_at DESC")
+	}
+
+	// PAGINATION
+	if criteria.Limit > 0 {
+		query = query.Limit(criteria.Limit)
+	}
+
+	if criteria.Offset > 0 {
+		query = query.Offset(criteria.Offset)
+	}
+
 	query = query.Preload("Properties")
 
+	// RUN QUERY
 	var artifacts []models.Artifact
 	if err := query.Find(&artifacts).Error; err != nil {
 		return nil, fmt.Errorf("failed to execute search query: %w", err)
-	}
-
-	if len(criteria.Properties) > 0 {
-		var filteredArtifacts []models.Artifact
-		for _, artifact := range artifacts {
-			matches := true
-			props := artifact.PropertiesMap()
-
-			for key, value := range criteria.Properties {
-				if propValue, exists := props[key]; !exists || propValue != value {
-					matches = false
-					break
-				}
-			}
-
-			if matches {
-				filteredArtifacts = append(filteredArtifacts, artifact)
-			}
-		}
-		artifacts = filteredArtifacts
-	}
-
-	// Apply sorting (client-side since we already have the data)
-	// TODO: implement proper server-side sorting for large result sets
-
-	// Apply pagination if needed
-	if criteria.Limit > 0 {
-		endIdx := min(criteria.Offset+criteria.Limit, len(artifacts))
-
-		if criteria.Offset < len(artifacts) {
-			artifacts = artifacts[criteria.Offset:endIdx]
-		} else {
-			artifacts = []models.Artifact{}
-		}
 	}
 
 	return artifacts, nil
@@ -549,7 +603,6 @@ func (r *GormRepository) UpdateArtifactPath(id string, name string, path string,
 // ARTIFACT PROPERTY OPERATIONS
 func (r *GormRepository) SetArtifactProperties(artifactID string, properties map[string]string) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// Delete existing properties
 		if err := tx.Where("artifact_id = ?", artifactID).Delete(&models.ArtifactProperty{}).Error; err != nil {
 			return err
 		}

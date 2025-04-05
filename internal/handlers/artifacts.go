@@ -3,6 +3,7 @@ package handlers
 import (
 	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -46,6 +47,13 @@ func NewArtifactHandler(repo repository.Repository, cfg *models.Config, log *log
 
 func (h *ArtifactHandler) CreateRepository(w http.ResponseWriter, r *http.Request) {
 	username := r.Context().Value(constants.UsernameKey).(string)
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Failed to read request body", http.StatusBadRequest)
+		return
+	}
+
+	r.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 
 	var repo models.ArtifactRepository
 	if err := json.NewDecoder(r.Body).Decode(&repo); err != nil {
@@ -53,7 +61,14 @@ func (h *ArtifactHandler) CreateRepository(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// PREVENT USE OF RESERVED WORDS
+	if strings.HasPrefix(strings.ToLower(repo.Name), "user.") {
+		http.Error(w, "Repository name cannot start with 'user.' - this is a reserved prefix", http.StatusBadRequest)
+		return
+	}
+
 	repo.Owner = username
+
 	if err := h.repo.CreateArtifactRepository(&repo); err != nil {
 		h.log.Printf("Failed to create repository: %v", err)
 		http.Error(w, "Failed to create repository", http.StatusInternalServerError)
@@ -68,7 +83,9 @@ func (h *ArtifactHandler) CreateRepository(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(repo)
 }
 
 func (h *ArtifactHandler) ListRepositories(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +118,7 @@ func (h *ArtifactHandler) InitiateUpload(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
-	if repo.Owner != username && repo.Private {
+	if repo.Owner != username && (repo.Private != nil && *repo.Private) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -189,7 +206,7 @@ func (h *ArtifactHandler) CompleteUpload(w http.ResponseWriter, r *http.Request)
 		h.metrics.TrackUploadFailed()
 		return
 	}
-	if repo.Owner != username && repo.Private {
+	if repo.Owner != username && (repo.Private != nil && *repo.Private) {
 		_ = os.Remove(uploadPath)
 		http.Error(w, "Access denied", http.StatusForbidden)
 		h.metrics.TrackUploadFailed()
@@ -359,7 +376,7 @@ func (h *ArtifactHandler) DownloadArtifact(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if repo.Owner != username && repo.Private {
+	if repo.Owner != username && (repo.Private != nil && *repo.Private) {
 		h.metrics.TrackDownloadFailed()
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
@@ -405,7 +422,7 @@ func (h *ArtifactHandler) QueryDownloadArtifacts(w http.ResponseWriter, r *http.
 		http.Error(w, "Repository not found", http.StatusNotFound)
 		return
 	}
-	if repo.Owner != username && repo.Private {
+	if repo.Owner != username && (repo.Private != nil && *repo.Private) {
 		h.metrics.TrackDownloadFailed()
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
@@ -585,7 +602,7 @@ func (h *ArtifactHandler) ListVersions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if repo.Owner != username && repo.Private {
+	if repo.Owner != username && (repo.Private != nil && *repo.Private) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -620,7 +637,7 @@ func (h *ArtifactHandler) UpdateMetadata(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if repo.Owner != username && repo.Private {
+	if repo.Owner != username && (repo.Private != nil && *repo.Private) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -816,7 +833,7 @@ func (h *ArtifactHandler) SearchArtifacts(w http.ResponseWriter, r *http.Request
 			http.Error(w, "Repository not found", http.StatusNotFound)
 			return
 		}
-		if repoObj.Owner != username && repoObj.Private {
+		if repoObj.Owner != username && (repoObj.Private != nil && *repoObj.Private) {
 			http.Error(w, "Access denied", http.StatusForbidden)
 			return
 		}

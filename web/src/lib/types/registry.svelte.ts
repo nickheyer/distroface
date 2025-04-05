@@ -18,6 +18,7 @@ export interface ImageRepository {
 // API REQUEST/RESPONSE TYPES
 export interface VisibilityUpdateRequest {
   id: string;
+  name: string;
   private: boolean;
 }
 

@@ -137,19 +137,35 @@ type User struct {
 
 // DEFAULT SYSTEM ROLES - TODO: USE THIS INSTEAD OF MANUAL MIGRATIONS
 type GlobalView struct {
-	TotalImages int64            `json:"total_images"`
-	TotalSize   int64            `json:"total_size"`
-	Images      []*ImageMetadata `json:"images"`
+	TotalImages int64                `json:"total_images"`
+	TotalSize   int64                `json:"total_size"`
+	Images      []*ImageMetadataView `json:"images"`
+}
+
+type ImageMetadataView struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	FullName    string    `json:"full_name"`
+	Tags        []string  `json:"tags"`
+	Size        int64     `json:"size"`
+	Owner       string    `json:"owner"`
+	Labels      StringMap `json:"labels"`
+	Private     bool      `json:"private"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	IsOwnedByMe bool      `json:"is_owned_by_me"`
 }
 
 type ImageRepository struct {
-	ID        string     `json:"id"`
-	Name      string     `json:"name"`
-	Tags      []ImageTag `json:"tags"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	Owner     string     `json:"owner"`
-	Private   bool       `json:"private"`
-	Size      int64      `json:"size"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	FullName    string     `json:"full_name"`
+	Tags        []ImageTag `json:"tags"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	Owner       string     `json:"owner"`
+	Private     bool       `json:"private"`
+	Size        int64      `json:"size"`
+	IsOwnedByMe bool       `json:"is_owned_by_me"`
 }
 
 type ImageTag struct {
@@ -160,15 +176,22 @@ type ImageTag struct {
 }
 
 type ImageMetadata struct {
-	ID        string      `json:"id" gorm:"primaryKey;type:text"`
-	Name      string      `json:"name" gorm:"index;not null"`
-	Tags      StringArray `json:"tags" gorm:"type:text;not null"`
-	Size      int64       `json:"size" gorm:"not null"`
-	Owner     string      `json:"owner" gorm:"index;not null"`
-	Labels    StringMap   `json:"labels" gorm:"type:text"`
-	Private   bool        `json:"private" gorm:"default:false"`
-	CreatedAt time.Time   `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt time.Time   `json:"updated_at" gorm:"autoUpdateTime"`
+	ID        string    `json:"id" gorm:"primaryKey;type:text"`
+	Size      int64     `json:"size" gorm:"not null"`
+	Labels    StringMap `json:"labels" gorm:"type:text"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type UserImage struct {
+	ID        int       `json:"id" gorm:"primaryKey;autoIncrement"`
+	Username  string    `json:"username" gorm:"uniqueIndex:idx_user_images_unique;not null"`
+	Name      string    `json:"name" gorm:"uniqueIndex:idx_user_images_unique;index;not null"`
+	Tag       string    `json:"tag" gorm:"uniqueIndex:idx_user_images_unique;not null"`
+	ImageID   string    `json:"image_id" gorm:"type:text;not null;index"`
+	Private   bool      `json:"private" gorm:"default:false"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type DockerManifest struct {
@@ -191,7 +214,7 @@ type ArtifactRepository struct {
 	Name        string    `json:"name" gorm:"uniqueIndex;not null"`
 	Description string    `json:"description"`
 	Owner       string    `json:"owner" gorm:"not null"`
-	Private     bool      `json:"private" gorm:"default:true"`
+	Private     *bool     `json:"private" gorm:"default:true"`
 	CreatedAt   time.Time `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt   time.Time `json:"updated_at" gorm:"autoUpdateTime"`
 }
@@ -250,7 +273,8 @@ type SearchResponse struct {
 }
 
 type VisibilityUpdateRequest struct {
-	ID      string `json:"id"`
+	ID      string `json:"id"`   // CAN BE ID OR REPO NAME OR HASH
+	Name    string `json:"name"` // CAN ONLY BE REPO NAME
 	Private bool   `json:"private"`
 }
 

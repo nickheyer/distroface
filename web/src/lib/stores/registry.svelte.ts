@@ -71,6 +71,7 @@ async function updateVisibility(repository: ImageRepository, newPrivateState: bo
         },
         body: JSON.stringify({
           id: repository.id,
+          name: repository.name,
           private: newPrivateState
         })
       });

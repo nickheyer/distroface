@@ -378,6 +378,8 @@ func (s *Server) setupRoutes() error {
 		http.HandlerFunc(repoHandler.HandleBlobUpload))).Methods("PATCH")
 	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage, metricsHandler)(
 		http.HandlerFunc(repoHandler.CompleteBlobUpload))).Methods("PUT")
+	regAPI.Handle("/{name:.*}/blobs/uploads/{uuid}", requirePermission(s.authService, models.ActionPush, models.ResourceImage, metricsHandler)(
+		http.HandlerFunc(repoHandler.DeleteBlobUpload))).Methods("DELETE")
 
 	// TAG OPERATIONS
 	regAPI.Handle("/{name:.*}/tags/list", requirePermission(s.authService, models.ActionView, models.ResourceTag, metricsHandler)(

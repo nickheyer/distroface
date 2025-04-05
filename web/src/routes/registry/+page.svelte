@@ -33,6 +33,7 @@
     async function toggleVisibility(repository: ImageRepository) {
         request = {
             id: repository.id,
+            name: repository.name,
             private: !repository.private,
         };
 

@@ -19,6 +19,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/constants"
 	"github.com/nickheyer/distroface/internal/models"
+	"github.com/nickheyer/distroface/internal/utils"
 	"github.com/opencontainers/go-digest"
 )
 
@@ -405,20 +406,31 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 		return fmt.Errorf("failed to write tag link: %v", err)
 	}
 
-	// UPDATE IMAGE METADATA
-	metadata := &models.ImageMetadata{
+	imgMetadata := &models.ImageMetadata{
 		ID:        manifestDigest.String(),
-		Name:      imagePath,
-		Tags:      []string{tag},
-		Size:      calculateTotalSize(manifestObj),
-		Owner:     ctxUsername,
+		Size:      utils.CalculateTotalSize(manifestObj),
 		Labels:    make(map[string]string),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 
-	if err := h.repo.CreateImageMetadata(metadata); err != nil {
+	if err := h.repo.CreateImageMetadata(imgMetadata); err != nil {
 		h.log.Printf("Warning: failed to create image metadata: %v", err)
+	}
+
+	// USER IMAGE FOR TAG
+	userImage := &models.UserImage{
+		Username:  ctxUsername,
+		Name:      imagePath,
+		Tag:       tag,
+		ImageID:   manifestDigest.String(),
+		Private:   false,
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	if err := h.repo.CreateUserImage(userImage); err != nil {
+		h.log.Printf("Warning: failed to create user image: %v", err)
 	}
 
 	h.log.Printf("Successfully migrated image %s:%s", imagePath, tag)
@@ -654,26 +666,4 @@ func (h *RepositoryHandler) updateMigrationTask(task *MigrationTask) {
 
 func (h *RepositoryHandler) getMigrationTask(taskID string) *MigrationTask {
 	return migrationTasks[taskID]
-}
-
-func calculateTotalSize(manifest struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	MediaType     string `json:"mediaType"`
-	Config        struct {
-		MediaType string `json:"mediaType"`
-		Size      int64  `json:"size"`
-		Digest    string `json:"digest"`
-	} `json:"config"`
-	Layers []struct {
-		MediaType string `json:"mediaType"`
-		Size      int64  `json:"size"`
-		Digest    string `json:"digest"`
-	} `json:"layers"`
-}) int64 {
-	var totalSize int64
-	totalSize += manifest.Config.Size
-	for _, layer := range manifest.Layers {
-		totalSize += layer.Size
-	}
-	return totalSize
 }

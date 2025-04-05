@@ -48,6 +48,12 @@ func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// PREVENT user. RESERVED WORDS
+	if strings.HasPrefix(strings.ToLower(user.Username), "user.") {
+		http.Error(w, "USERNAME CANNOT START WITH 'user.' - THIS IS A RESERVED PREFIX", http.StatusBadRequest)
+		return
+	}
+
 	// VALIDATE PASSWORD
 	if user.Password == "" {
 		http.Error(w, "PASSWORD REQUIRED", http.StatusBadRequest)
