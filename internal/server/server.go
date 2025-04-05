@@ -216,11 +216,6 @@ func initDB(cfg *models.Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("init data error: %w", err)
 	}
 
-	// RUN MIGRATIONS
-	if err := db.RunMigrations(gormDB, cfg); err != nil {
-		return nil, fmt.Errorf("migrations error: %w", err)
-	}
-
 	return gormDB, nil
 }
 
