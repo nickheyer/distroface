@@ -54,7 +54,7 @@ func (r *GormRepository) UpdateUser(user *models.User) error {
 }
 
 func (r *GormRepository) UpdateUserGroups(username string, groups []string) error {
-	result := r.db.Model(&models.User{}).Where("username = ?", username).Update("groups", models.StringArray(groups))
+	result := r.db.Model(&models.User{}).Where("username = ?", username).Update("groups", []string(groups))
 	if result.Error != nil {
 		return result.Error
 	}
@@ -163,7 +163,7 @@ func (r *GormRepository) RemoveUserFromGroup(username string, groupName string) 
 		}
 	}
 
-	return r.db.Model(&models.User{}).Where("username = ?", username).Update("groups", models.StringArray(newGroups)).Error
+	return r.db.Model(&models.User{}).Where("username = ?", username).Update("groups", []string(newGroups)).Error
 }
 
 func (r *GormRepository) GetUserGroups(username string) ([]string, error) {

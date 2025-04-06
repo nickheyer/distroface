@@ -67,7 +67,7 @@ clean:
 ## -----------------------
 ## DEV
 ## -----------------------
-dev:
+dev: clean
 	@echo "Starting dev mode (frontend + backend in parallel)..."
 	$(MAKE) -j 2 dev-backend dev-frontend
 

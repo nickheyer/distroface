@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"log"
 
 	"github.com/nickheyer/distroface/internal/models"
 	"golang.org/x/crypto/bcrypt"
@@ -10,6 +11,14 @@ import (
 
 func RunInit(db *gorm.DB, cfg *models.Config) error {
 	var err error
+
+	if cfg.Init.Migrations {
+		log.Println("Starting migrations...")
+		if err = RunMigrations(db); err != nil {
+			return fmt.Errorf("failed to run migrations: %w", err)
+		}
+		log.Println("Migrations completed successfully")
+	}
 
 	// IF ROLES ENABLED
 	if cfg.Init.Roles {
@@ -32,11 +41,6 @@ func RunInit(db *gorm.DB, cfg *models.Config) error {
 		}
 	}
 
-	// RUN MIGRATIONS
-	if err = RunMigrations(db, cfg); err != nil {
-		return fmt.Errorf("failed to run migrations: %w", err)
-	}
-
 	return nil
 }
 
@@ -45,7 +49,7 @@ func createDefaultRoles(db *gorm.DB) error {
 		{
 			Name:        "anonymous",
 			Description: "Unauthenticated access",
-			Permissions: models.PermissionArray{
+			Permissions: []models.Permission{
 				{Action: models.ActionView, Resource: models.ResourceWebUI},
 				{Action: models.ActionLogin, Resource: models.ResourceWebUI},
 				{Action: models.ActionPull, Resource: models.ResourceImage},
@@ -58,7 +62,7 @@ func createDefaultRoles(db *gorm.DB) error {
 		{
 			Name:        "reader",
 			Description: "Basic read access",
-			Permissions: models.PermissionArray{
+			Permissions: []models.Permission{
 				{Action: models.ActionView, Resource: models.ResourceWebUI},
 				{Action: models.ActionLogin, Resource: models.ResourceWebUI},
 				{Action: models.ActionPull, Resource: models.ResourceImage},
@@ -73,7 +77,7 @@ func createDefaultRoles(db *gorm.DB) error {
 		{
 			Name:        "developer",
 			Description: "Standard developer access",
-			Permissions: models.PermissionArray{
+			Permissions: []models.Permission{
 				{Action: models.ActionMigrate, Resource: models.ResourceTask},
 				{Action: models.ActionView, Resource: models.ResourceWebUI},
 				{Action: models.ActionLogin, Resource: models.ResourceWebUI},
@@ -99,7 +103,7 @@ func createDefaultRoles(db *gorm.DB) error {
 		{
 			Name:        "administrator",
 			Description: "Full system access",
-			Permissions: models.PermissionArray{
+			Permissions: []models.Permission{
 				{Action: models.ActionAdmin, Resource: models.ResourceSystem},
 				{Action: models.ActionView, Resource: models.ResourceWebUI},
 				{Action: models.ActionLogin, Resource: models.ResourceWebUI},
@@ -131,50 +135,67 @@ func createDefaultRoles(db *gorm.DB) error {
 		},
 	}
 
-	for _, role := range roles {
-		result := db.Where("name = ?", role.Name).FirstOrCreate(&role)
-		if result.Error != nil {
-			return result.Error
-		}
-	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		for _, role := range roles {
+			var existingRole models.Role
+			result := tx.Where("name = ?", role.Name).First(&existingRole)
 
-	return nil
+			if result.RowsAffected > 0 {
+				if err := tx.Save(&existingRole).Error; err != nil {
+					return err
+				}
+			} else {
+				// CREATE NEW
+				if err := tx.Create(&role).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 }
 
 func createDefaultGroups(db *gorm.DB) error {
-	if err := db.Exec("UPDATE groups SET scope = 'system:all' WHERE scope IS NULL OR scope = ''").Error; err != nil {
-		return err
-	}
-
 	groups := []models.Group{
 		{
 			Name:        "admins",
 			Description: "System Administrators",
-			Roles:       models.StringArray{"administrator"},
+			Roles:       []string{"administrator"},
 			Scope:       "system:all",
 		},
 		{
 			Name:        "developers",
 			Description: "Development Team",
-			Roles:       models.StringArray{"developer"},
+			Roles:       []string{"developer"},
 			Scope:       "system:all",
 		},
 		{
 			Name:        "readers",
 			Description: "Read-only Users",
-			Roles:       models.StringArray{"reader"},
+			Roles:       []string{"reader"},
 			Scope:       "system:all",
 		},
 	}
 
-	for _, group := range groups {
-		result := db.Where("name = ?", group.Name).FirstOrCreate(&group)
-		if result.Error != nil {
-			return result.Error
-		}
-	}
+	return db.Transaction(func(tx *gorm.DB) error {
+		// CREATE/UPDATE DEFAULT GROUPS
+		for _, group := range groups {
+			var existingGroup models.Group
+			result := tx.Where("name = ?", group.Name).First(&existingGroup)
 
-	return nil
+			if result.RowsAffected > 0 {
+				if err := tx.Save(&existingGroup).Error; err != nil {
+					return err
+				}
+			} else {
+				// CREATE NEW
+				if err := tx.Create(&group).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 }
 
 func createAdminUser(db *gorm.DB, cfg *models.Config) error {
@@ -188,7 +209,7 @@ func createAdminUser(db *gorm.DB, cfg *models.Config) error {
 	user := models.User{
 		Username: cfg.Init.Username,
 		Password: hash,
-		Groups:   models.StringArray{"admins"},
+		Groups:   []string{"admins"},
 	}
 
 	result := db.Where("username = ?", user.Username).FirstOrCreate(&user)

@@ -180,8 +180,10 @@ func initDB(cfg *models.Config) (*gorm.DB, error) {
 
 	// OPEN GORM DB CONNECTION
 	gormDB, err := gorm.Open(sqlite.Open(cfg.Database.Path), &gorm.Config{
-		Logger: gormLogger,
+		Logger:                                   gormLogger,
+		DisableForeignKeyConstraintWhenMigrating: true,
 	})
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to open DB: %w", err)
 	}
@@ -205,11 +207,6 @@ func initDB(cfg *models.Config) (*gorm.DB, error) {
 	// WAL MODE FOR CONCURRENCY
 	_, _ = sqlDB.Exec("PRAGMA journal_mode=WAL;")
 	_, _ = sqlDB.Exec("PRAGMA busy_timeout=5000;")
-
-	// RUN SCHEMA SETUP (AUTO MIGRATIONS)
-	// if err := db.RunSchema(gormDB, cfg); err != nil {
-	// 	return nil, fmt.Errorf("schema init error: %w", err)
-	// }
 
 	// INSERT INITIAL VALUES
 	if err := db.RunInit(gormDB, cfg); err != nil {
