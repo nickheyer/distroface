@@ -55,7 +55,56 @@
     try {
       const response = await api.get("/api/v1/repositories/public");
       const data = await response.json();
-      repositories = data.images || [];
+      
+      // Process the API response format
+      let repoData = data.images || [];
+      const username = auth.user?.username;
+      
+      // Transform the image array data format to the repository format expected by UI
+      const transformedRepos: ImageRepository[] = [];
+      
+      // Group by repository name
+      const repoMap = new Map<string, any>();
+      
+      repoData.forEach((img: any) => {
+        // Transform tag string array to tag objects
+        const tagObjects = img.tags.map((tagName: string) => ({
+          name: tagName,
+          size: img.size || 0,
+          digest: img.image_id,
+          created: img.created_at,
+          owner: img.owner,
+          isOwned: img.owner === username
+        }));
+        
+        // Create or update repository
+        if (!repoMap.has(img.name)) {
+          repoMap.set(img.name, {
+            id: img.image_id,
+            name: img.name,
+            tags: tagObjects,
+            updated_at: img.updated_at,
+            owner: img.owner,
+            private: img.private,
+            size: img.size || 0,
+            isOwned: img.owner === username
+          });
+        } else {
+          // Add tags to existing repository
+          const repo = repoMap.get(img.name);
+          repo.tags = [...repo.tags, ...tagObjects];
+          
+          // Update last updated time if this image is newer
+          if (new Date(img.updated_at) > new Date(repo.updated_at)) {
+            repo.updated_at = img.updated_at;
+          }
+          
+          // Sum up sizes
+          repo.size += (img.size || 0);
+        }
+      });
+      
+      repositories = Array.from(repoMap.values());
       metrics = {
         totalSize: data.total_size || 0,
         totalImages: data.total_images || 0,
@@ -227,7 +276,11 @@
                     <div class="mt-2 flex items-center text-sm text-gray-500">
                       <span class="mr-2">Owner: {repo.owner}</span>
                       <span class="mr-2">•</span>
-                      <span>Size: {formatSize(repo.size)}</span>
+                      {#if repo.size}
+                        <span>Size: {formatSize(repo.size)}</span>
+                      {:else}
+                        <span>Size: N/A</span>
+                      {/if}
                     </div>
                   </div>
                 </div>
@@ -241,7 +294,14 @@
                   </span>
                   <div class="mt-2 flex flex-wrap gap-2 justify-end">
                     {#each repo.tags as tag}
-                      <Tag {tag} name={repo.name} />
+                      <div class="flex items-center space-x-2">
+                        <Tag tag={tag.name} name={repo.name} />
+                        {#if tag.isOwned}
+                          <span class="text-xs px-2 py-0.5 rounded-full bg-blue-200 text-blue-700">
+                            Your Tag
+                          </span>
+                        {/if}
+                      </div>
                     {/each}
                   </div>
                 </div>

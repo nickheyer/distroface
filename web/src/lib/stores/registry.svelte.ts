@@ -6,6 +6,8 @@ export interface ImageTag {
   size: number;
   digest: string;
   created: string;
+  owner?: string;
+  isOwned?: boolean;
 }
 
 // STATE
@@ -31,10 +33,20 @@ const filteredRepositories = $derived(() => {
           repo.name.toLowerCase().includes(searchLower)
       )
       .sort((a, b) => {
-          // SORT BY PRIVATE STATUS THEN NAME
+          // SORT BY UPDATED TIME (NEWEST FIRST), THEN PRIVATE STATUS, THEN NAME
+          const timeA = new Date(a.updated_at).getTime();
+          const timeB = new Date(b.updated_at).getTime();
+          
+          if (timeA !== timeB) {
+              return timeB - timeA;
+          }
+          
+          // THEN BY PRIVATE STATUS
           if (a.private !== b.private) {
               return a.private ? 1 : -1;
           }
+          
+          // FINALLY BY NAME
           return a.name.localeCompare(b.name);
       });
 });
@@ -53,7 +65,64 @@ async function fetchRepositories() {
 
         if (!response.ok) throw new Error('Failed to fetch repositories');
         
-        state.repositories = await response.json();
+        const data = await response.json();
+        let repoData = Array.isArray(data) ? data : data.images || [];
+        const username = auth.user?.username;
+        const repoMap = new Map<string, any>();
+        
+        repoData.forEach((img: any) => {
+            if (!img.tags || !Array.isArray(img.tags)) {
+                console.error('Missing or invalid tags property:', img);
+                return;
+            }
+            
+            // "id": "sha256:757d680068d77be46fd1ea20fb21db16f150468c5e7079a08a2e4705aec096ac",
+            // "name": "iss-warden",
+            // "tags": [
+            //     {
+            //         "name": "test",
+            //         "size": 3993626,
+            //         "digest": "sha256:757d680068d77be46fd1ea20fb21db16f150468c5e7079a08a2e4705aec096ac",
+            //         "created": "2025-04-01T22:05:46-07:00"
+            //     }
+            // ],
+            // "updated_at": "2025-04-01T22:05:46-07:00",
+            // "owner": "admin",
+            // "size": 3993626,
+            // "private": false
+
+            const tagObjects = img.tags.map((tag:any) => {
+                if (tag.created && new Date(tag.created).toString() === 'Invalid Date') {
+                    console.warn('Invalid date format detected:', tag.created);
+                    tag.created = new Date().toISOString();
+                }
+                
+                return tag;
+            });
+            
+            if (!repoMap.has(img.name)) {
+                repoMap.set(img.name, {
+                    id: img.image_id,
+                    name: img.name,
+                    tags: tagObjects,
+                    updated_at: img.updated_at,
+                    owner: img.owner,
+                    private: img.private,
+                    size: img.size || 0,
+                    isOwned: img.owner === username
+                });
+            } else {
+                const repo = repoMap.get(img.name);
+                repo.tags = [...repo.tags, ...tagObjects];
+                if (new Date(img.updated_at) > new Date(repo.updated_at)) {
+                    repo.updated_at = img.updated_at;
+                }
+                
+                repo.size += (img.size || 0);
+            }
+        });
+        
+        state.repositories = Array.from(repoMap.values());
     } catch (err) {
         state.error = err instanceof Error ? err.message : 'Failed to load repositories';
     } finally {
@@ -113,12 +182,17 @@ async function deleteTag(repository: string, tag: string) {
 }
 
 function formatSize(bytes: number | undefined | null): string {
-    if (bytes == null || bytes === undefined) {
+    if (bytes === undefined || bytes === null || isNaN(bytes) || bytes < 0) {
+        return '0 B';
+    }
+    
+    const numBytes = Number(bytes);
+    if (numBytes === 0) {
         return '0 B';
     }
 
     const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let size = bytes;
+    let size = numBytes;
     let unitIndex = 0;
 
     while (size >= 1024 && unitIndex < units.length - 1) {
@@ -126,7 +200,12 @@ function formatSize(bytes: number | undefined | null): string {
         unitIndex++;
     }
 
-    return `${size.toFixed(1)} ${units[unitIndex]}`;
+    try {
+        return `${size.toFixed(1)} ${units[unitIndex]}`;
+    } catch (e) {
+        console.error("Error formatting size:", e, "bytes:", bytes);
+        return '0 B';
+    }
 }
 
 export const registry = {

@@ -123,9 +123,9 @@ func (u *User) UnmarshalGroups(data string) error {
 
 // DEFAULT SYSTEM ROLES - TODO: USE THIS INSTEAD OF MANUAL MIGRATIONS
 type GlobalView struct {
-	TotalImages int64            `json:"total_images"`
-	TotalSize   int64            `json:"total_size"`
-	Images      []*ImageMetadata `json:"images"`
+	TotalImages int64        `json:"total_images"`
+	TotalSize   int64        `json:"total_size"`
+	Images      []*UserImage `json:"images"`
 }
 
 type ImageRepository struct {
@@ -146,13 +146,20 @@ type ImageTag struct {
 }
 
 type ImageMetadata struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Tags      []string          `json:"tags"`
-	Size      int64             `json:"size"`
-	Owner     string            `json:"owner"`
-	Labels    map[string]string `json:"labels"`
-	Private   bool              `json:"private"`
+	ID        string    `json:"id"`   // Manifest hash
+	Size      int64     `json:"size"` // Size of the file
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type UserImage struct {
+	ID        int               `json:"id"`
+	ImageID   string            `json:"image_id"` // Reference to ImageMetadata.ID
+	Owner     string            `json:"owner"`    // Username
+	Name      string            `json:"name"`     // Repository name
+	Tags      []string          `json:"tags"`     // Image tags
+	Labels    map[string]string `json:"labels"`   // Optional metadata
+	Private   bool              `json:"private"`  // Visibility
 	CreatedAt time.Time         `json:"created_at"`
 	UpdatedAt time.Time         `json:"updated_at"`
 }

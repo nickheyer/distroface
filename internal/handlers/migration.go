@@ -211,18 +211,9 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 		ctxUsername = "admin"
 	}
 
-	// BUILD SOURCE URL
-	sourceURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s",
-		sourceRegistry,
-		imagePath,
-		tag)
-
-	h.log.Printf("Fetching manifest from: %s", sourceURL)
-
 	// CREATE CUSTOM TRANSPORT
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			ServerName:         h.config.Server.Domain,
 			InsecureSkipVerify: true,
 		},
 	}
@@ -230,8 +221,22 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 	// CREATE CLIENT WITH TIMEOUT
 	client := &http.Client{
 		Transport: tr,
-		Timeout:   time.Minute * 10, // WHOLE OP MAX 10 MIN
+		Timeout:   time.Minute * 10,
 	}
+
+	// GET TOKEN FROM REMOTE REGISTRY
+	token, err := h.getRemoteRegistryToken(client, sourceRegistry, username, password)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate with remote registry: %v", err)
+	}
+
+	// BUILD SOURCE URL
+	sourceURL := fmt.Sprintf("https://%s/v2/%s/manifests/%s",
+		sourceRegistry,
+		imagePath,
+		tag)
+
+	h.log.Printf("Fetching manifest from: %s", sourceURL)
 
 	// CREATE REQUEST WITH MANIFEST SUPPORT
 	req, err := http.NewRequestWithContext(ctx, "GET", sourceURL, nil)
@@ -241,16 +246,12 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 
 	// ADD MANIFEST ACCEPT HEADERS
 	req.Header.Set("Docker-Distribution-Api-Version", "registry/2.0")
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v2+json")
 	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.list.v2+json")
 	req.Header.Add("Accept", "application/vnd.oci.image.manifest.v1+json")
 	req.Header.Add("Accept", "application/vnd.oci.image.index.v1+json")
 	req.Header.Add("Accept", "application/vnd.docker.distribution.manifest.v1+prettyjws")
-
-	// ADD AUTH IF PROVIDED
-	if username != "" && password != "" {
-		req.SetBasicAuth(username, password)
-	}
 
 	// MAKE REQUEST
 	resp, err := client.Do(req)
@@ -405,20 +406,31 @@ func (h *RepositoryHandler) migrateImage(ctx context.Context, sourceRegistry, im
 		return fmt.Errorf("failed to write tag link: %v", err)
 	}
 
-	// UPDATE IMAGE METADATA
-	metadata := &models.ImageMetadata{
+	// CREATE OR UPDATE PHYSICAL IMAGE METADATA
+	imgMetadata := &models.ImageMetadata{
 		ID:        manifestDigest.String(),
+		Size:      calculateTotalSize(manifestObj),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+
+	if err := h.repo.CreateImageMetadata(imgMetadata); err != nil {
+		h.log.Printf("Warning: failed to create image metadata: %v", err)
+	}
+
+	// CREATE USER IMAGE REFERENCE
+	userImg := &models.UserImage{
+		ImageID:   manifestDigest.String(),
 		Name:      imagePath,
 		Tags:      []string{tag},
-		Size:      calculateTotalSize(manifestObj),
 		Owner:     ctxUsername,
 		Labels:    make(map[string]string),
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
 
-	if err := h.repo.CreateImageMetadata(metadata); err != nil {
-		h.log.Printf("Warning: failed to create image metadata: %v", err)
+	if err := h.repo.CreateUserImage(userImg); err != nil {
+		h.log.Printf("Warning: failed to create user image reference: %v", err)
 	}
 
 	h.log.Printf("Successfully migrated image %s:%s", imagePath, tag)
@@ -552,6 +564,49 @@ func (h *RepositoryHandler) createBlobLink(imagePath, digest, hash string) error
 	return os.WriteFile(linkPath, []byte(digest), 0644)
 }
 
+// getRemoteRegistryToken authenticates with a remote distroface registry and returns a Bearer token
+func (h *RepositoryHandler) getRemoteRegistryToken(client *http.Client, registry, username, password string) (string, error) {
+	tokenURL := fmt.Sprintf("https://%s/auth/token?service=%s", registry, registry)
+
+	req, err := http.NewRequest("GET", tokenURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	if username != "" && password != "" {
+		req.SetBasicAuth(username, password)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("token request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("token request returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	var tokenResp struct {
+		Token       string `json:"token"`
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
+		return "", fmt.Errorf("failed to decode token response: %v", err)
+	}
+
+	token := tokenResp.Token
+	if token == "" {
+		token = tokenResp.AccessToken
+	}
+	if token == "" {
+		return "", fmt.Errorf("no token in response")
+	}
+
+	return token, nil
+}
+
 func (h *RepositoryHandler) ProxyCatalog(w http.ResponseWriter, r *http.Request) {
 	sourceRegistry := r.URL.Query().Get("registry")
 	username := r.URL.Query().Get("username")
@@ -562,30 +617,29 @@ func (h *RepositoryHandler) ProxyCatalog(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// CREATE TRANSPORT WITH TLS CONFIG
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			ServerName:         h.config.Server.Domain, // MY SERVER NAME
-			InsecureSkipVerify: true,                   // IF SELF-SIGNED
+			InsecureSkipVerify: true,
 		},
 	}
-
 	client := &http.Client{Transport: tr}
 
-	// BUILD CATALOG URL
+	// GET TOKEN FROM REMOTE REGISTRY
+	token, err := h.getRemoteRegistryToken(client, sourceRegistry, username, password)
+	if err != nil {
+		h.log.Printf("Failed to get token from remote registry: %v", err)
+		http.Error(w, fmt.Sprintf("Authentication failed: %v", err), http.StatusBadGateway)
+		return
+	}
 
+	// NOW CALL CATALOG WITH BEARER TOKEN
 	catalogURL := fmt.Sprintf("https://%s/v2/_catalog", sourceRegistry)
-
 	req, err := http.NewRequest("GET", catalogURL, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// ADD AUTH IF PROVIDED
-	if username != "" && password != "" {
-		req.SetBasicAuth(username, password)
-	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -594,7 +648,15 @@ func (h *RepositoryHandler) ProxyCatalog(w http.ResponseWriter, r *http.Request)
 	}
 	defer resp.Body.Close()
 
-	// COPY STATUS CODE AND HEADERS
+	// COPY RESPONSE - BUT DON'T PASS THROUGH 401 (use 502 instead)
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		h.log.Printf("Remote registry returned 401: %s", string(body))
+		http.Error(w, "Remote registry authentication failed", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
@@ -610,28 +672,29 @@ func (h *RepositoryHandler) ProxyTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// CREATE TRANSPORT WITH TLS CONFIG
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{
-			ServerName:         h.config.Server.Domain, // MY SERVER NAME
 			InsecureSkipVerify: true,
 		},
 	}
-
 	client := &http.Client{Transport: tr}
 
-	// BUILD TAGS URL
+	// GET TOKEN FROM REMOTE REGISTRY
+	token, err := h.getRemoteRegistryToken(client, sourceRegistry, username, password)
+	if err != nil {
+		h.log.Printf("Failed to get token from remote registry: %v", err)
+		http.Error(w, fmt.Sprintf("Authentication failed: %v", err), http.StatusBadGateway)
+		return
+	}
+
+	// BUILD TAGS URL WITH BEARER TOKEN
 	tagsURL := fmt.Sprintf("https://%s/v2/%s/tags/list", sourceRegistry, repository)
 	req, err := http.NewRequest("GET", tagsURL, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	// ADD AUTH IF PROVIDED
-	if username != "" && password != "" {
-		req.SetBasicAuth(username, password)
-	}
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -640,7 +703,15 @@ func (h *RepositoryHandler) ProxyTags(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// COPY STATUS CODE AND HEADERS
+	// DON'T PASS THROUGH 401 - USE 502 INSTEAD
+	if resp.StatusCode == http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		h.log.Printf("Remote registry returned 401: %s", string(body))
+		http.Error(w, "Remote registry authentication failed", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
@@ -670,8 +741,7 @@ func calculateTotalSize(manifest struct {
 		Digest    string `json:"digest"`
 	} `json:"layers"`
 }) int64 {
-	var totalSize int64
-	totalSize += manifest.Config.Size
+	totalSize := manifest.Config.Size
 	for _, layer := range manifest.Layers {
 		totalSize += layer.Size
 	}

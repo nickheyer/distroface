@@ -14,6 +14,7 @@ import (
 
 	dconfig "github.com/distribution/distribution/v3/configuration"
 	_ "github.com/distribution/distribution/v3/registry/auth/token"
+	dhandlers "github.com/distribution/distribution/v3/registry/handlers"
 	_ "github.com/distribution/distribution/v3/registry/storage/driver/filesystem"
 	"github.com/golang-jwt/jwt/v4"
 	"github.com/gorilla/mux"
@@ -33,6 +34,7 @@ import (
 type Server struct {
 	config         *models.Config
 	distConfig     *dconfig.Configuration
+	distApp        *dhandlers.App
 	router         *mux.Router
 	ctx            context.Context
 	db             *sql.DB
@@ -99,11 +101,6 @@ func NewServer(cfg *models.Config) (*Server, error) {
 				"rootcertbundle": cfg.Server.CertBundle,
 			},
 		},
-		Middleware: map[string][]dconfig.Middleware{
-			"registry":   {{Name: "auth"}},
-			"repository": {{Name: "auth"}},
-			"storage":    {{Name: "auth"}},
-		},
 	}
 
 	// SET HTTP CONFIG SEPARATELY
@@ -112,9 +109,13 @@ func NewServer(cfg *models.Config) (*Server, error) {
 	distConfig.HTTP.TLS.Certificate = cfg.Server.TLSCertFile
 	distConfig.HTTP.TLS.Key = cfg.Server.TLSKeyFile
 
+	// CREATE DISTRIBUTION REGISTRY APP
+	distApp := dhandlers.NewApp(ctx, distConfig)
+
 	s := &Server{
 		config:         cfg,
 		distConfig:     distConfig,
+		distApp:        distApp,
 		router:         mux.NewRouter(),
 		ctx:            ctx,
 		db:             db,
@@ -366,6 +367,9 @@ func (s *Server) setupRoutes() error {
 		http.HandlerFunc(repoHandler.DeleteBlob))).Methods("DELETE")
 	regAPI.Handle("/{name:.*}/tags/{tag}", requirePermission(s.authService, models.ActionDelete, models.ResourceTag, metricsHandler)(
 		http.HandlerFunc(repoHandler.DeleteBlob))).Methods("DELETE")
+
+	// DISTRIBUTION LIBRARY FALLBACK - handles /_catalog and other standard Docker registry routes
+	s.router.PathPrefix("/v2").Handler(s.distApp)
 
 	// STATIC FILES
 	if os.Getenv("GO_ENV") == "production" {

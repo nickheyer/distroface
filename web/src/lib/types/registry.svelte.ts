@@ -3,6 +3,8 @@ export interface ImageTag {
   size: number;
   digest: string;
   created: string;
+  owner?: string;
+  isOwned?: boolean;
 }
 
 export interface ImageRepository {
@@ -12,7 +14,8 @@ export interface ImageRepository {
   updated_at: string;
   owner: string;
   private: boolean;
-  size: number;          // TOTAL SIZE IN BYTES
+  size?: number;          // TOTAL SIZE IN BYTES
+  isOwned?: boolean;
 }
 
 // API REQUEST/RESPONSE TYPES

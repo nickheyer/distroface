@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"slices"
+
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/models"
 )
@@ -435,77 +437,18 @@ func (r *SQLiteRepository) DeleteRole(name string) error {
 }
 
 // IMAGE OPERATIONS
-func (r *SQLiteRepository) ListImageMetadata(owner string) ([]*models.ImageMetadata, error) {
-	log.Printf("Fetching image metadata for owner: %s", owner)
-
-	rows, err := r.db.Query(
-		`SELECT id, name, tags, size, owner, labels, CASE private 
-            WHEN 1 THEN true 
-            ELSE false 
-         END as private, created_at, updated_at 
-         FROM image_metadata WHERE owner = ?`,
-		owner,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query failed: %v", err)
-	}
-	defer rows.Close()
-
-	var metadata []*models.ImageMetadata
-	for rows.Next() {
-		var img models.ImageMetadata
-		var tagsJSON, labelsJSON string
-
-		err := rows.Scan(
-			&img.ID,
-			&img.Name,
-			&tagsJSON,
-			&img.Size,
-			&img.Owner,
-			&labelsJSON,
-			&img.Private,
-			&img.CreatedAt,
-			&img.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("row scan failed: %v", err)
-		}
-
-		if err := json.Unmarshal([]byte(tagsJSON), &img.Tags); err != nil {
-			return nil, fmt.Errorf("failed to parse tags: %v", err)
-		}
-		if err := json.Unmarshal([]byte(labelsJSON), &img.Labels); err != nil {
-			return nil, fmt.Errorf("failed to parse labels: %v", err)
-		}
-
-		metadata = append(metadata, &img)
-	}
-
-	return metadata, nil
-}
-
 func (r *SQLiteRepository) GetImageMetadata(id string) (*models.ImageMetadata, error) {
 	var metadata models.ImageMetadata
-	var tagsJSON, labelsJSON string
 	var createdAt, updatedAt string
 
 	err := r.db.QueryRow(
-		`SELECT id, name, tags, size, owner, labels, created_at, updated_at 
+		`SELECT id, size, created_at, updated_at 
          FROM image_metadata WHERE id = ?`,
 		id,
-	).Scan(&metadata.ID, &metadata.Name, &tagsJSON, &metadata.Size,
-		&metadata.Owner, &labelsJSON, &createdAt, &updatedAt)
+	).Scan(&metadata.ID, &metadata.Size, &createdAt, &updatedAt)
 
 	if err != nil {
 		return nil, err
-	}
-
-	if err := json.Unmarshal([]byte(tagsJSON), &metadata.Tags); err != nil {
-		return nil, fmt.Errorf("failed to parse tags: %v", err)
-	}
-
-	if err := json.Unmarshal([]byte(labelsJSON), &metadata.Labels); err != nil {
-		return nil, fmt.Errorf("failed to parse labels: %v", err)
 	}
 
 	metadata.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
@@ -515,47 +458,35 @@ func (r *SQLiteRepository) GetImageMetadata(id string) (*models.ImageMetadata, e
 }
 
 func (r *SQLiteRepository) CreateImageMetadata(metadata *models.ImageMetadata) error {
-	tagsJSON, err := json.Marshal(metadata.Tags)
-	if err != nil {
-		return fmt.Errorf("failed to marshal tags: %v", err)
+	existing, err := r.GetImageMetadata(metadata.ID)
+	if err == nil {
+		if existing.Size != metadata.Size {
+			existing.Size = metadata.Size
+			existing.UpdatedAt = time.Now()
+			return r.UpdateImageMetadata(existing)
+		}
+		return nil
 	}
 
-	labelsJSON, err := json.Marshal(metadata.Labels)
-	if err != nil {
-		return fmt.Errorf("failed to marshal labels: %v", err)
-	}
-
+	// CREATE NEW IF DOESNT EXIST
 	_, err = r.db.Exec(
-		`INSERT INTO image_metadata 
-         (id, name, tags, size, owner, labels, created_at, updated_at) 
-         VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-		metadata.ID, metadata.Name, string(tagsJSON), metadata.Size,
-		metadata.Owner, string(labelsJSON),
+		`INSERT INTO image_metadata (id, size, created_at, updated_at) 
+		VALUES (?, ?, ?, ?)`,
+		metadata.ID,
+		metadata.Size,
+		time.Now().Format(time.RFC3339),
+		time.Now().Format(time.RFC3339),
 	)
-	if err != nil {
-		return fmt.Errorf("failed to insert image metadata: %v", err)
-	}
 
-	return nil
+	return err
 }
 
 func (r *SQLiteRepository) UpdateImageMetadata(metadata *models.ImageMetadata) error {
-	tagsJSON, err := json.Marshal(metadata.Tags)
-	if err != nil {
-		return fmt.Errorf("failed to marshal tags: %v", err)
-	}
-
-	labelsJSON, err := json.Marshal(metadata.Labels)
-	if err != nil {
-		return fmt.Errorf("failed to marshal labels: %v", err)
-	}
-
 	result, err := r.db.Exec(
 		`UPDATE image_metadata SET 
-         name = ?, tags = ?, size = ?, labels = ?, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = ? AND owner = ?`,
-		metadata.Name, string(tagsJSON), metadata.Size, string(labelsJSON),
-		metadata.ID, metadata.Owner,
+         size = ?, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = ?`,
+		metadata.Size, metadata.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to update image metadata: %v", err)
@@ -588,59 +519,245 @@ func (r *SQLiteRepository) DeleteImageMetadata(id string) error {
 	return nil
 }
 
-func (r *SQLiteRepository) DeleteImageTag(repository string, tag string, owner string) error {
-	var metadata models.ImageMetadata
-	var tagsJSON string
+// USER IMAGE OPERATIONS
+func (r *SQLiteRepository) ListUserImages(owner string) ([]*models.UserImage, error) {
 
-	err := r.db.QueryRow(
-		`SELECT id, tags FROM image_metadata 
-         WHERE name = ? AND owner = ?`,
-		repository, owner,
-	).Scan(&metadata.ID, &tagsJSON)
-
-	if err != nil {
-		if err == sql.ErrNoRows {
-			return fmt.Errorf("repository not found: %s", repository)
-		}
-		return fmt.Errorf("failed to fetch repository: %v", err)
-	}
-
-	// UNMARSHALL CURRENT TAGS
-	var currentTags []string
-	if err := json.Unmarshal([]byte(tagsJSON), &currentTags); err != nil {
-		return fmt.Errorf("failed to parse tags: %v", err)
-	}
-
-	// RM SPECIFIC TAG
-	newTags := make([]string, 0)
-	tagFound := false
-	for _, t := range currentTags {
-		if t != tag {
-			newTags = append(newTags, t)
-		} else {
-			tagFound = true
-		}
-	}
-
-	if !tagFound {
-		return fmt.Errorf("tag not found: %s", tag)
-	}
-
-	// MARSHALL NEW TAGS
-	newTagsJSON, err := json.Marshal(newTags)
-	if err != nil {
-		return fmt.Errorf("failed to marshal new tags: %v", err)
-	}
-
-	// UPDATE METADATA
-	result, err := r.db.Exec(
-		`UPDATE image_metadata 
-         SET tags = ?, updated_at = CURRENT_TIMESTAMP 
-         WHERE id = ? AND owner = ?`,
-		string(newTagsJSON), metadata.ID, owner,
+	rows, err := r.db.Query(
+		`SELECT ui.id, ui.image_id, ui.owner, ui.name, ui.tags, ui.labels, 
+		CASE ui.private WHEN 1 THEN true ELSE false END as private, 
+		ui.created_at, ui.updated_at, im.size
+		FROM user_images ui
+		JOIN image_metadata im ON ui.image_id = im.id
+		WHERE ui.owner = ?`,
+		owner,
 	)
 	if err != nil {
-		return fmt.Errorf("failed to update tags: %v", err)
+		return nil, fmt.Errorf("query failed: %v", err)
+	}
+	defer rows.Close()
+
+	var userImages []*models.UserImage
+	for rows.Next() {
+		var img models.UserImage
+		var tagsJSON, labelsJSON string
+		var size int64
+
+		err := rows.Scan(
+			&img.ID,
+			&img.ImageID,
+			&img.Owner,
+			&img.Name,
+			&tagsJSON,
+			&labelsJSON,
+			&img.Private,
+			&img.CreatedAt,
+			&img.UpdatedAt,
+			&size,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("row scan failed: %v", err)
+		}
+
+		if err := json.Unmarshal([]byte(tagsJSON), &img.Tags); err != nil {
+			return nil, fmt.Errorf("failed to parse tags: %v", err)
+		}
+		if err := json.Unmarshal([]byte(labelsJSON), &img.Labels); err != nil {
+			return nil, fmt.Errorf("failed to parse labels: %v", err)
+		}
+
+		userImages = append(userImages, &img)
+	}
+
+	return userImages, nil
+}
+
+func (r *SQLiteRepository) GetUserImage(id int) (*models.UserImage, error) {
+	var userImage models.UserImage
+	var tagsJSON, labelsJSON string
+
+	err := r.db.QueryRow(
+		`SELECT ui.id, ui.image_id, ui.owner, ui.name, ui.tags, ui.labels, 
+		CASE ui.private WHEN 1 THEN true ELSE false END as private, 
+		ui.created_at, ui.updated_at
+		FROM user_images ui
+		WHERE ui.id = ?`,
+		id,
+	).Scan(
+		&userImage.ID,
+		&userImage.ImageID,
+		&userImage.Owner,
+		&userImage.Name,
+		&tagsJSON,
+		&labelsJSON,
+		&userImage.Private,
+		&userImage.CreatedAt,
+		&userImage.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, err
+	}
+
+	if err := json.Unmarshal([]byte(tagsJSON), &userImage.Tags); err != nil {
+		return nil, fmt.Errorf("failed to parse tags: %v", err)
+	}
+
+	if err := json.Unmarshal([]byte(labelsJSON), &userImage.Labels); err != nil {
+		return nil, fmt.Errorf("failed to parse labels: %v", err)
+	}
+
+	return &userImage, nil
+}
+
+func (r *SQLiteRepository) GetUserImageByNameAndTag(owner string, name string, tag string) (*models.UserImage, error) {
+	// FIRST TRY TO GET ALL MATCHING USER IMAGES BY NAME AND OWNER
+	rows, err := r.db.Query(
+		`SELECT id, tags FROM user_images 
+			 WHERE name = ? AND owner = ?`,
+		name, owner,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check existing user image: %v", err)
+	}
+
+	// CHECK EACH ROW'S TAGS ARRAY FOR THE REQUESTED TAG
+	var matchingId int = 0
+	for rows.Next() {
+		var id int
+		var tagsJSON string
+
+		if err := rows.Scan(&id, &tagsJSON); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("failed to scan row: %v", err)
+		}
+
+		// UNMARSHAL JSON TAGS ARRAY
+		var tags []string
+		if err := json.Unmarshal([]byte(tagsJSON), &tags); err != nil {
+			continue // SKIP INVALID JSON
+		}
+
+		// CHECK IF TAG EXISTS IN ARRAY
+		if slices.Contains(tags, tag) {
+			matchingId = id
+		}
+
+		if matchingId > 0 {
+			break
+		}
+	}
+	rows.Close()
+
+	// IF FOUND FOR OWNER, RETURN IT
+	if matchingId > 0 {
+		return r.GetUserImage(matchingId)
+	}
+
+	return nil, fmt.Errorf("no user image found with name %s and tag %s", name, tag)
+}
+
+func (r *SQLiteRepository) CreateUserImage(userImage *models.UserImage) error {
+	log.Printf("DEBUG: SQLite CreateUserImage: owner=%s name=%s imageID=%s tags=%v",
+		userImage.Owner, userImage.Name, userImage.ImageID, userImage.Tags)
+
+	if len(userImage.Tags) == 0 {
+		return fmt.Errorf("no tags provided for user image")
+	}
+
+	for _, tag := range userImage.Tags {
+		log.Printf("DEBUG: Creating entry for tag %s for owner %s and repo %s",
+			tag, userImage.Owner, userImage.Name)
+
+		rows, err := r.db.Query(
+			`SELECT id FROM user_images 
+			WHERE name = ? AND owner = ? AND tags LIKE ?`,
+			userImage.Name, userImage.Owner, "%"+tag+"%",
+		)
+		if err != nil {
+			return fmt.Errorf("failed to check existing user image: %v", err)
+		}
+
+		existingID := 0
+		if rows.Next() {
+			if err := rows.Scan(&existingID); err != nil {
+				rows.Close()
+				return fmt.Errorf("failed to scan row: %v", err)
+			}
+		}
+		rows.Close()
+
+		if existingID > 0 {
+			existingUserImage, err := r.GetUserImage(existingID)
+			if err != nil {
+				return fmt.Errorf("failed to get existing user image: %v", err)
+			}
+
+			existingUserImage.ImageID = userImage.ImageID
+			existingUserImage.UpdatedAt = time.Now()
+
+			if err := r.UpdateUserImage(existingUserImage); err != nil {
+				return fmt.Errorf("failed to update existing user image: %v", err)
+			}
+		} else {
+			singleTagJSON, err := json.Marshal([]string{tag})
+			if err != nil {
+				return fmt.Errorf("failed to marshal tag: %v", err)
+			}
+
+			labelsJSON, err := json.Marshal(userImage.Labels)
+			if err != nil {
+				return fmt.Errorf("failed to marshal labels: %v", err)
+			}
+
+			result, err := r.db.Exec(
+				`INSERT INTO user_images (image_id, owner, name, tags, labels, private, created_at, updated_at) 
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				userImage.ImageID,
+				userImage.Owner,
+				userImage.Name,
+				singleTagJSON,
+				labelsJSON,
+				userImage.Private,
+				time.Now().Format(time.RFC3339),
+				time.Now().Format(time.RFC3339),
+			)
+			if err != nil {
+				return fmt.Errorf("failed to insert image metadata: %v", err)
+			}
+
+			if tag == userImage.Tags[0] {
+				id, err := result.LastInsertId()
+				if err != nil {
+					return err
+				}
+				userImage.ID = int(id)
+			}
+		}
+	}
+
+	return nil
+}
+
+func (r *SQLiteRepository) UpdateUserImage(userImage *models.UserImage) error {
+	tagsJSON, err := json.Marshal(userImage.Tags)
+	if err != nil {
+		return fmt.Errorf("failed to marshal tags: %v", err)
+	}
+
+	labelsJSON, err := json.Marshal(userImage.Labels)
+	if err != nil {
+		return fmt.Errorf("failed to marshal labels: %v", err)
+	}
+
+	result, err := r.db.Exec(
+		`UPDATE user_images SET 
+         name = ?, tags = ?, labels = ?, private = ?, image_id = ?, updated_at = CURRENT_TIMESTAMP 
+         WHERE id = ? AND owner = ?`,
+		userImage.Name, string(tagsJSON), string(labelsJSON), userImage.Private, userImage.ImageID,
+		userImage.ID, userImage.Owner,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to update user image: %v", err)
 	}
 
 	rows, err := result.RowsAffected()
@@ -648,18 +765,100 @@ func (r *SQLiteRepository) DeleteImageTag(repository string, tag string, owner s
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("failed to update repository: %s", repository)
+		return fmt.Errorf("user image not found: %d", userImage.ID)
 	}
 
 	return nil
 }
 
-func (r *SQLiteRepository) ListPublicImageMetadata() ([]*models.ImageMetadata, error) {
+func (r *SQLiteRepository) DeleteUserImage(id int) error {
+	result, err := r.db.Exec("DELETE FROM user_images WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("failed to delete user image: %v", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return fmt.Errorf("user image not found: %d", id)
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) DeleteUserImageTag(repository string, tag string, owner string) error {
+	rows, err := r.db.Query(
+		`SELECT id, tags FROM user_images 
+         WHERE name = ? AND owner = ?`,
+		repository, owner,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to fetch repository: %v", err)
+	}
+	defer rows.Close()
+
+	tagFound := false
+	for rows.Next() {
+		var id int
+		var tagsJSON string
+		if err := rows.Scan(&id, &tagsJSON); err != nil {
+			return fmt.Errorf("failed to scan row: %v", err)
+		}
+
+		// Unmarshal current tags
+		var currentTags []string
+		if err := json.Unmarshal([]byte(tagsJSON), &currentTags); err != nil {
+			return fmt.Errorf("failed to parse tags: %v", err)
+		}
+
+		// Remove specific tag
+		newTags := make([]string, 0)
+		tagFoundInImage := false
+		for _, t := range currentTags {
+			if t != tag {
+				newTags = append(newTags, t)
+			} else {
+				tagFoundInImage = true
+				tagFound = true
+			}
+		}
+
+		if tagFoundInImage {
+			// Marshal new tags
+			newTagsJSON, err := json.Marshal(newTags)
+			if err != nil {
+				return fmt.Errorf("failed to marshal new tags: %v", err)
+			}
+
+			// Update user image
+			_, err = r.db.Exec(
+				`UPDATE user_images 
+				 SET tags = ?, updated_at = CURRENT_TIMESTAMP 
+				 WHERE id = ?`,
+				string(newTagsJSON), id,
+			)
+			if err != nil {
+				return fmt.Errorf("failed to update tags: %v", err)
+			}
+		}
+	}
+
+	if !tagFound {
+		return fmt.Errorf("tag not found: %s", tag)
+	}
+
+	return nil
+}
+
+func (r *SQLiteRepository) ListPublicUserImages() ([]*models.UserImage, error) {
 	query := `
-					SELECT id, name, tags, size, owner, labels, private, created_at, updated_at
-					FROM image_metadata 
-					WHERE private = FALSE OR private IS NULL
-					ORDER BY created_at DESC
+		SELECT ui.id, ui.image_id, ui.owner, ui.name, ui.tags, ui.labels, 
+		ui.private, ui.created_at, ui.updated_at, im.size
+		FROM user_images ui
+		JOIN image_metadata im ON ui.image_id = im.id
+		WHERE ui.private = FALSE OR ui.private IS NULL
+		ORDER BY ui.created_at DESC
 	`
 
 	rows, err := r.db.Query(query)
@@ -668,21 +867,23 @@ func (r *SQLiteRepository) ListPublicImageMetadata() ([]*models.ImageMetadata, e
 	}
 	defer rows.Close()
 
-	var metadata []*models.ImageMetadata
+	var userImages []*models.UserImage
 	for rows.Next() {
-		var img models.ImageMetadata
+		var img models.UserImage
 		var tagsJSON, labelsJSON string
+		var size int64
 
 		err := rows.Scan(
 			&img.ID,
+			&img.ImageID,
+			&img.Owner,
 			&img.Name,
 			&tagsJSON,
-			&img.Size,
-			&img.Owner,
 			&labelsJSON,
 			&img.Private,
 			&img.CreatedAt,
 			&img.UpdatedAt,
+			&size,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan row: %v", err)
@@ -695,15 +896,15 @@ func (r *SQLiteRepository) ListPublicImageMetadata() ([]*models.ImageMetadata, e
 			return nil, fmt.Errorf("failed to parse labels: %v", err)
 		}
 
-		metadata = append(metadata, &img)
+		userImages = append(userImages, &img)
 	}
 
-	return metadata, nil
+	return userImages, nil
 }
 
-func (r *SQLiteRepository) UpdateImageVisibility(id string, private bool) error {
+func (r *SQLiteRepository) UpdateUserImageVisibility(id int, private bool) error {
 	result, err := r.db.Exec(
-		"UPDATE image_metadata SET private = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+		"UPDATE user_images SET private = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
 		private, id,
 	)
 	if err != nil {
@@ -715,7 +916,7 @@ func (r *SQLiteRepository) UpdateImageVisibility(id string, private bool) error 
 		return err
 	}
 	if rows == 0 {
-		return fmt.Errorf("image not found: %s", id)
+		return fmt.Errorf("user image not found: %d", id)
 	}
 
 	return nil

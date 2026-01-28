@@ -85,7 +85,13 @@
     }
 
     function formatDate(date: string): string {
-        return formatDistance(new Date(date), new Date(), { addSuffix: true });
+        // Ensure we're working with a parseable string format for dates
+        const parsedDate = new Date(date);
+        if (isNaN(parsedDate.getTime())) {
+            console.error("Invalid date format received:", date);
+            return "unknown";
+        }
+        return formatDistance(parsedDate, new Date(), { addSuffix: true });
     }
 </script>
 
@@ -209,17 +215,19 @@
                                         <span class="text-sm text-gray-500">
                                             {formatDate(tag.created)}
                                         </span>
-                                        <button
-                                            type="button"
-                                            class="text-gray-400 hover:text-red-600 transition-colors duration-150"
-                                            onclick={() =>
-                                                (deleteConfirmation = {
-                                                    repository: repository.name,
-                                                    tag: tag.name,
-                                                })}
-                                        >
-                                            <Trash2 class="h-4 w-4" />
-                                        </button>
+                                        {#if tag.isOwned}
+                                            <button
+                                                type="button"
+                                                class="text-gray-400 hover:text-red-600 transition-colors duration-150"
+                                                onclick={() =>
+                                                    (deleteConfirmation = {
+                                                        repository: repository.name,
+                                                        tag: tag.name,
+                                                    })}
+                                            >
+                                                <Trash2 class="h-4 w-4" />
+                                            </button>
+                                        {/if}
                                     </div>
                                 </div>
                             {/each}

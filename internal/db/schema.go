@@ -26,6 +26,7 @@ const dropSQL = `
 DROP TABLE IF EXISTS roles;
 DROP TABLE IF EXISTS groups;
 DROP TABLE IF EXISTS users;
+DROP TABLE IF EXISTS user_images;
 DROP TABLE IF EXISTS image_metadata;
 DROP TABLE IF EXISTS artifact_repositories;
 DROP TABLE IF EXISTS artifacts;
@@ -78,14 +79,23 @@ CREATE TABLE IF NOT EXISTS users (
 -- IMAGE METADATA
 CREATE TABLE IF NOT EXISTS image_metadata (
     id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    tags TEXT NOT NULL, -- JSON array of tags
     size INTEGER NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- USER IMAGES (Junction table linking users to images with their own metadata)
+CREATE TABLE IF NOT EXISTS user_images (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    image_id TEXT NOT NULL,
     owner TEXT NOT NULL,
-    labels TEXT, -- JSON object of labels
+    name TEXT NOT NULL,
+    tags TEXT NOT NULL,
+    labels TEXT,
     private BOOLEAN DEFAULT FALSE,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(image_id) REFERENCES image_metadata(id),
     FOREIGN KEY(owner) REFERENCES users(username)
 );
 
@@ -131,8 +141,9 @@ CREATE INDEX IF NOT EXISTS idx_roles_name ON roles(name);
 CREATE INDEX IF NOT EXISTS idx_groups_name ON groups(name);
 CREATE INDEX IF NOT EXISTS idx_groups_scope ON groups(scope);
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-CREATE INDEX IF NOT EXISTS idx_image_metadata_owner ON image_metadata(owner);
-CREATE INDEX IF NOT EXISTS idx_image_metadata_name ON image_metadata(name);
+CREATE INDEX IF NOT EXISTS idx_user_images_image_id ON user_images(image_id);
+CREATE INDEX IF NOT EXISTS idx_user_images_owner ON user_images(owner);
+CREATE INDEX IF NOT EXISTS idx_user_images_name ON user_images(name);
 CREATE INDEX IF NOT EXISTS idx_artifact_properties_key ON artifact_properties(key);
 CREATE INDEX IF NOT EXISTS idx_artifact_properties_value ON artifact_properties(value);
 CREATE INDEX IF NOT EXISTS idx_artifact_properties_artifact ON artifact_properties(artifact_id);
@@ -165,6 +176,13 @@ CREATE TRIGGER IF NOT EXISTS update_image_metadata_timestamp
 AFTER UPDATE ON image_metadata
 BEGIN
     UPDATE image_metadata SET updated_at = CURRENT_TIMESTAMP 
+    WHERE id = NEW.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS update_user_images_timestamp 
+AFTER UPDATE ON user_images
+BEGIN
+    UPDATE user_images SET updated_at = CURRENT_TIMESTAMP 
     WHERE id = NEW.id;
 END;
 

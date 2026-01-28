@@ -35,14 +35,22 @@ type Repository interface {
 	UpdateUserGroups(username string, groups []string) error
 
 	// REGISTRY OPS
-	ListImageMetadata(owner string) ([]*models.ImageMetadata, error)
+
+	// - IMAGE METADATA
 	GetImageMetadata(id string) (*models.ImageMetadata, error)
 	CreateImageMetadata(metadata *models.ImageMetadata) error
 	UpdateImageMetadata(metadata *models.ImageMetadata) error
-	DeleteImageTag(repository string, tag string, owner string) error
 	DeleteImageMetadata(id string) error
-	ListPublicImageMetadata() ([]*models.ImageMetadata, error)
-	UpdateImageVisibility(id string, private bool) error
+	// - USER IMAGES
+	ListUserImages(owner string) ([]*models.UserImage, error)
+	GetUserImage(id int) (*models.UserImage, error)
+	GetUserImageByNameAndTag(owner string, name string, tag string) (*models.UserImage, error)
+	CreateUserImage(userImage *models.UserImage) error
+	UpdateUserImage(userImage *models.UserImage) error
+	DeleteUserImageTag(repository string, tag string, owner string) error
+	DeleteUserImage(id int) error
+	ListPublicUserImages() ([]*models.UserImage, error)
+	UpdateUserImageVisibility(id int, private bool) error
 
 	// ARTIFACT OPS
 	CreateArtifactRepository(repo *models.ArtifactRepository) error

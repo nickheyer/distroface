@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -100,15 +101,15 @@ func (h *RepositoryHandler) ListRepositories(w http.ResponseWriter, r *http.Requ
 	username := r.Context().Value(constants.UsernameKey).(string)
 	h.log.Printf("Listing repositories for user: %s", username)
 
-	metadata, err := h.repo.ListImageMetadata(username)
+	userImages, err := h.repo.ListUserImages(username)
 	if err != nil {
 		h.log.Printf("Failed to list repositories: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 		return
 	}
 
-	if metadata == nil {
-		metadata = []*models.ImageMetadata{}
+	if userImages == nil {
+		userImages = []*models.UserImage{}
 	}
 
 	// BUILD RESPONSE
@@ -129,18 +130,35 @@ func (h *RepositoryHandler) ListRepositories(w http.ResponseWriter, r *http.Requ
 		Private   bool      `json:"private"`
 	}
 
+	// PUT/GET SIZES IN MEM CACHE
+	imgSizeCache := make(map[string]int64)
+	getImageSize := func(imageID string) int64 {
+		if size, ok := imgSizeCache[imageID]; ok {
+			return size
+		}
+
+		physicalImg, err := h.repo.GetImageMetadata(imageID)
+		var size int64 = 0
+		if err == nil {
+			size = physicalImg.Size
+		}
+		imgSizeCache[imageID] = size
+		return size
+	}
+
 	// GROUPING BY REPO NAME
 	repoMap := make(map[string]*RepositoryResponse)
-	for _, img := range metadata {
+	for _, img := range userImages {
 		repo, exists := repoMap[img.Name]
+		size := getImageSize(img.ImageID)
 		if !exists {
 			repo = &RepositoryResponse{
-				ID:        img.ID,
+				ID:        img.ImageID,
 				Name:      img.Name,
 				Tags:      make([]TagInfo, 0),
 				UpdatedAt: img.UpdatedAt,
 				Owner:     img.Owner,
-				TotalSize: img.Size,
+				TotalSize: size,
 				Private:   img.Private,
 			}
 			repoMap[img.Name] = repo
@@ -150,8 +168,8 @@ func (h *RepositoryHandler) ListRepositories(w http.ResponseWriter, r *http.Requ
 		for _, tagName := range img.Tags {
 			tag := TagInfo{
 				Name:    tagName,
-				Size:    img.Size,
-				Digest:  img.ID, // USE MANIFEST AS ID
+				Size:    size,
+				Digest:  img.ImageID, // USE MANIFEST AS ID
 				Created: img.CreatedAt,
 			}
 			repo.Tags = append(repo.Tags, tag)
@@ -163,11 +181,27 @@ func (h *RepositoryHandler) ListRepositories(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// MAP TO SLICE
+	// MAP TO SLICE AND ENSURE SIZE VALUES ARE PROPERLY SET
 	repositories := make([]*RepositoryResponse, 0, len(repoMap))
 	for _, repo := range repoMap {
+		for i := range repo.Tags {
+			// AGGR SIZE IF NOT EXISTING
+			if repo.Tags[i].Size == 0 {
+				physicalImg, err := h.repo.GetImageMetadata(repo.Tags[i].Digest)
+				if err == nil {
+					repo.Tags[i].Size = physicalImg.Size
+				}
+			}
+		}
 		repositories = append(repositories, repo)
 	}
+
+	// SORT BY RECENT UPDATE
+	sort.Slice(repositories, func(i, j int) bool {
+		timeI, _ := time.Parse(time.RFC3339, repositories[i].UpdatedAt.Format(time.RFC3339))
+		timeJ, _ := time.Parse(time.RFC3339, repositories[j].UpdatedAt.Format(time.RFC3339))
+		return timeI.After(timeJ)
+	})
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(repositories); err != nil {
@@ -232,8 +266,8 @@ func (h *RepositoryHandler) DeleteTag(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		// UPDATE METADATA TO REMOVE JUST THIS TAG
-		if err := h.updateImageMetadata(manifestDigest, tag); err != nil {
+		// RM TAG
+		if err := h.repo.DeleteUserImageTag(name, tag, username); err != nil {
 			h.log.Printf("Error updating image metadata: %v", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
@@ -250,8 +284,8 @@ func (h *RepositoryHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 
 	h.log.Printf("Listing tags for repository %s by user %s", name, username)
 
-	// GET ALL METADATA FOR REPO
-	metadata, err := h.repo.ListImageMetadata(username)
+	// GET ALL USER IMAGES FOR REPO
+	userImages, err := h.repo.ListUserImages(username)
 	if err != nil {
 		h.log.Printf("Failed to get repository metadata: %v", err)
 		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
@@ -262,7 +296,7 @@ func (h *RepositoryHandler) ListTags(w http.ResponseWriter, r *http.Request) {
 	var tags []string
 	tagMap := make(map[string]bool) // GET ONLY UNIQUE TAGS, DEDUP
 
-	for _, img := range metadata {
+	for _, img := range userImages {
 		if img.Name == name {
 			for _, tag := range img.Tags {
 				tagMap[tag] = true
@@ -323,17 +357,29 @@ func (h *RepositoryHandler) HandleManifest(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *RepositoryHandler) getManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
-	// RESOLVE MANIFEST PATH
+	// GET CURRENT USER
+	username := r.Context().Value(constants.UsernameKey).(string)
+
+	// CHECK IF USER HAS THIS TAG IN DATABASE
+	_, err := h.repo.GetUserImageByNameAndTag(username, name, reference)
+	if err != nil {
+		// USER DOESN'T HAVE THIS TAG - FORCE UPLOAD BY RETURNING 404
+		h.log.Errorf("\nError encountered while getting image by user and tag:\n", err)
+		h.log.Printf("User %s doesn't have tag %s:%s in database.\n",
+			username, name, reference)
+		http.Error(w, "MANIFEST NOT FOUND", http.StatusNotFound)
+		return
+	}
+
+	// USER HAS THIS TAG - SERVE MANIFEST NORMALLY
 	manifestPath := h.resolveManifestPath(name, reference)
 	if manifestPath == "" {
-		h.log.Printf("Failed to resolve manifest path for %s:%s", name, reference)
 		http.Error(w, "MANIFEST NOT FOUND", http.StatusNotFound)
 		return
 	}
 
 	manifest, err := os.ReadFile(manifestPath)
 	if err != nil {
-		h.log.Printf("Failed to read manifest at %s: %v", manifestPath, err)
 		http.Error(w, "MANIFEST NOT FOUND", http.StatusNotFound)
 		return
 	}
@@ -348,17 +394,16 @@ func (h *RepositoryHandler) getManifest(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	// DOCKER HEADERS
+	// SET HEADERS
+	manifestDigest := digest.FromBytes(manifest)
 	w.Header().Set("Content-Type", manifestObj.MediaType)
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(manifest)))
-	manifestDigest := digest.FromBytes(manifest)
 	w.Header().Set("Docker-Content-Digest", manifestDigest.String())
 
-	if r.Method == "HEAD" {
-		return
+	// SEND BODY FOR GET REQUESTS
+	if r.Method != "HEAD" {
+		w.Write(manifest)
 	}
-
-	w.Write(manifest)
 }
 
 func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, name, reference, username string) {
@@ -413,46 +458,53 @@ func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, 
 			Digest    string `json:"digest"`
 		} `json:"layers"`
 	}
+
 	if err := json.Unmarshal(body, &manifestObj); err != nil {
-		h.log.Printf("Failed to parse manifest JSON: %v", err)
+		h.log.Printf("Failed to parse manifest JSON: %v\n", err)
 		http.Error(w, "INVALID MANIFEST", http.StatusBadRequest)
 		return
 	}
 
-	// UPSERT METADATA
-	metadata, err := h.repo.GetImageMetadata(manifestDigest.String())
+	imgMetadata, err := h.repo.GetImageMetadata(manifestDigest.String())
 	if err == nil {
 		// UPDATE EXISTING
-		hasTag := false
-		for _, t := range metadata.Tags {
-			if t == reference {
-				hasTag = true
-				break
-			}
-		}
-		if !hasTag {
-			metadata.Tags = append(metadata.Tags, reference)
-		}
-		metadata.Size = calculateTotalSize(manifestObj)
-		metadata.UpdatedAt = time.Now()
-		if err := h.repo.UpdateImageMetadata(metadata); err != nil {
+		imgMetadata.Size = calculateTotalSize(manifestObj)
+		imgMetadata.UpdatedAt = time.Now()
+		if err := h.repo.UpdateImageMetadata(imgMetadata); err != nil {
 			h.log.Printf("Failed to update image metadata: %v", err)
+		} else {
+			h.log.Printf("Updated physical image metadata for digest %s", manifestDigest.String())
 		}
 	} else {
-		// CREATE NEW METADATA
-		metadata := &models.ImageMetadata{
+		imgMetadata = &models.ImageMetadata{
 			ID:        manifestDigest.String(),
-			Name:      name,
-			Tags:      []string{reference},
 			Size:      calculateTotalSize(manifestObj),
-			Owner:     username,
-			Labels:    make(map[string]string),
 			CreatedAt: time.Now(),
 			UpdatedAt: time.Now(),
 		}
-		if err := h.repo.CreateImageMetadata(metadata); err != nil {
-			h.log.Printf("Failed to create image metadata: %v", err)
+		if err := h.repo.CreateImageMetadata(imgMetadata); err != nil {
+			h.log.Printf("Failed to create image metadata: %v\n", err)
+		} else {
+			h.log.Printf("Created image metadata: %+v\n", imgMetadata)
 		}
+	}
+
+	// CREATE USER IMAGE REFERENCE FOR THIS TAG
+	userImg := &models.UserImage{
+		ImageID:   manifestDigest.String(),
+		Name:      name,
+		Tags:      []string{reference},
+		Owner:     username,
+		Labels:    make(map[string]string),
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	if err := h.repo.CreateUserImage(userImg); err != nil {
+		h.log.Printf("Failed to create user image reference: %v", err)
+		http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
+		return
+	} else {
+		h.log.Printf("Created user image reference: %+v\n", userImg)
 	}
 
 	// UPDATE LINK IF TAG
@@ -467,7 +519,7 @@ func (h *RepositoryHandler) putManifest(w http.ResponseWriter, r *http.Request, 
 			"current",
 		)
 		if err := os.MkdirAll(tagDir, 0755); err != nil {
-			h.log.Printf("Failed to create tag directory: %v", err)
+			h.log.Printf("Failed to create tag directory: %v\n", err)
 			http.Error(w, "INTERNAL ERROR", http.StatusInternalServerError)
 			return
 		}
@@ -525,28 +577,11 @@ func (h *RepositoryHandler) DeleteManifest(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// UPDATE METADATA
-	metadata, err := h.repo.GetImageMetadata(reference)
-	if err == nil {
-		newTags := make([]string, 0)
-		for _, tag := range metadata.Tags {
-			if tag != reference {
-				newTags = append(newTags, tag)
-			}
-		}
-
-		if len(newTags) == 0 {
-			// IF NO TAGS, DELETE METADATA
-			if err := h.repo.DeleteImageMetadata(metadata.ID); err != nil {
-				h.log.Printf("Failed to delete image metadata: %v", err)
-			}
-		} else {
-			// UPDATE REMAINING TAGS
-			metadata.Tags = newTags
-			if err := h.repo.UpdateImageMetadata(metadata); err != nil {
-				h.log.Printf("Failed to update image metadata: %v", err)
-			}
-		}
+	// UPDATE USER IMAGE METADATA
+	deleteErr := h.repo.DeleteUserImageTag(name, reference, username)
+	if deleteErr != nil {
+		h.log.Printf("Failed to delete tag from user image: %v", deleteErr)
+		// Don't fail on tag removal error
 	}
 
 	w.WriteHeader(http.StatusAccepted)
@@ -1188,23 +1223,6 @@ func (h *RepositoryHandler) checkRemainingTags(name, manifestDigest string) (boo
 	return hasRemainingTags, err
 }
 
-func (h *RepositoryHandler) updateImageMetadata(manifestDigest, removedTag string) error {
-	metadata, err := h.repo.GetImageMetadata(manifestDigest)
-	if err != nil {
-		return fmt.Errorf("failed to get image metadata: %v", err)
-	}
-
-	newTags := make([]string, 0, len(metadata.Tags)-1)
-	for _, t := range metadata.Tags {
-		if t != removedTag {
-			newTags = append(newTags, t)
-		}
-	}
-	metadata.Tags = newTags
-
-	return h.repo.UpdateImageMetadata(metadata)
-}
-
 func (h *RepositoryHandler) performFullCleanup(name, manifestDigest string) error {
 	// 1. READ AND PARSE MANIFEST
 	manifestPath := filepath.Join(
@@ -1342,20 +1360,31 @@ func (h *RepositoryHandler) UpdateImageVisibility(w http.ResponseWriter, r *http
 	}
 
 	// CHECK OWNERSHIP USING THE DIGEST/SHA ID
-	metadata, err := h.repo.GetImageMetadata(req.ID)
+	userImages, err := h.repo.ListUserImages(username)
 	if err != nil {
-		h.log.Printf("Failed to get image metadata: %v", err)
+		h.log.Printf("Failed to get user images: %v", err)
 		http.Error(w, "Not found", http.StatusNotFound)
 		return
 	}
 
-	if metadata.Owner != username {
+	// FIND USER IMAGE
+	var userImageID int
+	found := false
+	for _, img := range userImages {
+		if img.ImageID == req.ID {
+			userImageID = img.ID
+			found = true
+			break
+		}
+	}
+
+	if !found {
 		h.log.Printf("User %s not authorized for image %s", username, req.ID)
 		http.Error(w, "Not authorized", http.StatusForbidden)
 		return
 	}
 
-	if err := h.repo.UpdateImageVisibility(req.ID, req.Private); err != nil {
+	if err := h.repo.UpdateUserImageVisibility(userImageID, req.Private); err != nil {
 		h.log.Printf("Failed to update visibility: %v", err)
 		http.Error(w, "Failed to update visibility", http.StatusInternalServerError)
 		return
@@ -1368,49 +1397,75 @@ func (h *RepositoryHandler) ListGlobalRepositories(w http.ResponseWriter, r *htt
 	username := r.Context().Value(constants.UsernameKey).(string)
 
 	// GET ALL PUBLIC IMAGES AND USER'S PRIVATE IMAGES
-	metadata, err := h.repo.ListPublicImageMetadata()
+	userImages, err := h.repo.ListPublicUserImages()
 	if err != nil {
 		http.Error(w, "Failed to list repositories", http.StatusInternalServerError)
 		return
 	}
 
 	// GET USER'S PRIVATE IMAGES
-	userMeta, err := h.repo.ListImageMetadata(username)
+	privateImages, err := h.repo.ListUserImages(username)
 	if err != nil {
 		http.Error(w, "Failed to list user repositories", http.StatusInternalServerError)
 		return
 	}
 
-	// COMBINE AND DEDUPLICATE
-	seen := make(map[string]bool)
-	var combined []*models.ImageMetadata
+	// COMBINE WITHOUT DEDUPLICATING BY IMAGE ID
+	var combined []*models.UserImage
 
-	// ADD PUBLIC IMAGES
-	for _, img := range metadata {
-		if !seen[img.ID] {
-			seen[img.ID] = true
+	combined = append(combined, userImages...)
+
+	// ADD USER'S PRIVATE IMAGES
+	for _, img := range privateImages {
+		if img.Private {
 			combined = append(combined, img)
 		}
 	}
 
-	// ADD USER PRIVATE IMAGES
-	for _, img := range userMeta {
-		if !seen[img.ID] && img.Private {
-			seen[img.ID] = true
-			combined = append(combined, img)
-		}
-	}
+	// SORT BY UPDATED_AT TIME (NEWEST FIRST)
+	sort.Slice(combined, func(i, j int) bool {
+		return combined[i].UpdatedAt.After(combined[j].UpdatedAt)
+	})
 
-	// CALCULATE TOTALS
+	// CALCULATE TOTALS WITH SIZE INFORMATION
 	var totalSize int64
+	imageSizeCache := make(map[string]int64)
 	for _, img := range combined {
-		totalSize += img.Size
+		if _, exists := imageSizeCache[img.ImageID]; !exists {
+			physicalImg, err := h.repo.GetImageMetadata(img.ImageID)
+			if err == nil {
+				imageSizeCache[img.ImageID] = physicalImg.Size
+				totalSize += physicalImg.Size
+			} else {
+				imageSizeCache[img.ImageID] = 0
+			}
+		} else {
+			totalSize += imageSizeCache[img.ImageID]
+		}
 	}
 
-	response := models.GlobalView{
+	type EnhancedUserImage struct {
+		*models.UserImage
+		Size int64 `json:"size"`
+	}
+
+	enhancedImages := make([]*EnhancedUserImage, 0, len(combined))
+	for _, img := range combined {
+		size := imageSizeCache[img.ImageID]
+		enhancedImages = append(enhancedImages, &EnhancedUserImage{
+			UserImage: img,
+			Size:      size,
+		})
+	}
+
+	response := struct {
+		TotalImages int64                `json:"total_images"`
+		TotalSize   int64                `json:"total_size"`
+		Images      []*EnhancedUserImage `json:"images"`
+	}{
 		TotalImages: int64(len(combined)),
 		TotalSize:   totalSize,
-		Images:      combined,
+		Images:      enhancedImages,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
