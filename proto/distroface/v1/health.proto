@@ -9,14 +9,14 @@ option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;dis
 // HealthService provides application health checking.
 service HealthService {
   // Check returns the current health status of the application.
-  rpc Check(HealthServiceCheckRequest) returns (HealthServiceCheckResponse) {}
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {}
 }
 
 // HealthCheckRequest is an empty request for health checks.
-message HealthServiceCheckRequest {}
+message HealthCheckRequest {}
 
 // HealthCheckResponse contains the application health status.
-message HealthServiceCheckResponse {
+message HealthCheckResponse {
   // status is the health status (e.g. "ok").
   string status = 1;
   // timestamp is the server time when the check was performed.

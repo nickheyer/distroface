@@ -11,7 +11,7 @@
 
 	async function checkHealth() {
 		try {
-			const response = await rpcClient.health.check({});
+			const response = await rpcClient.health.healthCheck({});
 			healthStatus = { status: response.status, version: response.version };
 			healthError = null;
 		} catch (error: any) {
@@ -58,7 +58,7 @@
 						<Badge variant="outline" class="bg-green-500/10 text-green-500 border-green-500/20">
 							{healthStatus.status}
 						</Badge>
-						<span class="text-xs text-muted-foreground">v{healthStatus.version}</span>
+						<span class="text-xs text-muted-foreground">{healthStatus.version}</span>
 					</div>
 				{:else}
 					<p class="text-sm text-red-500">{healthError}</p>
