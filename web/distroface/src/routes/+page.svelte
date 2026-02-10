@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
+	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
 	import { onMount } from 'svelte';
 	import { CheckCircle, XCircle, Home } from '@lucide/svelte';
@@ -29,7 +29,7 @@
 
 <div class="flex-1 space-y-6 h-full p-6">
 	<div class="flex items-center gap-4 pb-4 border-b border-border/40">
-		<div class="h-14 w-14 rounded-2xl bg-gradient-to-br from-primary/20 to-primary/10 flex items-center justify-center shadow-lg">
+		<div class="h-14 w-14 rounded-2xl bg-linear-to-br from-primary/20 to-primary/10 flex items-center justify-center shadow-lg">
 			<Home class="h-7 w-7 text-primary" />
 		</div>
 		<div class="space-y-1">
