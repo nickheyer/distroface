@@ -7,8 +7,10 @@ import (
 
 	"connectrpc.com/connect"
 	"connectrpc.com/grpcreflect"
+	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/config"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc/services"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
@@ -22,13 +24,29 @@ type Server struct {
 	config  *config.Config
 	log     *logger.Logger
 	handler http.Handler
+
+	registryHandler http.Handler
+	tokenHandler    *auth.TokenHandler
+	eventHandler    *registry.EventHandler
 }
 
-func NewServer(store *storage.Store, cfg *config.Config, log *logger.Logger) *Server {
+type ServerDeps struct {
+	Store           *storage.Store
+	Config          *config.Config
+	Log             *logger.Logger
+	RegistryHandler http.Handler
+	TokenHandler    *auth.TokenHandler
+	EventHandler    *registry.EventHandler
+}
+
+func NewServer(deps ServerDeps) *Server {
 	s := &Server{
-		store:  store,
-		config: cfg,
-		log:    log,
+		store:           deps.Store,
+		config:          deps.Config,
+		log:             deps.Log,
+		registryHandler: deps.RegistryHandler,
+		tokenHandler:    deps.TokenHandler,
+		eventHandler:    deps.EventHandler,
 	}
 	s.setupHandler()
 	return s
@@ -38,6 +56,7 @@ func (s *Server) setupHandler() {
 	mux := http.NewServeMux()
 
 	interceptors := []connect.Interceptor{
+		newSessionInterceptor(s.store, s.log),
 		&loggingInterceptor{log: s.log},
 	}
 
@@ -45,14 +64,44 @@ func (s *Server) setupHandler() {
 		connect.WithInterceptors(interceptors...),
 	}
 
-	// Register services
+	// Registry handler (OCI Distribution API)
+	if s.registryHandler != nil {
+		mux.Handle("/v2/", s.registryHandler)
+	}
+
+	// Docker token auth endpoint
+	if s.tokenHandler != nil {
+		mux.Handle("GET /auth/token", s.tokenHandler)
+	}
+
+	// Registry notification webhook receiver
+	if s.eventHandler != nil {
+		mux.Handle("POST /internal/registry/events", s.eventHandler)
+	}
+
+	// Register RPC services
 	healthService := services.NewHealthService(s.log)
 	healthPath, healthHandler := distrofacev1connect.NewHealthServiceHandler(healthService, opts...)
 	mux.Handle(healthPath, healthHandler)
 
+	authService := services.NewAuthService(s.store, s.config, s.log)
+	authPath, authHandler := distrofacev1connect.NewAuthServiceHandler(authService, opts...)
+	mux.Handle(authPath, authHandler)
+
+	userService := services.NewUserService(s.store, s.log)
+	userPath, userHandler := distrofacev1connect.NewUserServiceHandler(userService, opts...)
+	mux.Handle(userPath, userHandler)
+
+	repoService := services.NewRepositoryService(s.store, s.log)
+	repoPath, repoHandler := distrofacev1connect.NewRepositoryServiceHandler(repoService, opts...)
+	mux.Handle(repoPath, repoHandler)
+
 	// gRPC reflection
 	reflector := grpcreflect.NewStaticReflector(
 		distrofacev1connect.HealthServiceName,
+		distrofacev1connect.AuthServiceName,
+		distrofacev1connect.UserServiceName,
+		distrofacev1connect.RepositoryServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))

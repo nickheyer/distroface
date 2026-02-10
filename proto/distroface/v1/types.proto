@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// Role represents a user's role in the system.
+enum Role {
+  // ROLE_UNSPECIFIED is the default unspecified role.
+  ROLE_UNSPECIFIED = 0;
+  // ROLE_USER is a standard user.
+  ROLE_USER = 1;
+  // ROLE_ADMIN is an administrator.
+  ROLE_ADMIN = 2;
+}
+
+// Visibility represents the visibility of a repository.
+enum Visibility {
+  // VISIBILITY_UNSPECIFIED is the default unspecified visibility.
+  VISIBILITY_UNSPECIFIED = 0;
+  // VISIBILITY_PUBLIC is a publicly accessible repository.
+  VISIBILITY_PUBLIC = 1;
+  // VISIBILITY_PRIVATE is a private repository.
+  VISIBILITY_PRIVATE = 2;
+}
+
+// User represents a registered user account.
+message User {
+  // id is the unique identifier for the user.
+  string id = 1;
+  // username is the user's unique username.
+  string username = 2;
+  // email is the user's email address.
+  string email = 3;
+  // display_name is the user's display name.
+  string display_name = 4;
+  // role is the user's role.
+  Role role = 5;
+  // created_at is when the user was created.
+  google.protobuf.Timestamp created_at = 6;
+  // updated_at is when the user was last updated.
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// Repository represents a container image repository.
+message Repository {
+  // id is the unique identifier for the repository.
+  string id = 1;
+  // namespace is the repository namespace (typically username or org).
+  string namespace = 2;
+  // name is the repository name within the namespace.
+  string name = 3;
+  // full_name is namespace/name.
+  string full_name = 4;
+  // description is the repository description.
+  string description = 5;
+  // visibility is the repository visibility.
+  Visibility visibility = 6;
+  // tag_count is the number of tags in the repository.
+  int32 tag_count = 7;
+  // size_bytes is the total size of the repository.
+  int64 size_bytes = 8;
+  // owner_id is the ID of the repository owner.
+  string owner_id = 9;
+  // created_at is when the repository was created.
+  google.protobuf.Timestamp created_at = 10;
+  // updated_at is when the repository was last updated.
+  google.protobuf.Timestamp updated_at = 11;
+  // last_pushed_at is when the last push occurred.
+  google.protobuf.Timestamp last_pushed_at = 12;
+  // pull_count is the number of times images have been pulled.
+  int64 pull_count = 13;
+  // push_count is the number of times images have been pushed.
+  int64 push_count = 14;
+}
+
+// Tag represents a tagged image in a repository.
+message Tag {
+  // name is the tag name.
+  string name = 1;
+  // digest is the manifest digest.
+  string digest = 2;
+  // size_bytes is the total size of the tagged image.
+  int64 size_bytes = 3;
+  // pushed_at is when the tag was pushed.
+  google.protobuf.Timestamp pushed_at = 4;
+}
+
+// TagDetail contains detailed information about a tagged image.
+message TagDetail {
+  // name is the tag name.
+  string name = 1;
+  // digest is the manifest digest.
+  string digest = 2;
+  // media_type is the manifest media type.
+  string media_type = 3;
+  // size_bytes is the total size.
+  int64 size_bytes = 4;
+  // architecture is the image architecture (e.g. amd64).
+  string architecture = 5;
+  // os is the image operating system (e.g. linux).
+  string os = 6;
+  // layers is the list of layers in the image.
+  repeated Layer layers = 7;
+  // created_at is when the image was created.
+  google.protobuf.Timestamp created_at = 8;
+  // pushed_at is when the image was pushed.
+  google.protobuf.Timestamp pushed_at = 9;
+}
+
+// Layer represents a single layer in a container image.
+message Layer {
+  // digest is the layer digest.
+  string digest = 1;
+  // size_bytes is the layer size.
+  int64 size_bytes = 2;
+  // media_type is the layer media type.
+  string media_type = 3;
+}

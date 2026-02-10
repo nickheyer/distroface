@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// OrganizationService manages organizations and team membership.
+// This service will be implemented in Phase 3.
+service OrganizationService {}

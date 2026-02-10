@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/types.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// UserService manages user profiles.
+service UserService {
+  // GetUser returns a user by username.
+  rpc GetUser(GetUserRequest) returns (GetUserResponse) {}
+  // UpdateUser updates the current user's profile.
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse) {}
+  // ChangePassword changes the current user's password.
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse) {}
+}
+
+// GetUserRequest identifies a user to retrieve.
+message GetUserRequest {
+  // username is the username to look up.
+  string username = 1;
+}
+
+// GetUserResponse contains the requested user.
+message GetUserResponse {
+  // user is the requested user.
+  User user = 1;
+}
+
+// UpdateUserRequest contains fields to update on the current user.
+message UpdateUserRequest {
+  // display_name is the new display name, if provided.
+  optional string display_name = 1;
+  // email is the new email, if provided.
+  optional string email = 2;
+}
+
+// UpdateUserResponse contains the updated user.
+message UpdateUserResponse {
+  // user is the updated user.
+  User user = 1;
+}
+
+// ChangePasswordRequest contains the current and new password.
+message ChangePasswordRequest {
+  // current_password is the user's current password.
+  string current_password = 1;
+  // new_password is the desired new password.
+  string new_password = 2;
+}
+
+// ChangePasswordResponse is empty on success.
+message ChangePasswordResponse {}

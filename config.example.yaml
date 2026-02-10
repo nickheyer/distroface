@@ -15,6 +15,15 @@ database:
   conn_max_lifetime: 300
 
 
+# Registry configuration
+registry:
+  storage_path: "./data/registry"
+
+# Auth configuration
+auth:
+  session_duration: 86400       # 24 hours in seconds
+  token_expiry: 900             # 15 minutes for registry tokens
+
 # Storage configuration
 storage:
   data_dir: "./data"

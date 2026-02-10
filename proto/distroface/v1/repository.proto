@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/types.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// RepositoryService manages container image repositories.
+service RepositoryService {
+  // GetRepository returns a repository by namespace and name.
+  rpc GetRepository(GetRepositoryRequest) returns (GetRepositoryResponse) {}
+  // ListRepositories returns a paginated list of repositories.
+  rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse) {}
+  // DeleteRepository deletes a repository.
+  rpc DeleteRepository(DeleteRepositoryRequest) returns (DeleteRepositoryResponse) {}
+  // ListTags returns a paginated list of tags for a repository.
+  rpc ListTags(ListTagsRequest) returns (ListTagsResponse) {}
+  // GetTagDetail returns detailed information about a specific tag.
+  rpc GetTagDetail(GetTagDetailRequest) returns (GetTagDetailResponse) {}
+}
+
+// GetRepositoryRequest identifies a repository to retrieve.
+message GetRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// GetRepositoryResponse contains the requested repository.
+message GetRepositoryResponse {
+  // repository is the requested repository.
+  Repository repository = 1;
+}
+
+// ListRepositoriesRequest contains pagination and filter parameters.
+message ListRepositoriesRequest {
+  // page_size is the maximum number of repositories to return.
+  int32 page_size = 1;
+  // page_token is the pagination token from a previous response.
+  string page_token = 2;
+  // namespace filters by namespace.
+  string namespace = 3;
+  // query filters by name substring.
+  string query = 4;
+  // visibility filters by visibility.
+  Visibility visibility = 5;
+}
+
+// ListRepositoriesResponse contains a page of repositories.
+message ListRepositoriesResponse {
+  // repositories is the list of repositories.
+  repeated Repository repositories = 1;
+  // next_page_token is the token for the next page.
+  string next_page_token = 2;
+  // total_count is the total number of matching repositories.
+  int32 total_count = 3;
+}
+
+// DeleteRepositoryRequest identifies a repository to delete.
+message DeleteRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// DeleteRepositoryResponse is empty on success.
+message DeleteRepositoryResponse {}
+
+// ListTagsRequest identifies a repository and pagination parameters.
+message ListTagsRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+  // page_size is the maximum number of tags to return.
+  int32 page_size = 3;
+  // page_token is the pagination token from a previous response.
+  string page_token = 4;
+}
+
+// ListTagsResponse contains a page of tags.
+message ListTagsResponse {
+  // tags is the list of tags.
+  repeated Tag tags = 1;
+  // next_page_token is the token for the next page.
+  string next_page_token = 2;
+}
+
+// GetTagDetailRequest identifies a specific tag.
+message GetTagDetailRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+  // tag is the tag name.
+  string tag = 3;
+}
+
+// GetTagDetailResponse contains detailed tag information.
+message GetTagDetailResponse {
+  // detail is the tag detail.
+  TagDetail detail = 1;
+}

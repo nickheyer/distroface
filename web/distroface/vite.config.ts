@@ -32,6 +32,14 @@ export default defineConfig({
 			'/connect': {
 				target: 'http://localhost:8080',
 				changeOrigin: true
+			},
+			'/v2': {
+				target: 'http://localhost:8080',
+				changeOrigin: true
+			},
+			'/auth': {
+				target: 'http://localhost:8080',
+				changeOrigin: true
 			}
 		}
 	}

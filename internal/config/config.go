@@ -13,6 +13,8 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database" json:"database"`
 	Storage  StorageConfig  `mapstructure:"storage" json:"storage"`
 	Logging  LoggingConfig  `mapstructure:"logging" json:"logging"`
+	Registry RegistryConfig `mapstructure:"registry" json:"registry"`
+	Auth     AuthConfig     `mapstructure:"auth" json:"auth"`
 }
 
 type ServerConfig struct {
@@ -32,6 +34,15 @@ type DatabaseConfig struct {
 
 type StorageConfig struct {
 	DataDir string `mapstructure:"data_dir" json:"data_dir"`
+}
+
+type RegistryConfig struct {
+	StoragePath string `mapstructure:"storage_path" json:"storage_path"`
+}
+
+type AuthConfig struct {
+	SessionDuration int `mapstructure:"session_duration" json:"session_duration"`
+	TokenExpiry     int `mapstructure:"token_expiry" json:"token_expiry"`
 }
 
 type LoggingConfig struct {
@@ -98,6 +109,11 @@ func setDefaults(v *viper.Viper) {
 	}
 	v.SetDefault("storage.data_dir", dataDir)
 
+	v.SetDefault("registry.storage_path", "./data/registry")
+
+	v.SetDefault("auth.session_duration", 86400)
+	v.SetDefault("auth.token_expiry", 900)
+
 	v.SetDefault("logging.enabled", true)
 	v.SetDefault("logging.file_path", "./data/distroface.log")
 	v.SetDefault("logging.max_size", 10)
@@ -116,6 +132,11 @@ func validateConfig(cfg *Config) error {
 	cfg.Storage.DataDir, err = filepath.Abs(cfg.Storage.DataDir)
 	if err != nil {
 		return fmt.Errorf("invalid data directory: %w", err)
+	}
+
+	cfg.Registry.StoragePath, err = filepath.Abs(cfg.Registry.StoragePath)
+	if err != nil {
+		return fmt.Errorf("invalid registry storage path: %w", err)
 	}
 
 	return nil

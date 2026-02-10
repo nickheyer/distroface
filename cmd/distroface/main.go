@@ -9,8 +9,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/distribution/distribution/v3/registry/handlers"
+	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/config"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
@@ -47,14 +50,43 @@ func main() {
 	}
 	defer store.Close()
 
-	rpcServer := rpc.NewServer(store, cfg, log)
+	// Initialize token service (ECDSA key pair for Docker token auth)
+	tokenExpiry := time.Duration(cfg.Auth.TokenExpiry) * time.Second
+	tokenService, err := auth.NewTokenService(cfg.Storage.DataDir, "distroface", "distroface-registry", tokenExpiry)
+	if err != nil {
+		log.Fatal("Failed to initialize token service: %v", err)
+	}
+	log.Info("Token service initialized (cert: %s)", tokenService.CertPath())
+
+	// Ensure registry storage directory exists
+	if err := os.MkdirAll(cfg.Registry.StoragePath, 0755); err != nil {
+		log.Fatal("Failed to create registry storage directory: %v", err)
+	}
+
+	// Build Distribution v3 registry handler
+	registryCfg := registry.BuildConfig(cfg.Registry.StoragePath, tokenService.CertPath(), cfg.Server.Host, cfg.Server.Port)
+	registryApp := handlers.NewApp(context.Background(), registryCfg)
+	log.Info("Distribution v3 registry initialized")
+
+	// Create auth and event handlers
+	tokenHandler := auth.NewTokenHandler(tokenService, store, log)
+	eventHandler := registry.NewEventHandler(store, log)
+
+	rpcServer := rpc.NewServer(rpc.ServerDeps{
+		Store:           store,
+		Config:          cfg,
+		Log:             log,
+		RegistryHandler: registryApp,
+		TokenHandler:    tokenHandler,
+		EventHandler:    eventHandler,
+	})
 
 	srv := &http.Server{
-		Addr:         fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port),
-		Handler:      rpcServer.Handler(),
-		ReadTimeout:  time.Duration(cfg.Server.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(cfg.Server.WriteTimeout) * time.Second,
-		IdleTimeout:  time.Duration(cfg.Server.IdleTimeout) * time.Second,
+		Addr:        fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port),
+		Handler:     rpcServer.Handler(),
+		ReadTimeout: time.Duration(cfg.Server.ReadTimeout) * time.Second,
+		IdleTimeout: time.Duration(cfg.Server.IdleTimeout) * time.Second,
+		// WriteTimeout set to 0 for large layer uploads via the registry
 	}
 
 	go func() {

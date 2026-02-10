@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// TokenService manages personal access tokens.
+// This service will be implemented in Phase 4.
+service TokenService {}
