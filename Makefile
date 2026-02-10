@@ -1,110 +1,158 @@
-# DISTROFACE MAKE
-# RUN 'make dev' FOR LOCAL INSTANCE
-# RUN 'make prod' FOR LOCAL PROD INSTANCE W/O VITE PROXY
-# RUN 'make clean' TO DELETE FILES
+.PHONY: dev prod clean build build-frontend run deps test fmt lint check help kill-dev image dev-docker proto proto-clean proto-lint proto-format proto-breaking gen
 
-SHELL := /bin/sh
-BUILD_DIR ?= ./build
-BUILD_DIR_DF ?= $(BUILD_DIR)/distroface
-BUILD_DIR_DFCLI ?= $(BUILD_DIR)/dfcli
-BINARY        ?= $(BUILD_DIR_DF)/distroface
-CLI_BINARY    ?= $(BUILD_DIR_DFCLI)/dfcli
-CMD_PATH      ?= ./cmd/distroface
-CLI_CMD_PATH  ?= ./cmd/dfcli
-WEB_DIR       ?= ./web
-CONFIG_FILE   ?= config.yml
+DATA_DIR := ./data
+DB_FILE := $(DATA_DIR)/distroface.db
+FRONTEND_DIR := web/distroface
+DISTROFACE_BIN := build/distroface
+BUF_IMAGE := bufbuild/buf:latest
+BUF_RUN := docker run --rm \
+	--volume "$(shell pwd):/workspace" \
+	--workdir /workspace \
+	--user "$(shell id -u):$(shell id -g)" \
+	--env HOME=/tmp \
+	$(BUF_IMAGE)
 
-# TOOLS
-GO            ?= go
-NPM           ?= npm
-YQ            ?= yq  # YQ (YAML FLAVORED JQ - NEEDS TO BE INSTALLED)
-
-# DB PATH IS PARSED FROM CONFIG.YML W/ YQ
-STORAGE_ROOT  := $(shell $(YQ) -r '.storage.root_directory' $(CONFIG_FILE) 2>/dev/null || echo registry)
-DB_PATH       := $(shell $(YQ) -r '.database.path' $(CONFIG_FILE) 2>/dev/null || echo registry.db)
-GOBUILD       = $(GO) build
-GOCLEAN       = $(GO) clean
-GOTEST        = $(GO) test
-ALL_PACKAGES  = $(shell go list ./...)
-
-.PHONY: all build test clean dev run dev-backend dev-frontend deps format prod build-cli
-all: build
-
-## -----------------------
-## PROD
-## -----------------------
-build: build-cli
-	rm -rf $(BINARY)
-	mkdir -p $(BUILD_DIR_DF)
-	@echo "Building web frontend..."
-	cd $(WEB_DIR) && $(NPM) install && $(NPM) run build
-	@echo "Building Go backend..."
-	$(GOBUILD) -o $(BINARY) $(CMD_PATH)
-
-prod: build
-	@echo "Starting $(BINARY) in production mode..."
-	GO_ENV=production ./$(BINARY)
-
-## -----------------------
-## TEST, LINT, AND FORMATTING
-## -----------------------
-test:
-	$(GOTEST) $(ALL_PACKAGES)
-
-format:
-	gofmt -s -w .
-	cd $(WEB_DIR) && $(NPM) run format
-
-## -----------------------
-## CLEANING (FOR DEV)
-## -----------------------
-clean:
-	@echo "Cleaning build artifacts..."
-	$(GOCLEAN)
-	rm -rf $(WEB_DIR)/dist $(BINARY) $(STORAGE_ROOT) $(DB_PATH) $(BUILD_DIR)
-
-
-## -----------------------
-## DEV
-## -----------------------
-dev: clean
-	@echo "Starting dev mode (frontend + backend in parallel)..."
-	$(MAKE) -j 2 dev-backend dev-frontend
-
+# Development mode - runs backend and frontend concurrently
 run:
-	@echo "Running backend + frontend at once..."
-	$(MAKE) -j 2 run-backend run-frontend
+	@echo "Starting development environment..."
+	@mkdir -p $(DATA_DIR)
+	@echo "Starting backend server with frontend dev server..."
+	@trap 'echo "Stopping all processes..."; kill $$(jobs -p) 2>/dev/null; wait; exit' INT TERM; \
+	cd $(FRONTEND_DIR) && npm run dev & \
+	FRONTEND_PID=$$!; \
+	go run cmd/distroface/main.go & \
+	BACKEND_PID=$$!; \
+	wait $$BACKEND_PID $$FRONTEND_PID
 
-dev-backend:
-	@echo "Starting backend in development mode with DB_PATH=$(DB_PATH)..."
-	GO_ENV=development $(GO) run $(CMD_PATH)/main.go
+dev: clean run
 
-dev-frontend:
-	@echo "Starting frontend (SvelteKit dev server)..."
-	cd $(WEB_DIR) && $(NPM) install && $(NPM) run dev
+# Build and run docker container for local dev
+dev-docker:
+	@echo "Building and running Docker container for development..."
+	docker compose -f docker-compose.dev.yaml build --no-cache
+	docker compose -f docker-compose.dev.yaml up
 
-dev-cli:
-	@echo "Building and watching CLI..."
-	$(GO) run $(CLI_CMD_PATH)/main.go
+# Production build and run
+prod: build-frontend
+	@echo "Building for production..."
+	@mkdir -p $(DATA_DIR)
+	go build -tags embed -o $(DISTROFACE_BIN) cmd/distroface/main.go
 
-run-backend:
-	@echo "Running backend with existing DB (no init)..."
-	GO_ENV=development $(GO) run $(CMD_PATH)/main.go
+# Build frontend for production
+build-frontend:
+	@echo "Building frontend..."
+	cd $(FRONTEND_DIR) && npm run build
 
-run-frontend:
-	cd $(WEB_DIR) && $(NPM) run dev
+# Build backend with embedded frontend
+build: build-frontend
+	@echo "Building backend with embedded frontend..."
+	go build -o $(DISTROFACE_BIN) cmd/distroface/main.go
 
-## -----------------------
-## DEPENDENCIES
-## -----------------------
-build-cli:
-	@echo "Building CLI..."
-	rm -rf $(CLI_BINARY)
-	mkdir -p $(BUILD_DIR_DFCLI)
-	CGO_ENABLED=0 $(GOBUILD) -o $(CLI_BINARY) $(CLI_CMD_PATH)
+# Build and push Docker image to :dev tag
+image:
+	@echo "Building and pushing Docker image..."
+	@bash scripts/build.sh
 
-deps: build-cli
-	@echo "Tidying Go modules and installing NPM modules..."
-	$(GO) mod tidy
-	cd $(WEB_DIR) && $(NPM) install
+# Clean development data
+clean:
+	@echo "Cleaning development data..."
+	@if [ -d "$(DATA_DIR)" ]; then \
+		echo "Removing data directory..."; \
+		rm -rf $(DATA_DIR); \
+	fi
+	@if [ -f "$(DISTROFACE_BIN)" ]; then \
+		echo "Removing backend binary..."; \
+		rm -f $(DISTROFACE_BIN); \
+	fi
+	@echo "Clean complete!"
 
+# Kill any orphaned dev processes
+kill-dev:
+	@echo "Killing orphaned development processes..."
+	@pkill -f "npm run dev" || true
+	@pkill -f "vite" || true
+	@pkill -f "go run cmd/distroface/main.go" || true
+	@pkill -f "distroface" || true
+	@echo "Cleanup complete!"
+
+# Install dependencies
+deps:
+	@echo "Installing Go dependencies..."
+	go mod download
+	@echo "Updating buf dependencies (using Docker)..."
+	$(BUF_RUN) dep update
+	@echo "Installing frontend dependencies..."
+	cd $(FRONTEND_DIR) && npm install
+
+# Run tests
+test:
+	@echo "Running Go tests..."
+	go test ./...
+
+# Format code
+fmt:
+	@echo "Formatting Go code..."
+	go fmt ./...
+	@echo "Formatting frontend code..."
+	cd $(FRONTEND_DIR) && npm run format
+
+# Lint code
+lint: proto-lint
+	@echo "Linting frontend code..."
+	cd $(FRONTEND_DIR) && npm run lint
+
+# Type check frontend
+check:
+	@echo "Type checking frontend..."
+	cd $(FRONTEND_DIR) && npm run check
+
+proto:
+	@echo "Generating protocol buffer code (using Docker)..."
+	$(BUF_RUN) generate
+	@echo "Proto generation complete!"
+
+proto-clean:
+	@echo "Cleaning generated proto files..."
+	rm -rf pkg/proto
+	rm -rf web/distroface/src/lib/proto
+	@echo "Proto files cleaned!"
+
+proto-lint:
+	@echo "Linting proto files (using Docker)..."
+	$(BUF_RUN) lint || echo "Buf linting failed, but it's probably just missing comment documentation. Ignore it."
+	@echo "Proto linting complete!"
+
+gen: proto-clean proto
+
+proto-format:
+	@echo "Formatting proto files (using Docker)..."
+	$(BUF_RUN) format -w
+	@echo "Proto files formatted!"
+
+proto-breaking:
+	@echo "Checking for breaking changes (using Docker)..."
+	$(BUF_RUN) breaking --against '.git#branch=main'
+	@echo "Breaking change check complete!"
+
+# Help
+help:
+	@echo "Available commands:"
+	@echo "  make dev            - Run in development mode (frontend + backend)"
+	@echo "  make build          - Build standalone binary with embedded frontend"
+	@echo "  make prod           - Build and run in production mode"
+	@echo "  make image          - Build and push Docker image to :dev tag"
+	@echo "  make dev-docker     - Build and run Docker container locally (no cache)"
+	@echo "  make clean          - Remove data directory and build artifacts"
+	@echo "  make kill-dev       - Kill any orphaned dev processes"
+	@echo "  make deps           - Install all dependencies"
+	@echo "  make test           - Run tests"
+	@echo "  make fmt            - Format code"
+	@echo "  make lint           - Lint code"
+	@echo "  make check          - Type check frontend"
+	@echo "  make gen            - Clean and regenerate proto code (via Docker)"
+	@echo "  make proto          - Generate Go and TypeScript code from proto files (via Docker)"
+	@echo "  make proto-clean    - Remove all generated proto files"
+	@echo "  make proto-lint     - Lint proto files for style and correctness (via Docker)"
+	@echo "  make proto-format   - Format proto files (via Docker)"
+	@echo "  make proto-breaking - Check for breaking changes against main (via Docker)"
+	@echo "  make help           - Show this help message"

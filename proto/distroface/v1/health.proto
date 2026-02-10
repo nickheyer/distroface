@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// HealthService provides application health checking.
+service HealthService {
+  // Check returns the current health status of the application.
+  rpc Check(HealthServiceCheckRequest) returns (HealthServiceCheckResponse) {}
+}
+
+// HealthCheckRequest is an empty request for health checks.
+message HealthServiceCheckRequest {}
+
+// HealthCheckResponse contains the application health status.
+message HealthServiceCheckResponse {
+  // status is the health status (e.g. "ok").
+  string status = 1;
+  // timestamp is the server time when the check was performed.
+  google.protobuf.Timestamp timestamp = 2;
+  // version is the application version string.
+  string version = 3;
+}

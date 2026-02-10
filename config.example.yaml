@@ -1,0 +1,32 @@
+# Distroface Config File
+
+server:
+  port: "8080"
+  host: "0.0.0.0"
+  read_timeout: 15
+  write_timeout: 15
+  idle_timeout: 60
+
+# Database configuration
+database:
+  path: "./data/distroface.db"
+  max_connections: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 300
+
+
+# Storage configuration
+storage:
+  data_dir: "./data"
+  backup_dir: "./backups"
+  temp_dir: "./tmp"
+  max_upload_size: 524288000  # 500MB in bytes
+
+# Logging configuration
+logging:
+  enabled: true
+  file_path: "./data/distroface.log"
+  max_size: 10
+  max_backups: 5
+  max_age: 30
+  compress: true
