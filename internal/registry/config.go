@@ -7,15 +7,12 @@ import (
 
 	"github.com/distribution/distribution/v3/configuration"
 	"github.com/google/uuid"
-)
 
-// blank imports for driver and auth registration
-import (
 	_ "github.com/distribution/distribution/v3/registry/auth/token"
 	_ "github.com/distribution/distribution/v3/registry/storage/driver/filesystem"
 )
 
-// BuildConfig creates a Distribution v3 configuration for the embedded registry.
+// BuildConfig creates a Distribution v3 configuration for the embedded registry
 func BuildConfig(storagePath, certPath, host, port string) *configuration.Configuration {
 	addr := fmt.Sprintf("%s:%s", host, port)
 	realm := fmt.Sprintf("http://%s/auth/token", addr)

@@ -46,12 +46,13 @@ type AuthConfig struct {
 }
 
 type LoggingConfig struct {
-	Enabled    bool   `mapstructure:"enabled" json:"enabled"`
-	FilePath   string `mapstructure:"file_path" json:"file_path"`
-	MaxSize    int    `mapstructure:"max_size" json:"max_size"`
-	MaxBackups int    `mapstructure:"max_backups" json:"max_backups"`
-	MaxAge     int    `mapstructure:"max_age" json:"max_age"`
-	Compress   bool   `mapstructure:"compress" json:"compress"`
+	Enabled       bool   `mapstructure:"enabled" json:"enabled"`
+	Dir           string `mapstructure:"dir" json:"dir"`
+	DefaultModule string `mapstructure:"default_module" json:"default_module"`
+	MaxSize       int    `mapstructure:"max_size" json:"max_size"`
+	MaxBackups    int    `mapstructure:"max_backups" json:"max_backups"`
+	MaxAge        int    `mapstructure:"max_age" json:"max_age"`
+	Compress      bool   `mapstructure:"compress" json:"compress"`
 }
 
 func Load(configPath string) (*Config, error) {
@@ -110,12 +111,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("storage.data_dir", dataDir)
 
 	v.SetDefault("registry.storage_path", "./data/registry")
+	v.SetDefault("registry.log_path", "./data/registry.log")
 
 	v.SetDefault("auth.session_duration", 86400)
 	v.SetDefault("auth.token_expiry", 900)
 
 	v.SetDefault("logging.enabled", true)
-	v.SetDefault("logging.file_path", "./data/distroface.log")
+	v.SetDefault("logging.dir", "./data/logs")
+	v.SetDefault("logging.default_module", "distroface-app")
 	v.SetDefault("logging.max_size", 10)
 	v.SetDefault("logging.max_backups", 5)
 	v.SetDefault("logging.max_age", 30)
@@ -137,6 +140,11 @@ func validateConfig(cfg *Config) error {
 	cfg.Registry.StoragePath, err = filepath.Abs(cfg.Registry.StoragePath)
 	if err != nil {
 		return fmt.Errorf("invalid registry storage path: %w", err)
+	}
+
+	cfg.Logging.Dir, err = filepath.Abs(cfg.Logging.Dir)
+	if err != nil {
+		return fmt.Errorf("invalid logging directory: %w", err)
 	}
 
 	return nil

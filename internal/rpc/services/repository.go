@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
@@ -18,12 +19,13 @@ import (
 var _ distrofacev1connect.RepositoryServiceHandler = (*RepositoryService)(nil)
 
 type RepositoryService struct {
-	store *storage.Store
-	log   *logger.Logger
+	store    *storage.Store
+	registry *registry.RegistryAccess
+	log      *logger.Logger
 }
 
-func NewRepositoryService(store *storage.Store, log *logger.Logger) *RepositoryService {
-	return &RepositoryService{store: store, log: log}
+func NewRepositoryService(store *storage.Store, reg *registry.RegistryAccess, log *logger.Logger) *RepositoryService {
+	return &RepositoryService{store: store, registry: reg, log: log}
 }
 
 func (s *RepositoryService) GetRepository(ctx context.Context, req *connect.Request[v1.GetRepositoryRequest]) (*connect.Response[v1.GetRepositoryResponse], error) {
@@ -145,15 +147,93 @@ func (s *RepositoryService) DeleteRepository(ctx context.Context, req *connect.R
 }
 
 func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v1.ListTagsRequest]) (*connect.Response[v1.ListTagsResponse], error) {
-	// This will be fully implemented when we integrate with the registry's tag listing API.
-	// For now, return an empty list since tags are stored in the registry, not our DB.
-	return connect.NewResponse(&v1.ListTagsResponse{}), nil
+	if req.Msg.Namespace == "" || req.Msg.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	}
+
+	repo, err := s.store.GetRepository(ctx, req.Msg.Namespace, req.Msg.Name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if repo == nil {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
+	}
+
+	if repo.IsPrivate {
+		user := auth.UserFromContext(ctx)
+		if user == nil {
+			return nil, connect.NewError(connect.CodeNotFound, nil)
+		}
+		if !user.IsAdmin && user.Username != repo.Namespace {
+			return nil, connect.NewError(connect.CodeNotFound, nil)
+		}
+	}
+
+	tags, err := s.registry.ListTags(ctx, req.Msg.Namespace, req.Msg.Name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	// Pagination
+	pageSize := int(req.Msg.PageSize)
+	if pageSize <= 0 || pageSize > 100 {
+		pageSize = 20
+	}
+
+	offset := 0
+	if req.Msg.PageToken != "" {
+		decoded, err := base64.StdEncoding.DecodeString(req.Msg.PageToken)
+		if err == nil {
+			offset, _ = strconv.Atoi(string(decoded))
+		}
+	}
+
+	total := len(tags)
+	start := min(offset, total)
+	end := min(start+pageSize, total)
+
+	var nextPageToken string
+	if end < total {
+		nextPageToken = base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(end)))
+	}
+
+	return connect.NewResponse(&v1.ListTagsResponse{
+		Tags:          tags[start:end],
+		NextPageToken: nextPageToken,
+	}), nil
 }
 
 func (s *RepositoryService) GetTagDetail(ctx context.Context, req *connect.Request[v1.GetTagDetailRequest]) (*connect.Response[v1.GetTagDetailResponse], error) {
-	// This will be fully implemented when we integrate with the registry's manifest API.
-	// For now, return not found since tag details come from the registry.
-	return nil, connect.NewError(connect.CodeUnimplemented, fmt.Errorf("tag detail not yet available"))
+	if req.Msg.Namespace == "" || req.Msg.Name == "" || req.Msg.Tag == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	}
+
+	repo, err := s.store.GetRepository(ctx, req.Msg.Namespace, req.Msg.Name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if repo == nil {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
+	}
+
+	if repo.IsPrivate {
+		user := auth.UserFromContext(ctx)
+		if user == nil {
+			return nil, connect.NewError(connect.CodeNotFound, nil)
+		}
+		if !user.IsAdmin && user.Username != repo.Namespace {
+			return nil, connect.NewError(connect.CodeNotFound, nil)
+		}
+	}
+
+	detail, err := s.registry.GetTagDetail(ctx, req.Msg.Namespace, req.Msg.Name, req.Msg.Tag)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("tag %q: %w", req.Msg.Tag, err))
+	}
+
+	return connect.NewResponse(&v1.GetTagDetailResponse{
+		Detail: detail,
+	}), nil
 }
 
 func repoToProto(r *storage.Repository) *v1.Repository {

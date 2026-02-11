@@ -140,7 +140,7 @@ func (h *TokenHandler) filterActions(r *http.Request, user *storage.User, repoNa
 				granted = append(granted, "pull")
 			}
 		case "push":
-			if h.canPush(user, namespace) {
+			if h.canPush(r, user, namespace) {
 				granted = append(granted, "push")
 			}
 		}
@@ -164,12 +164,20 @@ func (h *TokenHandler) canPull(user *storage.User, namespace string, repo *stora
 	return user.Username == namespace
 }
 
-func (h *TokenHandler) canPush(user *storage.User, namespace string) bool {
+func (h *TokenHandler) canPush(r *http.Request, user *storage.User, namespace string) bool {
 	if user == nil {
 		return false
 	}
-	if user.IsAdmin {
+	if user.Username == namespace {
 		return true
 	}
-	return user.Username == namespace
+	if !user.IsAdmin {
+		return false
+	}
+	// Admin can push to other namespaces, but only if the namespace owner exists
+	nsOwner, err := h.store.GetUserByUsername(r.Context(), namespace)
+	if err != nil || nsOwner == nil {
+		return false
+	}
+	return true
 }

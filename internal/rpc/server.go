@@ -26,6 +26,7 @@ type Server struct {
 	handler http.Handler
 
 	registryHandler http.Handler
+	registryAccess  *registry.RegistryAccess
 	tokenHandler    *auth.TokenHandler
 	eventHandler    *registry.EventHandler
 }
@@ -35,6 +36,7 @@ type ServerDeps struct {
 	Config          *config.Config
 	Log             *logger.Logger
 	RegistryHandler http.Handler
+	RegistryAccess  *registry.RegistryAccess
 	TokenHandler    *auth.TokenHandler
 	EventHandler    *registry.EventHandler
 }
@@ -45,6 +47,7 @@ func NewServer(deps ServerDeps) *Server {
 		config:          deps.Config,
 		log:             deps.Log,
 		registryHandler: deps.RegistryHandler,
+		registryAccess:  deps.RegistryAccess,
 		tokenHandler:    deps.TokenHandler,
 		eventHandler:    deps.EventHandler,
 	}
@@ -92,7 +95,7 @@ func (s *Server) setupHandler() {
 	userPath, userHandler := distrofacev1connect.NewUserServiceHandler(userService, opts...)
 	mux.Handle(userPath, userHandler)
 
-	repoService := services.NewRepositoryService(s.store, s.log)
+	repoService := services.NewRepositoryService(s.store, s.registryAccess, s.log)
 	repoPath, repoHandler := distrofacev1connect.NewRepositoryServiceHandler(repoService, opts...)
 	mux.Handle(repoPath, repoHandler)
 
