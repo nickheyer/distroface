@@ -25,11 +25,13 @@
 	import { Home, Sun, Moon, LogIn, LogOut, Package, UserPlus } from '@lucide/svelte';
 	import { toggleMode, mode } from 'mode-watcher';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
 
 	let { children } = $props();
 
 	onMount(() => {
 		authStore.init();
+		configStore.init();
 	});
 </script>
 
@@ -68,7 +70,7 @@
 								<SidebarMenuItem>
 									<SidebarMenuButton isActive={page.url.pathname.startsWith(`/${authStore.user?.username}`)}>
 										{#snippet child({ props })}
-											<a href="/" {...props}>
+											<a href="/{authStore.user?.username}" {...props}>
 												<Package class="h-4 w-4" />
 												<span class="group-data-[collapsible=icon]:hidden">Repositories</span>
 											</a>

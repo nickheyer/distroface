@@ -29,6 +29,11 @@ export function getStringForEnum(map: any, val: unknown) {
   return Object.keys(map).find(key => map[key] === val);
 }
 
+export function pageToToken(page: number, pageSize: number): string {
+  if (page <= 1) return '';
+  return btoa(String((page - 1) * pageSize));
+}
+
 export function enumToString(map: any, val: unknown): string {
   const enumKey = getStringForEnum(map, val);
   if (!enumKey) return '';

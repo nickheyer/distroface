@@ -14,14 +14,15 @@ import (
 
 // publicProcedures are RPCs that don't require authentication.
 var publicProcedures = map[string]bool{
-	distrofacev1connect.AuthServiceRegisterProcedure:       true,
-	distrofacev1connect.AuthServiceLoginProcedure:          true,
-	distrofacev1connect.HealthServiceHealthCheckProcedure:  true,
-	distrofacev1connect.UserServiceGetUserProcedure:        true,
-	distrofacev1connect.RepositoryServiceGetRepositoryProcedure:    true,
-	distrofacev1connect.RepositoryServiceListRepositoriesProcedure: true,
-	distrofacev1connect.RepositoryServiceListTagsProcedure:         true,
-	distrofacev1connect.RepositoryServiceGetTagDetailProcedure:     true,
+	distrofacev1connect.AuthServiceRegisterProcedure:                      true,
+	distrofacev1connect.AuthServiceLoginProcedure:                         true,
+	distrofacev1connect.HealthServiceHealthCheckProcedure:                 true,
+	distrofacev1connect.UserServiceGetUserProcedure:                       true,
+	distrofacev1connect.RepositoryServiceGetRepositoryProcedure:           true,
+	distrofacev1connect.RepositoryServiceListRepositoriesProcedure:        true,
+	distrofacev1connect.RepositoryServiceListTagsProcedure:                true,
+	distrofacev1connect.RepositoryServiceGetTagDetailProcedure:            true,
+	distrofacev1connect.ConfigurationServiceGetConfigurationProcedure:     true,
 }
 
 type sessionInterceptor struct {

@@ -200,6 +200,7 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v
 	return connect.NewResponse(&v1.ListTagsResponse{
 		Tags:          tags[start:end],
 		NextPageToken: nextPageToken,
+		TotalCount:    int32(total),
 	}), nil
 }
 
@@ -236,6 +237,44 @@ func (s *RepositoryService) GetTagDetail(ctx context.Context, req *connect.Reque
 	}), nil
 }
 
+func (s *RepositoryService) UpdateRepository(ctx context.Context, req *connect.Request[v1.UpdateRepositoryRequest]) (*connect.Response[v1.UpdateRepositoryResponse], error) {
+	if req.Msg.Namespace == "" || req.Msg.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	}
+
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+
+	repo, err := s.store.GetRepository(ctx, req.Msg.Namespace, req.Msg.Name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if repo == nil {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
+	}
+
+	if !user.IsAdmin && user.Username != repo.Namespace {
+		return nil, connect.NewError(connect.CodePermissionDenied, nil)
+	}
+
+	if req.Msg.Description != nil {
+		repo.Description = *req.Msg.Description
+	}
+	if req.Msg.Visibility != nil {
+		repo.IsPrivate = *req.Msg.Visibility == v1.Visibility_VISIBILITY_PRIVATE
+	}
+
+	if err := s.store.UpdateRepository(ctx, repo); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	return connect.NewResponse(&v1.UpdateRepositoryResponse{
+		Repository: repoToProto(repo),
+	}), nil
+}
+
 func repoToProto(r *storage.Repository) *v1.Repository {
 	vis := v1.Visibility_VISIBILITY_PUBLIC
 	if r.IsPrivate {
@@ -243,16 +282,17 @@ func repoToProto(r *storage.Repository) *v1.Repository {
 	}
 
 	repo := &v1.Repository{
-		Id:         r.ID,
-		Namespace:  r.Namespace,
-		Name:       r.Name,
-		FullName:   r.Namespace + "/" + r.Name,
-		Visibility: vis,
-		OwnerId:    r.OwnerID,
-		PullCount:  r.PullCount,
-		PushCount:  r.PushCount,
-		CreatedAt:  timestamppb.New(r.CreatedAt),
-		UpdatedAt:  timestamppb.New(r.UpdatedAt),
+		Id:          r.ID,
+		Namespace:   r.Namespace,
+		Name:        r.Name,
+		FullName:    r.Namespace + "/" + r.Name,
+		Description: r.Description,
+		Visibility:  vis,
+		OwnerId:     r.OwnerID,
+		PullCount:   r.PullCount,
+		PushCount:   r.PushCount,
+		CreatedAt:   timestamppb.New(r.CreatedAt),
+		UpdatedAt:   timestamppb.New(r.UpdatedAt),
 	}
 
 	if r.LastPush != nil {

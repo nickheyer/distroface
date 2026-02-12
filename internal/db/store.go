@@ -196,7 +196,7 @@ func (s *Store) ListRepositories(ctx context.Context, namespace, query string, v
 		tx = tx.Where("namespace = ?", namespace)
 	}
 	if query != "" {
-		tx = tx.Where("name LIKE ? OR namespace LIKE ?", "%"+query+"%", "%"+query+"%")
+		tx = tx.Where("name LIKE ? OR namespace LIKE ? OR description LIKE ?", "%"+query+"%", "%"+query+"%", "%"+query+"%")
 	}
 	if visibility != nil {
 		tx = tx.Where("is_private = ?", !*visibility)

@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// ConfigurationService exposes safe, frontend-relevant configuration.
+service ConfigurationService {
+  // GetConfiguration returns whitelisted config entries as key-value pairs.
+  rpc GetConfiguration(GetConfigurationRequest) returns (GetConfigurationResponse) {}
+}
+
+// GetConfigurationRequest is an empty request.
+message GetConfigurationRequest {}
+
+// ConfigEntry is a single configuration key-value pair.
+message ConfigEntry {
+  // key is the dot-separated config key (e.g. "server.hostname").
+  string key = 1;
+  // value is the config value as an arbitrary JSON-like value.
+  google.protobuf.Value value = 2;
+}
+
+// GetConfigurationResponse contains the whitelisted config entries.
+message GetConfigurationResponse {
+  // entries is the list of config entries.
+  repeated ConfigEntry entries = 1;
+}

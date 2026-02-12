@@ -99,12 +99,17 @@ func (s *Server) setupHandler() {
 	repoPath, repoHandler := distrofacev1connect.NewRepositoryServiceHandler(repoService, opts...)
 	mux.Handle(repoPath, repoHandler)
 
+	configService := services.NewConfigurationService(s.config, s.log)
+	configPath, configHandler := distrofacev1connect.NewConfigurationServiceHandler(configService, opts...)
+	mux.Handle(configPath, configHandler)
+
 	// gRPC reflection
 	reflector := grpcreflect.NewStaticReflector(
 		distrofacev1connect.HealthServiceName,
 		distrofacev1connect.AuthServiceName,
 		distrofacev1connect.UserServiceName,
 		distrofacev1connect.RepositoryServiceName,
+		distrofacev1connect.ConfigurationServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))

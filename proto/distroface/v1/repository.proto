@@ -18,6 +18,8 @@ service RepositoryService {
   rpc ListTags(ListTagsRequest) returns (ListTagsResponse) {}
   // GetTagDetail returns detailed information about a specific tag.
   rpc GetTagDetail(GetTagDetailRequest) returns (GetTagDetailResponse) {}
+  // UpdateRepository updates a repository's metadata.
+  rpc UpdateRepository(UpdateRepositoryRequest) returns (UpdateRepositoryResponse) {}
 }
 
 // GetRepositoryRequest identifies a repository to retrieve.
@@ -87,6 +89,8 @@ message ListTagsResponse {
   repeated Tag tags = 1;
   // next_page_token is the token for the next page.
   string next_page_token = 2;
+  // total_count is the total number of tags.
+  int32 total_count = 3;
 }
 
 // GetTagDetailRequest identifies a specific tag.
@@ -103,4 +107,22 @@ message GetTagDetailRequest {
 message GetTagDetailResponse {
   // detail is the tag detail.
   TagDetail detail = 1;
+}
+
+// UpdateRepositoryRequest contains fields to update on a repository.
+message UpdateRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+  // description is the new description, if provided.
+  optional string description = 3;
+  // visibility is the new visibility, if provided.
+  optional Visibility visibility = 4;
+}
+
+// UpdateRepositoryResponse contains the updated repository.
+message UpdateRepositoryResponse {
+  // repository is the updated repository.
+  Repository repository = 1;
 }

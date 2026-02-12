@@ -20,6 +20,7 @@ type Config struct {
 type ServerConfig struct {
 	Port         string `mapstructure:"port" json:"port"`
 	Host         string `mapstructure:"host" json:"host"`
+	Hostname     string `mapstructure:"hostname" json:"hostname"`
 	ReadTimeout  int    `mapstructure:"read_timeout" json:"read_timeout"`
 	WriteTimeout int    `mapstructure:"write_timeout" json:"write_timeout"`
 	IdleTimeout  int    `mapstructure:"idle_timeout" json:"idle_timeout"`
@@ -95,6 +96,7 @@ func Load(configPath string) (*Config, error) {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.port", "8080")
 	v.SetDefault("server.host", "0.0.0.0")
+	v.SetDefault("server.hostname", "localhost:8080")
 	v.SetDefault("server.read_timeout", 15)
 	v.SetDefault("server.write_timeout", 15)
 	v.SetDefault("server.idle_timeout", 60)
@@ -111,7 +113,6 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("storage.data_dir", dataDir)
 
 	v.SetDefault("registry.storage_path", "./data/registry")
-	v.SetDefault("registry.log_path", "./data/registry.log")
 
 	v.SetDefault("auth.session_duration", 86400)
 	v.SetDefault("auth.token_expiry", 900)
