@@ -28,7 +28,6 @@ type Server struct {
 	registryHandler http.Handler
 	registryAccess  *registry.RegistryAccess
 	tokenHandler    *auth.TokenHandler
-	eventHandler    *registry.EventHandler
 }
 
 type ServerDeps struct {
@@ -38,7 +37,6 @@ type ServerDeps struct {
 	RegistryHandler http.Handler
 	RegistryAccess  *registry.RegistryAccess
 	TokenHandler    *auth.TokenHandler
-	EventHandler    *registry.EventHandler
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -49,7 +47,6 @@ func NewServer(deps ServerDeps) *Server {
 		registryHandler: deps.RegistryHandler,
 		registryAccess:  deps.RegistryAccess,
 		tokenHandler:    deps.TokenHandler,
-		eventHandler:    deps.EventHandler,
 	}
 	s.setupHandler()
 	return s
@@ -75,11 +72,6 @@ func (s *Server) setupHandler() {
 	// Docker token auth endpoint
 	if s.tokenHandler != nil {
 		mux.Handle("GET /auth/token", s.tokenHandler)
-	}
-
-	// Registry notification webhook receiver
-	if s.eventHandler != nil {
-		mux.Handle("POST /internal/registry/events", s.eventHandler)
 	}
 
 	// Register RPC services

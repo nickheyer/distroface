@@ -3,7 +3,6 @@ package registry
 import (
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/distribution/distribution/v3/configuration"
 	"github.com/google/uuid"
@@ -47,21 +46,9 @@ func BuildConfig(storagePath, certPath, host, port string) *configuration.Config
 				"X-Content-Type-Options": {"nosniff"},
 			},
 		},
-		Notifications: configuration.Notifications{
-			EventConfig: configuration.Events{
-				IncludeReferences: true,
-			},
-			Endpoints: []configuration.Endpoint{
-				{
-					Name:    "internal",
-					URL:     fmt.Sprintf("http://127.0.0.1:%s/internal/registry/events", port),
-					Timeout: 5 * time.Second,
-					Headers: http.Header{
-						"Authorization": {"Bearer distroface-internal-webhook-secret"},
-					},
-					Threshold: 5,
-					Backoff:   time.Second,
-				},
+		Middleware: map[string][]configuration.Middleware{
+			"repository": {
+				{Name: "distroface"},
 			},
 		},
 	}

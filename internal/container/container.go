@@ -90,6 +90,8 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("creating registry storage directory: %w", err)
 	}
 
+	registry.RegisterListenerMiddleware(store, registryLog)
+
 	registryCfg := registry.BuildConfig(cfg.Registry.StoragePath, tokenService.CertPath(), cfg.Server.Host, cfg.Server.Port)
 	registryApp := handlers.NewApp(context.Background(), registryCfg)
 	registryLog.Info("Distribution v3 initialized")
@@ -102,7 +104,6 @@ func New() (*App, error) {
 	}
 
 	tokenHandler := auth.NewTokenHandler(tokenService, store, registryLog)
-	eventHandler := registry.NewEventHandler(store, registryLog)
 
 	rpcServer := rpc.NewServer(rpc.ServerDeps{
 		Store:           store,
@@ -111,7 +112,6 @@ func New() (*App, error) {
 		RegistryHandler: registryApp,
 		RegistryAccess:  registryAccess,
 		TokenHandler:    tokenHandler,
-		EventHandler:    eventHandler,
 	})
 
 	srv := &http.Server{
