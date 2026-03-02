@@ -13,6 +13,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/config"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -25,12 +26,14 @@ type App struct {
 	Log            *logger.Logger
 	Store          *storage.Store
 	TokenService   *auth.TokenService
+	AuthManager    *auth.Manager
+	Enforcer       *rbac.Enforcer
 	RegistryAccess *registry.RegistryAccess
 	Server         *http.Server
 }
 
 // New builds the entire application: config, logger, store, token service,
-// registry handler, RPC server, and HTTP server. Returns a ready-to-start App.
+// RBAC enforcer, auth manager, registry handler, RPC server, and HTTP server.
 func New() (*App, error) {
 	cfg, err := config.Load(".")
 	if err != nil {
@@ -66,6 +69,30 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("initializing storage: %w", err)
 	}
 
+	// Initialize Casbin RBAC enforcer
+	enforcer, err := rbac.NewEnforcer(store.DB())
+	if err != nil {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("initializing RBAC enforcer: %w", err)
+	}
+	if err := enforcer.SeedDefaultPolicies(cfg.Auth.AnonymousAccess); err != nil {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("seeding RBAC policies: %w", err)
+	}
+	log.Info("RBAC enforcer initialized")
+
+	// Initialize Auth Manager (HS256 JWT for web sessions + API tokens)
+	authManager, err := auth.NewManager(store, enforcer, &cfg.Auth)
+	if err != nil {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("initializing auth manager: %w", err)
+	}
+	log.Info("Auth manager initialized")
+
+	// Initialize Token Service (ECDSA keys for Docker registry JWTs - separate from HS256 sessions)
 	tokenExpiry := time.Duration(cfg.Auth.TokenExpiry) * time.Second
 	tokenService, err := auth.NewTokenService(cfg.Storage.DataDir, "distroface", "distroface-registry", tokenExpiry)
 	if err != nil {
@@ -103,7 +130,9 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("initializing registry access: %w", err)
 	}
 
-	tokenHandler := auth.NewTokenHandler(tokenService, store, registryLog)
+	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, registryLog)
+
+	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, log)
 
 	rpcServer := rpc.NewServer(rpc.ServerDeps{
 		Store:           store,
@@ -112,6 +141,9 @@ func New() (*App, error) {
 		RegistryHandler: registryApp,
 		RegistryAccess:  registryAccess,
 		TokenHandler:    tokenHandler,
+		AuthManager:     authManager,
+		Enforcer:        enforcer,
+		OIDCHandler:     oidcHandler,
 	})
 
 	srv := &http.Server{
@@ -126,6 +158,8 @@ func New() (*App, error) {
 		Log:            log,
 		Store:          store,
 		TokenService:   tokenService,
+		AuthManager:    authManager,
+		Enforcer:       enforcer,
 		RegistryAccess: registryAccess,
 		Server:         srv,
 	}, nil

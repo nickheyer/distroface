@@ -14,41 +14,75 @@ service UserService {
   rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse) {}
   // ChangePassword changes the current user's password.
   rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse) {}
+  // ListUsers returns all users (admin).
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {}
+  // AdminUpdateUser updates a user's status and roles (admin).
+  rpc AdminUpdateUser(AdminUpdateUserRequest) returns (AdminUpdateUserResponse) {}
+  // AdminDeleteUser deletes a user (admin).
+  rpc AdminDeleteUser(AdminDeleteUserRequest) returns (AdminDeleteUserResponse) {}
 }
 
 // GetUserRequest identifies a user to retrieve.
 message GetUserRequest {
-  // username is the username to look up.
   string username = 1;
 }
 
 // GetUserResponse contains the requested user.
 message GetUserResponse {
-  // user is the requested user.
   User user = 1;
 }
 
 // UpdateUserRequest contains fields to update on the current user.
 message UpdateUserRequest {
-  // display_name is the new display name, if provided.
   optional string display_name = 1;
-  // email is the new email, if provided.
   optional string email = 2;
 }
 
 // UpdateUserResponse contains the updated user.
 message UpdateUserResponse {
-  // user is the updated user.
   User user = 1;
 }
 
 // ChangePasswordRequest contains the current and new password.
 message ChangePasswordRequest {
-  // current_password is the user's current password.
   string current_password = 1;
-  // new_password is the desired new password.
   string new_password = 2;
 }
 
 // ChangePasswordResponse is empty on success.
 message ChangePasswordResponse {}
+
+// ListUsersRequest for paginated user listing.
+message ListUsersRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+  string query = 3;
+}
+
+// ListUsersResponse contains a page of users.
+message ListUsersResponse {
+  repeated User users = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+// AdminUpdateUserRequest allows admins to update a user.
+message AdminUpdateUserRequest {
+  string user_id = 1;
+  optional string email = 2;
+  optional bool is_active = 3;
+  repeated string roles = 4;
+}
+
+// AdminUpdateUserResponse contains the updated user.
+message AdminUpdateUserResponse {
+  User user = 1;
+}
+
+// AdminDeleteUserRequest identifies the user to delete.
+message AdminDeleteUserRequest {
+  string user_id = 1;
+}
+
+// AdminDeleteUserResponse is empty on success.
+message AdminDeleteUserResponse {}

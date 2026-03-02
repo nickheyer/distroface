@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -21,11 +22,28 @@ var _ distrofacev1connect.RepositoryServiceHandler = (*RepositoryService)(nil)
 type RepositoryService struct {
 	store    *storage.Store
 	registry *registry.RegistryAccess
+	enforcer *rbac.Enforcer
 	log      *logger.Logger
 }
 
-func NewRepositoryService(store *storage.Store, reg *registry.RegistryAccess, log *logger.Logger) *RepositoryService {
-	return &RepositoryService{store: store, registry: reg, log: log}
+func NewRepositoryService(store *storage.Store, reg *registry.RegistryAccess, enforcer *rbac.Enforcer, log *logger.Logger) *RepositoryService {
+	return &RepositoryService{store: store, registry: reg, enforcer: enforcer, log: log}
+}
+
+// canReadRepo checks if the requesting user can read the given repo via RBAC.
+// Public repos are readable by anyone. Private repos require the user's roles
+// to have repositories.read on the specific object (namespace/name) or wildcard.
+func (s *RepositoryService) canReadRepo(ctx context.Context, repo *storage.Repository) bool {
+	if !repo.IsPrivate {
+		return true
+	}
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return false
+	}
+	objectID := repo.Namespace + "/" + repo.Name
+	allowed, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionRead, objectID)
+	return allowed
 }
 
 func (s *RepositoryService) GetRepository(ctx context.Context, req *connect.Request[v1.GetRepositoryRequest]) (*connect.Response[v1.GetRepositoryResponse], error) {
@@ -41,14 +59,8 @@ func (s *RepositoryService) GetRepository(ctx context.Context, req *connect.Requ
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	user := auth.UserFromContext(ctx)
-	if repo.IsPrivate {
-		if user == nil {
-			return nil, connect.NewError(connect.CodeNotFound, nil)
-		}
-		if !user.IsAdmin && user.Username != repo.Namespace {
-			return nil, connect.NewError(connect.CodeNotFound, nil)
-		}
+	if !s.canReadRepo(ctx, repo) {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
 	return connect.NewResponse(&v1.GetRepositoryResponse{
@@ -70,32 +82,22 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.R
 		}
 	}
 
-	var visibility *bool
-	switch req.Msg.Visibility {
-	case v1.Visibility_VISIBILITY_PUBLIC:
-		v := true
-		visibility = &v
-	case v1.Visibility_VISIBILITY_PRIVATE:
-		v := false
-		visibility = &v
-	}
-
+	// Resolve visibility: admin sees all, authenticated users see public +
+	// owned + org membership + RBAC grants, anonymous sees public only.
 	user := auth.UserFromContext(ctx)
+	var userID string
+	var canManage bool
+	var grantedRepos []string
 
-	// Non-admin users can only list public repos (plus their own private repos)
-	// For simplicity, when no specific namespace is given and user is not admin,
-	// we only show public repos. Private repos are visible via their own namespace.
-	if visibility == nil && (user == nil || !user.IsAdmin) {
-		v := true
-		visibility = &v
+	if user != nil {
+		userID = user.ID
+		canManage, _ = s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, "*")
+		if !canManage {
+			grantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceRepositories, rbac.ActionRead)
+		}
 	}
 
-	// If filtering by the user's own namespace, show all repos (public + private)
-	if user != nil && req.Msg.Namespace == user.Username {
-		visibility = nil
-	}
-
-	repos, total, err := s.store.ListRepositories(ctx, req.Msg.Namespace, req.Msg.Query, visibility, pageSize, offset)
+	repos, total, err := s.store.ListRepositories(ctx, req.Msg.Namespace, req.Msg.Query, userID, canManage, grantedRepos, pageSize, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -135,8 +137,15 @@ func (s *RepositoryService) DeleteRepository(ctx context.Context, req *connect.R
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	if !user.IsAdmin && user.Username != repo.Namespace {
-		return nil, connect.NewError(connect.CodePermissionDenied, nil)
+	objectID := repo.Namespace + "/" + repo.Name
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, objectID)
+	if !canManage {
+		if user.Username != repo.Namespace {
+			isMember, role, _ := s.store.IsOrgMember(ctx, repo.Namespace, user.ID)
+			if !isMember || (role != storage.OrgRoleOwner && role != storage.OrgRoleAdmin) {
+				return nil, connect.NewError(connect.CodePermissionDenied, nil)
+			}
+		}
 	}
 
 	if err := s.store.DeleteRepository(ctx, req.Msg.Namespace, req.Msg.Name); err != nil {
@@ -159,14 +168,8 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	if repo.IsPrivate {
-		user := auth.UserFromContext(ctx)
-		if user == nil {
-			return nil, connect.NewError(connect.CodeNotFound, nil)
-		}
-		if !user.IsAdmin && user.Username != repo.Namespace {
-			return nil, connect.NewError(connect.CodeNotFound, nil)
-		}
+	if !s.canReadRepo(ctx, repo) {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
 	tags, err := s.registry.ListTags(ctx, req.Msg.Namespace, req.Msg.Name)
@@ -174,7 +177,6 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	// Pagination
 	pageSize := int(req.Msg.PageSize)
 	if pageSize <= 0 || pageSize > 100 {
 		pageSize = 20
@@ -217,14 +219,8 @@ func (s *RepositoryService) GetTagDetail(ctx context.Context, req *connect.Reque
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	if repo.IsPrivate {
-		user := auth.UserFromContext(ctx)
-		if user == nil {
-			return nil, connect.NewError(connect.CodeNotFound, nil)
-		}
-		if !user.IsAdmin && user.Username != repo.Namespace {
-			return nil, connect.NewError(connect.CodeNotFound, nil)
-		}
+	if !s.canReadRepo(ctx, repo) {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
 	detail, err := s.registry.GetTagDetail(ctx, req.Msg.Namespace, req.Msg.Name, req.Msg.Tag)
@@ -255,8 +251,15 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, req *connect.R
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	if !user.IsAdmin && user.Username != repo.Namespace {
-		return nil, connect.NewError(connect.CodePermissionDenied, nil)
+	objectID := repo.Namespace + "/" + repo.Name
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, objectID)
+	if !canManage {
+		if user.Username != repo.Namespace {
+			isMember, role, _ := s.store.IsOrgMember(ctx, repo.Namespace, user.ID)
+			if !isMember || (role != storage.OrgRoleOwner && role != storage.OrgRoleAdmin) {
+				return nil, connect.NewError(connect.CodePermissionDenied, nil)
+			}
+		}
 	}
 
 	if req.Msg.Description != nil {

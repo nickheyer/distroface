@@ -1,15 +1,19 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { UserRound, Package, Calendar } from '@lucide/svelte';
+	import { UserRound, Package, Calendar, Building2, Settings } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
-	import { pageToToken } from '$lib/utils';
+	import { pageToToken, relativeTime } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { Card, CardContent } from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
+	import { Separator } from '$lib/components/ui/separator';
 	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import RepoCard from '$lib/components/repo-card.svelte';
+	import EmptyState from '$lib/components/empty-state.svelte';
+	import DataPagination from '$lib/components/data-pagination.svelte';
 	import type { User, Repository } from '$lib/proto/distroface/v1/types_pb';
 
 	const username = $derived(page.params.username);
@@ -21,6 +25,13 @@
 	let repoTotalCount = $state(0);
 	let repoPage = $state(1);
 	const repoPageSize = 20;
+
+	const isOwnProfile = $derived(authStore.user?.username === username);
+
+	function getInitials(u: User): string {
+		const name = u.displayName || u.username;
+		return name.split(/[\s-]+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2);
+	}
 
 	async function loadUser() {
 		loading = true;
@@ -51,38 +62,32 @@
 		}
 	}
 
-	function prevPage() {
-		if (repoPage > 1) {
-			repoPage--;
-			loadRepos();
-		}
-	}
-
-	function nextPage() {
-		if (repoPage * repoPageSize < repoTotalCount) {
-			repoPage++;
-			loadRepos();
-		}
-	}
-
-	onMount(() => {
-		loadUser();
-		loadRepos();
-	});
+	onMount(() => { loadUser(); loadRepos(); });
 </script>
 
-<div class="flex-1 space-y-6 h-full p-6">
-	<!-- User Header -->
-	<div class="flex items-center gap-4 pb-4 border-b border-border/40">
-		<div class="h-14 w-14 rounded-full bg-linear-to-br from-primary/20 to-primary/10 flex items-center justify-center shadow-lg">
-			<UserRound class="h-7 w-7 text-primary" />
-		</div>
-		<div class="space-y-1">
-			{#if loading}
-				<Skeleton class="h-8 w-48" />
+<div class="space-y-6">
+	{#if loading}
+		<div class="flex items-center gap-4">
+			<Skeleton class="h-16 w-16 rounded-full" />
+			<div class="space-y-2 flex-1">
+				<Skeleton class="h-7 w-48" />
 				<Skeleton class="h-4 w-32" />
-			{:else if user}
-				<h2 class="text-3xl font-bold tracking-tight">{user.username}</h2>
+			</div>
+		</div>
+	{:else if user}
+		<div class="flex items-center gap-4">
+			<Avatar class="h-16 w-16">
+				<AvatarFallback class="text-xl bg-primary/10 text-primary font-bold">
+					{getInitials(user)}
+				</AvatarFallback>
+			</Avatar>
+			<div class="space-y-1 flex-1 min-w-0">
+				<div class="flex items-center gap-2.5">
+					<h1 class="text-2xl font-bold tracking-tight">{user.username}</h1>
+					{#each user.roles as role}
+						<Badge variant="outline" class="text-xs">{role}</Badge>
+					{/each}
+				</div>
 				<div class="flex items-center gap-3 text-sm text-muted-foreground">
 					{#if user.displayName}
 						<span>{user.displayName}</span>
@@ -90,92 +95,68 @@
 					{#if user.createdAt}
 						<span class="flex items-center gap-1">
 							<Calendar class="h-3.5 w-3.5" />
-							Joined {timestampDate(user.createdAt).toLocaleDateString()}
+							Joined {relativeTime(timestampDate(user.createdAt))}
 						</span>
 					{/if}
 				</div>
-			{:else}
-				<h2 class="text-3xl font-bold tracking-tight">{username}</h2>
-				<p class="text-sm text-muted-foreground">User not found</p>
+			</div>
+			{#if isOwnProfile}
+				<div class="flex gap-2 shrink-0">
+					<a href="/orgs">
+						<Button variant="outline" size="sm">
+							<Building2 class="h-4 w-4 mr-1.5" />Organizations
+						</Button>
+					</a>
+					<a href="/settings/profile">
+						<Button variant="outline" size="sm">
+							<Settings class="h-4 w-4 mr-1.5" />Edit Profile
+						</Button>
+					</a>
+				</div>
 			{/if}
 		</div>
-	</div>
+	{:else}
+		<div class="flex items-center gap-4">
+			<div class="h-16 w-16 rounded-full bg-muted flex items-center justify-center">
+				<UserRound class="h-8 w-8 text-muted-foreground" />
+			</div>
+			<div>
+				<h1 class="text-2xl font-bold tracking-tight">{username}</h1>
+				<p class="text-[13px] text-muted-foreground">User not found</p>
+			</div>
+		</div>
+	{/if}
 
-	<!-- Repositories -->
+	<Separator />
+
 	<div class="space-y-4">
-		<div class="flex items-center justify-between">
-			<h3 class="text-lg font-semibold">Repositories</h3>
+		<div class="section-header">
+			<h2 class="section-title">Repositories</h2>
 			{#if repoTotalCount > 0}
-				<span class="text-sm text-muted-foreground">{repoTotalCount} total</span>
+				<span class="text-[13px] text-muted-foreground">{repoTotalCount} total</span>
 			{/if}
 		</div>
 
 		{#if repoLoading}
-			<div class="space-y-3">
+			<div class="space-y-2">
 				{#each Array(3) as _}
-					<Skeleton class="h-16 w-full" />
+					<Skeleton class="h-17 w-full rounded-xl" />
 				{/each}
 			</div>
 		{:else if repos.length === 0}
-			<Card class="border-dashed">
-				<CardContent class="flex flex-col items-center justify-center py-12 text-center">
-					<Package class="h-12 w-12 text-muted-foreground/50 mb-4" />
-					<p class="text-muted-foreground">No repositories yet</p>
-				</CardContent>
-			</Card>
+			<EmptyState icon={Package} message="No repositories yet" />
 		{:else}
-			<div class="grid gap-3">
+			<div class="space-y-2">
 				{#each repos as repo}
-					<a href="/{repo.namespace}/{repo.name}" class="block">
-						<Card class="border-border/50 hover:border-primary/30 transition-all hover:shadow-md">
-							<CardContent class="flex items-center justify-between py-4">
-								<div class="flex items-center gap-3">
-									<Package class="h-5 w-5 text-muted-foreground" />
-									<div>
-										<p class="font-medium">{repo.fullName}</p>
-										<div class="flex items-center gap-2 mt-1">
-											<Badge variant="outline" class="text-xs">
-												{repo.visibility === 2 ? 'private' : 'public'}
-											</Badge>
-											{#if repo.description}
-												<span class="text-xs text-muted-foreground truncate max-w-xs">{repo.description}</span>
-											{/if}
-											{#if repo.pushCount > 0}
-												<span class="text-xs text-muted-foreground">{repo.pushCount} pushes</span>
-											{/if}
-											{#if repo.pullCount > 0}
-												<span class="text-xs text-muted-foreground">{repo.pullCount} pulls</span>
-											{/if}
-										</div>
-									</div>
-								</div>
-							</CardContent>
-						</Card>
-					</a>
+					<RepoCard {repo} />
 				{/each}
 			</div>
 
-			<!-- Pagination -->
-			{#if repoTotalCount > repoPageSize}
-				<div class="flex items-center justify-between">
-					<span class="text-sm text-muted-foreground">
-						Page {repoPage} of {Math.ceil(repoTotalCount / repoPageSize)}
-					</span>
-					<div class="flex gap-2">
-						<Button variant="outline" size="sm" disabled={repoPage <= 1} onclick={prevPage}>
-							Previous
-						</Button>
-						<Button
-							variant="outline"
-							size="sm"
-							disabled={repoPage * repoPageSize >= repoTotalCount}
-							onclick={nextPage}
-						>
-							Next
-						</Button>
-					</div>
-				</div>
-			{/if}
+			<DataPagination
+				page={repoPage} pageSize={repoPageSize} totalCount={repoTotalCount}
+				onPrev={() => { repoPage--; loadRepos(); }}
+				onNext={() => { repoPage++; loadRepos(); }}
+			/>
 		{/if}
 	</div>
 </div>

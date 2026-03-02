@@ -1,0 +1,133 @@
+package rbac
+
+import (
+	"strings"
+
+	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
+)
+
+// ProcedurePermission maps an RPC procedure to a resource and action.
+type ProcedurePermission struct {
+	Resource      string
+	Action        string
+	ObjectIDField string // Protobuf field name to extract for per-object RBAC (empty = "*")
+}
+
+// PublicProcedures lists RPC procedures that require no authentication.
+var PublicProcedures = map[string]bool{
+	distrofacev1connect.AuthServiceRegisterProcedure:                  true,
+	distrofacev1connect.AuthServiceLoginProcedure:                     true,
+	distrofacev1connect.AuthServiceGetAuthStatusProcedure:             true,
+	distrofacev1connect.AuthServiceGetOIDCLoginURLProcedure:           true,
+	distrofacev1connect.HealthServiceHealthCheckProcedure:             true,
+	distrofacev1connect.ConfigurationServiceGetConfigurationProcedure: true,
+	// Public repo browsing (visibility filtering handled in service)
+	distrofacev1connect.RepositoryServiceGetRepositoryProcedure:    true,
+	distrofacev1connect.RepositoryServiceListRepositoriesProcedure: true,
+	distrofacev1connect.RepositoryServiceListTagsProcedure:         true,
+	distrofacev1connect.RepositoryServiceGetTagDetailProcedure:     true,
+	distrofacev1connect.UserServiceGetUserProcedure:                true,
+	// Invite validation is public (used during registration)
+	distrofacev1connect.AuthServiceValidateInviteProcedure: true,
+}
+
+// AuthenticatedOnlyProcedures lists RPC procedures that require authentication
+// but no specific resource permission.
+var AuthenticatedOnlyProcedures = map[string]bool{
+	// Auth - user operations
+	distrofacev1connect.AuthServiceGetCurrentUserProcedure: true,
+	distrofacev1connect.AuthServiceLogoutProcedure:         true,
+	distrofacev1connect.AuthServiceRefreshSessionProcedure: true,
+
+	// User - self-service
+	distrofacev1connect.UserServiceUpdateUserProcedure:     true,
+	distrofacev1connect.UserServiceChangePasswordProcedure: true,
+}
+
+// ProcedurePermissions maps each RPC procedure path to the resource and action
+// required to invoke it, plus an optional ObjectIDField for per-object scoping.
+var ProcedurePermissions = map[string]ProcedurePermission{
+	// ── RepositoryService ─────────────────────────────────────────────
+	distrofacev1connect.RepositoryServiceDeleteRepositoryProcedure: {Resource: ResourceRepositories, Action: ActionDelete, ObjectIDField: "namespace+name"},
+	distrofacev1connect.RepositoryServiceUpdateRepositoryProcedure: {Resource: ResourceRepositories, Action: ActionUpdate, ObjectIDField: "namespace+name"},
+
+	// ── UserService (admin) ───────────────────────────────────────────
+	distrofacev1connect.UserServiceListUsersProcedure:       {Resource: ResourceUsers, Action: ActionRead},
+	distrofacev1connect.UserServiceAdminUpdateUserProcedure: {Resource: ResourceUsers, Action: ActionUpdate},
+	distrofacev1connect.UserServiceAdminDeleteUserProcedure: {Resource: ResourceUsers, Action: ActionDelete},
+
+	// ── RoleService ───────────────────────────────────────────────────
+	distrofacev1connect.RoleServiceListRolesProcedure:           {Resource: ResourceRoles, Action: ActionRead},
+	distrofacev1connect.RoleServiceGetRoleProcedure:             {Resource: ResourceRoles, Action: ActionRead},
+	distrofacev1connect.RoleServiceCreateRoleProcedure:          {Resource: ResourceRoles, Action: ActionCreate},
+	distrofacev1connect.RoleServiceUpdateRoleProcedure:          {Resource: ResourceRoles, Action: ActionUpdate},
+	distrofacev1connect.RoleServiceDeleteRoleProcedure:          {Resource: ResourceRoles, Action: ActionDelete},
+	distrofacev1connect.RoleServiceGetPermissionMatrixProcedure: {Resource: ResourceRoles, Action: ActionRead},
+	distrofacev1connect.RoleServiceUpdatePermissionsProcedure:   {Resource: ResourceRoles, Action: ActionUpdate},
+	distrofacev1connect.RoleServiceAssignRoleProcedure:          {Resource: ResourceRoles, Action: ActionCreate},
+	distrofacev1connect.RoleServiceUnassignRoleProcedure:        {Resource: ResourceRoles, Action: ActionDelete},
+	distrofacev1connect.RoleServiceGetUserRolesProcedure:        {Resource: ResourceRoles, Action: ActionRead},
+
+	// ── AuthService (admin) ───────────────────────────────────────────
+	distrofacev1connect.AuthServiceGetAuthConfigProcedure:      {Resource: ResourceSettings, Action: ActionRead},
+	distrofacev1connect.AuthServiceUpdateAuthSettingsProcedure: {Resource: ResourceSettings, Action: ActionUpdate},
+	distrofacev1connect.AuthServiceCreateInviteProcedure:       {Resource: ResourceSettings, Action: ActionCreate},
+	distrofacev1connect.AuthServiceListInvitesProcedure:        {Resource: ResourceSettings, Action: ActionRead},
+	distrofacev1connect.AuthServiceGetInviteProcedure:          {Resource: ResourceSettings, Action: ActionRead},
+	distrofacev1connect.AuthServiceDeleteInviteProcedure:       {Resource: ResourceSettings, Action: ActionDelete},
+
+	// ── TokenService ────────────────────────────────────────────────
+	distrofacev1connect.TokenServiceCreateAPITokenProcedure: {Resource: ResourceTokens, Action: ActionCreate},
+	distrofacev1connect.TokenServiceListAPITokensProcedure:  {Resource: ResourceTokens, Action: ActionRead},
+	distrofacev1connect.TokenServiceDeleteAPITokenProcedure: {Resource: ResourceTokens, Action: ActionDelete},
+
+	// ── OrganizationService ───────────────────────────────────────────
+	distrofacev1connect.OrganizationServiceCreateOrganizationProcedure:  {Resource: ResourceOrganizations, Action: ActionCreate},
+	distrofacev1connect.OrganizationServiceGetOrganizationProcedure:     {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "name"},
+	distrofacev1connect.OrganizationServiceListOrganizationsProcedure:   {Resource: ResourceOrganizations, Action: ActionRead},
+	distrofacev1connect.OrganizationServiceUpdateOrganizationProcedure:  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "name"},
+	distrofacev1connect.OrganizationServiceDeleteOrganizationProcedure:  {Resource: ResourceOrganizations, Action: ActionDelete, ObjectIDField: "name"},
+	distrofacev1connect.OrganizationServiceListOrgMembersProcedure:      {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
+	distrofacev1connect.OrganizationServiceAddOrgMemberProcedure:        {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.OrganizationServiceRemoveOrgMemberProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.OrganizationServiceUpdateOrgMemberRoleProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+}
+
+// ExtractObjectID extracts a field value from a protobuf request using reflection.
+// If field contains "+", it splits on "+", extracts each proto field, and joins
+// with "/" to form a composite ID (e.g., "namespace+name" → "nick/myimage").
+func ExtractObjectID(req interface{ Any() any }, field string) string {
+	msg, ok := req.Any().(proto.Message)
+	if !ok {
+		return "*"
+	}
+
+	if strings.Contains(field, "+") {
+		parts := strings.Split(field, "+")
+		values := make([]string, 0, len(parts))
+		for _, part := range parts {
+			fd := msg.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name(part))
+			if fd == nil {
+				return "*"
+			}
+			val := msg.ProtoReflect().Get(fd).String()
+			if val == "" {
+				return "*"
+			}
+			values = append(values, val)
+		}
+		return strings.Join(values, "/")
+	}
+
+	fd := msg.ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name(field))
+	if fd == nil {
+		return "*"
+	}
+	val := msg.ProtoReflect().Get(fd)
+	if str := val.String(); str != "" {
+		return str
+	}
+	return "*"
+}

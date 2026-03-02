@@ -1,4 +1,4 @@
-.PHONY: dev prod clean build build-frontend run deps test fmt lint check help kill-dev image dev-docker proto proto-clean proto-lint proto-format proto-breaking gen
+.PHONY: dev prod clean build build-frontend run deps test fmt lint check help kill-dev image dev-docker proto proto-clean proto-lint proto-format proto-breaking gen dev-auth
 
 DATA_DIR := ./data
 DB_FILE := $(DATA_DIR)/distroface.db
@@ -31,6 +31,14 @@ dev-docker:
 	@echo "Building and running Docker container for development..."
 	docker compose -f docker-compose.dev.yaml build --no-cache
 	docker compose -f docker-compose.dev.yaml up
+
+# Build and run with OIDC provider (Keycloak)
+dev-auth-%: clean
+	docker compose -f oidc/$*/docker-compose.yaml down -v --remove-orphans
+	@docker run --rm -v /tmp:/tmp alpine rm -rf /tmp/distroface
+	@echo "Building and running with OIDC provider..."
+	docker compose -f oidc/$*/docker-compose.yaml build --no-cache
+	docker compose -f oidc/$*/docker-compose.yaml up
 
 # Production build and run
 prod: build-frontend

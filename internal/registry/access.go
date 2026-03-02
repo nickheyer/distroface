@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 
 	"github.com/distribution/distribution/v3"
@@ -20,7 +22,8 @@ import (
 
 // RegistryAccess provides read access to the registry's storage layer.
 type RegistryAccess struct {
-	registry distribution.Namespace
+	registry    distribution.Namespace
+	storagePath string
 }
 
 // NewRegistryAccess creates a RegistryAccess backed by the filesystem storage driver
@@ -36,7 +39,13 @@ func NewRegistryAccess(storagePath string) (*RegistryAccess, error) {
 		return nil, fmt.Errorf("creating registry namespace: %w", err)
 	}
 
-	return &RegistryAccess{registry: reg}, nil
+	return &RegistryAccess{registry: reg, storagePath: storagePath}, nil
+}
+
+// DeleteNamespace removes all registry storage for a given namespace.
+func (r *RegistryAccess) DeleteNamespace(namespace string) error {
+	repoPath := filepath.Join(r.storagePath, "docker", "registry", "v2", "repositories", namespace)
+	return os.RemoveAll(repoPath)
 }
 
 // ListTags returns all tags for a repository as proto Tag messages.

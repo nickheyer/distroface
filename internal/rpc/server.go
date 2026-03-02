@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"context"
 	"net/http"
 	"strings"
 
@@ -10,6 +9,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/config"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc/services"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -28,6 +28,9 @@ type Server struct {
 	registryHandler http.Handler
 	registryAccess  *registry.RegistryAccess
 	tokenHandler    *auth.TokenHandler
+	authManager     *auth.Manager
+	enforcer        *rbac.Enforcer
+	oidcHandler     *auth.OIDCHandler
 }
 
 type ServerDeps struct {
@@ -37,6 +40,9 @@ type ServerDeps struct {
 	RegistryHandler http.Handler
 	RegistryAccess  *registry.RegistryAccess
 	TokenHandler    *auth.TokenHandler
+	AuthManager     *auth.Manager
+	Enforcer        *rbac.Enforcer
+	OIDCHandler     *auth.OIDCHandler
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -47,6 +53,9 @@ func NewServer(deps ServerDeps) *Server {
 		registryHandler: deps.RegistryHandler,
 		registryAccess:  deps.RegistryAccess,
 		tokenHandler:    deps.TokenHandler,
+		authManager:     deps.AuthManager,
+		enforcer:        deps.Enforcer,
+		oidcHandler:     deps.OIDCHandler,
 	}
 	s.setupHandler()
 	return s
@@ -56,7 +65,7 @@ func (s *Server) setupHandler() {
 	mux := http.NewServeMux()
 
 	interceptors := []connect.Interceptor{
-		newSessionInterceptor(s.store, s.log),
+		connect.UnaryInterceptorFunc(s.authInterceptor()),
 		&loggingInterceptor{log: s.log},
 	}
 
@@ -74,26 +83,44 @@ func (s *Server) setupHandler() {
 		mux.Handle("GET /auth/token", s.tokenHandler)
 	}
 
+	// OIDC HTTP handlers (not Connect RPC — these are OAuth2 redirect flows)
+	if s.oidcHandler != nil && s.oidcHandler.IsEnabled() {
+		mux.HandleFunc("/api/v1/auth/oidc/login", s.oidcHandler.HandleLogin)
+		mux.HandleFunc("/api/v1/auth/oidc/callback", s.oidcHandler.HandleCallback)
+	}
+
 	// Register RPC services
 	healthService := services.NewHealthService(s.log)
 	healthPath, healthHandler := distrofacev1connect.NewHealthServiceHandler(healthService, opts...)
 	mux.Handle(healthPath, healthHandler)
 
-	authService := services.NewAuthService(s.store, s.config, s.log)
+	authService := services.NewAuthService(s.store, s.config, s.authManager, s.enforcer, s.oidcHandler, s.log)
 	authPath, authHandler := distrofacev1connect.NewAuthServiceHandler(authService, opts...)
 	mux.Handle(authPath, authHandler)
 
-	userService := services.NewUserService(s.store, s.log)
+	userService := services.NewUserService(s.store, s.authManager, s.enforcer, s.log)
 	userPath, userHandler := distrofacev1connect.NewUserServiceHandler(userService, opts...)
 	mux.Handle(userPath, userHandler)
 
-	repoService := services.NewRepositoryService(s.store, s.registryAccess, s.log)
+	repoService := services.NewRepositoryService(s.store, s.registryAccess, s.enforcer, s.log)
 	repoPath, repoHandler := distrofacev1connect.NewRepositoryServiceHandler(repoService, opts...)
 	mux.Handle(repoPath, repoHandler)
 
 	configService := services.NewConfigurationService(s.config, s.log)
 	configPath, configHandler := distrofacev1connect.NewConfigurationServiceHandler(configService, opts...)
 	mux.Handle(configPath, configHandler)
+
+	roleService := services.NewRoleService(s.store, s.enforcer, s.log)
+	rolePath, roleHandler := distrofacev1connect.NewRoleServiceHandler(roleService, opts...)
+	mux.Handle(rolePath, roleHandler)
+
+	tokenService := services.NewTokenService(s.authManager, s.enforcer, s.log)
+	tokenSvcPath, tokenSvcHandler := distrofacev1connect.NewTokenServiceHandler(tokenService, opts...)
+	mux.Handle(tokenSvcPath, tokenSvcHandler)
+
+	orgService := services.NewOrganizationService(s.store, s.registryAccess, s.enforcer, s.log)
+	orgPath, orgHandler := distrofacev1connect.NewOrganizationServiceHandler(orgService, opts...)
+	mux.Handle(orgPath, orgHandler)
 
 	// gRPC reflection
 	reflector := grpcreflect.NewStaticReflector(
@@ -102,6 +129,9 @@ func (s *Server) setupHandler() {
 		distrofacev1connect.UserServiceName,
 		distrofacev1connect.RepositoryServiceName,
 		distrofacev1connect.ConfigurationServiceName,
+		distrofacev1connect.RoleServiceName,
+		distrofacev1connect.TokenServiceName,
+		distrofacev1connect.OrganizationServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
@@ -114,30 +144,6 @@ func (s *Server) setupHandler() {
 
 func (s *Server) Handler() http.Handler {
 	return s.handler
-}
-
-type loggingInterceptor struct {
-	log *logger.Logger
-}
-
-func (i *loggingInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		i.log.Info("RPC %s %s", req.Peer().Addr, req.Spec().Procedure)
-		return next(ctx, req)
-	}
-}
-
-func (i *loggingInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return next
-}
-
-func (i *loggingInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		i.log.Info("RPC Stream open %s %s", conn.Peer().Addr, conn.Spec().Procedure)
-		err := next(ctx, conn)
-		i.log.Info("RPC Stream closed %s %s", conn.Peer().Addr, conn.Spec().Procedure)
-		return err
-	}
 }
 
 func (s *Server) setupFrontend(mux *http.ServeMux) {

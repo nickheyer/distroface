@@ -1,0 +1,151 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/types.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// RoleService manages roles and permissions.
+service RoleService {
+  // ListRoles returns all roles.
+  rpc ListRoles(ListRolesRequest) returns (ListRolesResponse);
+  // GetRole returns a single role.
+  rpc GetRole(GetRoleRequest) returns (GetRoleResponse);
+  // CreateRole creates a new custom role.
+  rpc CreateRole(CreateRoleRequest) returns (CreateRoleResponse);
+  // UpdateRole updates a role.
+  rpc UpdateRole(UpdateRoleRequest) returns (UpdateRoleResponse);
+  // DeleteRole deletes a custom role.
+  rpc DeleteRole(DeleteRoleRequest) returns (DeleteRoleResponse);
+  // GetPermissionMatrix returns permissions for all roles.
+  rpc GetPermissionMatrix(GetPermissionMatrixRequest) returns (GetPermissionMatrixResponse);
+  // UpdatePermissions sets permissions for a role.
+  rpc UpdatePermissions(UpdatePermissionsRequest) returns (UpdatePermissionsResponse);
+  // AssignRole assigns a role to a user.
+  rpc AssignRole(AssignRoleRequest) returns (AssignRoleResponse);
+  // UnassignRole removes a role from a user.
+  rpc UnassignRole(UnassignRoleRequest) returns (UnassignRoleResponse);
+  // GetUserRoles returns roles for a user.
+  rpc GetUserRoles(GetUserRolesRequest) returns (GetUserRolesResponse);
+}
+
+// ListRolesRequest is empty.
+message ListRolesRequest {}
+
+// ListRolesResponse contains all roles in the system.
+message ListRolesResponse {
+  repeated Role roles = 1;
+}
+
+// GetRoleRequest identifies a role by ID.
+message GetRoleRequest {
+  string id = 1;
+}
+
+// GetRoleResponse contains the requested role.
+message GetRoleResponse {
+  Role role = 1;
+}
+
+// CreateRoleRequest contains fields for a new role.
+message CreateRoleRequest {
+  string name = 1;
+  string description = 2;
+  bool is_default = 3;
+  repeated Permission permissions = 4;
+}
+
+// CreateRoleResponse contains the newly created role.
+message CreateRoleResponse {
+  Role role = 1;
+}
+
+// UpdateRoleRequest contains optional fields to update on a role.
+message UpdateRoleRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string description = 3;
+  optional bool is_default = 4;
+}
+
+// UpdateRoleResponse contains the updated role.
+message UpdateRoleResponse {
+  Role role = 1;
+}
+
+// DeleteRoleRequest identifies the role to delete.
+message DeleteRoleRequest {
+  string id = 1;
+}
+
+// DeleteRoleResponse is empty on success.
+message DeleteRoleResponse {}
+
+// GetPermissionMatrixRequest optionally includes object-level permissions.
+message GetPermissionMatrixRequest {
+  bool include_objects = 1;
+}
+
+// ResourceActions pairs a resource with its valid actions.
+message ResourceActions {
+  string resource = 1;
+  repeated string actions = 2;
+}
+
+// RolePermissions contains the permissions assigned to a role.
+message RolePermissions {
+  repeated Permission permissions = 1;
+}
+
+// ScopeableObject represents an object that can have per-object permissions.
+message ScopeableObject {
+  string id = 1;
+  string name = 2;
+  string resource = 3;
+  string scope_source = 4;
+}
+
+// GetPermissionMatrixResponse contains the full permission matrix.
+message GetPermissionMatrixResponse {
+  repeated ResourceActions resource_actions = 1;
+  map<string, RolePermissions> role_permissions = 2;
+  repeated ScopeableObject available_objects = 3;
+}
+
+// UpdatePermissionsRequest sets permissions for a specific role.
+message UpdatePermissionsRequest {
+  string role_name = 1;
+  repeated Permission permissions = 2;
+}
+
+// UpdatePermissionsResponse is empty on success.
+message UpdatePermissionsResponse {}
+
+// AssignRoleRequest assigns a role to a user.
+message AssignRoleRequest {
+  string user_id = 1;
+  string role_name = 2;
+}
+
+// AssignRoleResponse is empty on success.
+message AssignRoleResponse {}
+
+// UnassignRoleRequest removes a role from a user.
+message UnassignRoleRequest {
+  string user_id = 1;
+  string role_name = 2;
+}
+
+// UnassignRoleResponse is empty on success.
+message UnassignRoleResponse {}
+
+// GetUserRolesRequest identifies the user whose roles to retrieve.
+message GetUserRolesRequest {
+  string user_id = 1;
+}
+
+// GetUserRolesResponse contains the user's role names.
+message GetUserRolesResponse {
+  repeated string roles = 1;
+}

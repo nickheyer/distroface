@@ -2,44 +2,52 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
-
-	storage "github.com/nickheyer/distroface/internal/db"
+	"strings"
 )
 
 type contextKey string
 
-const userContextKey contextKey = "user"
-const sessionContextKey contextKey = "session"
+const userContextKey contextKey = "authenticated_user"
 
-// GenerateSessionToken creates a cryptographically random session token.
-func GenerateSessionToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b), nil
+// AuthenticatedUser represents a validated user in context.
+type AuthenticatedUser struct {
+	ID       string
+	Username string
+	Email    string
+	Roles    []string
+	Provider string // "local", "oidc", "anonymous"
 }
 
-// WithUser attaches a user to the context.
-func WithUser(ctx context.Context, user *storage.User) context.Context {
+// WithUser attaches an authenticated user to the context.
+func WithUser(ctx context.Context, user *AuthenticatedUser) context.Context {
 	return context.WithValue(ctx, userContextKey, user)
 }
 
 // UserFromContext retrieves the authenticated user from the context.
-func UserFromContext(ctx context.Context) *storage.User {
-	user, _ := ctx.Value(userContextKey).(*storage.User)
+func UserFromContext(ctx context.Context) *AuthenticatedUser {
+	user, _ := ctx.Value(userContextKey).(*AuthenticatedUser)
 	return user
 }
 
-// WithSession attaches a session to the context.
-func WithSession(ctx context.Context, session *storage.Session) context.Context {
-	return context.WithValue(ctx, sessionContextKey, session)
-}
+// ExtractToken extracts a bearer token from Authorization header or session cookie.
+func ExtractToken(headers interface{ Get(string) string }) string {
+	authHeader := headers.Get("Authorization")
+	if authHeader != "" {
+		prefix, token, ok := strings.Cut(authHeader, " ")
+		if ok && strings.EqualFold(prefix, "Bearer") {
+			return strings.TrimSpace(token)
+		}
+	}
 
-// SessionFromContext retrieves the session from the context.
-func SessionFromContext(ctx context.Context) *storage.Session {
-	session, _ := ctx.Value(sessionContextKey).(*storage.Session)
-	return session
+	cookie := headers.Get("Cookie")
+	if cookie != "" {
+		for _, part := range strings.Split(cookie, ";") {
+			part = strings.TrimSpace(part)
+			if name, value, ok := strings.Cut(part, "="); ok && name == "distroface_session" {
+				return value
+			}
+		}
+	}
+
+	return ""
 }

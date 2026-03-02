@@ -2,106 +2,113 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"strings"
-	"time"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
-	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
-	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 )
 
-// publicProcedures are RPCs that don't require authentication.
-var publicProcedures = map[string]bool{
-	distrofacev1connect.AuthServiceRegisterProcedure:                      true,
-	distrofacev1connect.AuthServiceLoginProcedure:                         true,
-	distrofacev1connect.HealthServiceHealthCheckProcedure:                 true,
-	distrofacev1connect.UserServiceGetUserProcedure:                       true,
-	distrofacev1connect.RepositoryServiceGetRepositoryProcedure:           true,
-	distrofacev1connect.RepositoryServiceListRepositoriesProcedure:        true,
-	distrofacev1connect.RepositoryServiceListTagsProcedure:                true,
-	distrofacev1connect.RepositoryServiceGetTagDetailProcedure:            true,
-	distrofacev1connect.ConfigurationServiceGetConfigurationProcedure:     true,
-}
+// authInterceptor creates a Connect interceptor for authentication and authorization.
+func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
+	return func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			procedure := req.Spec().Procedure
+			isPublic := rbac.PublicProcedures[procedure]
 
-type sessionInterceptor struct {
-	store *storage.Store
-	log   *logger.Logger
-}
-
-func newSessionInterceptor(store *storage.Store, log *logger.Logger) *sessionInterceptor {
-	return &sessionInterceptor{store: store, log: log}
-}
-
-func (i *sessionInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		ctx = i.authenticate(ctx, req.Header())
-
-		if !publicProcedures[req.Spec().Procedure] {
-			if auth.UserFromContext(ctx) == nil {
-				return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+			// If no auth providers are enabled, bypass auth entirely
+			if !s.authManager.IsAnyAuthEnabled() {
+				ctx = auth.WithUser(ctx, &auth.AuthenticatedUser{
+					ID:       "admin",
+					Username: "admin",
+					Roles:    []string{"admin"},
+					Provider: "none",
+				})
+				return next(ctx, req)
 			}
-		}
 
+			// Resolve user from token or anonymous access — always, for every request
+			token := auth.ExtractToken(req.Header())
+			var user *auth.AuthenticatedUser
+
+			if token != "" {
+				var err error
+				if strings.HasPrefix(token, "df_") {
+					user, err = s.authManager.ValidateAPIToken(ctx, token)
+				} else {
+					user, err = s.authManager.ValidateSession(ctx, token)
+				}
+				if err != nil {
+					if !isPublic {
+						return nil, connect.NewError(connect.CodeUnauthenticated, err)
+					}
+					// Public route with bad token — proceed without user
+				}
+			} else if s.authManager.IsAnonymousAccessEnabled() {
+				user = s.authManager.AnonymousUser()
+			} else if !isPublic {
+				return nil, connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
+			}
+
+			if user != nil {
+				ctx = auth.WithUser(ctx, user)
+			}
+
+			// Public procedures — no further checks
+			if isPublic {
+				return next(ctx, req)
+			}
+
+			// Authenticated-only procedures — no specific resource permission needed
+			if rbac.AuthenticatedOnlyProcedures[procedure] {
+				return next(ctx, req)
+			}
+
+			// RBAC permission check
+			if perm, ok := rbac.ProcedurePermissions[procedure]; ok {
+				if s.enforcer != nil {
+					objectID := "*"
+					if perm.ObjectIDField != "" {
+						objectID = rbac.ExtractObjectID(req, perm.ObjectIDField)
+					}
+					allowed, err := s.enforcer.Enforce(user.Roles, perm.Resource, perm.Action, objectID)
+					if err != nil {
+						s.log.Error("RBAC enforcement error: %v", err)
+						return nil, connect.NewError(connect.CodeInternal, err)
+					}
+					if !allowed {
+						return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("insufficient permissions for %s/%s", perm.Resource, perm.Action))
+					}
+				}
+			}
+
+			return next(ctx, req)
+		}
+	}
+}
+
+type loggingInterceptor struct {
+	log *logger.Logger
+}
+
+func (i *loggingInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+		i.log.Info("RPC %s %s", req.Peer().Addr, req.Spec().Procedure)
 		return next(ctx, req)
 	}
 }
 
-func (i *sessionInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+func (i *loggingInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
 	return next
 }
 
-func (i *sessionInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+func (i *loggingInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
 	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		ctx = i.authenticate(ctx, conn.RequestHeader())
-		return next(ctx, conn)
+		i.log.Info("RPC Stream open %s %s", conn.Peer().Addr, conn.Spec().Procedure)
+		err := next(ctx, conn)
+		i.log.Info("RPC Stream closed %s %s", conn.Peer().Addr, conn.Spec().Procedure)
+		return err
 	}
-}
-
-func (i *sessionInterceptor) authenticate(ctx context.Context, headers interface{ Get(string) string }) context.Context {
-	token := extractToken(headers)
-	if token == "" {
-		return ctx
-	}
-
-	tokenHash := storage.HashToken(token)
-	session, err := i.store.GetSessionByTokenHash(ctx, tokenHash)
-	if err != nil {
-		i.log.Error("session auth: failed to look up session: %v", err)
-		return ctx
-	}
-	if session == nil {
-		return ctx
-	}
-
-	if session.ExpiresAt.Before(time.Now().UTC()) {
-		return ctx
-	}
-
-	ctx = auth.WithUser(ctx, &session.User)
-	ctx = auth.WithSession(ctx, session)
-	return ctx
-}
-
-func extractToken(headers interface{ Get(string) string }) string {
-	authHeader := headers.Get("Authorization")
-	if authHeader != "" {
-		prefix, token, ok := strings.Cut(authHeader, " ")
-		if ok && strings.EqualFold(prefix, "Bearer") {
-			return strings.TrimSpace(token)
-		}
-	}
-
-	cookie := headers.Get("Cookie")
-	if cookie != "" {
-		for _, part := range strings.Split(cookie, ";") {
-			part = strings.TrimSpace(part)
-			if name, value, ok := strings.Cut(part, "="); ok && name == "distroface_session" {
-				return value
-			}
-		}
-	}
-
-	return ""
 }

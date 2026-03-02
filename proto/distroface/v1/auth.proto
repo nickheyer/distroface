@@ -3,6 +3,7 @@ syntax = "proto3";
 package distroface.v1;
 
 import "distroface/v1/types.proto";
+import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
 
@@ -18,40 +19,55 @@ service AuthService {
   rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse) {}
   // RefreshSession extends the current session.
   rpc RefreshSession(RefreshSessionRequest) returns (RefreshSessionResponse) {}
+  // GetAuthStatus returns which auth methods are available (public).
+  rpc GetAuthStatus(GetAuthStatusRequest) returns (GetAuthStatusResponse) {}
+  // GetOIDCLoginURL returns the OIDC provider redirect URL (public).
+  rpc GetOIDCLoginURL(GetOIDCLoginURLRequest) returns (GetOIDCLoginURLResponse) {}
+  // GetAuthConfig returns full auth settings (admin).
+  rpc GetAuthConfig(GetAuthConfigRequest) returns (GetAuthConfigResponse) {}
+  // UpdateAuthSettings updates auth settings (admin).
+  rpc UpdateAuthSettings(UpdateAuthSettingsRequest) returns (UpdateAuthSettingsResponse) {}
+  // CreateInvite creates a registration invite code (admin).
+  rpc CreateInvite(CreateInviteRequest) returns (CreateInviteResponse) {}
+  // ListInvites returns all registration invites (admin).
+  rpc ListInvites(ListInvitesRequest) returns (ListInvitesResponse) {}
+  // GetInvite returns a single invite by ID (admin).
+  rpc GetInvite(GetInviteRequest) returns (GetInviteResponse) {}
+  // DeleteInvite deletes a registration invite (admin).
+  rpc DeleteInvite(DeleteInviteRequest) returns (DeleteInviteResponse) {}
+  // ValidateInvite checks if an invite code is valid (public).
+  rpc ValidateInvite(ValidateInviteRequest) returns (ValidateInviteResponse) {}
 }
 
 // RegisterRequest contains the fields needed to create a new account.
 message RegisterRequest {
-  // username is the desired username.
   string username = 1;
-  // email is the user's email address.
   string email = 2;
-  // password is the desired password.
   string password = 3;
+  optional string invite_code = 4;
+  optional string invite_pin = 5;
 }
 
 // RegisterResponse contains the newly created user and session.
 message RegisterResponse {
-  // user is the newly created user.
   User user = 1;
-  // session_token is the authentication token for the new session.
   string session_token = 2;
+  repeated string roles = 3;
+  repeated Permission permissions = 4;
 }
 
 // LoginRequest contains credentials for authentication.
 message LoginRequest {
-  // identifier is a username or email address.
   string identifier = 1;
-  // password is the user's password.
   string password = 2;
 }
 
 // LoginResponse contains the authenticated user and session.
 message LoginResponse {
-  // user is the authenticated user.
   User user = 1;
-  // session_token is the authentication token for the new session.
   string session_token = 2;
+  repeated string roles = 3;
+  repeated Permission permissions = 4;
 }
 
 // LogoutRequest is empty; the session is identified from the auth header.
@@ -63,10 +79,10 @@ message LogoutResponse {}
 // GetCurrentUserRequest is empty; the user is identified from the auth header.
 message GetCurrentUserRequest {}
 
-// GetCurrentUserResponse contains the current user.
+// GetCurrentUserResponse contains the current user with permissions.
 message GetCurrentUserResponse {
-  // user is the currently authenticated user.
   User user = 1;
+  repeated Permission permissions = 2;
 }
 
 // RefreshSessionRequest is empty; the session is identified from the auth header.
@@ -74,8 +90,127 @@ message RefreshSessionRequest {}
 
 // RefreshSessionResponse contains the refreshed session token.
 message RefreshSessionResponse {
-  // session_token is the new authentication token.
   string session_token = 1;
-  // expires_at is when the new session expires.
   int64 expires_at = 2;
+}
+
+// GetAuthStatusRequest is empty.
+message GetAuthStatusRequest {}
+
+// GetAuthStatusResponse returns available auth methods.
+message GetAuthStatusResponse {
+  bool local_enabled = 1;
+  bool oidc_enabled = 2;
+  bool registration_enabled = 3;
+  bool anonymous_access = 4;
+  bool first_user_setup = 5;
+}
+
+// GetOIDCLoginURLRequest is empty.
+message GetOIDCLoginURLRequest {}
+
+// GetOIDCLoginURLResponse returns the OIDC redirect URL.
+message GetOIDCLoginURLResponse {
+  string redirect_url = 1;
+}
+
+// GetAuthConfigRequest is empty.
+message GetAuthConfigRequest {}
+
+// GetAuthConfigResponse returns the full auth configuration.
+message GetAuthConfigResponse {
+  bool local_enabled = 1;
+  bool registration_enabled = 2;
+  bool anonymous_access = 3;
+  int32 session_timeout = 4;
+  bool oidc_enabled = 5;
+  string oidc_issuer_uri = 6;
+  string oidc_client_id = 7;
+  string oidc_redirect_url = 8;
+  repeated string oidc_scopes = 9;
+  string oidc_role_claim = 10;
+  bool first_user_setup = 11;
+}
+
+// UpdateAuthSettingsRequest allows toggling auth settings.
+message UpdateAuthSettingsRequest {
+  optional bool local_enabled = 1;
+  optional bool registration_enabled = 2;
+  optional bool anonymous_access = 3;
+  optional int32 session_timeout = 4;
+}
+
+// UpdateAuthSettingsResponse returns the updated configuration.
+message UpdateAuthSettingsResponse {
+  GetAuthConfigResponse config = 1;
+}
+
+// CreateInviteRequest contains the fields to create a registration invite.
+message CreateInviteRequest {
+  string description = 1;
+  repeated string roles = 2;
+  optional string pin = 3;
+  optional int32 max_uses = 4;
+  optional int32 expires_in_hours = 5;
+}
+
+// CreateInviteResponse returns the created invite with its code.
+message CreateInviteResponse {
+  RegistrationInvite invite = 1;
+}
+
+// ListInvitesRequest supports pagination.
+message ListInvitesRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+// ListInvitesResponse contains a page of registration invites.
+message ListInvitesResponse {
+  repeated RegistrationInvite invites = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+// GetInviteRequest identifies an invite by ID.
+message GetInviteRequest {
+  string id = 1;
+}
+
+// GetInviteResponse contains the requested invite.
+message GetInviteResponse {
+  RegistrationInvite invite = 1;
+}
+
+// DeleteInviteRequest identifies the invite to delete.
+message DeleteInviteRequest {
+  string id = 1;
+}
+
+// DeleteInviteResponse is empty on success.
+message DeleteInviteResponse {}
+
+// ValidateInviteRequest checks an invite code's validity.
+message ValidateInviteRequest {
+  string code = 1;
+}
+
+// ValidateInviteResponse indicates whether the invite is valid.
+message ValidateInviteResponse {
+  bool valid = 1;
+  bool requires_pin = 2;
+}
+
+// RegistrationInvite represents an invite code for user registration.
+message RegistrationInvite {
+  string id = 1;
+  string code = 2;
+  string description = 3;
+  repeated string roles = 4;
+  bool has_pin = 5;
+  int32 max_uses = 6;
+  int32 use_count = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  string created_by = 9;
+  google.protobuf.Timestamp created_at = 10;
 }

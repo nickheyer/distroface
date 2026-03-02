@@ -2,37 +2,98 @@
 	import '../app.css';
 	import { ModeWatcher } from 'mode-watcher';
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
-	import {
-		SidebarProvider,
-		SidebarInset,
-		Sidebar,
-		SidebarContent,
-		SidebarGroup,
-		SidebarGroupLabel,
-		SidebarGroupContent,
-		SidebarMenu,
-		SidebarMenuItem,
-		SidebarMenuButton,
-		SidebarHeader,
-		SidebarFooter,
-		SidebarTrigger
-	} from '$lib/components/ui/sidebar';
-	import { Separator } from '$lib/components/ui/separator';
 	import { Button } from '$lib/components/ui/button';
 	import { Toaster } from '$lib/components/ui/sonner';
-
-	import { Home, Sun, Moon, LogIn, LogOut, Package, UserPlus } from '@lucide/svelte';
+	import {
+		DropdownMenu,
+		DropdownMenuContent,
+		DropdownMenuItem,
+		DropdownMenuLabel,
+		DropdownMenuSeparator,
+		DropdownMenuTrigger
+	} from '$lib/components/ui/dropdown-menu';
+	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import {
+		Sheet,
+		SheetContent,
+		SheetHeader,
+		SheetTitle,
+		SheetDescription
+	} from '$lib/components/ui/sheet';
+	import {
+		Sun,
+		Moon,
+		LogIn,
+		LogOut,
+		Package,
+		Settings,
+		Building2,
+		User,
+		Menu,
+		Shield
+	} from '@lucide/svelte';
 	import { toggleMode, mode } from 'mode-watcher';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 
 	let { children } = $props();
+	let initialized = $state(false);
+	let mobileMenuOpen = $state(false);
 
-	onMount(() => {
-		authStore.init();
+	const isLoginPage = $derived(page.url.pathname === '/login');
+
+	function getUserInitials(user: typeof authStore.user): string {
+		if (!user) return '?';
+		const name = user.displayName || user.username;
+		return name
+			.split(/[\s-]+/)
+			.map((w) => w[0])
+			.join('')
+			.toUpperCase()
+			.slice(0, 2);
+	}
+
+	function isActive(path: string): boolean {
+		if (path === '/') return page.url.pathname === '/';
+		return page.url.pathname.startsWith(path);
+	}
+
+	onMount(async () => {
+		await authStore.init();
 		configStore.init();
+		initialized = true;
+
+		if (!isLoginPage && authStore.firstUserSetup) {
+			goto('/login');
+			return;
+		}
+
+		if (
+			!isLoginPage &&
+			!authStore.isAuthenticated &&
+			!authStore.anonymousAccessEnabled &&
+			authStore.authStatusLoaded
+		) {
+			goto('/login');
+		}
 	});
+
+	async function handleLogout() {
+		await authStore.logout();
+		goto('/login');
+	}
+
+	const navLinks = $derived([
+		{ href: '/', label: 'Explore', icon: Package },
+		...(authStore.isAuthenticated
+			? [{ href: '/orgs', label: 'Organizations', icon: Building2 }]
+			: []),
+		...(authStore.canAccessAdmin
+			? [{ href: '/admin', label: 'Admin', icon: Shield }]
+			: [])
+	]);
 </script>
 
 <svelte:head>
@@ -42,105 +103,138 @@
 <ModeWatcher />
 <Toaster position="bottom-center" expand={true} richColors />
 
-<div>
-	<SidebarProvider>
-		<Sidebar collapsible="icon">
-			<SidebarHeader class="my-2">
-				<div class="m-auto flex items-center gap-2">
-					<span class="text-lg font-bold group-data-[collapsible=icon]:hidden">Distroface</span>
-				</div>
-			</SidebarHeader>
+{#if isLoginPage}
+	{@render children?.()}
+{:else if !initialized}
+	<div class="flex h-screen flex-col items-center justify-center gap-3">
+		<img src="/splash-icon.png" alt="Distroface" class="h-14 w-14 rounded-2xl" />
+		<div class="h-5 w-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></div>
+	</div>
+{:else}
+	<div class="min-h-screen flex flex-col">
+		<header class="sticky top-0 z-50 border-b border-border/50 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80">
+			<div class="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4 sm:px-6">
+				<a href="/" class="flex items-center gap-2.5 shrink-0">
+					<img src="/adaptive-icon.png" alt="Distroface" class="h-7 w-7 rounded-lg" />
+					<span class="font-bold text-lg tracking-tight hidden sm:inline">Distroface</span>
+				</a>
 
-			<SidebarContent>
-				<SidebarGroup>
-					<SidebarGroupLabel class="group-data-[collapsible=icon]:opacity-0">Navigation</SidebarGroupLabel>
-					<SidebarGroupContent>
-						<SidebarMenu>
-							<SidebarMenuItem>
-								<SidebarMenuButton isActive={page.url.pathname === '/'}>
-									{#snippet child({ props })}
-										<a href="/" {...props}>
-											<Home class="h-4 w-4" />
-											<span class="group-data-[collapsible=icon]:hidden">Home</span>
-										</a>
-									{/snippet}
-								</SidebarMenuButton>
-							</SidebarMenuItem>
-							{#if authStore.isAuthenticated}
-								<SidebarMenuItem>
-									<SidebarMenuButton isActive={page.url.pathname.startsWith(`/${authStore.user?.username}`)}>
-										{#snippet child({ props })}
-											<a href="/{authStore.user?.username}" {...props}>
-												<Package class="h-4 w-4" />
-												<span class="group-data-[collapsible=icon]:hidden">Repositories</span>
-											</a>
-										{/snippet}
-									</SidebarMenuButton>
-								</SidebarMenuItem>
-							{/if}
-						</SidebarMenu>
-					</SidebarGroupContent>
-				</SidebarGroup>
+				<nav class="hidden md:flex items-center gap-0.5">
+					{#each navLinks as link}
+						<a
+							href={link.href}
+							class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors {isActive(link.href)
+								? 'bg-accent text-accent-foreground'
+								: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
+						>
+							<link.icon class="h-4 w-4" />
+							{link.label}
+						</a>
+					{/each}
+				</nav>
 
-				{#if !authStore.isAuthenticated && !authStore.loading}
-					<SidebarGroup>
-						<SidebarGroupLabel class="group-data-[collapsible=icon]:opacity-0">Account</SidebarGroupLabel>
-						<SidebarGroupContent>
-							<SidebarMenu>
-								<SidebarMenuItem>
-									<SidebarMenuButton isActive={page.url.pathname === '/login'}>
-										{#snippet child({ props })}
-											<a href="/login" {...props}>
-												<LogIn class="h-4 w-4" />
-												<span class="group-data-[collapsible=icon]:hidden">Sign in</span>
-											</a>
-										{/snippet}
-									</SidebarMenuButton>
-								</SidebarMenuItem>
-								<SidebarMenuItem>
-									<SidebarMenuButton isActive={page.url.pathname === '/register'}>
-										{#snippet child({ props })}
-											<a href="/register" {...props}>
-												<UserPlus class="h-4 w-4" />
-												<span class="group-data-[collapsible=icon]:hidden">Register</span>
-											</a>
-										{/snippet}
-									</SidebarMenuButton>
-								</SidebarMenuItem>
-							</SidebarMenu>
-						</SidebarGroupContent>
-					</SidebarGroup>
-				{/if}
-			</SidebarContent>
+				<div class="flex-1"></div>
 
-			<SidebarFooter>
-				<Separator orientation="horizontal" class="mb-2" />
-				{#if authStore.isAuthenticated}
-					<div class="flex items-center gap-2 px-2 group-data-[collapsible=icon]:justify-center">
-						<span class="text-sm font-medium truncate group-data-[collapsible=icon]:hidden">{authStore.user?.username}</span>
-						<Button variant="ghost" size="icon" class="h-7 w-7 ml-auto group-data-[collapsible=icon]:ml-0" onclick={() => authStore.logout()}>
-							<LogOut class="h-4 w-4 text-muted-foreground" />
-						</Button>
-					</div>
-				{/if}
-				<div class="ml-auto flex items-center gap-2">
-					<span class="text-muted-foreground text-xs group-data-[collapsible=icon]:hidden">{__APP_VERSION__}</span>
-					<Button variant="ghost" size="icon" class="h-7 w-7 group-data-[collapsible=icon]:hidden" onclick={toggleMode}>
+				<div class="flex items-center gap-1.5">
+					<span class="text-muted-foreground/60 text-[11px] hidden lg:inline mr-2">{__APP_VERSION__}</span>
+
+					<Button variant="ghost" size="icon" class="h-8 w-8" onclick={toggleMode}>
 						{#if mode.current === 'light'}
 							<Moon class="h-4 w-4 text-muted-foreground" />
 						{:else}
 							<Sun class="h-4 w-4 text-muted-foreground" />
 						{/if}
 					</Button>
-					<SidebarTrigger />
-				</div>
-			</SidebarFooter>
-		</Sidebar>
 
-		<SidebarInset class="flex h-screen flex-col">
-			<main class="flex-1">
-				{@render children?.()}
-			</main>
-		</SidebarInset>
-	</SidebarProvider>
-</div>
+					{#if authStore.isAuthenticated && authStore.user}
+						<DropdownMenu>
+							<DropdownMenuTrigger>
+								{#snippet child({ props })}
+									<button
+										{...props}
+										class="flex items-center gap-2 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ml-1"
+									>
+										<Avatar class="h-8 w-8">
+											<AvatarFallback class="text-xs bg-primary/10 text-primary font-medium">
+												{getUserInitials(authStore.user)}
+											</AvatarFallback>
+										</Avatar>
+									</button>
+								{/snippet}
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end" class="w-56">
+								<DropdownMenuLabel>
+									<div class="flex flex-col">
+										<span class="font-medium">{authStore.user.displayName || authStore.user.username}</span>
+										{#if authStore.user.email}
+											<span class="text-xs font-normal text-muted-foreground">{authStore.user.email}</span>
+										{/if}
+									</div>
+								</DropdownMenuLabel>
+								<DropdownMenuSeparator />
+								<DropdownMenuItem onclick={() => goto(`/${authStore.user?.username}`)}>
+									<User class="h-4 w-4 mr-2" />
+									Profile
+								</DropdownMenuItem>
+								<DropdownMenuItem onclick={() => goto('/settings')}>
+									<Settings class="h-4 w-4 mr-2" />
+									Settings
+								</DropdownMenuItem>
+								<DropdownMenuSeparator />
+								<DropdownMenuItem onclick={handleLogout}>
+									<LogOut class="h-4 w-4 mr-2" />
+									Sign out
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
+					{:else if !authStore.loading}
+						<Button variant="outline" size="sm" class="ml-1" onclick={() => goto('/login')}>
+							<LogIn class="h-4 w-4 mr-1.5" />
+							Sign in
+						</Button>
+					{/if}
+
+					<Button
+						variant="ghost"
+						size="icon"
+						class="h-8 w-8 md:hidden"
+						onclick={() => (mobileMenuOpen = true)}
+					>
+						<Menu class="h-4 w-4" />
+					</Button>
+				</div>
+			</div>
+		</header>
+
+		<main class="flex-1">
+			{#key page.url.pathname}
+				<div class="mx-auto max-w-7xl px-4 sm:px-6 py-6 page-enter">
+					{@render children?.()}
+				</div>
+			{/key}
+		</main>
+	</div>
+
+	<Sheet bind:open={mobileMenuOpen}>
+		<SheetContent side="right" class="w-72">
+			<SheetHeader>
+				<SheetTitle>Navigation</SheetTitle>
+				<SheetDescription class="sr-only">Navigation menu</SheetDescription>
+			</SheetHeader>
+			<nav class="flex flex-col gap-1 mt-4">
+				{#each navLinks as link}
+					<a
+						href={link.href}
+						class="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors {isActive(link.href)
+							? 'bg-accent text-accent-foreground'
+							: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
+						onclick={() => (mobileMenuOpen = false)}
+					>
+						<link.icon class="h-4 w-4" />
+						{link.label}
+					</a>
+				{/each}
+			</nav>
+		</SheetContent>
+	</Sheet>
+{/if}

@@ -10,7 +10,7 @@ function getVersion() {
 	try {
 		const version = execSync('git describe --tags --always').toString().trim();
 		if (version) return version;
-	} catch {}
+	} catch (err) { console.log(err) }
 	return 'dev';
 }
 
@@ -38,6 +38,10 @@ export default defineConfig({
 				changeOrigin: true
 			},
 			'/auth': {
+				target: 'http://localhost:8080',
+				changeOrigin: true
+			},
+			'/api': {
 				target: 'http://localhost:8080',
 				changeOrigin: true
 			}

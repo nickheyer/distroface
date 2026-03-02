@@ -2,8 +2,49 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/types.proto";
+
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
 
 // TokenService manages personal access tokens.
-// This service will be implemented in Phase 4.
-service TokenService {}
+service TokenService {
+  // CreateAPIToken creates a new personal access token.
+  rpc CreateAPIToken(CreateAPITokenRequest) returns (CreateAPITokenResponse) {}
+  // ListAPITokens lists the current user's API tokens.
+  rpc ListAPITokens(ListAPITokensRequest) returns (ListAPITokensResponse) {}
+  // DeleteAPIToken revokes a personal access token.
+  rpc DeleteAPIToken(DeleteAPITokenRequest) returns (DeleteAPITokenResponse) {}
+}
+
+// CreateAPITokenRequest contains the token name and optional expiry.
+message CreateAPITokenRequest {
+  string name = 1;
+  optional int32 expires_in_days = 2;
+}
+
+// CreateAPITokenResponse returns the plaintext token (shown once) and metadata.
+message CreateAPITokenResponse {
+  string plaintext_token = 1;
+  APIToken token = 2;
+}
+
+// ListAPITokensRequest supports pagination.
+message ListAPITokensRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+
+// ListAPITokensResponse contains a page of the user's tokens.
+message ListAPITokensResponse {
+  repeated APIToken tokens = 1;
+  string next_page_token = 2;
+  int32 total_count = 3;
+}
+
+// DeleteAPITokenRequest identifies the token to revoke.
+message DeleteAPITokenRequest {
+  string id = 1;
+}
+
+// DeleteAPITokenResponse is empty on success.
+message DeleteAPITokenResponse {}

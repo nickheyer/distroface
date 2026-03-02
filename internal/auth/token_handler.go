@@ -7,6 +7,7 @@ import (
 	"time"
 
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -16,6 +17,8 @@ import (
 type TokenHandler struct {
 	tokenService *TokenService
 	store        *storage.Store
+	authManager  *Manager
+	enforcer     *rbac.Enforcer
 	log          *logger.Logger
 }
 
@@ -27,10 +30,12 @@ type tokenResponse struct {
 }
 
 // NewTokenHandler creates a new Docker token auth endpoint handler.
-func NewTokenHandler(ts *TokenService, store *storage.Store, log *logger.Logger) *TokenHandler {
+func NewTokenHandler(ts *TokenService, store *storage.Store, manager *Manager, enforcer *rbac.Enforcer, log *logger.Logger) *TokenHandler {
 	return &TokenHandler{
 		tokenService: ts,
 		store:        store,
+		authManager:  manager,
+		enforcer:     enforcer,
 		log:          log,
 	}
 }
@@ -46,29 +51,54 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	scopeStr := q.Get("scope")
 	account := q.Get("account")
 
-	var user *storage.User
+	var authUser *AuthenticatedUser
 	username, password, hasBasic := r.BasicAuth()
 	if hasBasic && username != "" {
-		u, err := h.store.GetUserByIdentifier(r.Context(), username)
-		if err != nil {
-			h.log.Error("token auth: failed to look up user %s: %v", username, err)
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
+		// Check if password is an API token (df_ prefix)
+		if strings.HasPrefix(password, "df_") {
+			user, err := h.authManager.ValidateAPIToken(r.Context(), password)
+			if err != nil {
+				w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			authUser = user
+		} else {
+			// Standard password auth
+			u, err := h.store.GetUserByIdentifier(r.Context(), username)
+			if err != nil {
+				h.log.Error("token auth: failed to look up user %s: %v", username, err)
+				http.Error(w, "internal error", http.StatusInternalServerError)
+				return
+			}
+			if u == nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+				w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			// Resolve roles for the user
+			roleNames, err := h.store.GetUserRoleNames(r.Context(), u.ID)
+			if err != nil {
+				roleNames = []string{}
+			}
+			authUser = &AuthenticatedUser{
+				ID:       u.ID,
+				Username: u.Username,
+				Roles:    roleNames,
+				Provider: u.AuthProvider,
+			}
+			if u.Email != nil {
+				authUser.Email = *u.Email
+			}
 		}
-		if u == nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
-			w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		user = u
-		if account == "" {
-			account = user.Username
+		if account == "" && authUser != nil {
+			account = authUser.Username
 		}
 	}
 
 	var access []*ResourceActions
 	if scopeStr != "" {
-		access = h.resolveAccess(r, user, scopeStr)
+		access = h.resolveAccess(r, authUser, scopeStr)
 	}
 
 	tokenStr, err := h.tokenService.SignToken(account, access)
@@ -89,7 +119,7 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-func (h *TokenHandler) resolveAccess(r *http.Request, user *storage.User, scopeStr string) []*ResourceActions {
+func (h *TokenHandler) resolveAccess(r *http.Request, user *AuthenticatedUser, scopeStr string) []*ResourceActions {
 	var result []*ResourceActions
 
 	for _, scope := range strings.Split(scopeStr, " ") {
@@ -119,7 +149,7 @@ func (h *TokenHandler) resolveAccess(r *http.Request, user *storage.User, scopeS
 	return result
 }
 
-func (h *TokenHandler) filterActions(r *http.Request, user *storage.User, repoName string, requested []string) []string {
+func (h *TokenHandler) filterActions(r *http.Request, user *AuthenticatedUser, repoName string, requested []string) []string {
 	namespaceName := strings.SplitN(repoName, "/", 2)
 	if len(namespaceName) != 2 {
 		return nil
@@ -136,7 +166,7 @@ func (h *TokenHandler) filterActions(r *http.Request, user *storage.User, repoNa
 	for _, action := range requested {
 		switch action {
 		case "pull":
-			if h.canPull(user, namespace, repo) {
+			if h.canPull(r, user, namespace, repo) {
 				granted = append(granted, "pull")
 			}
 		case "push":
@@ -148,36 +178,63 @@ func (h *TokenHandler) filterActions(r *http.Request, user *storage.User, repoNa
 	return granted
 }
 
-func (h *TokenHandler) canPull(user *storage.User, namespace string, repo *storage.Repository) bool {
+func (h *TokenHandler) canPull(r *http.Request, user *AuthenticatedUser, namespace string, repo *storage.Repository) bool {
+	// Repo doesn't exist yet, only authenticated users can pull (will get 404 from registry)
 	if repo == nil {
 		return user != nil
 	}
+	// Public repos are pullable by anyone
 	if !repo.IsPrivate {
 		return true
 	}
 	if user == nil {
 		return false
 	}
-	if user.IsAdmin {
-		return true
+	// Use RBAC: check if user has pull permission on repositories
+	if h.enforcer != nil {
+		allowed, _ := h.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionPull, namespace)
+		if allowed {
+			return true
+		}
 	}
-	return user.Username == namespace
-}
-
-func (h *TokenHandler) canPush(r *http.Request, user *storage.User, namespace string) bool {
-	if user == nil {
-		return false
-	}
+	// Namespace owner can always pull their own repos
 	if user.Username == namespace {
 		return true
 	}
-	if !user.IsAdmin {
+	// Org member can pull org repos
+	isMember, _, _ := h.store.IsOrgMember(r.Context(), namespace, user.ID)
+	return isMember
+}
+
+func (h *TokenHandler) canPush(r *http.Request, user *AuthenticatedUser, namespace string) bool {
+	if user == nil {
 		return false
 	}
-	// Admin can push to other namespaces, but only if the namespace owner exists
-	nsOwner, err := h.store.GetUserByUsername(r.Context(), namespace)
-	if err != nil || nsOwner == nil {
-		return false
+	// Namespace owner can always push
+	if user.Username == namespace {
+		return true
 	}
-	return true
+	// Check RBAC push permission (e.g. admin role has wildcard push)
+	if h.enforcer != nil {
+		allowed, _ := h.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionPush, namespace)
+		if allowed {
+			// Push allowed via RBAC, but only if the namespace owner/org exists
+			nsOwner, _ := h.store.GetUserByUsername(r.Context(), namespace)
+			if nsOwner != nil {
+				return true
+			}
+			// Check if namespace is an org
+			org, _ := h.store.GetOrganization(r.Context(), namespace)
+			if org != nil {
+				return true
+			}
+			return false
+		}
+	}
+	// Org member with admin/owner role can push
+	isMember, role, _ := h.store.IsOrgMember(r.Context(), namespace, user.ID)
+	if isMember && (role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin) {
+		return true
+	}
+	return false
 }

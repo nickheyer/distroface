@@ -42,8 +42,30 @@ type RegistryConfig struct {
 }
 
 type AuthConfig struct {
-	SessionDuration int `mapstructure:"session_duration" json:"session_duration"`
-	TokenExpiry     int `mapstructure:"token_expiry" json:"token_expiry"`
+	SessionTimeout  int        `mapstructure:"session_timeout" json:"session_timeout"`
+	TokenExpiry     int        `mapstructure:"token_expiry" json:"token_expiry"`
+	JWTSecret       string     `mapstructure:"jwt_secret" json:"-"`
+	AnonymousAccess bool       `mapstructure:"anonymous_access" json:"anonymous_access"`
+	Local           LocalConfig `mapstructure:"local" json:"local"`
+	OIDC            OIDCConfig  `mapstructure:"oidc" json:"oidc"`
+}
+
+type LocalConfig struct {
+	Enabled           bool `mapstructure:"enabled" json:"enabled"`
+	AllowRegistration bool `mapstructure:"allow_registration" json:"allow_registration"`
+}
+
+type OIDCConfig struct {
+	Enabled       bool              `mapstructure:"enabled" json:"enabled"`
+	IssuerURI     string            `mapstructure:"issuer_uri" json:"issuer_uri"`
+	ClientID      string            `mapstructure:"client_id" json:"client_id"`
+	ClientSecret  string            `mapstructure:"client_secret" json:"-"`
+	RedirectURL   string            `mapstructure:"redirect_url" json:"redirect_url"`
+	Scopes        []string          `mapstructure:"scopes" json:"scopes"`
+	RoleClaim     string            `mapstructure:"role_claim" json:"role_claim"`
+	RoleMapping   map[string]string `mapstructure:"role_mapping" json:"role_mapping"`
+	GroupOrgMapping map[string]string `mapstructure:"group_org_mapping" json:"group_org_mapping"`
+	SkipTLSVerify bool              `mapstructure:"skip_tls_verify" json:"skip_tls_verify"`
 }
 
 type LoggingConfig struct {
@@ -114,8 +136,19 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("registry.storage_path", "./data/registry")
 
-	v.SetDefault("auth.session_duration", 86400)
+	v.SetDefault("auth.session_timeout", 86400)
 	v.SetDefault("auth.token_expiry", 900)
+	v.SetDefault("auth.anonymous_access", false)
+	v.SetDefault("auth.local.enabled", true)
+	v.SetDefault("auth.local.allow_registration", true)
+	v.SetDefault("auth.oidc.enabled", false)
+	v.SetDefault("auth.oidc.issuer_uri", "")
+	v.SetDefault("auth.oidc.client_id", "")
+	v.SetDefault("auth.oidc.client_secret", "")
+	v.SetDefault("auth.oidc.redirect_url", "")
+	v.SetDefault("auth.oidc.scopes", []string{})
+	v.SetDefault("auth.oidc.role_claim", "")
+	v.SetDefault("auth.oidc.skip_tls_verify", false)
 
 	v.SetDefault("logging.enabled", true)
 	v.SetDefault("logging.dir", "./data/logs")

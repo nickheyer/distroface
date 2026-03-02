@@ -6,16 +6,6 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
 
-// Role represents a user's role in the system.
-enum Role {
-  // ROLE_UNSPECIFIED is the default unspecified role.
-  ROLE_UNSPECIFIED = 0;
-  // ROLE_USER is a standard user.
-  ROLE_USER = 1;
-  // ROLE_ADMIN is an administrator.
-  ROLE_ADMIN = 2;
-}
-
 // Visibility represents the visibility of a repository.
 enum Visibility {
   // VISIBILITY_UNSPECIFIED is the default unspecified visibility.
@@ -26,22 +16,72 @@ enum Visibility {
   VISIBILITY_PRIVATE = 2;
 }
 
+// OrgRole represents a member's role within an organization.
+enum OrgRole {
+  ORG_ROLE_UNSPECIFIED = 0;
+  ORG_ROLE_OWNER = 1;
+  ORG_ROLE_ADMIN = 2;
+  ORG_ROLE_MEMBER = 3;
+}
+
+// Permission represents a single resource/action/object permission tuple.
+message Permission {
+  string resource = 1;
+  string action = 2;
+  string object_id = 3;
+}
+
 // User represents a registered user account.
 message User {
-  // id is the unique identifier for the user.
   string id = 1;
-  // username is the user's unique username.
   string username = 2;
-  // email is the user's email address.
   string email = 3;
-  // display_name is the user's display name.
   string display_name = 4;
-  // role is the user's role.
-  Role role = 5;
-  // created_at is when the user was created.
+  repeated string roles = 5;
   google.protobuf.Timestamp created_at = 6;
-  // updated_at is when the user was last updated.
   google.protobuf.Timestamp updated_at = 7;
+  repeated Permission permissions = 8;
+  string auth_provider = 9;
+  bool is_active = 10;
+}
+
+// Role represents a named role in the RBAC system.
+message Role {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  bool is_system = 4;
+  bool is_default = 5;
+  repeated Permission permissions = 6;
+}
+
+// Organization represents a group that can own repositories.
+message Organization {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+  string description = 4;
+  int32 member_count = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+// OrgMember represents a user's membership in an organization.
+message OrgMember {
+  string user_id = 1;
+  string username = 2;
+  OrgRole role = 3;
+  google.protobuf.Timestamp joined_at = 4;
+}
+
+// APIToken represents a personal access token (metadata only, no secret).
+message APIToken {
+  string id = 1;
+  string name = 2;
+  string created_by = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  google.protobuf.Timestamp last_used_at = 6;
 }
 
 // Repository represents a container image repository.
