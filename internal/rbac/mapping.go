@@ -27,7 +27,8 @@ var PublicProcedures = map[string]bool{
 	distrofacev1connect.RepositoryServiceGetRepositoryProcedure:    true,
 	distrofacev1connect.RepositoryServiceListRepositoriesProcedure: true,
 	distrofacev1connect.RepositoryServiceListTagsProcedure:         true,
-	distrofacev1connect.RepositoryServiceGetTagDetailProcedure:     true,
+	distrofacev1connect.RepositoryServiceResolveTagProcedure:       true,
+	distrofacev1connect.RepositoryServiceResolveDescriptorProcedure: true,
 	distrofacev1connect.UserServiceGetUserProcedure:                true,
 	// Invite validation is public (used during registration)
 	distrofacev1connect.AuthServiceValidateInviteProcedure: true,
