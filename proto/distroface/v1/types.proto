@@ -116,46 +116,112 @@ message Repository {
   int64 push_count = 14;
 }
 
+// Platform describes the platform which the image in the manifest runs on.
+// Mirrors the OCI image-spec Platform type.
+message Platform {
+  // architecture specifies the CPU architecture (e.g. amd64, arm64).
+  string architecture = 1;
+  // os specifies the operating system (e.g. linux, windows).
+  string os = 2;
+  // os_version is an optional OS version (e.g. 10.0.14393.1066).
+  string os_version = 3;
+  // os_features lists required OS features (e.g. win32k).
+  repeated string os_features = 4;
+  // variant is an optional CPU variant (e.g. v7 for ARMv7).
+  string variant = 5;
+}
+
 // Tag represents a tagged image in a repository.
+// Fields mirror the OCI descriptor (minus the data field).
 message Tag {
   // name is the tag name.
   string name = 1;
   // digest is the manifest digest.
   string digest = 2;
-  // size_bytes is the total size of the tagged image.
+  // size_bytes is the total size of the tagged image (manifest + all referenced blobs).
   int64 size_bytes = 3;
-  // pushed_at is when the tag was pushed.
+  // pushed_at is when the tag was created/pushed, derived from OCI annotations if available.
   google.protobuf.Timestamp pushed_at = 4;
+  // media_type is the manifest media type (e.g. application/vnd.oci.image.manifest.v1+json).
+  string media_type = 5;
+  // platforms lists the target platforms. Single-arch images have one entry;
+  // multi-arch manifest lists/indexes have one entry per supported platform.
+  repeated Platform platforms = 6;
+  // annotations contains arbitrary metadata from the manifest descriptor.
+  map<string, string> annotations = 7;
+  // artifact_type is the IANA media type of the artifact, if set.
+  string artifact_type = 8;
 }
 
-// TagDetail contains detailed information about a tagged image.
-message TagDetail {
-  // name is the tag name.
-  string name = 1;
-  // digest is the manifest digest.
-  string digest = 2;
-  // media_type is the manifest media type.
-  string media_type = 3;
-  // size_bytes is the total size.
-  int64 size_bytes = 4;
-  // architecture is the image architecture (e.g. amd64).
-  string architecture = 5;
-  // os is the image operating system (e.g. linux).
-  string os = 6;
-  // layers is the list of layers in the image.
-  repeated Layer layers = 7;
-  // created_at is when the image was created.
-  google.protobuf.Timestamp created_at = 8;
-  // pushed_at is when the image was pushed.
-  google.protobuf.Timestamp pushed_at = 9;
-}
-
-// Layer represents a single layer in a container image.
-message Layer {
-  // digest is the layer digest.
+// Descriptor is the universal content-addressable reference type per the OCI spec.
+// Every blob, layer, config, manifest, and index is described by a Descriptor.
+// When resolved (e.g. via GetTagDetail or GetManifestDetail), the children field
+// is populated with the descriptors contained within (config+layers for a manifest,
+// child manifests for an index).
+message Descriptor {
+  // digest is the content digest.
   string digest = 1;
-  // size_bytes is the layer size.
+  // size_bytes is the content size in bytes.
   int64 size_bytes = 2;
-  // media_type is the layer media type.
+  // media_type is the IANA media type of the content.
   string media_type = 3;
+  // platform describes the platform, if applicable (e.g. on manifest index entries).
+  Platform platform = 4;
+  // annotations contains arbitrary metadata.
+  map<string, string> annotations = 5;
+  // artifact_type is the IANA media type of the artifact, per OCI spec.
+  string artifact_type = 6;
+  // children lists the descriptors referenced by this content when resolved.
+  // For a manifest: config + layer descriptors. For an index: child manifest descriptors.
+  // Empty for unresolved descriptors or terminal blobs (layers, configs).
+  repeated Descriptor children = 7;
+  // image_config contains parsed image configuration data when available.
+  // For manifests: includes build history correlated with layer sizes.
+  // For config blobs: includes runtime configuration details.
+  ImageConfig image_config = 8;
+}
+
+// HistoryEntry describes a single step in the image build history.
+message HistoryEntry {
+  // created_by is the command that created this layer (e.g. Dockerfile instruction).
+  string created_by = 1;
+  // empty_layer is true if this history entry did not produce a filesystem diff.
+  bool empty_layer = 2;
+  // comment is an optional comment.
+  string comment = 3;
+  // created is when this layer was created.
+  google.protobuf.Timestamp created = 4;
+  // size_bytes is the compressed layer size (0 for empty layers).
+  // Correlated from the manifest's layer descriptors.
+  int64 size_bytes = 5;
+}
+
+// ImageConfig contains parsed metadata from an OCI/Docker image config blob.
+// Populated on manifest descriptors (with layer-correlated history) and on
+// config blob descriptors (with runtime configuration details).
+message ImageConfig {
+  // created is when the image was created.
+  google.protobuf.Timestamp created = 1;
+  // author is the image author.
+  string author = 2;
+  // architecture is the CPU architecture.
+  string architecture = 3;
+  // os is the operating system.
+  string os = 4;
+  // history is the ordered list of build steps.
+  repeated HistoryEntry history = 5;
+  // cmd is the default command.
+  repeated string cmd = 6;
+  // entrypoint is the image entrypoint.
+  repeated string entrypoint = 7;
+  // env is the default environment variables.
+  repeated string env = 8;
+  // labels are image labels.
+  map<string, string> labels = 9;
+  // working_dir is the working directory.
+  string working_dir = 10;
+  // exposed_ports lists exposed port mappings.
+  repeated string exposed_ports = 11;
+  // volumes lists volume mount points.
+  repeated string volumes = 12;
 }

@@ -22,8 +22,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import UserSearch from '$lib/components/user-search.svelte';
-	import RepoCard from '$lib/components/repo-card.svelte';
-	import EmptyState from '$lib/components/empty-state.svelte';
+	import RepoList from '$lib/components/repo-list.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import {
 		Building2, Users, Package, Plus, Pencil, Trash2, MoreHorizontal, UserPlus
@@ -44,6 +43,7 @@
 	let membersPage = $state(1);
 	const membersPageSize = 20;
 	let repos = $state<Repository[]>([]);
+	let reposTotalCount = $state(0);
 	let loading = $state(true);
 	let membersLoading = $state(true);
 	let reposLoading = $state(true);
@@ -111,6 +111,7 @@
 				namespace: orgName, pageSize: 50, pageToken: ''
 			});
 			repos = resp.repositories;
+			reposTotalCount = resp.totalCount;
 		} catch {
 			repos = [];
 		} finally {
@@ -368,25 +369,16 @@
 			<TabsContent value="repositories" class="space-y-4 mt-4">
 				<h2 class="section-title">Repositories</h2>
 
-				{#if reposLoading}
-					<div class="space-y-2">
-						{#each Array(3) as _}
-							<Skeleton class="h-18 w-full rounded-xl" />
-						{/each}
-					</div>
-				{:else if repos.length === 0}
-					<EmptyState
-						icon={Package}
-						message="No repositories yet"
-						description="Push images to this organization's namespace to create repositories."
-					/>
-				{:else}
-					<div class="space-y-2">
-						{#each repos as repo}
-							<RepoCard {repo} />
-						{/each}
-					</div>
-				{/if}
+				<RepoList
+					{repos}
+					totalCount={reposTotalCount}
+					loading={reposLoading}
+					page={1}
+					pageSize={50}
+					onPageChange={() => {}}
+					emptyMessage="No repositories yet"
+					emptyDescription="Push images to this organization's namespace to create repositories."
+				/>
 			</TabsContent>
 		</Tabs>
 	{:else}

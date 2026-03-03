@@ -10,7 +10,9 @@ function getVersion() {
 	try {
 		const version = execSync('git describe --tags --always').toString().trim();
 		if (version) return version;
-	} catch (err) { console.log(err) }
+	} catch (err) {
+		console.log(err);
+	}
 	return 'dev';
 }
 

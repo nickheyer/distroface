@@ -206,7 +206,7 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v
 	}), nil
 }
 
-func (s *RepositoryService) GetTagDetail(ctx context.Context, req *connect.Request[v1.GetTagDetailRequest]) (*connect.Response[v1.GetTagDetailResponse], error) {
+func (s *RepositoryService) ResolveTag(ctx context.Context, req *connect.Request[v1.ResolveTagRequest]) (*connect.Response[v1.ResolveTagResponse], error) {
 	if req.Msg.Namespace == "" || req.Msg.Name == "" || req.Msg.Tag == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
@@ -223,13 +223,13 @@ func (s *RepositoryService) GetTagDetail(ctx context.Context, req *connect.Reque
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	detail, err := s.registry.GetTagDetail(ctx, req.Msg.Namespace, req.Msg.Name, req.Msg.Tag)
+	desc, err := s.registry.ResolveTag(ctx, req.Msg.Namespace, req.Msg.Name, req.Msg.Tag)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("tag %q: %w", req.Msg.Tag, err))
 	}
 
-	return connect.NewResponse(&v1.GetTagDetailResponse{
-		Detail: detail,
+	return connect.NewResponse(&v1.ResolveTagResponse{
+		Descriptor_: desc,
 	}), nil
 }
 

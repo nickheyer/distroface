@@ -32,9 +32,7 @@ class AuthStore {
 
 	isAuthenticated = $derived(this.user !== null);
 	isAdmin = $derived(
-		this.permissions.some(
-			(p) => p.resource === '*' && (p.action === '*' || p.action === 'manage')
-		)
+		this.permissions.some((p) => p.resource === '*' && (p.action === '*' || p.action === 'manage'))
 	);
 
 	// Admin panel access — can see at least one admin section

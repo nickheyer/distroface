@@ -16,8 +16,8 @@ service RepositoryService {
   rpc DeleteRepository(DeleteRepositoryRequest) returns (DeleteRepositoryResponse) {}
   // ListTags returns a paginated list of tags for a repository.
   rpc ListTags(ListTagsRequest) returns (ListTagsResponse) {}
-  // GetTagDetail returns detailed information about a specific tag.
-  rpc GetTagDetail(GetTagDetailRequest) returns (GetTagDetailResponse) {}
+  // ResolveTag resolves a tag name to its descriptor with children populated.
+  rpc ResolveTag(ResolveTagRequest) returns (ResolveTagResponse) {}
   // UpdateRepository updates a repository's metadata.
   rpc UpdateRepository(UpdateRepositoryRequest) returns (UpdateRepositoryResponse) {}
 }
@@ -93,8 +93,8 @@ message ListTagsResponse {
   int32 total_count = 3;
 }
 
-// GetTagDetailRequest identifies a specific tag.
-message GetTagDetailRequest {
+// ResolveTagRequest identifies a tag to resolve.
+message ResolveTagRequest {
   // namespace is the repository namespace.
   string namespace = 1;
   // name is the repository name.
@@ -103,10 +103,10 @@ message GetTagDetailRequest {
   string tag = 3;
 }
 
-// GetTagDetailResponse contains detailed tag information.
-message GetTagDetailResponse {
-  // detail is the tag detail.
-  TagDetail detail = 1;
+// ResolveTagResponse contains the resolved descriptor for a tag.
+message ResolveTagResponse {
+  // descriptor is the resolved manifest descriptor with children populated.
+  Descriptor descriptor = 1;
 }
 
 // UpdateRepositoryRequest contains fields to update on a repository.

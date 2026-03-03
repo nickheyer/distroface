@@ -8,7 +8,8 @@ class ConfigStore {
 	async init() {
 		try {
 			const resp = await rpcClient.configuration.getConfiguration({});
-			for (const entry of resp.entries) { // ConfigEntry[]
+			for (const entry of resp.entries) {
+				// ConfigEntry[]
 				if (entry.value) {
 					this.store(entry.key, entry.value); // Store as union type
 				}
@@ -23,10 +24,8 @@ class ConfigStore {
 	}
 
 	get<T>(key: string, fallback?: T): JsonValue | T {
-		return this.entries[key] ?? fallback as T;
+		return this.entries[key] ?? (fallback as T);
 	}
 }
-
-
 
 export const configStore = new ConfigStore();

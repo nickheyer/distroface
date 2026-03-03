@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
-	import { UserRound, Package, Calendar, Building2, Settings } from '@lucide/svelte';
+	import { UserRound, Calendar, Building2, Settings } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { pageToToken, relativeTime } from '$lib/utils';
@@ -11,9 +11,7 @@
 	import { Separator } from '$lib/components/ui/separator';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
-	import RepoCard from '$lib/components/repo-card.svelte';
-	import EmptyState from '$lib/components/empty-state.svelte';
-	import DataPagination from '$lib/components/data-pagination.svelte';
+	import RepoList from '$lib/components/repo-list.svelte';
 	import type { User, Repository } from '$lib/proto/distroface/v1/types_pb';
 
 	const username = $derived(page.params.username);
@@ -60,6 +58,11 @@
 		} finally {
 			repoLoading = false;
 		}
+	}
+
+	function handlePageChange(newPage: number) {
+		repoPage = newPage;
+		loadRepos();
 	}
 
 	onMount(() => { loadUser(); loadRepos(); });
@@ -133,30 +136,18 @@
 		<div class="section-header">
 			<h2 class="section-title">Repositories</h2>
 			{#if repoTotalCount > 0}
-				<span class="text-[13px] text-muted-foreground">{repoTotalCount} total</span>
+				<span class="text-[12px] text-muted-foreground/60 tabular-nums">{repoTotalCount} total</span>
 			{/if}
 		</div>
 
-		{#if repoLoading}
-			<div class="space-y-2">
-				{#each Array(3) as _}
-					<Skeleton class="h-17 w-full rounded-xl" />
-				{/each}
-			</div>
-		{:else if repos.length === 0}
-			<EmptyState icon={Package} message="No repositories yet" />
-		{:else}
-			<div class="space-y-2">
-				{#each repos as repo}
-					<RepoCard {repo} />
-				{/each}
-			</div>
-
-			<DataPagination
-				page={repoPage} pageSize={repoPageSize} totalCount={repoTotalCount}
-				onPrev={() => { repoPage--; loadRepos(); }}
-				onNext={() => { repoPage++; loadRepos(); }}
-			/>
-		{/if}
+		<RepoList
+			{repos}
+			totalCount={repoTotalCount}
+			loading={repoLoading}
+			page={repoPage}
+			pageSize={repoPageSize}
+			onPageChange={handlePageChange}
+			emptyMessage="No repositories yet"
+		/>
 	</div>
 </div>
