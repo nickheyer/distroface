@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -83,7 +84,10 @@
 		}
 	}
 
-	onMount(loadConfig);
+	onMount(() => {
+		if (!authStore.hasPermission('settings', 'read')) { goto('/admin'); return; }
+		loadConfig();
+	});
 </script>
 
 {#if loading}

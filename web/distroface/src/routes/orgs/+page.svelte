@@ -14,6 +14,7 @@
 	import { Building2, Plus, Users, ShieldCheck } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime } from '$lib/utils';
@@ -103,12 +104,12 @@
 
 <PageHeader title="Organizations" subtitle="Manage your team namespaces" icon={Building2}>
 	{#snippet actions()}
-		{#if authStore.canCreateOrgs}
+		<PermissionGate resource="organizations" action="create">
 			<Button onclick={() => (createPanelOpen = true)}>
 				<Plus class="h-4 w-4 mr-1.5" />
 				New Organization
 			</Button>
-		{/if}
+		</PermissionGate>
 	{/snippet}
 </PageHeader>
 
@@ -125,12 +126,12 @@
 		description="Create an organization to collaborate with your team."
 	>
 		{#snippet actions()}
-			{#if authStore.canCreateOrgs}
+			<PermissionGate resource="organizations" action="create">
 				<Button variant="outline" onclick={() => (createPanelOpen = true)}>
 					<Plus class="h-4 w-4 mr-1.5" />
 					Create Organization
 				</Button>
-			{/if}
+			</PermissionGate>
 		{/snippet}
 	</EmptyState>
 {:else}

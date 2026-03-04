@@ -29,6 +29,7 @@
 	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { orgRoleLabel, relativeTime, pageToToken } from '$lib/utils';
@@ -244,7 +245,7 @@
 					</span>
 				</div>
 			</div>
-			{#if canUpdateOrg || canDeleteOrg}
+			<PermissionGate allowed={canUpdateOrg || canDeleteOrg}>
 				<DropdownMenu>
 					<DropdownMenuTrigger>
 						{#snippet child({ props })}
@@ -271,7 +272,7 @@
 						{/if}
 					</DropdownMenuContent>
 				</DropdownMenu>
-			{/if}
+			</PermissionGate>
 		</div>
 
 		<Tabs value="members">
@@ -283,12 +284,12 @@
 			<TabsContent value="members" class="space-y-4 mt-4">
 				<div class="section-header">
 					<h2 class="section-title">Members</h2>
-					{#if canUpdateOrg}
+					<PermissionGate allowed={canUpdateOrg}>
 						<Button size="sm" onclick={() => (addMemberOpen = true)}>
 							<Plus class="h-4 w-4 mr-1.5" />
 							Add Member
 						</Button>
-					{/if}
+					</PermissionGate>
 				</div>
 
 				{#if membersLoading}
@@ -305,9 +306,9 @@
 									<TableHead class="th">Username</TableHead>
 									<TableHead class="th">Role</TableHead>
 									<TableHead class="th">Joined</TableHead>
-									{#if canUpdateOrg}
+									<PermissionGate allowed={canUpdateOrg}>
 										<TableHead class="th w-20"></TableHead>
-									{/if}
+									</PermissionGate>
 								</TableRow>
 							</TableHeader>
 							<TableBody>
@@ -338,7 +339,7 @@
 										<TableCell class="text-muted-foreground text-sm py-3 px-3">
 											{member.joinedAt ? relativeTime(timestampDate(member.joinedAt)) : '-'}
 										</TableCell>
-										{#if canUpdateOrg}
+										<PermissionGate allowed={canUpdateOrg}>
 											<TableCell class="text-right py-3 px-3">
 												{#if member.role !== OrgRole.OWNER}
 													<Button
@@ -351,7 +352,7 @@
 													</Button>
 												{/if}
 											</TableCell>
-										{/if}
+										</PermissionGate>
 									</TableRow>
 								{/each}
 							</TableBody>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { Card, CardContent } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -22,6 +23,7 @@
 	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
 	import type { ResourceActions, ScopeableObject } from '$lib/proto/distroface/v1/role_pb';
 	import type { Permission, Role } from '$lib/proto/distroface/v1/types_pb';
@@ -307,7 +309,10 @@
 		}
 	}
 
-	onMount(loadRoles);
+	onMount(() => {
+		if (!authStore.hasPermission('roles', 'read')) { goto('/admin'); return; }
+		loadRoles();
+	});
 </script>
 
 <div class="space-y-4">
@@ -316,12 +321,12 @@
 			<h2 class="section-title">Roles & Permissions</h2>
 			<p class="section-subtitle">Manage roles and their access permissions</p>
 		</div>
-		{#if authStore.canCreateRoles}
+		<PermissionGate resource="roles" action="create">
 			<Button size="sm" onclick={() => (showCreateDialog = true)}>
 				<Plus class="h-4 w-4 mr-1" />
 				Create Role
 			</Button>
-		{/if}
+		</PermissionGate>
 	</div>
 
 	{#if loading}
@@ -372,15 +377,17 @@
 								<span class="text-sm text-muted-foreground">{getPermCount(role.name)} permissions</span>
 							{/if}
 
-							{#if !role.isSystem && authStore.canDeleteRoles}
-								<Button
-									variant="ghost"
-									size="icon"
-									class="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
-									onclick={() => openDelete(role)}
-								>
-									<Trash2 class="h-4 w-4" />
-								</Button>
+							{#if !role.isSystem}
+								<PermissionGate resource="roles" action="delete">
+									<Button
+										variant="ghost"
+										size="icon"
+										class="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+										onclick={() => openDelete(role)}
+									>
+										<Trash2 class="h-4 w-4" />
+									</Button>
+								</PermissionGate>
 							{/if}
 						</div>
 					</div>

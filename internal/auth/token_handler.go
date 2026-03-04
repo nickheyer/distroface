@@ -214,27 +214,24 @@ func (h *TokenHandler) canPush(r *http.Request, user *AuthenticatedUser, namespa
 	if user.Username == namespace {
 		return true
 	}
-	// Check RBAC push permission (e.g. admin role has wildcard push)
-	if h.enforcer != nil {
-		allowed, _ := h.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionPush, namespace)
-		if allowed {
-			// Push allowed via RBAC, but only if the namespace owner/org exists
-			nsOwner, _ := h.store.GetUserByUsername(r.Context(), namespace)
-			if nsOwner != nil {
-				return true
-			}
-			// Check if namespace is an org
-			org, _ := h.store.GetOrganization(r.Context(), namespace)
-			if org != nil {
-				return true
-			}
-			return false
-		}
-	}
 	// Org member with admin/owner role can push
 	isMember, role, _ := h.store.IsOrgMember(r.Context(), namespace, user.ID)
 	if isMember && (role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin) {
 		return true
+	}
+	// Admin-level override: users with manage permission can push to any valid namespace
+	if h.enforcer != nil {
+		canManage, _ := h.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, namespace)
+		if canManage {
+			nsOwner, _ := h.store.GetUserByUsername(r.Context(), namespace)
+			if nsOwner != nil {
+				return true
+			}
+			org, _ := h.store.GetOrganization(r.Context(), namespace)
+			if org != nil {
+				return true
+			}
+		}
 	}
 	return false
 }

@@ -71,8 +71,6 @@ func (e *Enforcer) SeedDefaultPolicies(anonymousEnabled bool) error {
 		"user": {
 			{"user", ResourceRepositories, ActionRead, "*"},
 			{"user", ResourceRepositories, ActionPull, "*"},
-			{"user", ResourceRepositories, ActionPush, "*"},
-			{"user", ResourceRepositories, ActionCreate, "*"},
 			{"user", ResourceRepositories, ActionUpdate, "*"},
 			{"user", ResourceRepositories, ActionDelete, "*"},
 			{"user", ResourceTokens, ActionRead, "*"},

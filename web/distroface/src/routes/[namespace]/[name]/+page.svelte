@@ -10,6 +10,7 @@
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
+	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { formatBytes, pageToToken, truncateDigest, relativeTime } from '$lib/utils';
 	import { toast } from 'svelte-sonner';
 	import { Badge } from '$lib/components/ui/badge';
@@ -68,18 +69,21 @@
 
 	const registryHost = $derived(configStore.get('registryHost', 'localhost:8080') as string);
 
-	const isOwner = $derived(
-		authStore.user &&
-			(authStore.user.username === namespace ||
-				authStore.hasPermission('repositories', 'update', `${namespace}/${name}`))
+	const isNamespaceMember = $derived(authStore.user?.username === namespace);
+
+	const canUpdateRepo = $derived(
+		authStore.user !== null &&
+			(isNamespaceMember && authStore.hasPermission('repositories', 'update', `${namespace}/${name}`) ||
+				authStore.hasPermission('repositories', 'manage', `${namespace}/${name}`))
 	);
 
-	const canDelete = $derived(
-		authStore.user &&
-			authStore.hasPermission('repositories', 'delete', `${namespace}/${name}`)
+	const canDeleteRepo = $derived(
+		authStore.user !== null &&
+			(isNamespaceMember && authStore.hasPermission('repositories', 'delete', `${namespace}/${name}`) ||
+				authStore.hasPermission('repositories', 'manage', `${namespace}/${name}`))
 	);
 
-	const canManage = $derived(isOwner || canDelete);
+	const canManage = $derived(canUpdateRepo || canDeleteRepo);
 	const pullCommand = $derived(`${registryHost}/${namespace}/${name}`);
 	const isPrivate = $derived(repo?.visibility === Visibility.PRIVATE);
 	const initials = $derived((namespace ?? '').slice(0, 2).toUpperCase());
@@ -278,11 +282,11 @@
 									<p class="text-[13px] {repo.description ? 'text-muted-foreground' : 'text-muted-foreground/50 italic'}">
 										{repo.description || 'No description'}
 									</p>
-									{#if isOwner}
+									<PermissionGate allowed={canUpdateRepo}>
 										<Button variant="ghost" size="icon" class="h-6 w-6" onclick={startEditDescription}>
 											<Pencil class="h-3 w-3 text-muted-foreground/50" />
 										</Button>
-									{/if}
+									</PermissionGate>
 								</div>
 							{/if}
 						</div>
@@ -316,7 +320,7 @@
 					</div>
 
 					<!-- Actions -->
-					{#if canManage}
+					<PermissionGate allowed={canManage}>
 						<DropdownMenu>
 							<DropdownMenuTrigger>
 								{#snippet child({ props })}
@@ -326,7 +330,7 @@
 								{/snippet}
 							</DropdownMenuTrigger>
 							<DropdownMenuContent align="end">
-								{#if isOwner}
+								<PermissionGate allowed={canUpdateRepo}>
 									<DropdownMenuItem onclick={toggleVisibility}>
 										{#if isPrivate}
 											<Eye class="h-4 w-4 mr-2" />Make Public
@@ -334,16 +338,16 @@
 											<EyeOff class="h-4 w-4 mr-2" />Make Private
 										{/if}
 									</DropdownMenuItem>
-								{/if}
-								{#if canDelete}
+								</PermissionGate>
+								<PermissionGate allowed={canDeleteRepo}>
 									<DropdownMenuSeparator />
 									<DropdownMenuItem class="text-destructive focus:text-destructive" onclick={() => (deleteRepoOpen = true)}>
 										<Trash2 class="h-4 w-4 mr-2" />Delete Repository
 									</DropdownMenuItem>
-								{/if}
+								</PermissionGate>
 							</DropdownMenuContent>
 						</DropdownMenu>
-					{/if}
+					</PermissionGate>
 				</div>
 			</div>
 

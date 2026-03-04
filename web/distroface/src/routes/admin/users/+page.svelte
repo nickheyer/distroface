@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -18,6 +19,7 @@
 	import { Pencil, Trash2, Search, UserCog } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { pageToToken, relativeTime } from '$lib/utils';
@@ -128,7 +130,10 @@
 		}
 	}
 
-	onMount(() => { loadUsers(); loadRoles(); });
+	onMount(() => {
+		if (!authStore.hasPermission('users', 'read')) { goto('/admin'); return; }
+		loadUsers(); loadRoles();
+	});
 </script>
 
 <div class="space-y-4">
@@ -162,9 +167,9 @@
 						<TableHead class="th">Roles</TableHead>
 						<TableHead class="th">Status</TableHead>
 						<TableHead class="th">Joined</TableHead>
-{#if authStore.canUpdateUsers || authStore.canDeleteUsers}
+<PermissionGate allowed={authStore.canUpdateUsers || authStore.canDeleteUsers}>
 							<TableHead class="th w-20"></TableHead>
-						{/if}
+						</PermissionGate>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -206,22 +211,22 @@
 							<TableCell class="text-sm text-muted-foreground py-3 px-3">
 								{#if user.createdAt}{relativeTime(timestampDate(user.createdAt))}{:else}-{/if}
 							</TableCell>
-							{#if authStore.canUpdateUsers || authStore.canDeleteUsers}
+							<PermissionGate allowed={authStore.canUpdateUsers || authStore.canDeleteUsers}>
 								<TableCell class="text-right py-3 px-3">
 									<div class="flex gap-1 justify-end">
-										{#if authStore.canUpdateUsers}
+										<PermissionGate resource="users" action="update">
 											<Button variant="ghost" size="icon" class="h-7 w-7" onclick={() => openEdit(user)}>
 												<Pencil class="h-3.5 w-3.5" />
 											</Button>
-										{/if}
-										{#if authStore.canDeleteUsers}
+										</PermissionGate>
+										<PermissionGate resource="users" action="delete">
 											<Button variant="ghost" size="icon" class="h-7 w-7 text-destructive hover:text-destructive" onclick={() => openDelete(user)}>
 												<Trash2 class="h-3.5 w-3.5" />
 											</Button>
-										{/if}
+										</PermissionGate>
 									</div>
 								</TableCell>
-							{/if}
+							</PermissionGate>
 						</TableRow>
 					{/each}
 				</TableBody>

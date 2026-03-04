@@ -22,6 +22,7 @@
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime, pageToToken } from '$lib/utils';
@@ -132,12 +133,12 @@
 			<h2 class="section-title">API Tokens</h2>
 			<p class="section-subtitle">Personal access tokens for API and Docker registry authentication.</p>
 		</div>
-		{#if authStore.canCreateTokens}
+		<PermissionGate resource="tokens" action="create">
 			<Button size="sm" onclick={() => (createPanelOpen = true)}>
 				<Plus class="h-4 w-4 mr-1.5" />
 				Create Token
 			</Button>
-		{/if}
+		</PermissionGate>
 	</div>
 
 	{#if loading}
@@ -153,12 +154,12 @@
 			description="Create a token to authenticate with the API and Docker registry."
 		>
 			{#snippet actions()}
-				{#if authStore.canCreateTokens}
+				<PermissionGate resource="tokens" action="create">
 					<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>
 						<Plus class="h-4 w-4 mr-1.5" />
 						Create Token
 					</Button>
-				{/if}
+				</PermissionGate>
 			{/snippet}
 		</EmptyState>
 	{:else}
@@ -203,7 +204,7 @@
 							<TableCell class="text-muted-foreground text-sm py-3 px-3">
 								{token.lastUsedAt ? relativeTime(timestampDate(token.lastUsedAt)) : 'Never'}
 							</TableCell>
-							{#if authStore.canDeleteTokens}
+							<PermissionGate resource="tokens" action="delete">
 								<TableCell class="text-right py-3 px-3">
 									<Button
 										variant="ghost" size="icon"
@@ -213,7 +214,7 @@
 										<Trash2 class="h-3.5 w-3.5" />
 									</Button>
 								</TableCell>
-							{/if}
+							</PermissionGate>
 						</TableRow>
 					{/each}
 				</TableBody>

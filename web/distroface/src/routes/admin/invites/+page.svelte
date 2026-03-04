@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -18,6 +19,7 @@
 	import { Ticket, Plus, Trash2, Clock, Lock, Link } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime, pageToToken } from '$lib/utils';
@@ -122,7 +124,10 @@
 		return `${window.location.origin}/login?invite=${code}`;
 	}
 
-	onMount(() => { loadInvites(); loadRoles(); });
+	onMount(() => {
+		if (!authStore.hasPermission('settings', 'read')) { goto('/admin'); return; }
+		loadInvites(); loadRoles();
+	});
 </script>
 
 <div class="space-y-4">
@@ -131,12 +136,12 @@
 			<h2 class="section-title">Registration Invites</h2>
 			<p class="section-subtitle">Invite links allow users to register when public registration is disabled.</p>
 		</div>
-		{#if authStore.canCreateSettings}
+		<PermissionGate resource="settings" action="create">
 			<Button size="sm" onclick={() => (createPanelOpen = true)}>
 				<Plus class="h-4 w-4 mr-1" />
 				Create Invite
 			</Button>
-		{/if}
+		</PermissionGate>
 	</div>
 
 	{#if loading}
@@ -152,12 +157,12 @@
 			description="Create an invite to allow users to register."
 		>
 			{#snippet actions()}
-				{#if authStore.canCreateSettings}
+				<PermissionGate resource="settings" action="create">
 					<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>
 						<Plus class="h-4 w-4 mr-1.5" />
 						Create Invite
 					</Button>
-				{/if}
+				</PermissionGate>
 			{/snippet}
 		</EmptyState>
 	{:else}
@@ -171,9 +176,9 @@
 						<TableHead class="th">Uses</TableHead>
 						<TableHead class="th">Security</TableHead>
 						<TableHead class="th">Expires</TableHead>
-						{#if authStore.canDeleteSettings}
+						<PermissionGate resource="settings" action="delete">
 							<TableHead class="th w-12"></TableHead>
-						{/if}
+						</PermissionGate>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -217,13 +222,13 @@
 									Never
 								{/if}
 							</TableCell>
-							{#if authStore.canDeleteSettings}
+							<PermissionGate resource="settings" action="delete">
 								<TableCell class="text-right py-3 px-3">
 									<Button variant="ghost" size="icon" class="h-7 w-7 text-destructive hover:text-destructive" onclick={() => openDelete(invite)}>
 										<Trash2 class="h-3.5 w-3.5" />
 									</Button>
 								</TableCell>
-							{/if}
+							</PermissionGate>
 						</TableRow>
 					{/each}
 				</TableBody>
