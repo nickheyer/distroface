@@ -11,6 +11,7 @@ import (
 	"github.com/distribution/distribution/v3/manifest/manifestlist"
 	"github.com/distribution/distribution/v3/manifest/ocischema"
 	"github.com/distribution/distribution/v3/manifest/schema2"
+	"github.com/distribution/reference"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	digest "github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -285,4 +286,29 @@ func ManifestAnnotations(manifest distribution.Manifest) map[string]string {
 	default:
 		return nil
 	}
+}
+
+func ExtractRef(repo reference.Named, m distribution.Manifest) (tag string, dgst string) {
+	if tagged, ok := repo.(reference.Tagged); ok {
+		tag = tagged.Tag()
+	}
+	if canonical, ok := repo.(reference.Canonical); ok {
+		dgst = canonical.Digest().String()
+	} else if m != nil {
+		_, payload, err := m.Payload()
+		if err == nil {
+			dgst = digest.FromBytes(payload).String()
+		}
+	}
+	return
+}
+
+// Extracts the tag from manifest service options
+func TagFromOptions(options []distribution.ManifestServiceOption) string {
+	for _, opt := range options {
+		if tagOpt, ok := opt.(distribution.WithTagOption); ok {
+			return tagOpt.Tag
+		}
+	}
+	return ""
 }

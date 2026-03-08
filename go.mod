@@ -24,6 +24,7 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
+	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2
 )
 
 require (

@@ -86,6 +86,8 @@ func (s *Store) Migrate() error {
 		&Repository{},
 		&SystemSetting{},
 		&RegistrationInvite{},
+		&Webhook{},
+		&WebhookDelivery{},
 	); err != nil {
 		return fmt.Errorf("failed to auto-migrate: %w", err)
 	}
@@ -601,8 +603,6 @@ func (s *Store) RemoveOrgMember(ctx context.Context, orgID, userID string) error
 	return s.db.WithContext(ctx).Where("org_id = ? AND user_id = ?", orgID, userID).Delete(&OrgMember{}).Error
 }
 
-
-
 func (s *Store) IsOrgMember(ctx context.Context, orgName, userID string) (bool, string, error) {
 	org, err := s.GetOrganization(ctx, orgName)
 	if err != nil || org == nil {
@@ -767,6 +767,132 @@ func (s *Store) DeleteRegistrationInvite(ctx context.Context, id string) error {
 		return fmt.Errorf("invite not found")
 	}
 	return nil
+}
+
+// ── Webhook operations ────────────────────────────────────────────────────
+
+func (s *Store) CreateWebhook(ctx context.Context, webhook *Webhook) error {
+	if webhook.ID == "" {
+		webhook.ID = uuid.New().String()
+	}
+	return s.db.WithContext(ctx).Create(webhook).Error
+}
+
+func (s *Store) GetWebhook(ctx context.Context, id string) (*Webhook, error) {
+	var webhook Webhook
+	err := s.db.WithContext(ctx).First(&webhook, "id = ?", id).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &webhook, nil
+}
+
+func (s *Store) ListWebhooksByRepo(ctx context.Context, repoID string, limit, offset int) ([]*Webhook, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&Webhook{}).Where("repo_id = ? AND scope = ?", repoID, WebhookScopeRepository)
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var webhooks []*Webhook
+	err := s.db.WithContext(ctx).Where("repo_id = ? AND scope = ?", repoID, WebhookScopeRepository).
+		Order("created_at DESC").Limit(limit).Offset(offset).Find(&webhooks).Error
+	return webhooks, total, err
+}
+
+func (s *Store) ListWebhooksByOrg(ctx context.Context, orgID string, limit, offset int) ([]*Webhook, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&Webhook{}).Where("org_id = ? AND scope = ?", orgID, WebhookScopeOrganization)
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var webhooks []*Webhook
+	err := s.db.WithContext(ctx).Where("org_id = ? AND scope = ?", orgID, WebhookScopeOrganization).
+		Order("created_at DESC").Limit(limit).Offset(offset).Find(&webhooks).Error
+	return webhooks, total, err
+}
+
+func (s *Store) UpdateWebhook(ctx context.Context, webhook *Webhook) error {
+	return s.db.WithContext(ctx).Save(webhook).Error
+}
+
+func (s *Store) DeleteWebhook(ctx context.Context, id string) error {
+	return s.db.WithContext(ctx).Delete(&Webhook{}, "id = ?", id).Error
+}
+
+// GetActiveWebhooksForRepo returns active webhooks for a repo: direct repo-scoped
+// webhooks plus org-scoped webhooks matching the repo's namespace.
+func (s *Store) GetActiveWebhooksForRepo(ctx context.Context, namespace, name string) ([]*Webhook, error) {
+	var webhooks []*Webhook
+
+	// Get the repo
+	repo, err := s.GetRepository(ctx, namespace, name)
+	if err != nil || repo == nil {
+		return nil, err
+	}
+
+	// Repo-scoped webhooks
+	err = s.db.WithContext(ctx).Where("repo_id = ? AND scope = ? AND active = ?", repo.ID, WebhookScopeRepository, true).Find(&webhooks).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// Org-scoped webhooks: find org by namespace
+	org, err := s.GetOrganization(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	if org != nil {
+		var orgWebhooks []*Webhook
+		err = s.db.WithContext(ctx).Where("org_id = ? AND scope = ? AND active = ?", org.ID, WebhookScopeOrganization, true).Find(&orgWebhooks).Error
+		if err != nil {
+			return nil, err
+		}
+		webhooks = append(webhooks, orgWebhooks...)
+	}
+
+	return webhooks, nil
+}
+
+// ── WebhookDelivery operations ────────────────────────────────────────────
+
+func (s *Store) CreateWebhookDelivery(ctx context.Context, delivery *WebhookDelivery) error {
+	if delivery.ID == "" {
+		delivery.ID = uuid.New().String()
+	}
+	return s.db.WithContext(ctx).Create(delivery).Error
+}
+
+func (s *Store) ListWebhookDeliveries(ctx context.Context, webhookID string, limit, offset int) ([]*WebhookDelivery, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&WebhookDelivery{}).Where("webhook_id = ?", webhookID)
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var deliveries []*WebhookDelivery
+	err := s.db.WithContext(ctx).Where("webhook_id = ?", webhookID).
+		Order("delivered_at DESC").Limit(limit).Offset(offset).Find(&deliveries).Error
+	return deliveries, total, err
+}
+
+func (s *Store) GetWebhookDelivery(ctx context.Context, id string) (*WebhookDelivery, error) {
+	var delivery WebhookDelivery
+	err := s.db.WithContext(ctx).First(&delivery, "id = ?", id).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &delivery, nil
 }
 
 // HashToken computes SHA-256 of a raw token string.

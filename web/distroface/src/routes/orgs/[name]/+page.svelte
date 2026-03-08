@@ -21,6 +21,7 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
+	import WebhookManager from '$lib/components/webhook-manager.svelte';
 	import UserSearch from '$lib/components/user-search.svelte';
 	import RepoList from '$lib/components/repo-list.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
@@ -33,7 +34,7 @@
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { orgRoleLabel, relativeTime, pageToToken } from '$lib/utils';
-	import { OrgRole } from '$lib/proto/distroface/v1/types_pb';
+	import { OrgRole, WebhookScope } from '$lib/proto/distroface/v1/types_pb';
 	import type { Organization, OrgMember, Repository } from '$lib/proto/distroface/v1/types_pb';
 
 	const orgName = $derived(page.params.name);
@@ -210,7 +211,11 @@
 		}
 	}
 
-	onMount(() => { loadOrg(); loadMembers(); loadRepos(); });
+	onMount(() => {
+		loadOrg();
+		loadMembers();
+		loadRepos();
+	});
 </script>
 
 <div class="space-y-6">
@@ -279,6 +284,9 @@
 			<TabsList>
 				<TabsTrigger value="members">Members</TabsTrigger>
 				<TabsTrigger value="repositories">Repositories</TabsTrigger>
+				{#if canUpdateOrg}
+					<TabsTrigger value="webhooks">Webhooks</TabsTrigger>
+				{/if}
 			</TabsList>
 
 			<TabsContent value="members" class="space-y-4 mt-4">
@@ -381,6 +389,17 @@
 					emptyDescription="Push images to this organization's namespace to create repositories."
 				/>
 			</TabsContent>
+
+			{#if org && canUpdateOrg}
+				<TabsContent value="webhooks" class="space-y-4 mt-4">
+					<WebhookManager
+						scope={WebhookScope.ORGANIZATION}
+						scopeId={org.id}
+						emptyDescription="Add a webhook to get notified when images are pushed, pulled, or deleted in any repository under this organization."
+						createDescription="Receive HTTP POST notifications for all repositories in this organization."
+					/>
+				</TabsContent>
+			{/if}
 		</Tabs>
 	{:else}
 		<div class="text-center py-12">
@@ -482,3 +501,4 @@
 		namespace will also be deleted. This action cannot be undone.
 	{/snippet}
 </ConfirmDialog>
+

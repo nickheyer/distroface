@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { OrgRole, Visibility } from '$lib/proto/distroface/v1/types_pb';
+import { OrgRole, Visibility, WebhookEvent } from '$lib/proto/distroface/v1/types_pb';
 
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
@@ -87,6 +87,12 @@ export function visibilityLabel(v: number): string {
 export function toggleInArray<T>(arr: T[], item: T): T[] {
 	return arr.includes(item) ? arr.filter((x) => x !== item) : [...arr, item];
 }
+
+export const webhookEventLabels: Record<number, string> = {
+	[WebhookEvent.PUSH]: 'push',
+	[WebhookEvent.PULL]: 'pull',
+	[WebhookEvent.DELETE]: 'delete'
+};
 
 export function orgRoleLabel(role: number): string {
 	switch (role) {

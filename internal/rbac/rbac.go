@@ -78,6 +78,10 @@ func (e *Enforcer) SeedDefaultPolicies(anonymousEnabled bool) error {
 			{"user", ResourceTokens, ActionDelete, "*"},
 			{"user", ResourceOrganizations, ActionRead, "*"},
 			{"user", ResourceOrganizations, ActionCreate, "*"},
+			{"user", ResourceWebhooks, ActionRead, "*"},
+			{"user", ResourceWebhooks, ActionCreate, "*"},
+			{"user", ResourceWebhooks, ActionUpdate, "*"},
+			{"user", ResourceWebhooks, ActionDelete, "*"},
 		},
 		"anonymous": {
 			{"anonymous", ResourceRepositories, ActionRead, "*"},

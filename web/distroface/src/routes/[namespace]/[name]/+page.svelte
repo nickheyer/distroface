@@ -32,9 +32,11 @@
 	import DescriptorPanel from '$lib/components/descriptor-panel.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
+	import WebhookManager from '$lib/components/webhook-manager.svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import type { Repository, Tag, Descriptor, HistoryEntry } from '$lib/proto/distroface/v1/types_pb';
-	import { Visibility } from '$lib/proto/distroface/v1/types_pb';
+	import { Visibility, WebhookScope } from '$lib/proto/distroface/v1/types_pb';
+	import { resolve } from '$app/paths';
 
 	const namespace = $derived(page.params.namespace);
 	const name = $derived(page.params.name);
@@ -69,6 +71,7 @@
 
 	const registryHost = $derived(configStore.get('registryHost', 'localhost:8080') as string);
 
+	const namespaceHref = $derived(repo?.isOrgNamespace ? `orgs/${namespace}` : `${namespace}`);
 	const isNamespaceMember = $derived(authStore.user?.username === namespace);
 
 	const canUpdateRepo = $derived(
@@ -203,7 +206,7 @@
 		try {
 			await rpcClient.repository.deleteRepository({ namespace, name });
 			toast.success('Repository deleted');
-			goto(`/${namespace}`);
+			goto(resolve(`/${namespaceHref}`));
 		} catch {
 			// error interceptor
 		} finally {
@@ -211,7 +214,10 @@
 		}
 	}
 
-	onMount(() => { loadRepo(); loadTags(); });
+	onMount(() => {
+		loadRepo();
+		loadTags();
+	});
 </script>
 
 <div class="space-y-6">
@@ -229,9 +235,9 @@
 	{:else if repo}
 		<!-- Breadcrumb -->
 		<nav class="flex items-center gap-1.5 text-sm text-muted-foreground">
-			<a href="/" class="hover:text-foreground transition-colors">Explore</a>
+			<a href={resolve('/')} class="hover:text-foreground transition-colors">Explore</a>
 			<span class="text-muted-foreground/30">/</span>
-			<a href="/{namespace}" class="hover:text-foreground transition-colors">{namespace}</a>
+			<a href={resolve(`/${namespaceHref}`)} class="hover:text-foreground transition-colors">{namespace}</a>
 			<span class="text-muted-foreground/30">/</span>
 			<span class="text-foreground font-medium">{name}</span>
 		</nav>
@@ -370,7 +376,7 @@
 
 			{#if tagsLoading}
 				<div class="space-y-2">
-					{#each Array(3) as _}
+					{#each [0, 1, 2] as i (i)}
 						<Skeleton class="h-14 w-full rounded-xl" />
 					{/each}
 				</div>
@@ -393,7 +399,7 @@
 							</TableRow>
 						</TableHeader>
 						<TableBody>
-							{#each tags as tag}
+							{#each tags as tag (tag.name)}
 								<TableRow class="cursor-pointer group/row" onclick={() => openTagDetail(tag.name)}>
 									<TableCell class="py-3 px-3">
 										<Badge variant="secondary" class="font-mono text-xs font-medium px-2 py-0.5">{tag.name}</Badge>
@@ -406,7 +412,7 @@
 									<TableCell class="py-3 px-3 hidden md:table-cell">
 										{#if tag.platforms.length > 0}
 											<div class="flex flex-wrap gap-1">
-												{#each tag.platforms as p}
+												{#each tag.platforms as p, pi (pi)}
 													<Badge variant="outline" class="text-[10px] font-mono py-0 h-4.5 text-muted-foreground/70">
 														{p.os ?? ''}{#if p.os && p.architecture}/{/if}{p.architecture ?? ''}{#if p.variant}/{p.variant}{/if}
 													</Badge>
@@ -433,6 +439,17 @@
 				/>
 			{/if}
 		</div>
+		<!-- Webhooks section (visible to repo managers) -->
+		{#if repo && canUpdateRepo}
+			<PermissionGate allowed={canUpdateRepo}>
+				<WebhookManager
+					scope={WebhookScope.REPOSITORY}
+					scopeId={repo.id}
+					createDescription="Receive HTTP POST notifications for repository events."
+				/>
+			</PermissionGate>
+		{/if}
+
 	{:else}
 		<div class="text-center py-16">
 			<div class="h-14 w-14 rounded-xl bg-muted/50 flex items-center justify-center mx-auto mb-4">
@@ -442,7 +459,7 @@
 			<p class="text-[13px] text-muted-foreground mt-1">
 				{namespace}/{name} does not exist or you don't have access.
 			</p>
-			<Button variant="outline" class="mt-4" onclick={() => goto('/')}>Back to Explore</Button>
+			<Button variant="outline" class="mt-4" onclick={() => goto(resolve('/'))}>Back to Explore</Button>
 		</div>
 	{/if}
 </div>
@@ -463,7 +480,7 @@
 							onclick={() => { if (panelStack.length > 1) panelStack = panelStack.slice(0, 1); }}>{panelStack[0]?.label ?? selectedTagName}
 						</span>
 					</span>
-					{#each panelStack as panel, i}
+					{#each panelStack as panel, i (panel.digest + i)}
 						{#if i > 0}
 							<ChevronRight class="h-3 w-3 shrink-0 text-muted-foreground/30 self-center" />
 							<span
@@ -486,7 +503,7 @@
 		</div>
 
 		<div bind:this={panelScroll} class="flex-1 flex overflow-x-hidden overflow-y-auto min-h-0">
-			{#each panelStack as panel, i}
+			{#each panelStack as panel, i (panel.digest + i)}
 				<div class="{panelStack.length === 1 ? 'flex-1' : 'w-lg shrink-0'} border-r border-border/30 overflow-y-auto last:border-r-0">
 					<DescriptorPanel
 						descriptor={panel.descriptor}
@@ -508,3 +525,4 @@
 		remove all tags and images. This action cannot be undone.
 	{/snippet}
 </ConfirmDialog>
+

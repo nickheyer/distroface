@@ -12,6 +12,7 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc/services"
+	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	web "github.com/nickheyer/distroface/web/distroface"
@@ -25,37 +26,40 @@ type Server struct {
 	log     *logger.Logger
 	handler http.Handler
 
-	registryHandler http.Handler
-	registryAccess  *registry.RegistryAccess
-	tokenHandler    *auth.TokenHandler
-	authManager     *auth.Manager
-	enforcer        *rbac.Enforcer
-	oidcHandler     *auth.OIDCHandler
+	registryHandler   http.Handler
+	registryAccess    *registry.RegistryAccess
+	tokenHandler      *auth.TokenHandler
+	authManager       *auth.Manager
+	enforcer          *rbac.Enforcer
+	oidcHandler       *auth.OIDCHandler
+	webhookDispatcher *webhook.Dispatcher
 }
 
 type ServerDeps struct {
-	Store           *storage.Store
-	Config          *config.Config
-	Log             *logger.Logger
-	RegistryHandler http.Handler
-	RegistryAccess  *registry.RegistryAccess
-	TokenHandler    *auth.TokenHandler
-	AuthManager     *auth.Manager
-	Enforcer        *rbac.Enforcer
-	OIDCHandler     *auth.OIDCHandler
+	Store             *storage.Store
+	Config            *config.Config
+	Log               *logger.Logger
+	RegistryHandler   http.Handler
+	RegistryAccess    *registry.RegistryAccess
+	TokenHandler      *auth.TokenHandler
+	AuthManager       *auth.Manager
+	Enforcer          *rbac.Enforcer
+	OIDCHandler       *auth.OIDCHandler
+	WebhookDispatcher *webhook.Dispatcher
 }
 
 func NewServer(deps ServerDeps) *Server {
 	s := &Server{
-		store:           deps.Store,
-		config:          deps.Config,
-		log:             deps.Log,
-		registryHandler: deps.RegistryHandler,
-		registryAccess:  deps.RegistryAccess,
-		tokenHandler:    deps.TokenHandler,
-		authManager:     deps.AuthManager,
-		enforcer:        deps.Enforcer,
-		oidcHandler:     deps.OIDCHandler,
+		store:             deps.Store,
+		config:            deps.Config,
+		log:               deps.Log,
+		registryHandler:   deps.RegistryHandler,
+		registryAccess:    deps.RegistryAccess,
+		tokenHandler:      deps.TokenHandler,
+		authManager:       deps.AuthManager,
+		enforcer:          deps.Enforcer,
+		oidcHandler:       deps.OIDCHandler,
+		webhookDispatcher: deps.WebhookDispatcher,
 	}
 	s.setupHandler()
 	return s
@@ -122,6 +126,10 @@ func (s *Server) setupHandler() {
 	orgPath, orgHandler := distrofacev1connect.NewOrganizationServiceHandler(orgService, opts...)
 	mux.Handle(orgPath, orgHandler)
 
+	webhookService := services.NewWebhookService(s.store, s.enforcer, s.webhookDispatcher, s.log)
+	webhookPath, webhookHandler := distrofacev1connect.NewWebhookServiceHandler(webhookService, opts...)
+	mux.Handle(webhookPath, webhookHandler)
+
 	// gRPC reflection
 	reflector := grpcreflect.NewStaticReflector(
 		distrofacev1connect.HealthServiceName,
@@ -132,6 +140,7 @@ func (s *Server) setupHandler() {
 		distrofacev1connect.RoleServiceName,
 		distrofacev1connect.TokenServiceName,
 		distrofacev1connect.OrganizationServiceName,
+		distrofacev1connect.WebhookServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))

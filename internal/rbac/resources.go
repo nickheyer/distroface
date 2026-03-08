@@ -8,6 +8,7 @@ const (
 	ResourceSettings      = "settings"
 	ResourceTokens        = "tokens"
 	ResourceOrganizations = "organizations"
+	ResourceWebhooks      = "webhooks"
 )
 
 // Action constants
@@ -31,6 +32,7 @@ var AllActions = []string{
 var AllResources = []string{
 	ResourceRepositories, ResourceUsers, ResourceRoles,
 	ResourceSettings, ResourceTokens, ResourceOrganizations,
+	ResourceWebhooks,
 }
 
 // Maps scopeable resources to the source they derive their object list from.
@@ -54,4 +56,5 @@ var ResourceActions = []ResourceActionEntry{
 	{Resource: ResourceSettings, Actions: []string{ActionRead, ActionCreate, ActionUpdate, ActionDelete, ActionManage}},
 	{Resource: ResourceTokens, Actions: []string{ActionRead, ActionCreate, ActionDelete, ActionManage}},
 	{Resource: ResourceOrganizations, Actions: []string{ActionRead, ActionCreate, ActionUpdate, ActionDelete, ActionManage}},
+	{Resource: ResourceWebhooks, Actions: []string{ActionRead, ActionCreate, ActionUpdate, ActionDelete}},
 }

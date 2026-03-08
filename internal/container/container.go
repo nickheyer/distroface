@@ -16,6 +16,7 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc"
+	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/sirupsen/logrus"
 )
@@ -117,7 +118,9 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("creating registry storage directory: %w", err)
 	}
 
-	registry.RegisterListenerMiddleware(store, registryLog)
+	dispatcher := webhook.NewDispatcher(store, registryLog)
+
+	registry.RegisterListenerMiddleware(store, registryLog, dispatcher)
 
 	registryCfg := registry.BuildConfig(cfg.Registry.StoragePath, tokenService.CertPath(), cfg.Server.Host, cfg.Server.Port)
 	registryApp := handlers.NewApp(context.Background(), registryCfg)
@@ -135,15 +138,16 @@ func New() (*App, error) {
 	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, log)
 
 	rpcServer := rpc.NewServer(rpc.ServerDeps{
-		Store:           store,
-		Config:          cfg,
-		Log:             log,
-		RegistryHandler: registryApp,
-		RegistryAccess:  registryAccess,
-		TokenHandler:    tokenHandler,
-		AuthManager:     authManager,
-		Enforcer:        enforcer,
-		OIDCHandler:     oidcHandler,
+		Store:             store,
+		Config:            cfg,
+		Log:               log,
+		RegistryHandler:   registryApp,
+		RegistryAccess:    registryAccess,
+		TokenHandler:      tokenHandler,
+		AuthManager:       authManager,
+		Enforcer:          enforcer,
+		OIDCHandler:       oidcHandler,
+		WebhookDispatcher: dispatcher,
 	})
 
 	srv := &http.Server{

@@ -93,6 +93,15 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.OrganizationServiceAddOrgMemberProcedure:        {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 	distrofacev1connect.OrganizationServiceRemoveOrgMemberProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 	distrofacev1connect.OrganizationServiceUpdateOrgMemberRoleProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+
+	// ── WebhookService ────────────────────────────────────────────────
+	distrofacev1connect.WebhookServiceCreateWebhookProcedure:         {Resource: ResourceWebhooks, Action: ActionCreate},
+	distrofacev1connect.WebhookServiceListWebhooksProcedure:          {Resource: ResourceWebhooks, Action: ActionRead},
+	distrofacev1connect.WebhookServiceGetWebhookProcedure:            {Resource: ResourceWebhooks, Action: ActionRead},
+	distrofacev1connect.WebhookServiceUpdateWebhookProcedure:         {Resource: ResourceWebhooks, Action: ActionUpdate},
+	distrofacev1connect.WebhookServiceDeleteWebhookProcedure:         {Resource: ResourceWebhooks, Action: ActionDelete},
+	distrofacev1connect.WebhookServiceListWebhookDeliveriesProcedure: {Resource: ResourceWebhooks, Action: ActionRead},
+	distrofacev1connect.WebhookServiceRedeliverWebhookProcedure:      {Resource: ResourceWebhooks, Action: ActionUpdate},
 }
 
 // ExtractObjectID extracts a field value from a protobuf request using reflection.

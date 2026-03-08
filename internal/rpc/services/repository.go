@@ -285,17 +285,18 @@ func repoToProto(r *storage.Repository) *v1.Repository {
 	}
 
 	repo := &v1.Repository{
-		Id:          r.ID,
-		Namespace:   r.Namespace,
-		Name:        r.Name,
-		FullName:    r.Namespace + "/" + r.Name,
-		Description: r.Description,
-		Visibility:  vis,
-		OwnerId:     r.OwnerID,
-		PullCount:   r.PullCount,
-		PushCount:   r.PushCount,
-		CreatedAt:   timestamppb.New(r.CreatedAt),
-		UpdatedAt:   timestamppb.New(r.UpdatedAt),
+		Id:             r.ID,
+		Namespace:      r.Namespace,
+		Name:           r.Name,
+		FullName:       r.Namespace + "/" + r.Name,
+		Description:    r.Description,
+		Visibility:     vis,
+		OwnerId:       r.OwnerID,
+		PullCount:      r.PullCount,
+		PushCount:      r.PushCount,
+		CreatedAt:      timestamppb.New(r.CreatedAt),
+		UpdatedAt:      timestamppb.New(r.UpdatedAt),
+		IsOrgNamespace: r.IsOrgNamespace,
 	}
 
 	if r.LastPush != nil {

@@ -114,6 +114,8 @@ message Repository {
   int64 pull_count = 13;
   // push_count is the number of times images have been pushed.
   int64 push_count = 14;
+  // is_org_namespace indicates whether the namespace belongs to an organization.
+  bool is_org_namespace = 15;
 }
 
 // Platform describes the platform which the image in the manifest runs on.
@@ -194,6 +196,52 @@ message HistoryEntry {
   // size_bytes is the compressed layer size (0 for empty layers).
   // Correlated from the manifest's layer descriptors.
   int64 size_bytes = 5;
+}
+
+// WebhookEvent represents the type of registry event that triggers a webhook.
+enum WebhookEvent {
+  WEBHOOK_EVENT_UNSPECIFIED = 0;
+  WEBHOOK_EVENT_PUSH = 1;
+  WEBHOOK_EVENT_PULL = 2;
+  WEBHOOK_EVENT_DELETE = 3;
+}
+
+// WebhookScope represents what a webhook is scoped to.
+enum WebhookScope {
+  WEBHOOK_SCOPE_UNSPECIFIED = 0;
+  WEBHOOK_SCOPE_REPOSITORY = 1;
+  WEBHOOK_SCOPE_ORGANIZATION = 2;
+}
+
+// Webhook represents a configured webhook endpoint.
+message Webhook {
+  string id = 1;
+  WebhookScope scope = 2;
+  string repo_id = 3;
+  string org_id = 4;
+  string url = 5;
+  bool has_secret = 6;
+  repeated WebhookEvent events = 7;
+  bool active = 8;
+  string content_type = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  string scope_name = 12;
+  string payload_template = 13;
+}
+
+// WebhookDelivery represents a single delivery attempt for a webhook.
+message WebhookDelivery {
+  string id = 1;
+  string webhook_id = 2;
+  WebhookEvent event = 3;
+  int32 status_code = 4;
+  bool success = 5;
+  string request_body = 6;
+  string response_body = 7;
+  int64 duration_ms = 8;
+  int32 attempt = 9;
+  google.protobuf.Timestamp delivered_at = 10;
 }
 
 // ImageConfig contains parsed metadata from an OCI/Docker image config blob.

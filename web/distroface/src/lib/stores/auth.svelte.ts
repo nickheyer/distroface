@@ -74,6 +74,10 @@ class AuthStore {
 	canCreateTokens = $derived(checkPermission(this.permissions, 'tokens', 'create'));
 	canDeleteTokens = $derived(checkPermission(this.permissions, 'tokens', 'delete'));
 
+	// Webhooks
+	canReadWebhooks = $derived(checkPermission(this.permissions, 'webhooks', 'read'));
+	canCreateWebhooks = $derived(checkPermission(this.permissions, 'webhooks', 'create'));
+
 	constructor() {
 		this.token = typeof window !== 'undefined' ? localStorage.getItem(SESSION_KEY) : null;
 	}
