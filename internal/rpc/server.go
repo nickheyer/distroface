@@ -85,6 +85,7 @@ func (s *Server) setupHandler() {
 	// Docker token auth endpoint
 	if s.tokenHandler != nil {
 		mux.Handle("GET /auth/token", s.tokenHandler)
+		mux.Handle("POST /auth/token", s.tokenHandler)
 	}
 
 	// OIDC HTTP handlers (not Connect RPC — these are OAuth2 redirect flows)

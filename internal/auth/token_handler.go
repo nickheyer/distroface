@@ -13,7 +13,6 @@ import (
 )
 
 // TokenHandler implements the Docker Token Authentication Specification.
-// GET /auth/token?service=<svc>&scope=<scope>&account=<acct>
 type TokenHandler struct {
 	tokenService *TokenService
 	store        *storage.Store
@@ -41,19 +40,16 @@ func NewTokenHandler(ts *TokenService, store *storage.Store, manager *Manager, e
 }
 
 func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
+	service, scopeStr, account := r.FormValue("service"), r.FormValue("scope"), r.FormValue("account")
+
+	username, password, hasCreds := r.BasicAuth()
+	if !hasCreds {
+		username, password = r.FormValue("username"), r.FormValue("password")
+		hasCreds = username != ""
 	}
 
-	q := r.URL.Query()
-	service := q.Get("service")
-	scopeStr := q.Get("scope")
-	account := q.Get("account")
-
 	var authUser *AuthenticatedUser
-	username, password, hasBasic := r.BasicAuth()
-	if hasBasic && username != "" {
+	if hasCreds && username != "" {
 		// Check if password is an API token (df_ prefix)
 		if strings.HasPrefix(password, "df_") {
 			user, err := h.authManager.ValidateAPIToken(r.Context(), password)
@@ -116,13 +112,18 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	err = json.NewEncoder(w).Encode(resp)
+	if err != nil {
+		h.log.Error("token auth: failed to json encode token response: %v", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 }
 
 func (h *TokenHandler) resolveAccess(r *http.Request, user *AuthenticatedUser, scopeStr string) []*ResourceActions {
 	var result []*ResourceActions
 
-	for _, scope := range strings.Split(scopeStr, " ") {
+	for scope := range strings.SplitSeq(scopeStr, " ") {
 		parts := strings.SplitN(scope, ":", 3)
 		if len(parts) != 3 {
 			continue
