@@ -69,7 +69,7 @@
 	let deleteRepoOpen = $state(false);
 	let deletingRepo = $state(false);
 
-	const registryHost = $derived(configStore.get('registryHost', 'localhost:8080') as string);
+	const registryHost = $derived(configStore.get('server.hostname', 'localhost:8080') as string);
 
 	const namespaceHref = $derived(repo?.isOrgNamespace ? `orgs/${namespace}` : `${namespace}`);
 	const isNamespaceMember = $derived(authStore.user?.username === namespace);

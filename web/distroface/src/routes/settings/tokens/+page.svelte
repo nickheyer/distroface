@@ -52,7 +52,7 @@
 		{ value: 'never', label: 'No expiration' }
 	];
 
-	const registryHost = $derived(configStore.get('registryHost', 'localhost:8080') as string);
+	const registryHost = $derived(configStore.get('server.hostname', 'localhost:8080') as string);
 	const dockerLoginExample = $derived(
 		`docker login ${registryHost} \\\n  -u ${authStore.user?.username} \\\n  -p ${newPlaintextToken ?? 'YOUR_TOKEN'}`
 	);
@@ -143,7 +143,7 @@
 
 	{#if loading}
 		<div class="space-y-2">
-			{#each Array(3) as _}
+			{#each Array(3)}
 				<Skeleton class="h-14 w-full rounded-xl" />
 			{/each}
 		</div>
@@ -175,7 +175,7 @@
 					</TableRow>
 				</TableHeader>
 				<TableBody>
-					{#each tokens as token}
+					{#each tokens as token (token.id)}
 						<TableRow>
 							<TableCell class="font-medium py-3 px-3">
 								<div class="flex items-center gap-2">
@@ -295,7 +295,7 @@
 								{expiryOptions.find((o) => o.value === tokenExpiryOption)?.label ?? 'Select expiry'}
 							</SelectTrigger>
 							<SelectContent>
-								{#each expiryOptions as option}
+								{#each expiryOptions as option (option.label)}
 									<SelectItem value={option.value}>{option.label}</SelectItem>
 								{/each}
 							</SelectContent>

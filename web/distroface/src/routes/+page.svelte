@@ -7,6 +7,7 @@
 	import { pageToToken } from '$lib/utils';
 	import RepoList from '$lib/components/repo-list.svelte';
 	import type { Repository } from '$lib/proto/distroface/v1/types_pb';
+  import { resolve } from '$app/paths';
 
 	let repos = $state<Repository[]>([]);
 	let repoLoading = $state(true);
@@ -92,12 +93,12 @@
 					<div class="text-center space-y-2">
 						<p class="text-[13px] text-muted-foreground">Push your first image:</p>
 						<code class="code-inline block text-xs">
-							docker push {configStore.get('registryHost', 'localhost:8080')}/{authStore.user?.username}/myimage:latest
+							docker push {configStore.get('server.hostname', 'localhost:8080')}/{authStore.user?.username}/myimage:latest
 						</code>
 					</div>
 				{:else}
 					<p class="text-[13px] text-muted-foreground">
-						<a href="/login" class="text-primary underline-offset-4 hover:underline">Sign in</a> to push images
+						<a href={resolve("/login")} class="text-primary underline-offset-4 hover:underline">Sign in</a> to push images
 					</p>
 				{/if}
 			{/if}
