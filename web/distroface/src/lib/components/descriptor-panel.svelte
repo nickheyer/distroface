@@ -51,8 +51,8 @@
 {:else if descriptor}
 	{@const kind = descriptorKind(descriptor.mediaType)}
 	{@const cfg = descriptor.imageConfig}
-	<div class="flex flex-col h-full overflow-x-hidden">
-		<div class="px-6 py-5 space-y-4 shrink-0">
+	<div class="h-full overflow-y-auto overflow-x-hidden">
+		<div class="px-6 py-5 space-y-4">
 			<Badge variant="outline" class="text-xs {kindColor(kind)}">
 				{kind}
 			</Badge>
@@ -112,7 +112,7 @@
 
 		<!-- Layer context from parent manifest's build history -->
 		{#if historyEntry && kind === 'Layer'}
-			<div class="border-t border-border/40 shrink-0 px-6 py-4 space-y-3">
+			<div class="border-t border-border/40 px-6 py-4 space-y-3">
 				<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Layer Details</span>
 				<div class="detail-row items-start">
 					<span class="detail-label pt-0.5">Created By</span>
@@ -123,7 +123,7 @@
 
 		<!-- Build history / layers -->
 		{#if cfg && cfg.history.length > 0 && kind === 'Manifest'}
-			<div class="border-t border-border/40 shrink-0">
+			<div class="border-t border-border/40">
 				<div class="flex items-center justify-between px-6 py-3">
 					<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Layers</span>
 					<Badge variant="secondary" class="text-xs">{cfg.history.length}</Badge>
@@ -144,7 +144,7 @@
 
 		<!-- Runtime config -->
 		{#if cfg && (cfg.cmd.length > 0 || cfg.entrypoint.length > 0 || cfg.env.length > 0)}
-			<div class="border-t border-border/40 shrink-0 px-6 py-4 space-y-3">
+			<div class="border-t border-border/40 px-6 py-4 space-y-3">
 				<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Configuration</span>
 				<div class="divide-y divide-border/30">
 					{#if cfg.entrypoint.length > 0}
@@ -208,12 +208,12 @@
 
 		<!-- Child references -->
 		{#if descriptor.children.length > 0}
-			<div class="border-t border-border/40 flex flex-col flex-1 min-h-0">
-				<div class="flex items-center justify-between px-6 py-3 shrink-0">
+			<div class="border-t border-border/40">
+				<div class="flex items-center justify-between px-6 py-3">
 					<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">References</span>
 					<Badge variant="secondary" class="text-xs">{descriptor.children.length}</Badge>
 				</div>
-				<div class="overflow-y-auto flex-1">
+				<div>
 					{#each descriptor.children as child}
 						{@const ck = descriptorKind(child.mediaType)}
 						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
