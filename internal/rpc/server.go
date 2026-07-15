@@ -6,6 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 	"connectrpc.com/grpcreflect"
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/ratelimit"
@@ -36,6 +37,7 @@ type Server struct {
 	webhookDispatcher *webhook.Dispatcher
 	portalProxies     *registry.PortalProxyManager
 	authLimiter       *ratelimit.Limiter
+	artifactManager   *artifacts.Manager
 }
 
 type ServerDeps struct {
@@ -51,6 +53,7 @@ type ServerDeps struct {
 	WebhookDispatcher *webhook.Dispatcher
 	PortalProxies     *registry.PortalProxyManager
 	AuthLimiter       *ratelimit.Limiter // Lockout limiter nil disables
+	ArtifactManager   *artifacts.Manager
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -67,6 +70,7 @@ func NewServer(deps ServerDeps) *Server {
 		webhookDispatcher: deps.WebhookDispatcher,
 		portalProxies:     deps.PortalProxies,
 		authLimiter:       deps.AuthLimiter,
+		artifactManager:   deps.ArtifactManager,
 	}
 	s.setupHandler()
 	return s
@@ -100,6 +104,12 @@ func (s *Server) setupHandler() {
 	if s.oidcHandler != nil && s.oidcHandler.IsEnabled() {
 		mux.HandleFunc("/api/v1/auth/oidc/login", s.oidcHandler.HandleLogin)
 		mux.HandleFunc("/api/v1/auth/oidc/callback", s.oidcHandler.HandleCallback)
+	}
+
+	// V1 artifact facade for old dfcli and ci
+	if s.artifactManager != nil && s.config.Artifacts.V1Compat {
+		v1Facade := artifacts.NewV1API(s.store, s.artifactManager, s.authManager, s.enforcer, s.authLimiter, s.log)
+		v1Facade.Register(mux)
 	}
 
 	// Register RPC services
@@ -145,6 +155,12 @@ func (s *Server) setupHandler() {
 		mux.Handle(portalPath, portalHandler)
 	}
 
+	if s.artifactManager != nil {
+		artifactService := services.NewArtifactService(s.store, s.artifactManager, s.enforcer, s.log)
+		artifactPath, artifactHandler := distrofacev1connect.NewArtifactServiceHandler(artifactService, opts...)
+		mux.Handle(artifactPath, artifactHandler)
+	}
+
 	// GRPC reflection
 	reflector := grpcreflect.NewStaticReflector(
 		distrofacev1connect.HealthServiceName,
@@ -157,6 +173,7 @@ func (s *Server) setupHandler() {
 		distrofacev1connect.OrganizationServiceName,
 		distrofacev1connect.WebhookServiceName,
 		distrofacev1connect.PortalServiceName,
+		distrofacev1connect.ArtifactServiceName,
 	)
 	reflectV1Path, reflectV1Handler := grpcreflect.NewHandlerV1(reflector)
 	mux.Handle(reflectV1Path, s.requireAuth(reflectV1Handler))

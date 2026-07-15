@@ -229,6 +229,28 @@ func (s *RoleService) GetPermissionMatrix(ctx context.Context, req *connect.Requ
 		}
 
 		for offset := 0; ; offset += batchSize {
+			artifactRepos, total, err := s.store.ListArtifactRepositories(ctx, storage.ArtifactRepoListOptions{
+				IncludePrivate: true,
+				Limit:          batchSize,
+				Offset:         offset,
+			})
+			if err != nil {
+				return nil, connect.NewError(connect.CodeInternal, err)
+			}
+			for _, r := range artifactRepos {
+				availableObjects = append(availableObjects, &v1.ScopeableObject{
+					Id:          r.Name,
+					Name:        r.Name,
+					Resource:    rbac.ResourceArtifacts,
+					ScopeSource: rbac.ResourceArtifacts,
+				})
+			}
+			if int64(offset+batchSize) >= total {
+				break
+			}
+		}
+
+		for offset := 0; ; offset += batchSize {
 			orgs, total, err := s.store.ListOrganizations(ctx, "", true, batchSize, offset)
 			if err != nil {
 				return nil, connect.NewError(connect.CodeInternal, err)

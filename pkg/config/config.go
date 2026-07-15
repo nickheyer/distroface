@@ -17,6 +17,26 @@ type Config struct {
 	Auth      AuthConfig      `mapstructure:"auth" json:"auth"`
 	Webhooks  WebhookConfig   `mapstructure:"webhooks" json:"webhooks"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit" json:"rate_limit"`
+	Artifacts ArtifactsConfig `mapstructure:"artifacts" json:"artifacts"`
+}
+
+type ArtifactsConfig struct {
+	StoragePath string `mapstructure:"storage_path" json:"storage_path"`
+	// Max artifact size in MB zero means unlimited
+	MaxFileSizeMB int64 `mapstructure:"max_file_size_mb" json:"max_file_size_mb"`
+	// Serve the v1 facade for old dfcli and ci
+	V1Compat  bool                    `mapstructure:"v1_compat" json:"v1_compat"`
+	Retention ArtifactRetentionConfig `mapstructure:"retention" json:"retention"`
+}
+
+type ArtifactRetentionConfig struct {
+	Enabled bool `mapstructure:"enabled" json:"enabled"`
+	// Newest versions kept per artifact path zero means unlimited
+	MaxVersions int `mapstructure:"max_versions" json:"max_versions"`
+	// Age based pruning in days zero disables
+	MaxAgeDays int `mapstructure:"max_age_days" json:"max_age_days"`
+	// Never age-prune the newest artifact of a path
+	ExcludeLatest bool `mapstructure:"exclude_latest" json:"exclude_latest"`
 }
 
 type WebhookConfig struct {
@@ -184,6 +204,14 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("webhooks.allow_private_networks", false)
 
+	v.SetDefault("artifacts.storage_path", "./data/artifacts")
+	v.SetDefault("artifacts.max_file_size_mb", 10240)
+	v.SetDefault("artifacts.v1_compat", true)
+	v.SetDefault("artifacts.retention.enabled", false)
+	v.SetDefault("artifacts.retention.max_versions", 5)
+	v.SetDefault("artifacts.retention.max_age_days", 0)
+	v.SetDefault("artifacts.retention.exclude_latest", true)
+
 	v.SetDefault("rate_limit.auth_failure_limit", 10)
 	v.SetDefault("rate_limit.auth_failure_window", 300)
 	v.SetDefault("rate_limit.pull_per_minute", 0)
@@ -213,6 +241,11 @@ func validateConfig(cfg *Config) error {
 	cfg.Registry.StoragePath, err = filepath.Abs(cfg.Registry.StoragePath)
 	if err != nil {
 		return fmt.Errorf("invalid registry storage path: %w", err)
+	}
+
+	cfg.Artifacts.StoragePath, err = filepath.Abs(cfg.Artifacts.StoragePath)
+	if err != nil {
+		return fmt.Errorf("invalid artifact storage path: %w", err)
 	}
 
 	cfg.Logging.Dir, err = filepath.Abs(cfg.Logging.Dir)

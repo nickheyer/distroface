@@ -244,6 +244,44 @@ message WebhookDelivery {
   google.protobuf.Timestamp delivered_at = 10;
 }
 
+// ArtifactRepository is a generic (non-OCI) artifact repository.
+message ArtifactRepository {
+  int64 id = 1;
+  string name = 2;
+  string description = 3;
+  // owner is the username of the repository owner.
+  string owner = 4;
+  bool is_private = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  // artifact_count is the number of artifacts stored in the repository.
+  int64 artifact_count = 8;
+  // total_size is the sum of artifact sizes in bytes.
+  int64 total_size = 9;
+}
+
+// Artifact is a single stored artifact (file) within an artifact repository.
+message Artifact {
+  string id = 1;
+  int64 repo_id = 2;
+  // name is the file basename.
+  string name = 3;
+  // path is the relative path of the artifact within its version.
+  string path = 4;
+  // upload_id is the upload session that produced this artifact.
+  string upload_id = 5;
+  string version = 6;
+  int64 size = 7;
+  string mime_type = 8;
+  // metadata is an arbitrary JSON object string.
+  string metadata = 9;
+  map<string, string> properties = 10;
+  // digest is the sha256 content address of the artifact blob.
+  string digest = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
 // ImageConfig contains parsed metadata from an OCI/Docker image config blob.
 // Populated on manifest descriptors (with layer-correlated history) and on
 // config blob descriptors (with runtime configuration details).

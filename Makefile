@@ -1,4 +1,4 @@
-.PHONY: dev prod clean build build-frontend run deps test fmt lint check help kill-dev image dev-docker proto proto-clean proto-lint proto-format proto-breaking gen dev-auth
+.PHONY: dev prod clean build build-frontend dfcli run deps test fmt lint check help kill-dev image dev-docker proto proto-clean proto-lint proto-format proto-breaking gen dev-auth
 
 DATA_DIR := ./data
 DB_FILE := $(DATA_DIR)/distroface.db
@@ -55,6 +55,11 @@ build-frontend:
 build: build-frontend
 	@echo "Building backend with embedded frontend..."
 	go build -o $(DISTROFACE_BIN) cmd/distroface/main.go
+
+# Build the dfcli binary
+dfcli:
+	@echo "Building dfcli..."
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.Version=$${DFCLI_VERSION:-dev}" -o build/dfcli ./cmd/dfcli
 
 # Build and push Docker image to :dev tag
 image:

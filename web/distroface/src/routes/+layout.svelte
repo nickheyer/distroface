@@ -32,7 +32,8 @@
 		Building2,
 		User,
 		Menu,
-		Shield
+		Shield,
+		Archive
 	} from '@lucide/svelte';
 	import { toggleMode, mode } from 'mode-watcher';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -87,6 +88,7 @@
 
 	const navLinks = $derived([
 		{ href: '/', label: 'Explore', icon: Package },
+		{ href: '/artifacts', label: 'Artifacts', icon: Archive },
 		...(authStore.isAuthenticated
 			? [{ href: '/orgs', label: 'Organizations', icon: Building2 }]
 			: []),

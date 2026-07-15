@@ -156,6 +156,42 @@ type RegistryPortal struct { // Alternate org-owned registry host and/or proxy p
 	Org            *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 }
 
+type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v1 parity
+	ID          int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	Name        string    `json:"name" gorm:"not null;uniqueIndex"`
+	Description string    `json:"description"`
+	OwnerID     string    `json:"owner_id" gorm:"index;column:owner_id"`
+	IsPrivate   bool      `json:"private" gorm:"not null;default:false"`
+	CreatedAt   time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type Artifact struct {
+	ID         string              `json:"id" gorm:"primaryKey"`
+	RepoID     int64               `json:"repo_id" gorm:"not null;index;uniqueIndex:idx_artifact_identity;column:repo_id"`
+	Name       string              `json:"name" gorm:"not null"`
+	Path       string              `json:"path" gorm:"not null;uniqueIndex:idx_artifact_identity"`
+	UploadID   string              `json:"upload_id" gorm:"not null;column:upload_id"`
+	Version    string              `json:"version" gorm:"not null;uniqueIndex:idx_artifact_identity"`
+	Digest     string              `json:"digest" gorm:"not null;index"` // Full sha256 content address
+	Size       int64               `json:"size" gorm:"not null"`
+	MimeType   string              `json:"mime_type" gorm:"column:mime_type"`
+	Metadata   string              `json:"metadata" gorm:"type:text;not null;default:'{}'"` // Arbitrary JSON object
+	CreatedAt  time.Time           `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt  time.Time           `json:"updated_at" gorm:"autoUpdateTime"`
+	Properties map[string]string   `json:"properties" gorm:"-"` // Loaded from artifact_properties
+	Repo       *ArtifactRepository `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type ArtifactProperty struct {
+	ID         int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	ArtifactID string    `json:"artifact_id" gorm:"not null;uniqueIndex:idx_prop_artifact_key;column:artifact_id"`
+	Key        string    `json:"key" gorm:"not null;uniqueIndex:idx_prop_artifact_key;index:idx_prop_key_value"`
+	Value      string    `json:"value" gorm:"not null;index:idx_prop_key_value"`
+	CreatedAt  time.Time `json:"created_at" gorm:"autoCreateTime"`
+	Artifact   *Artifact `json:"-" gorm:"foreignKey:ArtifactID;constraint:OnDelete:CASCADE"`
+}
+
 type RegistrationInvite struct {
 	ID          string     `json:"id" gorm:"primaryKey"`
 	Code        string     `json:"code" gorm:"not null;uniqueIndex"`

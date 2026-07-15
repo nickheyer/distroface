@@ -16,6 +16,7 @@ import { OrganizationService } from '$lib/proto/distroface/v1/organization_pb';
 import { RoleService } from '$lib/proto/distroface/v1/role_pb';
 import { WebhookService } from '$lib/proto/distroface/v1/webhook_pb';
 import { PortalService } from '$lib/proto/distroface/v1/portal_pb';
+import { ArtifactService } from '$lib/proto/distroface/v1/artifact_pb';
 import { toast } from 'svelte-sonner';
 
 const SESSION_KEY = 'distroface_session';
@@ -63,6 +64,7 @@ export class RpcClient {
 	public readonly role: Client<typeof RoleService>;
 	public readonly webhook: Client<typeof WebhookService>;
 	public readonly portal: Client<typeof PortalService>;
+	public readonly artifact: Client<typeof ArtifactService>;
 
 	constructor() {
 		this.health = createClient(HealthService, transport);
@@ -75,6 +77,7 @@ export class RpcClient {
 		this.role = createClient(RoleService, transport);
 		this.webhook = createClient(WebhookService, transport);
 		this.portal = createClient(PortalService, transport);
+		this.artifact = createClient(ArtifactService, transport);
 	}
 }
 

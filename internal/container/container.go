@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/distribution/distribution/v3/registry/handlers"
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/ratelimit"
@@ -167,6 +168,19 @@ func New() (*App, error) {
 
 	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, log)
 
+	blobStore, err := artifacts.NewBlobStore(cfg.Artifacts.StoragePath)
+	if err != nil {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("initializing artifact storage: %w", err)
+	}
+	artifactManager := artifacts.NewManager(store, blobStore, cfg.Artifacts, log)
+	if removed, err := blobStore.CleanStaleUploads(24 * time.Hour); err != nil {
+		log.Error("cleaning stale artifact uploads: %v", err)
+	} else if removed > 0 {
+		log.Info("Cleaned %d stale artifact upload sessions", removed)
+	}
+
 	rpcServer := rpc.NewServer(rpc.ServerDeps{
 		Store:             store,
 		Config:            cfg,
@@ -180,6 +194,7 @@ func New() (*App, error) {
 		WebhookDispatcher: dispatcher,
 		PortalProxies:     portalProxies,
 		AuthLimiter:       authLimiter,
+		ArtifactManager:   artifactManager,
 	})
 
 	srv := &http.Server{

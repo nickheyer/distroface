@@ -184,6 +184,39 @@ func (m *Manager) ValidateSession(ctx context.Context, token string) (*Authentic
 	return authUser, nil
 }
 
+// Fresh session for an already authenticated user
+func (m *Manager) IssueSession(ctx context.Context, userID string) (string, time.Time, error) {
+	user, err := m.store.GetUserByID(ctx, userID)
+	if err != nil || user == nil {
+		return "", time.Time{}, ErrInvalidToken
+	}
+	if !user.IsActive {
+		return "", time.Time{}, ErrUserNotActive
+	}
+
+	roleNames, err := m.store.GetUserRoleNames(ctx, user.ID)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	expiresAt := time.Now().Add(time.Duration(m.config.SessionTimeout) * time.Second)
+	token, err := m.generateJWT(user.ID, user.Username, roleNames, expiresAt)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	session := &db.Session{
+		ID:        uuid.New().String(),
+		UserID:    user.ID,
+		Token:     token,
+		ExpiresAt: expiresAt,
+	}
+	if err := m.store.CreateSession(ctx, session); err != nil {
+		return "", time.Time{}, err
+	}
+	return token, expiresAt, nil
+}
+
 func (m *Manager) Logout(ctx context.Context, token string) error {
 	return m.store.DeleteSession(ctx, token)
 }
@@ -426,6 +459,7 @@ func (m *Manager) generateJWT(userID, username string, roles []string, expiresAt
 		"roles":    roles,
 		"exp":      expiresAt.Unix(),
 		"iat":      time.Now().Unix(),
+		"jti":      uuid.New().String(), // Same second logins must not collide
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

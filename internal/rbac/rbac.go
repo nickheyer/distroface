@@ -82,20 +82,43 @@ func (e *Enforcer) SeedDefaultPolicies(anonymousEnabled bool) error {
 			{"user", ResourceWebhooks, ActionCreate, "*"},
 			{"user", ResourceWebhooks, ActionUpdate, "*"},
 			{"user", ResourceWebhooks, ActionDelete, "*"},
+			{"user", ResourceArtifacts, ActionRead, "*"},
+			{"user", ResourceArtifacts, ActionPull, "*"},
+			{"user", ResourceArtifacts, ActionPush, "*"},
+			{"user", ResourceArtifacts, ActionCreate, "*"},
+			{"user", ResourceArtifacts, ActionUpdate, "*"},
+			{"user", ResourceArtifacts, ActionDelete, "*"},
 		},
 		"anonymous": {
 			{"anonymous", ResourceRepositories, ActionRead, "*"},
 			{"anonymous", ResourceRepositories, ActionPull, "*"},
+			{"anonymous", ResourceArtifacts, ActionRead, "*"},
+			{"anonymous", ResourceArtifacts, ActionPull, "*"},
 		},
 	}
 
 	for role, rolePolicies := range policies {
 		existing, _ := e.enforcer.GetFilteredPolicy(0, role)
-		if len(existing) > 0 {
+		if len(existing) == 0 {
+			for _, p := range rolePolicies {
+				if _, err := e.enforcer.AddPolicy(p[0], p[1], p[2], p[3]); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 
+		// Backfill grants for resources added after role seeding
+		seen := make(map[string]bool)
+		for _, p := range existing {
+			if len(p) >= 2 {
+				seen[p[1]] = true
+			}
+		}
 		for _, p := range rolePolicies {
+			if seen[p[1]] {
+				continue
+			}
 			if _, err := e.enforcer.AddPolicy(p[0], p[1], p[2], p[3]); err != nil {
 				return err
 			}

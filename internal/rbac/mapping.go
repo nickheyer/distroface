@@ -101,6 +101,22 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.PortalServiceUpdatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 	distrofacev1connect.PortalServiceDeletePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 
+	// ── ArtifactService ───────────────────────────────────────────────
+	distrofacev1connect.ArtifactServiceCreateArtifactRepositoryProcedure: {Resource: ResourceArtifacts, Action: ActionCreate},
+	distrofacev1connect.ArtifactServiceGetArtifactRepositoryProcedure:    {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "name"},
+	distrofacev1connect.ArtifactServiceListArtifactRepositoriesProcedure: {Resource: ResourceArtifacts, Action: ActionRead},
+	distrofacev1connect.ArtifactServiceUpdateArtifactRepositoryProcedure: {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "name"},
+	distrofacev1connect.ArtifactServiceDeleteArtifactRepositoryProcedure: {Resource: ResourceArtifacts, Action: ActionDelete, ObjectIDField: "name"},
+	distrofacev1connect.ArtifactServiceInitiateArtifactUploadProcedure:   {Resource: ResourceArtifacts, Action: ActionPush, ObjectIDField: "repo_name"},
+	distrofacev1connect.ArtifactServiceCompleteArtifactUploadProcedure:   {Resource: ResourceArtifacts, Action: ActionPush, ObjectIDField: "repo_name"},
+	distrofacev1connect.ArtifactServiceGetArtifactProcedure:              {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "repo_name"},
+	distrofacev1connect.ArtifactServiceListArtifactsProcedure:            {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "repo_name"},
+	distrofacev1connect.ArtifactServiceListArtifactVersionsProcedure:     {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "repo_name"},
+	distrofacev1connect.ArtifactServiceSearchArtifactsProcedure:          {Resource: ResourceArtifacts, Action: ActionRead},
+	distrofacev1connect.ArtifactServiceUpdateArtifactProcedure:           {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "repo_name"},
+	distrofacev1connect.ArtifactServiceSetArtifactPropertiesProcedure:    {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "repo_name"},
+	distrofacev1connect.ArtifactServiceDeleteArtifactProcedure:           {Resource: ResourceArtifacts, Action: ActionDelete, ObjectIDField: "repo_name"},
+
 	// ── WebhookService ────────────────────────────────────────────────
 	distrofacev1connect.WebhookServiceCreateWebhookProcedure:         {Resource: ResourceWebhooks, Action: ActionCreate},
 	distrofacev1connect.WebhookServiceListWebhooksProcedure:          {Resource: ResourceWebhooks, Action: ActionRead},

@@ -98,6 +98,9 @@ func (s *Store) Migrate() error {
 		&Webhook{},
 		&WebhookDelivery{},
 		&RegistryPortal{},
+		&ArtifactRepository{},
+		&Artifact{},
+		&ArtifactProperty{},
 	); err != nil {
 		return fmt.Errorf("failed to auto-migrate: %w", err)
 	}
