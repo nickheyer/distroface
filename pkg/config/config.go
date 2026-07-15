@@ -18,6 +18,16 @@ type Config struct {
 	Webhooks  WebhookConfig   `mapstructure:"webhooks" json:"webhooks"`
 	RateLimit RateLimitConfig `mapstructure:"rate_limit" json:"rate_limit"`
 	Artifacts ArtifactsConfig `mapstructure:"artifacts" json:"artifacts"`
+	GC        GCConfig        `mapstructure:"gc" json:"gc"`
+}
+
+type GCConfig struct {
+	// Scheduled registry collection off by default
+	Enabled bool `mapstructure:"enabled" json:"enabled"`
+	// Hours between scheduled runs
+	IntervalHours int `mapstructure:"interval_hours" json:"interval_hours"`
+	// Scheduled runs also delete untagged manifests
+	RemoveUntagged bool `mapstructure:"remove_untagged" json:"remove_untagged"`
 }
 
 type ArtifactsConfig struct {
@@ -117,6 +127,7 @@ type OIDCConfig struct {
 	Scopes          []string          `mapstructure:"scopes" json:"scopes"`
 	RoleClaim       string            `mapstructure:"role_claim" json:"role_claim"`
 	RoleMapping     map[string]string `mapstructure:"role_mapping" json:"role_mapping"`
+	GroupClaim      string            `mapstructure:"group_claim" json:"group_claim"`
 	GroupOrgMapping map[string]string `mapstructure:"group_org_mapping" json:"group_org_mapping"`
 	SkipTLSVerify   bool              `mapstructure:"skip_tls_verify" json:"skip_tls_verify"`
 }
@@ -201,6 +212,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.oidc.redirect_url", "")
 	v.SetDefault("auth.oidc.scopes", []string{})
 	v.SetDefault("auth.oidc.role_claim", "")
+	v.SetDefault("auth.oidc.group_claim", "groups")
 	v.SetDefault("auth.oidc.skip_tls_verify", false)
 
 	v.SetDefault("webhooks.allow_private_networks", false)
@@ -212,6 +224,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("artifacts.retention.max_versions", 5)
 	v.SetDefault("artifacts.retention.max_age_days", 0)
 	v.SetDefault("artifacts.retention.exclude_latest", true)
+
+	v.SetDefault("gc.enabled", false)
+	v.SetDefault("gc.interval_hours", 24)
+	v.SetDefault("gc.remove_untagged", false)
 
 	v.SetDefault("rate_limit.auth_failure_limit", 10)
 	v.SetDefault("rate_limit.auth_failure_window", 300)

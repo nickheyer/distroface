@@ -5,7 +5,7 @@
 	import {
 		Package, ArrowDown, ArrowUp, Eye, Lock, Pencil, Check, X,
 		Trash2, MoreHorizontal, EyeOff, ChevronRight,
-		Tags, Clock, Terminal
+		Tags, Clock, Terminal, Star
 	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -68,6 +68,7 @@
 
 	let deleteRepoOpen = $state(false);
 	let deletingRepo = $state(false);
+	let starPending = $state(false);
 
 	const registryHost = $derived(configStore.get('server.hostname', 'localhost:8080') as string);
 
@@ -201,6 +202,26 @@
 		}
 	}
 
+	async function toggleStar() {
+		if (!repo || starPending) return;
+		starPending = true;
+		try {
+			if (repo.isStarred) {
+				const resp = await rpcClient.repository.unstarRepository({ namespace, name });
+				repo.isStarred = false;
+				repo.starCount = resp.starCount;
+			} else {
+				const resp = await rpcClient.repository.starRepository({ namespace, name });
+				repo.isStarred = true;
+				repo.starCount = resp.starCount;
+			}
+		} catch {
+			// error interceptor
+		} finally {
+			starPending = false;
+		}
+	}
+
 	async function confirmDeleteRepo() {
 		deletingRepo = true;
 		try {
@@ -326,6 +347,19 @@
 					</div>
 
 					<!-- Actions -->
+					{#if authStore.isAuthenticated}
+						<Button variant="outline" size="sm" class="h-8 shrink-0 gap-1.5" onclick={toggleStar} disabled={starPending}>
+							<Star class="h-3.5 w-3.5 {repo.isStarred ? 'fill-amber-400 text-amber-400' : ''}" />
+							{repo.isStarred ? 'Starred' : 'Star'}
+							{#if repo.starCount > 0n}
+								<span class="tabular-nums text-muted-foreground">{repo.starCount.toLocaleString()}</span>
+							{/if}
+						</Button>
+					{:else if repo.starCount > 0n}
+						<span class="flex items-center gap-1 text-[12px] text-muted-foreground/60 tabular-nums shrink-0 mt-2">
+							<Star class="h-3 w-3" />{repo.starCount.toLocaleString()}
+						</span>
+					{/if}
 					<PermissionGate allowed={canManage}>
 						<DropdownMenu>
 							<DropdownMenuTrigger>

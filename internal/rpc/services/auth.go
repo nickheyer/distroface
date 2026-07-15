@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -226,8 +227,28 @@ func (s *AuthService) GetCurrentUser(ctx context.Context, req *connect.Request[v
 }
 
 func (s *AuthService) RefreshSession(ctx context.Context, req *connect.Request[v1.RefreshSessionRequest]) (*connect.Response[v1.RefreshSessionResponse], error) {
-	// For JWT-based sessions, we don't refresh in place. Client re-authenticates.
-	return connect.NewResponse(&v1.RefreshSessionResponse{}), nil
+	token := auth.ExtractToken(req.Header())
+	if token == "" || strings.HasPrefix(token, "df_") {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("a session token is required"))
+	}
+
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+
+	newToken, expiresAt, err := s.authManager.IssueSession(ctx, user.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	// Old session dies once the new one exists
+	_ = s.authManager.Logout(ctx, token)
+
+	return connect.NewResponse(&v1.RefreshSessionResponse{
+		SessionToken: newToken,
+		ExpiresAt:    expiresAt.Unix(),
+	}), nil
 }
 
 func (s *AuthService) GetAuthStatus(ctx context.Context, req *connect.Request[v1.GetAuthStatusRequest]) (*connect.Response[v1.GetAuthStatusResponse], error) {

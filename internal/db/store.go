@@ -93,6 +93,7 @@ func (s *Store) Migrate() error {
 		&Organization{},
 		&OrgMember{},
 		&Repository{},
+		&Star{},
 		&SystemSetting{},
 		&RegistrationInvite{},
 		&Webhook{},
@@ -658,6 +659,13 @@ func (s *Store) RemoveOrgMember(ctx context.Context, orgID, userID string) error
 	return s.db.WithContext(ctx).Where("org_id = ? AND user_id = ?", orgID, userID).Delete(&OrgMember{}).Error
 }
 
+// Memberships a user got from one source with orgs preloaded
+func (s *Store) GetOrgMembershipsBySource(ctx context.Context, userID, source string) ([]*OrgMember, error) {
+	var members []*OrgMember
+	err := s.db.WithContext(ctx).Preload("Org").Where("user_id = ? AND source = ?", userID, source).Find(&members).Error
+	return members, err
+}
+
 func (s *Store) IsOrgMember(ctx context.Context, orgName, userID string) (bool, string, error) {
 	org, err := s.GetOrganization(ctx, orgName)
 	if err != nil || org == nil {
@@ -759,6 +767,87 @@ func (s *Store) IncrementPushCount(ctx context.Context, namespace, name string) 
 			"push_count": gorm.Expr("push_count + 1"),
 			"last_push":  now,
 		}).Error
+}
+
+// ── Star operations ──────────────────────────────────────────────────────
+
+func (s *Store) StarRepository(ctx context.Context, userID, repoID string) error {
+	var existing Star
+	err := s.db.WithContext(ctx).First(&existing, "user_id = ? AND repo_id = ?", userID, repoID).Error
+	if err == nil {
+		return nil // Already starred
+	}
+	star := &Star{ID: uuid.New().String(), UserID: userID, RepoID: repoID}
+	return s.db.WithContext(ctx).Create(star).Error
+}
+
+func (s *Store) UnstarRepository(ctx context.Context, userID, repoID string) error {
+	return s.db.WithContext(ctx).Where("user_id = ? AND repo_id = ?", userID, repoID).Delete(&Star{}).Error
+}
+
+func (s *Store) CountStars(ctx context.Context, repoID string) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Model(&Star{}).Where("repo_id = ?", repoID).Count(&count).Error
+	return count, err
+}
+
+// Star counts for many repos in one query
+func (s *Store) GetStarCounts(ctx context.Context, repoIDs []string) (map[string]int64, error) {
+	counts := make(map[string]int64)
+	if len(repoIDs) == 0 {
+		return counts, nil
+	}
+	var rows []struct {
+		RepoID string
+		Count  int64
+	}
+	err := s.db.WithContext(ctx).Model(&Star{}).
+		Select("repo_id, COUNT(*) as count").
+		Where("repo_id IN ?", repoIDs).
+		Group("repo_id").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		counts[r.RepoID] = r.Count
+	}
+	return counts, nil
+}
+
+// Which of these repos the user starred
+func (s *Store) GetStarredSet(ctx context.Context, userID string, repoIDs []string) (map[string]bool, error) {
+	starred := make(map[string]bool)
+	if userID == "" || len(repoIDs) == 0 {
+		return starred, nil
+	}
+	var ids []string
+	err := s.db.WithContext(ctx).Model(&Star{}).
+		Where("user_id = ? AND repo_id IN ?", userID, repoIDs).
+		Pluck("repo_id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		starred[id] = true
+	}
+	return starred, nil
+}
+
+// Newest starred first
+func (s *Store) ListStarredRepositories(ctx context.Context, userID string, limit, offset int) ([]*Repository, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&Repository{}).
+		Joins("JOIN stars ON stars.repo_id = repositories.id").
+		Where("stars.user_id = ?", userID)
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var repos []*Repository
+	err := tx.Order("stars.created_at DESC").Limit(limit).Offset(offset).Find(&repos).Error
+	return repos, total, err
 }
 
 // ── RegistrationInvite operations ─────────────────────────────────────

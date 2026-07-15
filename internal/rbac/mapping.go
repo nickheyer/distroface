@@ -44,6 +44,11 @@ var AuthenticatedOnlyProcedures = map[string]bool{
 	// User - self-service
 	distrofacev1connect.UserServiceUpdateUserProcedure:     true,
 	distrofacev1connect.UserServiceChangePasswordProcedure: true,
+
+	// Stars - read access enforced in-service
+	distrofacev1connect.RepositoryServiceStarRepositoryProcedure:          true,
+	distrofacev1connect.RepositoryServiceUnstarRepositoryProcedure:        true,
+	distrofacev1connect.RepositoryServiceListStarredRepositoriesProcedure: true,
 }
 
 // ProcedurePermissions maps each RPC procedure path to the resource and action
@@ -72,6 +77,10 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 
 	// ── ConfigurationService (admin) ──────────────────────────────────
 	distrofacev1connect.ConfigurationServiceGetStorageUsageProcedure: {Resource: ResourceSettings, Action: ActionRead},
+
+	// ── GCService (admin) ─────────────────────────────────────────────
+	distrofacev1connect.GCServiceRunGCProcedure:       {Resource: ResourceSettings, Action: ActionUpdate},
+	distrofacev1connect.GCServiceGetGCStatusProcedure: {Resource: ResourceSettings, Action: ActionRead},
 
 	// ── AuthService (admin) ───────────────────────────────────────────
 	distrofacev1connect.AuthServiceGetAuthConfigProcedure:      {Resource: ResourceSettings, Action: ActionRead},

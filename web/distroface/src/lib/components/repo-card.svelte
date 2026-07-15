@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Lock, Eye, ArrowDown, Tags, HardDrive, Clock } from '@lucide/svelte';
+	import { Lock, Eye, ArrowDown, Tags, HardDrive, Clock, Star } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Visibility } from '$lib/proto/distroface/v1/types_pb';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -16,7 +16,7 @@
 	);
 	const initials = $derived(repo.namespace.slice(0, 2).toUpperCase());
 	const hasStats = $derived(
-		repo.tagCount > 0 || Number(repo.sizeBytes) > 0 || repo.pullCount > 0n || lastPushed
+		repo.tagCount > 0 || Number(repo.sizeBytes) > 0 || repo.pullCount > 0n || repo.starCount > 0n || lastPushed
 	);
 </script>
 
@@ -73,6 +73,12 @@
 							<span class="flex items-center gap-1 tabular-nums">
 								<ArrowDown class="h-3 w-3" />
 								{repo.pullCount.toLocaleString()} pull{repo.pullCount !== 1n ? 's' : ''}
+							</span>
+						{/if}
+						{#if repo.starCount > 0n}
+							<span class="flex items-center gap-1 tabular-nums">
+								<Star class="h-3 w-3 {repo.isStarred ? 'fill-amber-400 text-amber-400' : ''}" />
+								{repo.starCount.toLocaleString()} star{repo.starCount !== 1n ? 's' : ''}
 							</span>
 						{/if}
 						{#if lastPushed}

@@ -13,6 +13,7 @@ import (
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/gc"
 	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -168,6 +169,17 @@ func New() (*App, error) {
 
 	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, log)
 
+	gcCollector, err := gc.New(cfg.Registry.StoragePath, registryLog)
+	if err != nil {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("initializing garbage collector: %w", err)
+	}
+	if cfg.GC.Enabled && cfg.GC.IntervalHours > 0 {
+		gcCollector.Schedule(context.Background(), time.Duration(cfg.GC.IntervalHours)*time.Hour, cfg.GC.RemoveUntagged)
+		log.Info("Scheduled registry GC every %dh (remove_untagged=%v)", cfg.GC.IntervalHours, cfg.GC.RemoveUntagged)
+	}
+
 	blobStore, err := artifacts.NewBlobStore(cfg.Artifacts.StoragePath)
 	if err != nil {
 		store.Close()
@@ -195,6 +207,7 @@ func New() (*App, error) {
 		PortalProxies:     portalProxies,
 		AuthLimiter:       authLimiter,
 		ArtifactManager:   artifactManager,
+		GCCollector:       gcCollector,
 	})
 
 	srv := &http.Server{

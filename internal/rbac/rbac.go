@@ -125,7 +125,9 @@ func (e *Enforcer) SeedDefaultPolicies(anonymousEnabled bool) error {
 		}
 	}
 
-	return e.enforcer.SavePolicy()
+	// AutoSave persisted every mutation, SavePolicy would deadlock
+	// sqlite through the adapter's cross connection rewrite
+	return nil
 }
 
 // Enforce checks if any of the given roles allows the specified action on a
@@ -253,7 +255,7 @@ func (e *Enforcer) SetPermissionsForRole(role string, perms []Permission) error 
 		}
 	}
 
-	return e.enforcer.SavePolicy()
+	return nil
 }
 
 // Move casbin policies to new role name
@@ -278,7 +280,7 @@ func (e *Enforcer) RenameRole(oldName, newName string) error {
 		return err
 	}
 
-	return e.enforcer.SavePolicy()
+	return nil
 }
 
 // GetPermissionMatrix returns a map of role names to their permission slices.

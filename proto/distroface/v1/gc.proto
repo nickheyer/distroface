@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// GCService triggers and reports registry garbage collection.
+service GCService {
+  // RunGC starts a garbage collection run in the background (admin).
+  rpc RunGC(RunGCRequest) returns (RunGCResponse) {}
+  // GetGCStatus returns whether GC is running and the last run's result (admin).
+  rpc GetGCStatus(GetGCStatusRequest) returns (GetGCStatusResponse) {}
+}
+
+// RunGCRequest configures a garbage collection run.
+message RunGCRequest {
+  // dry_run marks and reports without deleting anything.
+  bool dry_run = 1;
+  // remove_untagged also deletes manifests not referenced by any tag.
+  bool remove_untagged = 2;
+}
+
+// RunGCResponse is empty; poll GetGCStatus for progress.
+message RunGCResponse {}
+
+// GCRun describes one completed garbage collection run.
+message GCRun {
+  // started_at is when the run began.
+  google.protobuf.Timestamp started_at = 1;
+  // finished_at is when the run completed.
+  google.protobuf.Timestamp finished_at = 2;
+  // dry_run indicates the run made no deletions.
+  bool dry_run = 3;
+  // remove_untagged indicates untagged manifests were eligible for deletion.
+  bool remove_untagged = 4;
+  // blobs_deleted is the number of blobs removed from disk.
+  int64 blobs_deleted = 5;
+  // bytes_freed is the disk space reclaimed in bytes.
+  int64 bytes_freed = 6;
+  // error is the failure message, empty on success.
+  string error = 7;
+}
+
+// GetGCStatusRequest is an empty request.
+message GetGCStatusRequest {}
+
+// GetGCStatusResponse reports current and last GC state.
+message GetGCStatusResponse {
+  // running indicates a GC run is currently in progress.
+  bool running = 1;
+  // last_run is the most recent completed run, unset if none.
+  GCRun last_run = 2;
+  // scheduled indicates automatic GC is enabled via config.
+  bool scheduled = 3;
+  // interval_hours is the configured schedule interval.
+  int32 interval_hours = 4;
+}

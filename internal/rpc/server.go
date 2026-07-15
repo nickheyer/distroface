@@ -9,6 +9,7 @@ import (
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/gc"
 	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -38,6 +39,7 @@ type Server struct {
 	portalProxies     *registry.PortalProxyManager
 	authLimiter       *ratelimit.Limiter
 	artifactManager   *artifacts.Manager
+	gcCollector       *gc.Collector
 }
 
 type ServerDeps struct {
@@ -54,6 +56,7 @@ type ServerDeps struct {
 	PortalProxies     *registry.PortalProxyManager
 	AuthLimiter       *ratelimit.Limiter // Lockout limiter nil disables
 	ArtifactManager   *artifacts.Manager
+	GCCollector       *gc.Collector
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -71,6 +74,7 @@ func NewServer(deps ServerDeps) *Server {
 		portalProxies:     deps.PortalProxies,
 		authLimiter:       deps.AuthLimiter,
 		artifactManager:   deps.ArtifactManager,
+		gcCollector:       deps.GCCollector,
 	}
 	s.setupHandler()
 	return s
@@ -161,6 +165,12 @@ func (s *Server) setupHandler() {
 		mux.Handle(artifactPath, artifactHandler)
 	}
 
+	if s.gcCollector != nil {
+		gcService := services.NewGCService(s.gcCollector, s.config, s.log)
+		gcPath, gcHandler := distrofacev1connect.NewGCServiceHandler(gcService, opts...)
+		mux.Handle(gcPath, gcHandler)
+	}
+
 	// GRPC reflection
 	reflector := grpcreflect.NewStaticReflector(
 		distrofacev1connect.HealthServiceName,
@@ -174,6 +184,7 @@ func (s *Server) setupHandler() {
 		distrofacev1connect.WebhookServiceName,
 		distrofacev1connect.PortalServiceName,
 		distrofacev1connect.ArtifactServiceName,
+		distrofacev1connect.GCServiceName,
 	)
 	reflectV1Path, reflectV1Handler := grpcreflect.NewHandlerV1(reflector)
 	mux.Handle(reflectV1Path, s.requireAuth(reflectV1Handler))

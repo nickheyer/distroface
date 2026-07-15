@@ -61,8 +61,11 @@ func (s *RepositoryService) GetRepository(ctx context.Context, req *connect.Requ
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
+	proto := repoToProto(repo)
+	s.attachStars(ctx, []*v1.Repository{proto})
+
 	return connect.NewResponse(&v1.GetRepositoryResponse{
-		Repository: repoToProto(repo),
+		Repository: proto,
 	}), nil
 }
 
@@ -109,6 +112,7 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.R
 	for i, r := range repos {
 		protoRepos[i] = repoToProto(r)
 	}
+	s.attachStars(ctx, protoRepos)
 
 	return connect.NewResponse(&v1.ListRepositoriesResponse{
 		Repositories:  protoRepos,
@@ -274,6 +278,116 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, req *connect.R
 	return connect.NewResponse(&v1.UpdateRepositoryResponse{
 		Repository: repoToProto(repo),
 	}), nil
+}
+
+func (s *RepositoryService) StarRepository(ctx context.Context, req *connect.Request[v1.StarRepositoryRequest]) (*connect.Response[v1.StarRepositoryResponse], error) {
+	repo, err := s.starTarget(ctx, req.Msg.Namespace, req.Msg.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	user := auth.UserFromContext(ctx)
+	if err := s.store.StarRepository(ctx, user.ID, repo.ID); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	count, err := s.store.CountStars(ctx, repo.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&v1.StarRepositoryResponse{StarCount: count}), nil
+}
+
+func (s *RepositoryService) UnstarRepository(ctx context.Context, req *connect.Request[v1.UnstarRepositoryRequest]) (*connect.Response[v1.UnstarRepositoryResponse], error) {
+	repo, err := s.starTarget(ctx, req.Msg.Namespace, req.Msg.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	user := auth.UserFromContext(ctx)
+	if err := s.store.UnstarRepository(ctx, user.ID, repo.ID); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	count, err := s.store.CountStars(ctx, repo.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&v1.UnstarRepositoryResponse{StarCount: count}), nil
+}
+
+func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *connect.Request[v1.ListStarredRepositoriesRequest]) (*connect.Response[v1.ListStarredRepositoriesResponse], error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+
+	limit, offset := parsePagination(req.Msg.PageSize, req.Msg.PageToken)
+
+	repos, total, err := s.store.ListStarredRepositories(ctx, user.ID, limit, offset)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	protoRepos := make([]*v1.Repository, len(repos))
+	for i, r := range repos {
+		protoRepos[i] = repoToProto(r)
+	}
+	s.attachStars(ctx, protoRepos)
+
+	return connect.NewResponse(&v1.ListStarredRepositoriesResponse{
+		Repositories:  protoRepos,
+		NextPageToken: nextPageToken(offset, limit, total),
+		TotalCount:    int32(total),
+	}), nil
+}
+
+// Validates auth and read access for star mutations
+func (s *RepositoryService) starTarget(ctx context.Context, namespace, name string) (*storage.Repository, error) {
+	if namespace == "" || name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	}
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+	repo, err := s.store.GetRepository(ctx, namespace, name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if repo == nil || !s.canReadRepo(ctx, repo) {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
+	}
+	return repo, nil
+}
+
+// Fills star counts and the caller's starred flags
+func (s *RepositoryService) attachStars(ctx context.Context, repos []*v1.Repository) {
+	if len(repos) == 0 {
+		return
+	}
+	ids := make([]string, len(repos))
+	for i, r := range repos {
+		ids[i] = r.Id
+	}
+
+	counts, err := s.store.GetStarCounts(ctx, ids)
+	if err != nil {
+		s.log.Error("loading star counts: %v", err)
+		return
+	}
+
+	var starred map[string]bool
+	if user := auth.UserFromContext(ctx); user != nil {
+		if starred, err = s.store.GetStarredSet(ctx, user.ID, ids); err != nil {
+			s.log.Error("loading starred set: %v", err)
+		}
+	}
+
+	for _, r := range repos {
+		r.StarCount = counts[r.Id]
+		r.IsStarred = starred[r.Id]
+	}
 }
 
 func repoToProto(r *storage.Repository) *v1.Repository {

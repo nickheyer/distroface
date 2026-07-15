@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -8,11 +8,14 @@
 	import { Input } from '$lib/components/ui/input';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
-	import { Shield, Globe, Save } from '@lucide/svelte';
+	import { Shield, Globe, Save, Trash2, Loader2 } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import { formatBytes, relativeTime } from '$lib/utils';
+	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { toast } from 'svelte-sonner';
 	import type { GetAuthConfigResponse } from '$lib/proto/distroface/v1/auth_pb';
+	import type { GetGCStatusResponse } from '$lib/proto/distroface/v1/gc_pb';
 
 	let config = $state<GetAuthConfigResponse | null>(null);
 	let loading = $state(true);
@@ -43,6 +46,44 @@
 				]
 			: []
 	);
+
+	let gcStatus = $state<GetGCStatusResponse | null>(null);
+	let gcRemoveUntagged = $state(false);
+	let gcTriggering = $state(false);
+	let gcPollTimer: ReturnType<typeof setInterval> | null = null;
+
+	async function loadGCStatus() {
+		try {
+			gcStatus = await rpcClient.gc.getGCStatus({});
+			if (gcStatus.running) {
+				if (!gcPollTimer) gcPollTimer = setInterval(loadGCStatus, 2000);
+			} else {
+				stopGCPoll();
+			}
+		} catch {
+			// error interceptor
+		}
+	}
+
+	function stopGCPoll() {
+		if (gcPollTimer) {
+			clearInterval(gcPollTimer);
+			gcPollTimer = null;
+		}
+	}
+
+	async function runGC(dryRun: boolean) {
+		gcTriggering = true;
+		try {
+			await rpcClient.gc.runGC({ dryRun, removeUntagged: gcRemoveUntagged });
+			toast.success(dryRun ? 'Dry run started' : 'Garbage collection started');
+			await loadGCStatus();
+		} catch {
+			// error interceptor
+		} finally {
+			gcTriggering = false;
+		}
+	}
 
 	async function loadConfig() {
 		loading = true;
@@ -87,7 +128,10 @@
 	onMount(() => {
 		if (!authStore.hasPermission('settings', 'read')) { goto('/admin'); return; }
 		loadConfig();
+		loadGCStatus();
 	});
+
+	onDestroy(stopGCPoll);
 </script>
 
 {#if loading}
@@ -179,6 +223,58 @@
 					</p>
 				{/if}
 			</div>
+		</FormCard>
+
+		<!-- Garbage Collection Card -->
+		<FormCard title="Garbage Collection" description="Reclaim disk space from deleted images" icon={Trash2}>
+			<div class="space-y-4">
+				{#if gcStatus?.running}
+					<div class="flex items-center gap-2 text-sm">
+						<Loader2 class="h-4 w-4 animate-spin text-primary" />
+						<span class="font-medium">Collection in progress...</span>
+					</div>
+				{:else if gcStatus?.lastRun}
+					{@const run = gcStatus.lastRun}
+					<div class="flex items-center gap-3 text-[13px] text-muted-foreground flex-wrap">
+						{#if run.error}
+							<Badge variant="outline" class="text-xs border-destructive/40 text-destructive">Failed</Badge>
+							<span class="font-mono text-xs">{run.error}</span>
+						{:else}
+							<Badge variant="outline" class="text-xs">{run.dryRun ? 'Dry run' : 'Completed'}</Badge>
+							{#if run.finishedAt}
+								<span>{relativeTime(timestampDate(run.finishedAt))}</span>
+							{/if}
+							{#if !run.dryRun}
+								<span class="tabular-nums">{run.blobsDeleted.toLocaleString()} blob{run.blobsDeleted !== 1n ? 's' : ''} removed</span>
+								<span class="tabular-nums">{formatBytes(Number(run.bytesFreed))} freed</span>
+							{/if}
+						{/if}
+					</div>
+				{:else}
+					<p class="text-[13px] text-muted-foreground">No garbage collection has run yet.</p>
+				{/if}
+
+				<FormField label="Remove untagged manifests" help="Also delete manifests no tag points to." horizontal>
+					<Switch bind:checked={gcRemoveUntagged} disabled={!canEdit || gcStatus?.running} />
+				</FormField>
+
+				<p class="text-[13px] text-muted-foreground">
+					{gcStatus?.scheduled
+						? `Runs automatically every ${gcStatus.intervalHours}h. Avoid pushing images while a collection is running.`
+						: 'Automatic collection is disabled (gc.enabled in config). Avoid pushing images while a collection is running.'}
+				</p>
+			</div>
+			{#snippet footer()}
+				{#if canEdit}
+					<Button variant="outline" onclick={() => runGC(true)} disabled={gcTriggering || gcStatus?.running}>
+						Dry Run
+					</Button>
+					<Button onclick={() => runGC(false)} disabled={gcTriggering || gcStatus?.running} class="gap-2">
+						<Trash2 class="h-4 w-4" />
+						Run Now
+					</Button>
+				{/if}
+			{/snippet}
 		</FormCard>
 	</div>
 {/if}

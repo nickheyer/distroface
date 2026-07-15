@@ -116,6 +116,10 @@ message Repository {
   int64 push_count = 14;
   // is_org_namespace indicates whether the namespace belongs to an organization.
   bool is_org_namespace = 15;
+  // star_count is the number of users who starred the repository.
+  int64 star_count = 16;
+  // is_starred indicates whether the requesting user starred the repository.
+  bool is_starred = 17;
 }
 
 // Platform describes the platform which the image in the manifest runs on.

@@ -435,9 +435,8 @@ func (m *Manager) ValidateAPIToken(ctx context.Context, rawToken string) (*Authe
 		return nil, fmt.Errorf("failed to get user roles: %w", err)
 	}
 
-	go func() {
-		_ = m.store.UpdateAPITokenLastUsed(context.Background(), apiToken.ID)
-	}()
+	// Synchronous, a detached write races store shutdown
+	_ = m.store.UpdateAPITokenLastUsed(ctx, apiToken.ID)
 
 	authUser := &AuthenticatedUser{
 		ID:       user.ID,

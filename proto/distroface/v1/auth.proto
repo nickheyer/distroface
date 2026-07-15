@@ -17,7 +17,7 @@ service AuthService {
   rpc Logout(LogoutRequest) returns (LogoutResponse) {}
   // GetCurrentUser returns the currently authenticated user.
   rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse) {}
-  // RefreshSession extends the current session.
+  // RefreshSession issues a fresh session token and invalidates the current one.
   rpc RefreshSession(RefreshSessionRequest) returns (RefreshSessionResponse) {}
   // GetAuthStatus returns which auth methods are available (public).
   rpc GetAuthStatus(GetAuthStatusRequest) returns (GetAuthStatusResponse) {}

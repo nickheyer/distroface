@@ -82,6 +82,7 @@ type OrgMember struct {
 	OrgID     string        `json:"org_id" gorm:"not null;uniqueIndex:idx_org_user;column:org_id"`
 	UserID    string        `json:"user_id" gorm:"not null;uniqueIndex:idx_org_user;column:user_id"`
 	Role      string        `json:"role" gorm:"not null;default:'member'"`
+	Source    string        `json:"source" gorm:"not null;default:'local'"`
 	CreatedAt time.Time     `json:"created_at" gorm:"autoCreateTime"`
 	Org       *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 	User      *User         `json:"-" gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
@@ -100,6 +101,15 @@ type Repository struct {
 	LastPush       *time.Time `json:"last_push"`
 	CreatedAt      time.Time  `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt      time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type Star struct {
+	ID        string      `json:"id" gorm:"primaryKey"`
+	UserID    string      `json:"user_id" gorm:"not null;uniqueIndex:idx_star_user_repo;column:user_id"`
+	RepoID    string      `json:"repo_id" gorm:"not null;uniqueIndex:idx_star_user_repo;index;column:repo_id"`
+	CreatedAt time.Time   `json:"created_at" gorm:"autoCreateTime"`
+	User      *User       `json:"-" gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Repo      *Repository `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
 }
 
 // Webhook scope constants

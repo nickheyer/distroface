@@ -1,6 +1,6 @@
-# goreleaser config for dfcli — cross-platform static binaries published via
-# the artifact repo (as v1 did with the DFCli repo). The distroface server is
-# intentionally NOT built here: it needs CGO for sqlite.
+# goreleaser config for dfcli cross-platform static binaries. The distroface
+# server is intentionally NOT built here: it needs CGO for sqlite, so the
+# release workflow builds it on native runners instead.
 version: 2
 
 project_name: dfcli
@@ -37,4 +37,4 @@ snapshot:
   version_template: "{{ incpatch .Version }}-dev"
 
 release:
-  disable: true # Binaries are published to the DFCli artifact repo, not GitHub
+  disable: true

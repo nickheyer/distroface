@@ -5,6 +5,7 @@
 backups/
 sandbox/
 build/
+/dist/
 distroface
 !proto/distroface
 !cmd/distroface

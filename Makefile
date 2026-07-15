@@ -61,11 +61,6 @@ dfcli:
 	@echo "Building dfcli..."
 	CGO_ENABLED=0 go build -ldflags "-s -w -X main.Version=$${DFCLI_VERSION:-dev}" -o build/dfcli ./cmd/dfcli
 
-# Build and push Docker image to :dev tag
-image:
-	@echo "Building and pushing Docker image..."
-	@bash scripts/build.sh
-
 # Clean development data
 clean:
 	@echo "Cleaning development data..."

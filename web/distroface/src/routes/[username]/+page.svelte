@@ -24,6 +24,11 @@
 	let repoPage = $state(1);
 	const repoPageSize = 20;
 
+	let starred = $state<Repository[]>([]);
+	let starredLoading = $state(true);
+	let starredTotalCount = $state(0);
+	let starredPage = $state(1);
+
 	const isOwnProfile = $derived(authStore.user?.username === username);
 
 	function getInitials(u: User): string {
@@ -65,7 +70,32 @@
 		loadRepos();
 	}
 
+	async function loadStarred() {
+		starredLoading = true;
+		try {
+			const resp = await rpcClient.repository.listStarredRepositories({
+				pageSize: repoPageSize,
+				pageToken: pageToToken(starredPage, repoPageSize)
+			});
+			starred = resp.repositories;
+			starredTotalCount = resp.totalCount;
+		} catch {
+			starred = [];
+		} finally {
+			starredLoading = false;
+		}
+	}
+
+	function handleStarredPageChange(newPage: number) {
+		starredPage = newPage;
+		loadStarred();
+	}
+
 	onMount(() => { loadUser(); loadRepos(); });
+
+	$effect(() => {
+		if (isOwnProfile) loadStarred();
+	});
 </script>
 
 <div class="space-y-6">
@@ -150,4 +180,26 @@
 			emptyMessage="No repositories yet"
 		/>
 	</div>
+
+	{#if isOwnProfile}
+		<div class="space-y-4">
+			<div class="section-header">
+				<h2 class="section-title">Starred</h2>
+				{#if starredTotalCount > 0}
+					<span class="text-[12px] text-muted-foreground/60 tabular-nums">{starredTotalCount} total</span>
+				{/if}
+			</div>
+
+			<RepoList
+				repos={starred}
+				totalCount={starredTotalCount}
+				loading={starredLoading}
+				page={starredPage}
+				pageSize={repoPageSize}
+				onPageChange={handleStarredPageChange}
+				emptyMessage="No starred repositories"
+				emptyDescription="Star repositories to keep track of them here."
+			/>
+		</div>
+	{/if}
 </div>

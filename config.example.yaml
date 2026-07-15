@@ -23,6 +23,22 @@ registry:
 auth:
   session_duration: 86400       # 24 hours in seconds
   token_expiry: 900             # 15 minutes for registry tokens
+  # oidc:
+  #   enabled: true
+  #   issuer_uri: "https://idp.example.com/realms/main"
+  #   client_id: "distroface"
+  #   client_secret: "..."
+  #   redirect_url: "https://registry.example.com/api/v1/auth/oidc/callback"
+  #   role_claim: "roles"        # Claim mapped to distroface roles
+  #   group_claim: "groups"      # Claim listing idp groups
+  #   group_org_mapping:         # Idp group -> org membership
+  #     platform-team: platform
+
+# Registry garbage collection
+gc:
+  enabled: false          # Scheduled mark and sweep
+  interval_hours: 24
+  remove_untagged: false  # Scheduled runs also drop untagged manifests
 
 # Webhook delivery
 webhooks:

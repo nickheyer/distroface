@@ -20,6 +20,12 @@ service RepositoryService {
   rpc ResolveTag(ResolveTagRequest) returns (ResolveTagResponse) {}
   // UpdateRepository updates a repository's metadata.
   rpc UpdateRepository(UpdateRepositoryRequest) returns (UpdateRepositoryResponse) {}
+  // StarRepository stars a repository for the current user.
+  rpc StarRepository(StarRepositoryRequest) returns (StarRepositoryResponse) {}
+  // UnstarRepository removes the current user's star from a repository.
+  rpc UnstarRepository(UnstarRepositoryRequest) returns (UnstarRepositoryResponse) {}
+  // ListStarredRepositories returns the current user's starred repositories.
+  rpc ListStarredRepositories(ListStarredRepositoriesRequest) returns (ListStarredRepositoriesResponse) {}
 }
 
 // GetRepositoryRequest identifies a repository to retrieve.
@@ -125,4 +131,50 @@ message UpdateRepositoryRequest {
 message UpdateRepositoryResponse {
   // repository is the updated repository.
   Repository repository = 1;
+}
+
+// StarRepositoryRequest identifies a repository to star.
+message StarRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// StarRepositoryResponse contains the updated star count.
+message StarRepositoryResponse {
+  // star_count is the repository's star count after starring.
+  int64 star_count = 1;
+}
+
+// UnstarRepositoryRequest identifies a repository to unstar.
+message UnstarRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// UnstarRepositoryResponse contains the updated star count.
+message UnstarRepositoryResponse {
+  // star_count is the repository's star count after unstarring.
+  int64 star_count = 1;
+}
+
+// ListStarredRepositoriesRequest contains pagination parameters.
+message ListStarredRepositoriesRequest {
+  // page_size is the maximum number of repositories to return.
+  int32 page_size = 1;
+  // page_token is the pagination token from a previous response.
+  string page_token = 2;
+}
+
+// ListStarredRepositoriesResponse contains a page of starred repositories.
+message ListStarredRepositoriesResponse {
+  // repositories is the list of starred repositories.
+  repeated Repository repositories = 1;
+  // next_page_token is the token for the next page.
+  string next_page_token = 2;
+  // total_count is the total number of starred repositories.
+  int32 total_count = 3;
 }

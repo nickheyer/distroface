@@ -202,8 +202,9 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Map claims to roles
+	// Map claims to roles and orgs
 	h.mapClaimsToRoles(ctx, user.ID, claims)
+	h.mapGroupsToOrgs(ctx, user.ID, claims)
 
 	// Get roles and create session
 	roleNames, _ := h.store.GetUserRoleNames(ctx, user.ID)
@@ -283,28 +284,34 @@ func (h *OIDCHandler) findOrCreateOIDCUser(ctx context.Context, sub, username, e
 	return user, nil
 }
 
+// Claim value as strings accepting array or json string
+func claimStrings(v any) []string {
+	switch val := v.(type) {
+	case []any:
+		var out []string
+		for _, item := range val {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case string:
+		var arr []string
+		if json.Unmarshal([]byte(val), &arr) == nil {
+			return arr
+		}
+		return []string{val}
+	}
+	return nil
+}
+
 // Sync oidc claim roles add new drop revoked
 func (h *OIDCHandler) mapClaimsToRoles(ctx context.Context, userID string, claims map[string]any) {
 	if h.config.RoleClaim == "" {
 		return
 	}
 
-	var claimValues []string
-	switch v := claims[h.config.RoleClaim].(type) {
-	case []any:
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				claimValues = append(claimValues, s)
-			}
-		}
-	case string:
-		var arr []string
-		if json.Unmarshal([]byte(v), &arr) == nil {
-			claimValues = arr
-		} else {
-			claimValues = []string{v}
-		}
-	}
+	claimValues := claimStrings(claims[h.config.RoleClaim])
 
 	desired := make(map[string]bool)
 	for _, cv := range claimValues {
@@ -333,6 +340,67 @@ func (h *OIDCHandler) mapClaimsToRoles(ctx context.Context, userID string, claim
 	for roleName := range desired {
 		if err := h.store.AssignRole(ctx, userID, roleName, "oidc"); err != nil {
 			h.log.Warn("OIDC: failed to assign role %q to %s: %v", roleName, userID, err)
+		}
+	}
+}
+
+// Sync oidc group claims to org memberships add new drop revoked
+func (h *OIDCHandler) mapGroupsToOrgs(ctx context.Context, userID string, claims map[string]any) {
+	if len(h.config.GroupOrgMapping) == 0 {
+		return
+	}
+
+	groupClaim := h.config.GroupClaim
+	if groupClaim == "" {
+		groupClaim = "groups"
+	}
+
+	desired := make(map[string]bool)
+	for _, group := range claimStrings(claims[groupClaim]) {
+		if orgName, ok := h.config.GroupOrgMapping[group]; ok {
+			desired[orgName] = true
+		}
+	}
+
+	current, err := h.store.GetOrgMembershipsBySource(ctx, userID, "oidc")
+	if err != nil {
+		h.log.Error("OIDC: failed to load group memberships for %s: %v", userID, err)
+		return
+	}
+
+	for _, member := range current {
+		if member.Org == nil || desired[member.Org.Name] {
+			continue
+		}
+		// Never drop a sole owner
+		if member.Role == db.OrgRoleOwner {
+			if owners, err := h.store.CountOrgMembersByRole(ctx, member.OrgID, db.OrgRoleOwner); err != nil || owners <= 1 {
+				h.log.Warn("OIDC: keeping user %s in org %s (sole owner)", userID, member.Org.Name)
+				continue
+			}
+		}
+		if err := h.store.RemoveOrgMember(ctx, member.OrgID, userID); err != nil {
+			h.log.Error("OIDC: failed to remove %s from org %s: %v", userID, member.Org.Name, err)
+		}
+	}
+
+	for orgName := range desired {
+		org, err := h.store.GetOrganization(ctx, orgName)
+		if err != nil || org == nil {
+			h.log.Warn("OIDC: mapped org %q does not exist, skipping", orgName)
+			continue
+		}
+		existing, err := h.store.GetOrgMember(ctx, org.ID, userID)
+		if err != nil || existing != nil {
+			continue // Already a member from any source
+		}
+		if err := h.store.AddOrgMember(ctx, &db.OrgMember{
+			OrgID:  org.ID,
+			UserID: userID,
+			Role:   db.OrgRoleMember,
+			Source: "oidc",
+		}); err != nil {
+			h.log.Error("OIDC: failed to add %s to org %s: %v", userID, orgName, err)
 		}
 	}
 }
