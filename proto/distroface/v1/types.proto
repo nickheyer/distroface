@@ -258,7 +258,7 @@ message ImageConfig {
   string os = 4;
   // history is the ordered list of build steps.
   repeated HistoryEntry history = 5;
-  // cmd is the default command.
+  // Cmd is the default command.
   repeated string cmd = 6;
   // entrypoint is the image entrypoint.
   repeated string entrypoint = 7;

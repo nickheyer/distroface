@@ -11,12 +11,12 @@ import (
 
 	"github.com/distribution/distribution/v3/registry/handlers"
 	"github.com/nickheyer/distroface/internal/auth"
-	"github.com/nickheyer/distroface/internal/config"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc"
 	"github.com/nickheyer/distroface/internal/webhook"
+	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/http2"

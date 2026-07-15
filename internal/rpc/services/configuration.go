@@ -7,7 +7,7 @@ import (
 	"slices"
 
 	"connectrpc.com/connect"
-	"github.com/nickheyer/distroface/internal/config"
+	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"

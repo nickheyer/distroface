@@ -17,6 +17,20 @@ type Config struct {
 	Auth     AuthConfig     `mapstructure:"auth" json:"auth"`
 }
 
+type MigrateConfig struct {
+	V1DB      string // path to v1 distro.db
+	V1Root    string // v1 storage root (contains blobs/, repositories/, artifacts/)
+	V2DB      string // path to v2 sqlite db (direct writes: users, orgs, visibility, webhook toggle)
+	Registry  string // v2 registry host[:port] for docker API push-replay
+	User      string // v2 username for registry auth
+	Pass      string // v2 password or df_ API token (or V2_PASSWORD env)
+	PlainHTTP bool   // registry is plain http (dev / behind TLS terminator)
+	LegacyNS  string // org namespace that flat v1 names are mapped into
+	DryRun    bool   // print planned actions without writing
+	Jobs      int    // concurrent repo pushes
+	Verbose   bool
+}
+
 type ServerConfig struct {
 	Port         string `mapstructure:"port" json:"port"`
 	Host         string `mapstructure:"host" json:"host"`
@@ -42,10 +56,10 @@ type RegistryConfig struct {
 }
 
 type AuthConfig struct {
-	SessionTimeout  int        `mapstructure:"session_timeout" json:"session_timeout"`
-	TokenExpiry     int        `mapstructure:"token_expiry" json:"token_expiry"`
-	JWTSecret       string     `mapstructure:"jwt_secret" json:"-"`
-	AnonymousAccess bool       `mapstructure:"anonymous_access" json:"anonymous_access"`
+	SessionTimeout  int         `mapstructure:"session_timeout" json:"session_timeout"`
+	TokenExpiry     int         `mapstructure:"token_expiry" json:"token_expiry"`
+	JWTSecret       string      `mapstructure:"jwt_secret" json:"-"`
+	AnonymousAccess bool        `mapstructure:"anonymous_access" json:"anonymous_access"`
 	Local           LocalConfig `mapstructure:"local" json:"local"`
 	OIDC            OIDCConfig  `mapstructure:"oidc" json:"oidc"`
 }
@@ -56,16 +70,16 @@ type LocalConfig struct {
 }
 
 type OIDCConfig struct {
-	Enabled       bool              `mapstructure:"enabled" json:"enabled"`
-	IssuerURI     string            `mapstructure:"issuer_uri" json:"issuer_uri"`
-	ClientID      string            `mapstructure:"client_id" json:"client_id"`
-	ClientSecret  string            `mapstructure:"client_secret" json:"-"`
-	RedirectURL   string            `mapstructure:"redirect_url" json:"redirect_url"`
-	Scopes        []string          `mapstructure:"scopes" json:"scopes"`
-	RoleClaim     string            `mapstructure:"role_claim" json:"role_claim"`
-	RoleMapping   map[string]string `mapstructure:"role_mapping" json:"role_mapping"`
+	Enabled         bool              `mapstructure:"enabled" json:"enabled"`
+	IssuerURI       string            `mapstructure:"issuer_uri" json:"issuer_uri"`
+	ClientID        string            `mapstructure:"client_id" json:"client_id"`
+	ClientSecret    string            `mapstructure:"client_secret" json:"-"`
+	RedirectURL     string            `mapstructure:"redirect_url" json:"redirect_url"`
+	Scopes          []string          `mapstructure:"scopes" json:"scopes"`
+	RoleClaim       string            `mapstructure:"role_claim" json:"role_claim"`
+	RoleMapping     map[string]string `mapstructure:"role_mapping" json:"role_mapping"`
 	GroupOrgMapping map[string]string `mapstructure:"group_org_mapping" json:"group_org_mapping"`
-	SkipTLSVerify bool              `mapstructure:"skip_tls_verify" json:"skip_tls_verify"`
+	SkipTLSVerify   bool              `mapstructure:"skip_tls_verify" json:"skip_tls_verify"`
 }
 
 type LoggingConfig struct {

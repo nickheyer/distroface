@@ -11,8 +11,8 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/uuid"
-	"github.com/nickheyer/distroface/internal/config"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"golang.org/x/oauth2"
 )

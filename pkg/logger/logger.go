@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	pkgcfg "github.com/nickheyer/distroface/pkg/config"
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -182,4 +183,10 @@ func (l *Logger) GetLogFilePath() string {
 		return l.fileLogger.Filename
 	}
 	return ""
+}
+
+func Logv(cfg *pkgcfg.MigrateConfig, format string, args ...any) {
+	if cfg.Verbose {
+		fmt.Printf(format+"\n", args...)
+	}
 }

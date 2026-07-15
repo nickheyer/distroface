@@ -14,9 +14,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/nickheyer/distroface/internal/config"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/rbac"
+	"github.com/nickheyer/distroface/pkg/config"
 	"golang.org/x/crypto/bcrypt"
 )
 

@@ -11,9 +11,9 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
-	"github.com/nickheyer/distroface/internal/config"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/rbac"
+	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
@@ -507,4 +507,3 @@ func userToProto(u *storage.User, roles []string) *v1.User {
 	}
 	return proto
 }
-
