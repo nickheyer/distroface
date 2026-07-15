@@ -1,13 +1,14 @@
+# syntax=docker/dockerfile:1
 ARG APP_VERSION=dev
 
 # Generate protobuf code using buf
-FROM bufbuild/buf:latest AS proto-builder
+FROM --platform=$BUILDPLATFORM bufbuild/buf:latest AS proto-builder
 WORKDIR /app
 COPY buf.yaml buf.gen.yaml ./
 COPY proto/ ./proto/
 RUN mkdir -p web/distroface/static pkg/proto web/distroface/src/lib/proto && buf generate
 
-FROM node:22-alpine AS frontend-builder
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-builder
 
 ARG APP_VERSION
 ENV APP_VERSION=${APP_VERSION}
@@ -15,7 +16,7 @@ ENV APP_VERSION=${APP_VERSION}
 WORKDIR /app/web/distroface
 
 COPY web/distroface/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 COPY web/distroface/ ./
 COPY --from=proto-builder /app/web/distroface/src/lib/proto ./src/lib/proto/
@@ -32,13 +33,15 @@ RUN apk add --no-cache gcc musl-dev sqlite-dev
 WORKDIR /app
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 COPY . .
 COPY --from=proto-builder /app/pkg/proto ./pkg/proto/
 COPY --from=frontend-builder /app/web/distroface/build ./web/distroface/build
 
-RUN CGO_ENABLED=1 GOOS=linux go build -a -installsuffix cgo -o distroface ./cmd/distroface
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -o distroface ./cmd/distroface
 
 FROM alpine:latest
 
