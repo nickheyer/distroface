@@ -139,6 +139,40 @@ func (v *V2) EnsureOrg(ctx context.Context, name, ownerUsername string) (created
 	return true, nil
 }
 
+// EnsureArtifactRepo creates a v1 artifact repo in v2 if missing, preserving
+// name, description, privacy, and timestamps. The v1 owner username must
+// already exist in v2 (run users import first).
+func (v *V2) EnsureArtifactRepo(ctx context.Context, r V1ArtifactRepo) (repoID int64, created bool, err error) {
+	existing, err := v.Store.GetArtifactRepository(ctx, r.Name)
+	if err != nil {
+		return 0, false, err
+	}
+	if existing != nil {
+		return existing.ID, false, nil
+	}
+
+	owner, err := v.Store.GetUserByUsername(ctx, r.Owner)
+	if err != nil {
+		return 0, false, err
+	}
+	if owner == nil {
+		return 0, false, fmt.Errorf("owner %q not found in v2 (run users import first)", r.Owner)
+	}
+
+	repo := &db.ArtifactRepository{
+		Name:        r.Name,
+		Description: r.Desc,
+		OwnerID:     owner.ID,
+		IsPrivate:   r.Private,
+		CreatedAt:   r.CreatedAt,
+		UpdatedAt:   r.UpdatedAt,
+	}
+	if err := v.Store.CreateArtifactRepository(ctx, repo); err != nil {
+		return 0, false, err
+	}
+	return repo.ID, true, nil
+}
+
 // SuppressWebhooks deactivates all active webhooks and returns a restore func.
 // The v2 listener dispatches per-event by querying active webhooks, so flipping
 // the rows off silences dispatch during replay without touching server code.

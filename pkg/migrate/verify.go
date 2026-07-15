@@ -3,14 +3,17 @@ package migrate
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
-// CmdVerify produces the digest/tag parity report v1 vs v2: every v1 tag must
-// exist in v2 under its mapped name with an identical manifest digest.
+// CmdVerify produces the parity report v1 vs v2: every v1 tag must exist in v2
+// under its mapped name with an identical manifest digest, and with -v2-db
+// every planned v1 artifact must exist with matching size and blob.
 func CmdVerify(ctx context.Context, cfg *config.MigrateConfig) error {
 	if cfg.V1Root == "" {
 		return fmt.Errorf("-v1-root is required for verification")
@@ -107,15 +110,108 @@ func CmdVerify(ctx context.Context, cfg *config.MigrateConfig) error {
 		}
 	}
 
+	var artOK, artMissing, artBad int
+	if v2db != nil {
+		if artOK, artMissing, artBad, err = verifyArtifacts(ctx, cfg, v2db, v1s); err != nil {
+			return err
+		}
+	}
+
 	fmt.Printf("\nverify: %d ok, %d mismatched, %d missing, %d extra", match, mismatch, missing, extra)
 	if v2db != nil {
 		fmt.Printf(", %d visibility divergences", visBad)
+		fmt.Printf("; artifacts: %d ok, %d missing, %d divergent", artOK, artMissing, artBad)
 	}
 	fmt.Println()
 
-	if mismatch+missing+visBad > 0 {
-		return fmt.Errorf("parity check failed: %d mismatched, %d missing, %d visibility divergences", mismatch, missing, visBad)
+	if mismatch+missing+visBad+artMissing+artBad > 0 {
+		return fmt.Errorf("parity check failed: %d mismatched, %d missing, %d visibility divergences, %d artifact(s) missing, %d artifact(s) divergent",
+			mismatch, missing, visBad, artMissing, artBad)
 	}
 	fmt.Println("v1 and v2 are in parity")
 	return nil
+}
+
+// verifyArtifacts checks every planned v1 artifact against v2: the row must
+// exist (by preserved ID, else by identity), sizes must match the v1 file, and
+// with -v2-artifacts the content-addressed blob must be present and whole.
+func verifyArtifacts(ctx context.Context, cfg *config.MigrateConfig, v2db *V2, v1s *V1Storage) (ok, missing, bad int, err error) {
+	v1db, err := OpenV1DB(cfg.V1DB)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	defer v1db.Close()
+	plan, err := PlanArtifacts(v1db)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	var blobs *artifacts.BlobStore
+	if cfg.V2Artifacts != "" {
+		if blobs, err = artifacts.NewBlobStore(cfg.V2Artifacts); err != nil {
+			return 0, 0, 0, err
+		}
+	}
+
+	repoIDs := map[int64]int64{}
+	for _, r := range plan.Repos {
+		v2r, err := v2db.Store.GetArtifactRepository(ctx, r.Name)
+		if err != nil {
+			return 0, 0, 0, err
+		}
+		if v2r == nil {
+			fmt.Printf("ART MISSING  repo %s (not created in v2)\n", r.Name)
+			continue
+		}
+		repoIDs[r.ID] = v2r.ID
+	}
+
+	for _, a := range plan.Artifacts {
+		if ctx.Err() != nil {
+			return ok, missing, bad, ctx.Err()
+		}
+		row, err := v2db.Store.GetArtifact(ctx, a.ID)
+		if err != nil {
+			return ok, missing, bad, err
+		}
+		if row == nil {
+			if v2RepoID, found := repoIDs[a.RepoID]; found {
+				if row, err = v2db.Store.GetArtifactByPathVersion(ctx, v2RepoID, a.Version, a.Path); err != nil {
+					return ok, missing, bad, err
+				}
+			}
+		}
+		if row == nil {
+			fmt.Printf("ART MISSING  %s %s@%s\n", a.RepoName, a.Path, a.Version)
+			missing++
+			continue
+		}
+
+		divergent := false
+		if info, statErr := os.Stat(v1s.ArtifactFilePath(a)); statErr == nil && info.Size() != row.Size {
+			fmt.Printf("ART MISMATCH %s %s@%s: v1 file %d bytes, v2 row %d bytes\n", a.RepoName, a.Path, a.Version, info.Size(), row.Size)
+			divergent = true
+		}
+		if blobs != nil && !divergent {
+			f, info, blobErr := blobs.OpenBlob(row.Digest)
+			switch {
+			case blobErr != nil:
+				fmt.Printf("ART MISMATCH %s %s@%s: blob %s unreadable: %v\n", a.RepoName, a.Path, a.Version, row.Digest, blobErr)
+				divergent = true
+			case info.Size() != row.Size:
+				f.Close()
+				fmt.Printf("ART MISMATCH %s %s@%s: blob %s is %d bytes, row says %d\n", a.RepoName, a.Path, a.Version, row.Digest, info.Size(), row.Size)
+				divergent = true
+			default:
+				f.Close()
+			}
+		}
+		if divergent {
+			bad++
+		} else {
+			ok++
+			logger.Logv(cfg, "ART OK       %s %s@%s", a.RepoName, a.Path, a.Version)
+		}
+	}
+	return ok, missing, bad, nil
 }

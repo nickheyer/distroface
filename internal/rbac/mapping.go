@@ -70,6 +70,9 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.RoleServiceUnassignRoleProcedure:        {Resource: ResourceRoles, Action: ActionDelete},
 	distrofacev1connect.RoleServiceGetUserRolesProcedure:        {Resource: ResourceRoles, Action: ActionRead},
 
+	// ── ConfigurationService (admin) ──────────────────────────────────
+	distrofacev1connect.ConfigurationServiceGetStorageUsageProcedure: {Resource: ResourceSettings, Action: ActionRead},
+
 	// ── AuthService (admin) ───────────────────────────────────────────
 	distrofacev1connect.AuthServiceGetAuthConfigProcedure:      {Resource: ResourceSettings, Action: ActionRead},
 	distrofacev1connect.AuthServiceUpdateAuthSettingsProcedure: {Resource: ResourceSettings, Action: ActionUpdate},

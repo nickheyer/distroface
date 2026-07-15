@@ -306,6 +306,15 @@ func (s *Store) DeleteArtifact(ctx context.Context, id string) error {
 
 // ── Blob reference counting ──────────────────────────────────────────────
 
+// Sums one size per distinct digest matching disk usage
+func (s *Store) ArtifactUniqueBlobBytes(ctx context.Context) (int64, error) {
+	var total int64
+	err := s.db.WithContext(ctx).
+		Raw(`SELECT COALESCE(SUM(size),0) FROM (SELECT MAX(size) AS size FROM artifacts GROUP BY digest)`).
+		Scan(&total).Error
+	return total, err
+}
+
 func (s *Store) CountArtifactsByDigest(ctx context.Context, digest string) (int64, error) {
 	var count int64
 	err := s.db.WithContext(ctx).Model(&Artifact{}).Where("digest = ?", digest).Count(&count).Error

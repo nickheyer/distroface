@@ -4,11 +4,12 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import StatCard from '$lib/components/stat-card.svelte';
-	import { Users, Package, Building2, Key, Shield, Globe } from '@lucide/svelte';
+	import { Users, Package, Building2, Key, Shield, Globe, HardDrive, Archive } from '@lucide/svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
-	import { relativeTime } from '$lib/utils';
+	import { relativeTime, formatBytes } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import type { User, Repository } from '$lib/proto/distroface/v1/types_pb';
+	import type { GetStorageUsageResponse } from '$lib/proto/distroface/v1/configuration_pb';
 
 	let loading = $state(true);
 	let userCount = $state(0);
@@ -17,6 +18,7 @@
 	let roleCount = $state(0);
 	let recentUsers = $state<User[]>([]);
 	let recentRepos = $state<Repository[]>([]);
+	let storageUsage = $state<GetStorageUsageResponse | null>(null);
 	let authConfig = $state<{
 		localEnabled: boolean;
 		oidcEnabled: boolean;
@@ -71,6 +73,12 @@
 			// error interceptor
 		} finally {
 			loading = false;
+		}
+
+		try {
+			storageUsage = await rpcClient.configuration.getStorageUsage({}, silentCallOptions);
+		} catch {
+			// storage scan is best-effort
 		}
 	}
 
@@ -186,5 +194,59 @@
 				</div>
 			</div>
 		</div>
+
+		{#if storageUsage}
+			<div class="rounded-xl border border-border/60 overflow-hidden">
+				<div class="px-4 py-3 bg-muted/20 border-b border-border/40">
+					<h3 class="text-sm font-semibold">Storage</h3>
+				</div>
+				<div class="grid lg:grid-cols-2 divide-y lg:divide-y-0 lg:divide-x divide-border/40">
+					<div>
+						<div class="flex items-center gap-3 px-4 py-2.5 border-b border-border/40 bg-muted/10">
+							<HardDrive class="h-4 w-4 text-muted-foreground" />
+							<span class="text-sm font-medium flex-1">Registry Images</span>
+							<span class="text-sm font-semibold">{formatBytes(Number(storageUsage.registryBytes))}</span>
+						</div>
+						{#if storageUsage.registryNamespaces.length === 0}
+							<div class="px-4 py-6 text-center text-sm text-muted-foreground">No image data</div>
+						{:else}
+							<div class="divide-y divide-border/40">
+								{#each storageUsage.registryNamespaces as ns}
+									<div class="flex items-center gap-3 px-4 py-2.5">
+										<span class="text-sm truncate flex-1">{ns.name}</span>
+										<span class="text-xs text-muted-foreground shrink-0">
+											{ns.count} {ns.count === 1 ? 'repo' : 'repos'}
+										</span>
+										<span class="text-xs font-medium shrink-0 w-20 text-right">{formatBytes(Number(ns.bytes))}</span>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+					<div>
+						<div class="flex items-center gap-3 px-4 py-2.5 border-b border-border/40 bg-muted/10">
+							<Archive class="h-4 w-4 text-muted-foreground" />
+							<span class="text-sm font-medium flex-1">Artifacts</span>
+							<span class="text-sm font-semibold">{formatBytes(Number(storageUsage.artifactBytes))}</span>
+						</div>
+						{#if storageUsage.artifactRepos.length === 0}
+							<div class="px-4 py-6 text-center text-sm text-muted-foreground">No artifact data</div>
+						{:else}
+							<div class="divide-y divide-border/40">
+								{#each storageUsage.artifactRepos as repo}
+									<div class="flex items-center gap-3 px-4 py-2.5">
+										<span class="text-sm truncate flex-1">{repo.name}</span>
+										<span class="text-xs text-muted-foreground shrink-0">
+											{repo.count} {repo.count === 1 ? 'artifact' : 'artifacts'}
+										</span>
+										<span class="text-xs font-medium shrink-0 w-20 text-right">{formatBytes(Number(repo.bytes))}</span>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				</div>
+			</div>
+		{/if}
 	</div>
 {/if}

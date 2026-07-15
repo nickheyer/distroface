@@ -1,10 +1,12 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Label } from '$lib/components/ui/label';
 	import { Alert, AlertDescription } from '$lib/components/ui/alert';
 	import { Card, CardContent } from '$lib/components/ui/card';
-	import { Lock, ShieldCheck, Check, ArrowRight, Loader2 } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Lock, ShieldCheck, Check, ArrowRight, Loader2, KeyRound, Globe } from '@lucide/svelte';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
 	import PasswordInput from '$lib/components/password-input.svelte';
@@ -16,8 +18,35 @@
 	let saving = $state(false);
 	let errors = $state<Record<string, string>>({});
 	let touched = $state<Record<string, boolean>>({});
+	let oidcEnabled = $state(false);
 
 	const isOIDC = $derived(authStore.user?.authProvider !== 'local');
+
+	const connectedAccounts = $derived([
+		{
+			label: 'Local password',
+			description: 'Sign in with a username and password stored on this server.',
+			icon: KeyRound,
+			connected: !isOIDC,
+			show: true
+		},
+		{
+			label: 'Single sign-on',
+			description: 'Sign in through your organization’s identity provider.',
+			icon: Globe,
+			connected: isOIDC,
+			show: oidcEnabled || isOIDC
+		}
+	]);
+
+	onMount(async () => {
+		try {
+			const status = await rpcClient.auth.getAuthStatus({}, silentCallOptions);
+			oidcEnabled = status.oidcEnabled;
+		} catch {
+			// non-critical
+		}
+	});
 	const confirmMatch = $derived(
 		confirmPassword.length > 0 && newPassword === confirmPassword
 	);
@@ -65,6 +94,39 @@
 		<h2 class="section-title">Security</h2>
 		<p class="section-subtitle">Manage your password and account security.</p>
 	</div>
+
+	<Card class="border-border/60 pt-0">
+		<div class="flex items-center gap-3 px-6 py-4 border-b border-border/40 bg-muted/20">
+			<div class="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+				<ShieldCheck class="h-4 w-4 text-primary" />
+			</div>
+			<div>
+				<h3 class="text-sm font-semibold">Connected accounts</h3>
+				<p class="text-xs text-muted-foreground mt-0.5">How you sign in to this account.</p>
+			</div>
+		</div>
+		<CardContent class="p-0">
+			<div class="divide-y divide-border/40">
+				{#each connectedAccounts.filter((a) => a.show) as account}
+					<div class="flex items-center gap-3 px-6 py-4">
+						<account.icon class="h-4 w-4 text-muted-foreground shrink-0" />
+						<div class="flex-1 min-w-0">
+							<p class="text-sm font-medium">{account.label}</p>
+							<p class="text-xs text-muted-foreground mt-0.5">{account.description}</p>
+						</div>
+						{#if account.connected}
+							<Badge variant="outline" class="text-success border-success/30 gap-1 shrink-0">
+								<Check class="h-3 w-3" />
+								Connected
+							</Badge>
+						{:else}
+							<span class="text-xs text-muted-foreground shrink-0">Not linked</span>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		</CardContent>
+	</Card>
 
 	{#if isOIDC}
 		<Alert>

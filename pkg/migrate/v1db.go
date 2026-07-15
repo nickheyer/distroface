@@ -39,24 +39,29 @@ type V1Image struct {
 }
 
 type V1ArtifactRepo struct {
-	ID      int64
-	Name    string
-	Desc    string
-	Owner   string
-	Private bool
+	ID        int64
+	Name      string
+	Desc      string
+	Owner     string
+	Private   bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type V1Artifact struct {
-	ID       string
-	RepoID   int64
-	RepoName string
-	Name     string
-	Path     string
-	UploadID string
-	Version  string
-	Size     int64
-	MimeType string
-	Metadata string
+	ID        string
+	RepoID    int64
+	RepoName  string
+	Name      string
+	Path      string
+	UploadID  string
+	Version   string
+	Size      int64
+	MimeType  string
+	Metadata  string
+	RowID     int64 // Insertion order tiebreak for same second uploads
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type V1DB struct {
@@ -154,7 +159,7 @@ func (v *V1DB) Images() ([]V1Image, error) {
 }
 
 func (v *V1DB) ArtifactRepos() ([]V1ArtifactRepo, error) {
-	rows, err := v.db.Query(`SELECT id, name, COALESCE(description,''), owner, private FROM artifact_repositories ORDER BY id`)
+	rows, err := v.db.Query(`SELECT id, name, COALESCE(description,''), owner, private, created_at, updated_at FROM artifact_repositories ORDER BY id`)
 	if err != nil {
 		return nil, err
 	}
@@ -163,9 +168,12 @@ func (v *V1DB) ArtifactRepos() ([]V1ArtifactRepo, error) {
 	var repos []V1ArtifactRepo
 	for rows.Next() {
 		var r V1ArtifactRepo
-		if err := rows.Scan(&r.ID, &r.Name, &r.Desc, &r.Owner, &r.Private); err != nil {
+		var created, updated string
+		if err := rows.Scan(&r.ID, &r.Name, &r.Desc, &r.Owner, &r.Private, &created, &updated); err != nil {
 			return nil, err
 		}
+		r.CreatedAt = parseV1Time(created)
+		r.UpdatedAt = parseV1Time(updated)
 		repos = append(repos, r)
 	}
 	return repos, rows.Err()
@@ -175,7 +183,8 @@ func (v *V1DB) ArtifactRepos() ([]V1ArtifactRepo, error) {
 // repos were deleted (no FK cascade): those orphans are intentionally skipped.
 func (v *V1DB) LiveArtifacts() ([]V1Artifact, error) {
 	rows, err := v.db.Query(`
-		SELECT a.id, a.repo_id, r.name, a.name, a.path, a.upload_id, a.version, a.size, COALESCE(a.mime_type,''), COALESCE(a.metadata,'')
+		SELECT a.id, a.repo_id, r.name, a.name, a.path, a.upload_id, a.version, a.size, COALESCE(a.mime_type,''), COALESCE(a.metadata,''),
+		       a.rowid, a.created_at, a.updated_at
 		FROM artifacts a
 		JOIN artifact_repositories r ON r.id = a.repo_id
 		ORDER BY r.name, a.version, a.path`)
@@ -187,9 +196,13 @@ func (v *V1DB) LiveArtifacts() ([]V1Artifact, error) {
 	var arts []V1Artifact
 	for rows.Next() {
 		var a V1Artifact
-		if err := rows.Scan(&a.ID, &a.RepoID, &a.RepoName, &a.Name, &a.Path, &a.UploadID, &a.Version, &a.Size, &a.MimeType, &a.Metadata); err != nil {
+		var created, updated string
+		if err := rows.Scan(&a.ID, &a.RepoID, &a.RepoName, &a.Name, &a.Path, &a.UploadID, &a.Version, &a.Size, &a.MimeType, &a.Metadata,
+			&a.RowID, &created, &updated); err != nil {
 			return nil, err
 		}
+		a.CreatedAt = parseV1Time(created)
+		a.UpdatedAt = parseV1Time(updated)
 		arts = append(arts, a)
 	}
 	return arts, rows.Err()

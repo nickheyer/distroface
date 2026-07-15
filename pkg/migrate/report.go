@@ -167,22 +167,26 @@ func CmdReport(ctx context.Context, cfg *config.MigrateConfig) error {
 	}
 
 	// ── Artifacts ────────────────────────────────────────────────────────
-	arts, err := v1db.LiveArtifacts()
+	plan, err := PlanArtifacts(v1db)
 	if err != nil {
 		return err
 	}
-	orphans, err := v1db.OrphanStats()
-	if err != nil {
-		return err
+	var planSize int64
+	propCount := 0
+	for _, a := range plan.Artifacts {
+		planSize += a.Size
+		propCount += len(plan.Props[a.ID])
 	}
-	var liveSize int64
-	for _, a := range arts {
-		liveSize += a.Size
+	fmt.Printf("\nARTIFACTS: %d repo(s), %d artifact(s) (%s) + %d propertie(s) to import\n",
+		len(plan.Repos), len(plan.Artifacts), humanBytes(planSize), propCount)
+	if n := plan.TotalDupSkipped(); n > 0 {
+		fmt.Printf("  dropping %d older duplicate row(s) of the same repo/version/path (v2 keeps only the newest)\n", n)
 	}
-	fmt.Printf("\nARTIFACTS: %d live artifact(s) (%s) will migrate once the v2 artifact backend exists (Phase 7)\n",
-		len(arts), humanBytes(liveSize))
+	if len(plan.Invalid) > 0 {
+		fmt.Printf("  !! %d row(s) are not importable (bad version/path) — run 'artifacts -dry-run' for detail\n", len(plan.Invalid))
+	}
 	fmt.Printf("  skipping %d orphaned artifact row(s) + %d orphaned property row(s)\n",
-		orphans.OrphanedArtifacts, orphans.OrphanedProperties)
+		plan.Orphans.OrphanedArtifacts, plan.Orphans.OrphanedProperties)
 
 	// ── V2 state (optional) ──────────────────────────────────────────────
 	if cfg.V2DB != "" {
@@ -200,7 +204,7 @@ func CmdReport(ctx context.Context, cfg *config.MigrateConfig) error {
 		fmt.Printf("\nV2 STATE: %d of %d v1 users already exist (will be skipped)\n", existing, len(users))
 	}
 
-	fmt.Println("\nreport complete — run 'users', 'orgs', 'images', then 'verify'")
+	fmt.Println("\nreport complete — run 'users', 'orgs', 'images', 'artifacts', then 'verify'")
 	return nil
 }
 

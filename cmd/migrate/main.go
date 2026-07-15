@@ -16,15 +16,16 @@ import (
 //	users     - import v1 users (bcrypt hashes port directly) + map groups -> v2 roles
 //	orgs      - create the legacy org + orgs for v1 two-level namespaces
 //	images    - push-replay images into v2 via the registry API (webhooks suppressed)
-//	artifacts - analyze v1 artifact repos (import blocked until the v2 artifact backend exists)
-//	verify    - digest/tag parity report v1 vs v2
-//	all       - users + orgs + images + verify
+//	artifacts - import v1 artifact repos into v2 (blobs, rows, properties)
+//	verify    - digest/tag/artifact parity report v1 vs v2
+//	all       - users + orgs + images + artifacts + verify
 
 func bindFlags(fs *flag.FlagSet) *config.MigrateConfig {
 	cfg := &config.MigrateConfig{}
 	fs.StringVar(&cfg.V1DB, "v1-db", "distro.db", "path to v1 distro.db")
 	fs.StringVar(&cfg.V1Root, "v1-root", "", "path to v1 storage root directory")
 	fs.StringVar(&cfg.V2DB, "v2-db", "", "path to v2 sqlite database")
+	fs.StringVar(&cfg.V2Artifacts, "v2-artifacts", "", "path to v2 artifact storage root (config artifacts.storage_path)")
 	fs.StringVar(&cfg.Registry, "v2-url", "", "v2 registry host[:port], e.g. registry.example.com:8080")
 	fs.StringVar(&cfg.User, "v2-user", "", "v2 username for registry pushes")
 	fs.StringVar(&cfg.Pass, "v2-pass", "", "v2 password or df_ token (defaults to $V2_PASSWORD)")
@@ -44,9 +45,9 @@ commands:
   users      import v1 users into v2 (bcrypt hashes preserved, groups -> roles)
   orgs       create legacy org + two-level namespace orgs in v2
   images     push-replay v1 images into the v2 registry
-  artifacts  analyze v1 artifact repos (live vs orphaned)
-  verify     tag/digest parity report v1 vs v2
-  all        users + orgs + images + verify
+  artifacts  import v1 artifact repos into v2 (blobs, rows, properties)
+  verify     tag/digest/artifact parity report v1 vs v2
+  all        users + orgs + images + artifacts + verify
 
 run 'migrate <command> -h' for flags
 `)
@@ -110,6 +111,9 @@ func cmdAll(ctx context.Context, cfg *config.MigrateConfig) error {
 	}
 	if err := migrate.CmdImages(ctx, cfg); err != nil {
 		return fmt.Errorf("images: %w", err)
+	}
+	if err := migrate.CmdArtifacts(ctx, cfg); err != nil {
+		return fmt.Errorf("artifacts: %w", err)
 	}
 	return migrate.CmdVerify(ctx, cfg)
 }

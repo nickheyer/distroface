@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -19,7 +20,9 @@ import (
 )
 
 const (
-	maxRetries      = 3
+	maxRetries      = 5
+	baseRetryDelay  = 10 * time.Second
+	maxRetryDelay   = 15 * time.Minute
 	requestTimeout  = 10 * time.Second
 	signatureHeader = "X-Distroface-Signature-256"
 	eventHeader     = "X-Distroface-Event"
@@ -27,7 +30,15 @@ const (
 	maxResponseBody = 10 * 1024 // 10KB
 )
 
-var retryDelays = []time.Duration{0, 10 * time.Second, 60 * time.Second}
+// Exponential 10s 40s 160s 640s capped with 20 percent jitter
+func retryDelay(attempt int) time.Duration {
+	delay := baseRetryDelay << (2 * (attempt - 1))
+	if delay <= 0 || delay > maxRetryDelay {
+		delay = maxRetryDelay
+	}
+	jitter := 0.8 + 0.4*rand.Float64()
+	return time.Duration(float64(delay) * jitter)
+}
 
 // WebhookPayload is the JSON body sent to webhook URLs.
 type WebhookPayload struct {
@@ -136,7 +147,7 @@ func (d *Dispatcher) Redeliver(ctx context.Context, deliveryID string) (*db.Webh
 func (d *Dispatcher) deliverWithRetry(wh *db.Webhook, body []byte, event string) {
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
-			time.Sleep(retryDelays[attempt])
+			time.Sleep(retryDelay(attempt))
 		}
 
 		delivery := d.deliver(wh, body, event)

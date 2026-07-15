@@ -19,7 +19,7 @@
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import {
 		Plus, Trash2, Pencil, Loader2, Shield, KeyRound, Save,
-		Globe, Target, Package, Building2
+		Globe, Target, Package, Building2, Search
 	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -43,6 +43,7 @@
 	let activeSection = $state<'global' | 'scoped'>('global');
 	let scopedPermissions = $state<Record<string, boolean>>({});
 	let scopedResource = $state('');
+	let objectSearch = $state('');
 
 	let deleteDialogOpen = $state(false);
 	let deleteTarget = $state<Role | null>(null);
@@ -67,10 +68,18 @@
 		[...new Set(availableObjects.map((o) => o.resource))]
 	);
 
-	let filteredObjects = $derived(
+	let resourceObjects = $derived(
 		scopedResource
 			? availableObjects.filter((o) => o.resource === scopedResource)
 			: []
+	);
+
+	let filteredObjects = $derived(
+		objectSearch.trim()
+			? resourceObjects.filter((o) =>
+					o.name.toLowerCase().includes(objectSearch.trim().toLowerCase())
+				)
+			: resourceObjects
 	);
 
 	let scopedResourceActions = $derived(() => {
@@ -527,14 +536,17 @@
 			/>
 		{:else}
 			<div class="flex gap-2 mb-4">
-				{#each scopeableResources as res}
+				{#each scopeableResources as res, i (i)}
 					{@const Icon = RESOURCE_ICONS[res] || Package}
 					{@const count = availableObjects.filter((o) => o.resource === res).length}
 					<button
 						class="flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors {scopedResource === res
 							? 'bg-primary text-primary-foreground border-primary'
 							: 'bg-background hover:bg-muted border-border'}"
-						onclick={() => (scopedResource = res)}
+						onclick={() => {
+							scopedResource = res;
+							objectSearch = '';
+						}}
 					>
 						<Icon class="h-4 w-4" />
 						<span class="capitalize">{formatResourceName(res)}</span>
@@ -543,13 +555,29 @@
 				{/each}
 			</div>
 
-			{#if filteredObjects.length === 0}
+			{#if resourceObjects.length === 0}
 				<EmptyState
 					message="No {formatResourceName(scopedResource)}"
 					description="No objects of this type exist yet."
 					icon={RESOURCE_ICONS[scopedResource] || Package}
 				/>
 			{:else}
+				<div class="relative mb-3">
+					<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+					<Input
+						type="search"
+						placeholder="Filter {formatResourceName(scopedResource)} by name..."
+						bind:value={objectSearch}
+						class="pl-9"
+					/>
+				</div>
+				{#if filteredObjects.length === 0}
+					<EmptyState
+						message="No matches"
+						description="No {formatResourceName(scopedResource)} match “{objectSearch}”."
+						icon={Search}
+					/>
+				{:else}
 				<div class="overflow-x-auto border rounded-xl">
 					<Table>
 						<TableHeader>
@@ -601,6 +629,7 @@
 						</TableBody>
 					</Table>
 				</div>
+				{/if}
 			{/if}
 		{/if}
 	{/if}

@@ -129,7 +129,7 @@ func (s *Server) setupHandler() {
 	repoPath, repoHandler := distrofacev1connect.NewRepositoryServiceHandler(repoService, opts...)
 	mux.Handle(repoPath, repoHandler)
 
-	configService := services.NewConfigurationService(s.config, s.log)
+	configService := services.NewConfigurationService(s.store, s.config, s.log)
 	configPath, configHandler := distrofacev1connect.NewConfigurationServiceHandler(configService, opts...)
 	mux.Handle(configPath, configHandler)
 

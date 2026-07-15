@@ -56,17 +56,18 @@ type RateLimitConfig struct {
 }
 
 type MigrateConfig struct {
-	V1DB      string // Path to v1 distro.db
-	V1Root    string // V1 storage root (contains blobs/, repositories/, artifacts/)
-	V2DB      string // Path to v2 sqlite db (direct writes: users, orgs, visibility, webhook toggle)
-	Registry  string // V2 registry host[:port] for docker API push-replay
-	User      string // V2 username for registry auth
-	Pass      string // V2 password or df_ API token (or V2_PASSWORD env)
-	PlainHTTP bool   // Registry is plain http (dev / behind TLS terminator)
-	LegacyNS  string // Org namespace that flat v1 names are mapped into
-	DryRun    bool   // Print planned actions without writing
-	Jobs      int    // Concurrent repo pushes
-	Verbose   bool
+	V1DB        string // Path to v1 distro.db
+	V1Root      string // V1 storage root (contains blobs/, repositories/, artifacts/)
+	V2DB        string // Path to v2 sqlite db (direct writes: users, orgs, visibility, webhook toggle)
+	V2Artifacts string // V2 artifact storage root (config artifacts.storage_path) for blob import
+	Registry    string // V2 registry host[:port] for docker API push-replay
+	User        string // V2 username for registry auth
+	Pass        string // V2 password or df_ API token (or V2_PASSWORD env)
+	PlainHTTP   bool   // Registry is plain http (dev / behind TLS terminator)
+	LegacyNS    string // Org namespace that flat v1 names are mapped into
+	DryRun      bool   // Print planned actions without writing
+	Jobs        int    // Concurrent repo pushes
+	Verbose     bool
 }
 
 type ServerConfig struct {
