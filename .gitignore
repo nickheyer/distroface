@@ -430,3 +430,5 @@ FodyWeavers.xsd
 .vscode/settings.json
 tmp/
 .claude/
+# Internal planning docs - not tracked
+DOCKER_API_CHECKLIST.md
