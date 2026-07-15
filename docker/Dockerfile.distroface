@@ -58,7 +58,11 @@ WORKDIR /app
 
 COPY --from=backend-builder /app/distroface .
 
-RUN mkdir -p /app/data && chown distroface:distroface /app/data
+# Portals bind privileged ports without root
+RUN apk add --no-cache --virtual .setcap libcap && \
+    setcap cap_net_bind_service=+ep /app/distroface && \
+    apk del .setcap && \
+    mkdir -p /app/data && chown distroface:distroface /app/data
 
 USER 1000:1000
 

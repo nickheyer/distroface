@@ -10,10 +10,9 @@ services:
     image: nickheyer/distroface:dev
     container_name: distroface
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    network_mode: host
     volumes:
-      # Container runs as uid 1000, chown host dir to match
+      # Container runs as uid 1000, chown host dir if need be
       - /opt/distroface:/app/data
     environment:
       - DISTROFACE_DATA_DIR=/app/data
