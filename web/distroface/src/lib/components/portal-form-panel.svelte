@@ -7,6 +7,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { Button } from '$lib/components/ui/button';
 	import { Globe, Plus, X } from '@lucide/svelte';
+	import { parseEndpoint } from '$lib/portal-endpoint';
 
 	type RuleDraft = { pattern: string; replace: string };
 
@@ -18,7 +19,7 @@
 		idPrefix = 'portal',
 		orgName,
 		name = $bindable(''),
-		hostname = $bindable(''),
+		endpoint = $bindable(''),
 		mapUnqualified = $bindable(true),
 		allowPush = $bindable(true),
 		requireAuth = $bindable(false),
@@ -33,7 +34,7 @@
 		idPrefix?: string;
 		orgName: string;
 		name: string;
-		hostname: string;
+		endpoint: string;
 		mapUnqualified: boolean;
 		allowPush: boolean;
 		requireAuth: boolean;
@@ -41,6 +42,8 @@
 		rules: RuleDraft[];
 		footer?: Snippet;
 	} = $props();
+
+	const endpointError = $derived(parseEndpoint(endpoint).error);
 
 	function addRule() {
 		rules = [...rules, { pattern: '', replace: '' }];
@@ -60,16 +63,17 @@
 				</FormField>
 
 				<FormField
-					label="Hostname"
-					id="{idPrefix}-hostname"
+					label="Endpoint"
+					id="{idPrefix}-endpoint"
 					required
-					help="Host (or host:port) this portal answers on. Point DNS for the hostname at this server."
+					error={endpointError}
+					help="Where this portal answers - host, host:port, or :port. A port opens a dedicated proxy listener (shareable between portals), :port alone catches any hostname on it. Point DNS for hostnames at this server."
 				>
 					<Input
-						id="{idPrefix}-hostname"
-						bind:value={hostname}
+						id="{idPrefix}-endpoint"
+						bind:value={endpoint}
 						class="font-mono"
-						placeholder="registry.example.com"
+						placeholder="registry.example.com, registry.example.com:5001, or :5001"
 					/>
 				</FormField>
 			</div>

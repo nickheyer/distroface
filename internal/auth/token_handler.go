@@ -12,11 +12,11 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Applies per-host portal rules at the token endpoint
+// Applies portal rules at the token endpoint, portals resolve by hostnames/ports
 type RegistryAccessPolicy interface {
-	MapName(host, name string) string // Rewrites repo name for given host
-	AllowAnonymous(host string) bool  // Check if anon access permitted
-	AllowPush(host string) bool       // Check if push permitted
+	MapName(r *http.Request, name string) string // Rewrites repo name
+	AllowAnonymous(r *http.Request) bool         // Check if anon access permitted
+	AllowPush(r *http.Request) bool              // Check if push permitted
 }
 
 // TokenHandler implements the Docker Token Authentication Specification.
@@ -101,8 +101,8 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Portals may require auth for all access on their hostname
-	if authUser == nil && h.policy != nil && !h.policy.AllowAnonymous(r.Host) {
+	// Portals may require auth for all access
+	if authUser == nil && h.policy != nil && !h.policy.AllowAnonymous(r) {
 		w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
@@ -155,11 +155,11 @@ func (h *TokenHandler) resolveAccess(r *http.Request, user *AuthenticatedUser, s
 
 		// Granted claims must carry the mapped name to match the rewritten URL
 		if h.policy != nil {
-			resourceName = h.policy.MapName(r.Host, resourceName)
+			resourceName = h.policy.MapName(r, resourceName)
 		}
 
 		granted := h.filterActions(r, user, resourceName, requestedActions)
-		if h.policy != nil && !h.policy.AllowPush(r.Host) {
+		if h.policy != nil && !h.policy.AllowPush(r) {
 			granted = withoutAction(granted, "push")
 		}
 		if len(granted) > 0 {

@@ -19,6 +19,8 @@ import (
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 // App holds all initialized dependencies and the HTTP server.
@@ -30,6 +32,7 @@ type App struct {
 	AuthManager    *auth.Manager
 	Enforcer       *rbac.Enforcer
 	RegistryAccess *registry.RegistryAccess
+	PortalProxies  *registry.PortalProxyManager
 	Server         *http.Server
 }
 
@@ -137,20 +140,32 @@ func New() (*App, error) {
 
 	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, registryLog)
 
+	registryHandler := portalResolver.Middleware(registryApp)
+
+	// Portal proxies serve just the docker surface on their own ports
+	portalMux := http.NewServeMux()
+	portalMux.Handle("/v2/", registryHandler)
+	portalMux.Handle("GET /auth/token", tokenHandler)
+	portalMux.Handle("POST /auth/token", tokenHandler)
+	portalProxies := registry.NewPortalProxyManager(portalResolver, h2c.NewHandler(portalMux, &http2.Server{}), cfg.Server.Host, registryLog)
+	if err := portalProxies.Reconcile(context.Background()); err != nil {
+		registryLog.Error("portal proxy startup: %v", err)
+	}
+
 	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, log)
 
 	rpcServer := rpc.NewServer(rpc.ServerDeps{
 		Store:             store,
 		Config:            cfg,
 		Log:               log,
-		RegistryHandler:   portalResolver.Middleware(registryApp),
+		RegistryHandler:   registryHandler,
 		RegistryAccess:    registryAccess,
 		TokenHandler:      tokenHandler,
 		AuthManager:       authManager,
 		Enforcer:          enforcer,
 		OIDCHandler:       oidcHandler,
 		WebhookDispatcher: dispatcher,
-		PortalResolver:    portalResolver,
+		PortalProxies:     portalProxies,
 	})
 
 	srv := &http.Server{
@@ -168,6 +183,7 @@ func New() (*App, error) {
 		AuthManager:    authManager,
 		Enforcer:       enforcer,
 		RegistryAccess: registryAccess,
+		PortalProxies:  portalProxies,
 		Server:         srv,
 	}, nil
 }
@@ -191,6 +207,9 @@ func (a *App) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	if a.PortalProxies != nil {
+		a.PortalProxies.Close()
+	}
 	if err := a.Server.Shutdown(ctx); err != nil {
 		a.Log.Error("Server forced to shutdown: %v", err)
 	}
@@ -201,6 +220,9 @@ func (a *App) Start() error {
 
 // Close releases all held resources
 func (a *App) Close() {
+	if a.PortalProxies != nil {
+		a.PortalProxies.Close()
+	}
 	if a.Store != nil {
 		a.Store.Close()
 	}

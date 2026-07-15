@@ -2,10 +2,13 @@ package registry
 
 import (
 	"context"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -41,6 +44,17 @@ func createTestPortal(t *testing.T, store *storage.Store, portal *storage.Regist
 	return org, portal
 }
 
+// Builds a request as seen on a given listener port, 0 means unknown
+func portalRequest(method, path, host string, port int) *http.Request {
+	r := httptest.NewRequest(method, path, nil)
+	r.Host = host
+	if port > 0 {
+		addr := net.Addr(&net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: port})
+		r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, addr))
+	}
+	return r
+}
+
 func TestPortalResolverMapName(t *testing.T) {
 	store := newTestStore(t)
 	createTestPortal(t, store, &storage.RegistryPortal{
@@ -62,12 +76,103 @@ func TestPortalResolverMapName(t *testing.T) {
 		{"acme.example.com", "grab/foo", "grab/foo"},     // rule result outside org namespace refused
 		{"acme.example.com", "other/foo", "other/foo"},   // qualified names pass through
 		{"acme.example.com", "acme/foo", "acme/foo"},     // canonical names untouched
-		{"other.example.com", "myimg", "myimg"},          // non-portal host, no static rules
+		{"other.example.com", "myimg", "myimg"},          // non-portal host
 	}
 	for _, c := range cases {
-		if got := pr.MapName(c.host, c.name); got != c.want {
+		r := portalRequest(http.MethodGet, "/", c.host, 0)
+		if got := pr.MapName(r, c.name); got != c.want {
 			t.Errorf("MapName(%q, %q) = %q, want %q", c.host, c.name, got, c.want)
 		}
+	}
+}
+
+func TestPortalResolverPortMatching(t *testing.T) {
+	store := newTestStore(t)
+	_, catchAll := createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "port-only", Hostname: "", Port: 9500, MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "hosted", Hostname: "vanity.example.com", Port: 9501, MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	pr := NewPortalResolver(store, logger.New())
+
+	// Catch-all matches any host on its port
+	r := portalRequest(http.MethodGet, "/", "whatever.example.com:9500", 9500)
+	if got := pr.MapName(r, "myimg"); got != "acme/myimg" {
+		t.Errorf("port catch-all: got %q", got)
+	}
+	r = portalRequest(http.MethodGet, "/", "127.0.0.1:9500", 9500)
+	if got := pr.MapName(r, "myimg"); got != "acme/myimg" {
+		t.Errorf("port catch-all by IP: got %q", got)
+	}
+
+	// Host+port portal matches its host on its port
+	r = portalRequest(http.MethodGet, "/", "vanity.example.com:9501", 9501)
+	if got := pr.MapName(r, "myimg"); got != "acme/myimg" {
+		t.Errorf("host+port portal: got %q", got)
+	}
+
+	// Same port, unmatched host, no catch-all on 9501, no mapping
+	r = portalRequest(http.MethodGet, "/", "other.example.com:9501", 9501)
+	if got := pr.MapName(r, "myimg"); got != "myimg" {
+		t.Errorf("unmatched host on dedicated port: got %q", got)
+	}
+
+	// Port-bound portal does not match on other listeners
+	r = portalRequest(http.MethodGet, "/", "whatever.example.com", 8080)
+	if got := pr.MapName(r, "myimg"); got != "myimg" {
+		t.Errorf("catch-all must not match other ports: got %q", got)
+	}
+
+	_ = catchAll
+}
+
+func TestPortalResolverAccessOptions(t *testing.T) {
+	store := newTestStore(t)
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "ro", Hostname: "ro.example.com", Rules: "[]",
+		AllowPush: false, RequireAuth: true, Enabled: true,
+	})
+	pr := NewPortalResolver(store, logger.New())
+
+	ro := portalRequest(http.MethodGet, "/", "ro.example.com", 0)
+	other := portalRequest(http.MethodGet, "/", "other.example.com", 0)
+
+	if pr.AllowPush(ro) {
+		t.Error("read-only portal must not allow push")
+	}
+	if pr.AllowAnonymous(ro) {
+		t.Error("require_auth portal must not allow anonymous")
+	}
+	if !pr.AllowPush(other) || !pr.AllowAnonymous(other) {
+		t.Error("non-portal hosts keep default access")
+	}
+}
+
+func TestPortalResolverDisabledAndInvalidate(t *testing.T) {
+	store := newTestStore(t)
+	_, portal := createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "main", Hostname: "acme.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	pr := NewPortalResolver(store, logger.New())
+	req := func() *http.Request { return portalRequest(http.MethodGet, "/", "acme.example.com", 0) }
+
+	if got := pr.MapName(req(), "myimg"); got != "acme/myimg" {
+		t.Fatalf("expected portal mapping before disable, got %q", got)
+	}
+
+	portal.Enabled = false
+	if err := store.UpdateRegistryPortal(context.Background(), portal); err != nil {
+		t.Fatalf("UpdateRegistryPortal: %v", err)
+	}
+
+	// Stale cache until invalidated
+	if got := pr.MapName(req(), "myimg"); got != "acme/myimg" {
+		t.Errorf("expected cached mapping before Invalidate, got %q", got)
+	}
+	pr.Invalidate()
+	if got := pr.MapName(req(), "myimg"); got != "myimg" {
+		t.Errorf("disabled portal must not map, got %q", got)
 	}
 }
 
@@ -82,7 +187,6 @@ func TestPortalMiddlewareRouteShapes(t *testing.T) {
 		path string
 		want string
 	}{
-		// Unqualified names rewritten across every API route shape
 		{"/v2/myimg/manifests/v1", "/v2/acme/myimg/manifests/v1"},
 		{"/v2/myimg/manifests/sha256:abc", "/v2/acme/myimg/manifests/sha256:abc"},
 		{"/v2/myimg/blobs/sha256:abc", "/v2/acme/myimg/blobs/sha256:abc"},
@@ -90,10 +194,8 @@ func TestPortalMiddlewareRouteShapes(t *testing.T) {
 		{"/v2/myimg/blobs/uploads/uuid-123", "/v2/acme/myimg/blobs/uploads/uuid-123"},
 		{"/v2/myimg/tags/list", "/v2/acme/myimg/tags/list"},
 		{"/v2/myimg/referrers/sha256:abc", "/v2/acme/myimg/referrers/sha256:abc"},
-		// Qualified names pass through
 		{"/v2/other/thing/manifests/latest", "/v2/other/thing/manifests/latest"},
 		{"/v2/acme/myimg/tags/list", "/v2/acme/myimg/tags/list"},
-		// Non-repository endpoints untouched
 		{"/v2/", "/v2/"},
 		{"/v2/_catalog", "/v2/_catalog"},
 	}
@@ -103,84 +205,10 @@ func TestPortalMiddlewareRouteShapes(t *testing.T) {
 		h := pr.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			got = r.URL.Path
 		}))
-		r := httptest.NewRequest(http.MethodGet, c.path, nil)
-		r.Host = "acme.example.com"
-		h.ServeHTTP(httptest.NewRecorder(), r)
+		h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, c.path, "acme.example.com", 0))
 		if got != c.want {
 			t.Errorf("Middleware(%q) routed %q, want %q", c.path, got, c.want)
 		}
-	}
-}
-
-func TestPortalResolverAccessOptions(t *testing.T) {
-	store := newTestStore(t)
-	createTestPortal(t, store, &storage.RegistryPortal{
-		Name: "ro", Hostname: "ro.example.com", Rules: "[]",
-		AllowPush: false, RequireAuth: true, Enabled: true,
-	})
-	pr := NewPortalResolver(store, logger.New())
-
-	if pr.AllowPush("ro.example.com") {
-		t.Error("read-only portal must not allow push")
-	}
-	if pr.AllowAnonymous("ro.example.com") {
-		t.Error("require_auth portal must not allow anonymous")
-	}
-	if !pr.AllowPush("other.example.com") || !pr.AllowAnonymous("other.example.com") {
-		t.Error("non-portal hosts keep default access")
-	}
-}
-
-func TestPortalResolverDisabledAndInvalidate(t *testing.T) {
-	store := newTestStore(t)
-	_, portal := createTestPortal(t, store, &storage.RegistryPortal{
-		Name: "main", Hostname: "acme.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
-	})
-	pr := NewPortalResolver(store, logger.New())
-
-	if got := pr.MapName("acme.example.com", "myimg"); got != "acme/myimg" {
-		t.Fatalf("expected portal mapping before disable, got %q", got)
-	}
-
-	portal.Enabled = false
-	if err := store.UpdateRegistryPortal(context.Background(), portal); err != nil {
-		t.Fatalf("UpdateRegistryPortal: %v", err)
-	}
-
-	// Stale cache until invalidated
-	if got := pr.MapName("acme.example.com", "myimg"); got != "acme/myimg" {
-		t.Errorf("expected cached mapping before Invalidate, got %q", got)
-	}
-	pr.Invalidate()
-	if got := pr.MapName("acme.example.com", "myimg"); got != "myimg" {
-		t.Errorf("disabled portal must not map, got %q", got)
-	}
-}
-
-func TestPortalMiddleware(t *testing.T) {
-	store := newTestStore(t)
-	createTestPortal(t, store, &storage.RegistryPortal{
-		Name: "main", Hostname: "acme.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
-	})
-	pr := NewPortalResolver(store, logger.New())
-
-	var gotPath string
-	h := pr.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-	}))
-
-	r := httptest.NewRequest(http.MethodGet, "/v2/myimg/manifests/v1", nil)
-	r.Host = "acme.example.com"
-	h.ServeHTTP(httptest.NewRecorder(), r)
-	if gotPath != "/v2/acme/myimg/manifests/v1" {
-		t.Errorf("portal middleware routed %q", gotPath)
-	}
-
-	r = httptest.NewRequest(http.MethodGet, "/v2/myimg/manifests/v1", nil)
-	r.Host = "other.example.com"
-	h.ServeHTTP(httptest.NewRecorder(), r)
-	if gotPath != "/v2/myimg/manifests/v1" {
-		t.Errorf("non-portal host must not map, routed %q", gotPath)
 	}
 }
 
@@ -196,17 +224,13 @@ func TestPortalMiddlewareReadOnly(t *testing.T) {
 		nextCalled = true
 	}))
 
-	r := httptest.NewRequest(http.MethodPost, "/v2/myimg/blobs/uploads/", nil)
-	r.Host = "ro.example.com"
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
+	h.ServeHTTP(rec, portalRequest(http.MethodPost, "/v2/myimg/blobs/uploads/", "ro.example.com", 0))
 	if nextCalled || rec.Code != http.StatusForbidden {
 		t.Errorf("write through read-only portal: nextCalled=%v code=%d", nextCalled, rec.Code)
 	}
 
-	r = httptest.NewRequest(http.MethodGet, "/v2/myimg/manifests/v1", nil)
-	r.Host = "ro.example.com"
-	h.ServeHTTP(httptest.NewRecorder(), r)
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/v2/myimg/manifests/v1", "ro.example.com", 0))
 	if !nextCalled {
 		t.Error("read through read-only portal must pass")
 	}
@@ -221,8 +245,7 @@ func TestRealmRewrite(t *testing.T) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
 
-	r := httptest.NewRequest(http.MethodGet, "/v2/acme/myimg/manifests/v1", nil)
-	r.Host = "registry.acme.com"
+	r := portalRequest(http.MethodGet, "/v2/acme/myimg/manifests/v1", "registry.acme.com", 0)
 	r.Header.Set("X-Forwarded-Proto", "https")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, r)
@@ -232,13 +255,70 @@ func TestRealmRewrite(t *testing.T) {
 		t.Errorf("realm rewrite:\n got %q\nwant %q", got, want)
 	}
 
-	// Non-401 responses keep their headers untouched
 	h = pr.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	rec = httptest.NewRecorder()
-	h.ServeHTTP(rec, r)
+	h.ServeHTTP(rec, portalRequest(http.MethodGet, "/", "registry.acme.com", 0))
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200 passthrough, got %d", rec.Code)
 	}
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("freePort: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close()
+	return port
+}
+
+func TestPortalProxyManagerReconcile(t *testing.T) {
+	store := newTestStore(t)
+	pr := NewPortalResolver(store, logger.New())
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "portal-surface")
+	})
+	m := NewPortalProxyManager(pr, handler, "127.0.0.1", logger.New())
+	t.Cleanup(m.Close)
+
+	port := freePort(t)
+	_, portal := createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "proxy", Hostname: "", Port: port, MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
+	})
+
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	url := fmt.Sprintf("http://127.0.0.1:%d/", port)
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatalf("portal listener not serving: %v", err)
+	}
+	resp.Body.Close()
+
+	// Shared port stays open while any portal wants it
+	if err := m.ProbePort(port); err != nil {
+		t.Errorf("ProbePort on owned port must succeed, got %v", err)
+	}
+
+	// Deleting the portal closes the listener
+	if err := store.DeleteRegistryPortal(context.Background(), portal.ID); err != nil {
+		t.Fatalf("DeleteRegistryPortal: %v", err)
+	}
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile after delete: %v", err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := http.Get(url); err != nil {
+			return // Listener closed
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Error("listener still serving after portal delete")
 }

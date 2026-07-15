@@ -31,17 +31,18 @@ message RegistryPortal {
   string id = 1;
   string org_name = 2;
   string name = 3;
-  string hostname = 4; // Host or host:port this portal answers on
+  string hostname = 4; // Hostname this portal answers on, empty matches any host on its port
   bool map_unqualified = 5; // Map single-segment names into the org namespace
   repeated PortalRule rules = 6; // Custom rules, evaluated before map_unqualified
   bool allow_push = 7; // False makes the portal read-only
   bool require_auth = 8; // Require auth for all access, including public pulls
   bool enabled = 9;
-  google.protobuf.Timestamp created_at = 10;
-  google.protobuf.Timestamp updated_at = 11;
+  int32 port = 10; // Dedicated proxy port, 0 serves on the main port only, ports may be shared
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
 }
 
-// Fields to create a portal
+// Fields to create a portal, hostname or port required
 message CreatePortalRequest {
   string org_name = 1;
   string name = 2;
@@ -50,6 +51,7 @@ message CreatePortalRequest {
   repeated PortalRule rules = 5;
   bool allow_push = 6;
   bool require_auth = 7;
+  int32 port = 8;
 }
 
 // The newly created portal
@@ -90,6 +92,7 @@ message UpdatePortalRequest {
   optional bool allow_push = 8;
   optional bool require_auth = 9;
   optional bool enabled = 10;
+  optional int32 port = 11;
 }
 
 // The updated portal

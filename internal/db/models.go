@@ -140,11 +140,12 @@ type WebhookDelivery struct {
 	Webhook      *Webhook  `json:"-" gorm:"foreignKey:WebhookID;constraint:OnDelete:CASCADE"`
 }
 
-type RegistryPortal struct { // Alternate org-owned registry host
+type RegistryPortal struct { // Alternate org-owned registry host and/or proxy port
 	ID             string        `json:"id" gorm:"primaryKey"`
 	OrgID          string        `json:"org_id" gorm:"not null;index;column:org_id"`
 	Name           string        `json:"name" gorm:"not null"`
-	Hostname       string        `json:"hostname" gorm:"not null;uniqueIndex"`
+	Hostname       string        `json:"hostname" gorm:"not null;index"` // Empty matches any host on Port
+	Port           int           `json:"port" gorm:"not null;index"`    // 0 serves on the main port only, ports may be shared
 	MapUnqualified bool          `json:"map_unqualified" gorm:"not null"`
 	Rules          string        `json:"rules" gorm:"not null;default:'[]'"` // JSON array of {pattern, replace}
 	AllowPush      bool          `json:"allow_push" gorm:"not null"`

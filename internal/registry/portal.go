@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -14,14 +15,16 @@ import (
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
-// Compiled portal proxy instance
+// Compiled, request-ready portal
 type portalEntry struct {
 	portal  *storage.RegistryPortal
 	orgName string
 	rules   *PathMapper // Compiled custom rules, may be nil
 }
 
-// Resolve repo name to canon path, then runs rules to map to org's base namespace
+// Resolves a requested repo name to its canonical path, custom rules run
+// first (results must land in the org namespace), then unqualified names
+// get the org prefix when map_unqualified is set
 func (e *portalEntry) mapName(name string) string {
 	if e.rules != nil {
 		if mapped := e.rules.MapName(name); mapped != name {
@@ -37,59 +40,78 @@ func (e *portalEntry) mapName(name string) string {
 	return name
 }
 
-// Resolves requests to org portals and applies mapping+access rules
+// Resolves registry requests to per-org portals by listener port and Host
+// header, non-portal traffic gets default behavior
 type PortalResolver struct {
 	store *storage.Store
 	log   *logger.Logger
 
-	mu     sync.RWMutex
-	byHost map[string]*portalEntry
-	loaded bool
+	mu      sync.RWMutex
+	entries map[string]*portalEntry // Keyed "port|host", catch-alls use empty host
+	loaded  bool
 }
 
 func NewPortalResolver(store *storage.Store, log *logger.Logger) *PortalResolver {
 	return &PortalResolver{store: store, log: log}
 }
 
-// Drops the host lookup table, next request rebuilds it
+// Drops the lookup table, next request rebuilds it
 func (pr *PortalResolver) Invalidate() {
 	pr.mu.Lock()
-	pr.byHost = nil
+	pr.entries = nil
 	pr.loaded = false
 	pr.mu.Unlock()
 }
 
-func (pr *PortalResolver) resolve(host string) *portalEntry {
+func portalKey(port int, host string) string {
+	return strconv.Itoa(port) + "|" + host
+}
+
+// Port of the listener that accepted the request, 0 when unknown
+func listenerPort(r *http.Request) int {
+	if addr, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+		if _, portStr, err := net.SplitHostPort(addr.String()); err == nil {
+			if port, err := strconv.Atoi(portStr); err == nil {
+				return port
+			}
+		}
+	}
+	return 0
+}
+
+// Matches dedicated port + host, then the port catch-all, then host-only portals
+func (pr *PortalResolver) resolve(r *http.Request) *portalEntry {
 	if pr == nil {
 		return nil
 	}
-	host = strings.ToLower(host)
+	host := strings.ToLower(r.Host)
+	if bare, _, err := net.SplitHostPort(host); err == nil {
+		host = bare
+	}
+	port := listenerPort(r)
 
 	pr.mu.RLock()
-	if pr.loaded {
-		e := pr.lookupLocked(host)
-		pr.mu.RUnlock()
-		return e
-	}
-	pr.mu.RUnlock()
-
-	pr.mu.Lock()
-	defer pr.mu.Unlock()
 	if !pr.loaded {
-		pr.reloadLocked()
+		pr.mu.RUnlock()
+		pr.mu.Lock()
+		if !pr.loaded {
+			pr.reloadLocked()
+		}
+		pr.mu.Unlock()
+		pr.mu.RLock()
 	}
-	return pr.lookupLocked(host)
-}
+	defer pr.mu.RUnlock()
 
-// Matches the exact host first, then the host without its port
-func (pr *PortalResolver) lookupLocked(host string) *portalEntry {
-	if e, ok := pr.byHost[host]; ok {
-		return e
-	}
-	if bare, _, err := net.SplitHostPort(host); err == nil {
-		if e, ok := pr.byHost[bare]; ok {
+	if port > 0 {
+		if e, ok := pr.entries[portalKey(port, host)]; ok {
 			return e
 		}
+		if e, ok := pr.entries[portalKey(port, "")]; ok {
+			return e
+		}
+	}
+	if e, ok := pr.entries[portalKey(0, host)]; ok {
+		return e
 	}
 	return nil
 }
@@ -102,7 +124,7 @@ func (pr *PortalResolver) reloadLocked() {
 		return
 	}
 
-	byHost := make(map[string]*portalEntry, len(portals))
+	entries := make(map[string]*portalEntry, len(portals))
 	for _, p := range portals {
 		if !p.Enabled || p.Org == nil {
 			continue
@@ -118,13 +140,30 @@ func (pr *PortalResolver) reloadLocked() {
 				entry.rules = mapper
 			}
 		}
-		byHost[strings.ToLower(p.Hostname)] = entry
+		entries[portalKey(p.Port, strings.ToLower(p.Hostname))] = entry
 	}
-	pr.byHost = byHost
+	pr.entries = entries
 	pr.loaded = true
 }
 
-// Decodes a portals stored rules JSON
+// Ports needed by enabled portals, used by the proxy manager
+func (pr *PortalResolver) DesiredPorts() ([]int, error) {
+	portals, err := pr.store.ListRegistryPortals(context.Background())
+	if err != nil {
+		return nil, err
+	}
+	seen := map[int]bool{}
+	var ports []int
+	for _, p := range portals {
+		if p.Enabled && p.Port > 0 && !seen[p.Port] {
+			seen[p.Port] = true
+			ports = append(ports, p.Port)
+		}
+	}
+	return ports, nil
+}
+
+// Decodes a portal's stored rules JSON
 func ParsePortalRules(rulesJSON string) ([]MappingRule, error) {
 	if rulesJSON == "" || rulesJSON == "[]" {
 		return nil, nil
@@ -136,36 +175,37 @@ func ParsePortalRules(rulesJSON string) ([]MappingRule, error) {
 	return rules, nil
 }
 
-// Rewrites repo name for portal hosts, other hosts pass through
-func (pr *PortalResolver) MapName(host, name string) string {
-	if e := pr.resolve(host); e != nil {
+// Rewrites repo name when the request belongs to a portal
+func (pr *PortalResolver) MapName(r *http.Request, name string) string {
+	if e := pr.resolve(r); e != nil {
 		return e.mapName(name)
 	}
 	return name
 }
 
-// Check if anon access permitted on the host
-func (pr *PortalResolver) AllowAnonymous(host string) bool {
-	if e := pr.resolve(host); e != nil {
+// Check if anon access permitted for the request
+func (pr *PortalResolver) AllowAnonymous(r *http.Request) bool {
+	if e := pr.resolve(r); e != nil {
 		return !e.portal.RequireAuth
 	}
 	return true
 }
 
-// Check if push permitted on the host
-func (pr *PortalResolver) AllowPush(host string) bool {
-	if e := pr.resolve(host); e != nil {
+// Check if push permitted for the request
+func (pr *PortalResolver) AllowPush(r *http.Request) bool {
+	if e := pr.resolve(r); e != nil {
 		return e.portal.AllowPush
 	}
 	return true
 }
 
-// Rewrites repo names on portal hosts, enforces read-only portals, points 401 challenge at requesting host
+// Rewrites repo names on portal traffic, enforces read-only portals, points
+// 401 challenge realms at the requesting host
 func (pr *PortalResolver) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w = &realmRewriter{ResponseWriter: w, req: r}
 
-		entry := pr.resolve(r.Host)
+		entry := pr.resolve(r)
 		if match := apiRoutePattern.FindStringSubmatch(r.URL.Path); match != nil && entry != nil {
 			if !entry.portal.AllowPush && r.Method != http.MethodGet && r.Method != http.MethodHead {
 				writeRegistryDenied(w, "portal is read-only")

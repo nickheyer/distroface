@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"connectrpc.com/connect"
@@ -21,24 +22,25 @@ import (
 
 var _ distrofacev1connect.PortalServiceHandler = (*PortalService)(nil)
 
-// Lowercase host with optional port
-var hostnameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]{1,5})?$`)
+// Lowercase host, no port
+var hostnameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 
-// Drops the request-time portal cache after writes
-type PortalInvalidator interface {
-	Invalidate()
+// Syncs proxy listeners and the portal cache after writes
+type PortalReconciler interface {
+	Reconcile(ctx context.Context) error
+	ProbePort(port int) error
 }
 
 type PortalService struct {
 	store    *storage.Store
 	enforcer *rbac.Enforcer
-	resolver PortalInvalidator
+	proxies  PortalReconciler
 	config   *config.Config
 	log      *logger.Logger
 }
 
-func NewPortalService(store *storage.Store, enforcer *rbac.Enforcer, resolver PortalInvalidator, cfg *config.Config, log *logger.Logger) *PortalService {
-	return &PortalService{store: store, enforcer: enforcer, resolver: resolver, config: cfg, log: log}
+func NewPortalService(store *storage.Store, enforcer *rbac.Enforcer, proxies PortalReconciler, cfg *config.Config, log *logger.Logger) *PortalService {
+	return &PortalService{store: store, enforcer: enforcer, proxies: proxies, config: cfg, log: log}
 }
 
 // Resolves the org, caller needs global org-manage or owner/admin membership
@@ -84,21 +86,51 @@ func (s *PortalService) getOrgPortal(ctx context.Context, org *storage.Organizat
 	return portal, nil
 }
 
-// Normalizes and validates hostname, rejects primary hostname and hosts claimed by another portal
-func (s *PortalService) validateHostname(ctx context.Context, hostname, excludePortalID string) (string, error) {
+// Normalizes and validates hostname/port, rejects primary hostname and hosts claimed by another portal
+func (s *PortalService) validatePlacement(ctx context.Context, hostname string, port int, excludePortalID string) (string, error) {
 	hostname = strings.ToLower(strings.TrimSpace(hostname))
-	if !hostnameRegex.MatchString(hostname) {
-		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid hostname"))
+	if hostname == "" && port == 0 {
+		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname or port is required"))
 	}
-	if primary := strings.ToLower(s.config.Server.Hostname); hostname == primary || strings.TrimSuffix(hostname, ":"+s.config.Server.Port) == strings.TrimSuffix(primary, ":"+s.config.Server.Port) {
-		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname conflicts with the server's primary hostname"))
+	if port < 0 || port > 65535 {
+		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid port"))
 	}
-	existing, err := s.store.GetRegistryPortalByHostname(ctx, hostname)
-	if err != nil {
-		return "", connect.NewError(connect.CodeInternal, err)
+	if mainPort, _ := strconv.Atoi(s.config.Server.Port); port != 0 && port == mainPort {
+		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("port conflicts with the server's main port"))
 	}
-	if existing != nil && existing.ID != excludePortalID {
-		return "", connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("hostname already in use"))
+
+	if hostname != "" {
+		if !hostnameRegex.MatchString(hostname) {
+			return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid hostname"))
+		}
+		primary := strings.ToLower(s.config.Server.Hostname)
+		if hostname == primary || hostname == strings.SplitN(primary, ":", 2)[0] {
+			return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname conflicts with the server's primary hostname"))
+		}
+		existing, err := s.store.GetRegistryPortalByHostname(ctx, hostname)
+		if err != nil {
+			return "", connect.NewError(connect.CodeInternal, err)
+		}
+		if existing != nil && existing.ID != excludePortalID {
+			return "", connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("hostname already in use"))
+		}
+	} else {
+		// Port catch-all, only one per port
+		portals, err := s.store.ListRegistryPortals(ctx)
+		if err != nil {
+			return "", connect.NewError(connect.CodeInternal, err)
+		}
+		for _, p := range portals {
+			if p.ID != excludePortalID && p.Port == port && p.Hostname == "" {
+				return "", connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("port %d already has a catch-all portal", port))
+			}
+		}
+	}
+
+	if port > 0 {
+		if err := s.proxies.ProbePort(port); err != nil {
+			return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot bind port %d: %v", port, err))
+		}
 	}
 	return hostname, nil
 }
@@ -132,7 +164,7 @@ func (s *PortalService) CreatePortal(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("name is required"))
 	}
 
-	hostname, err := s.validateHostname(ctx, msg.Hostname, "")
+	hostname, err := s.validatePlacement(ctx, msg.Hostname, int(msg.Port), "")
 	if err != nil {
 		return nil, err
 	}
@@ -145,6 +177,7 @@ func (s *PortalService) CreatePortal(ctx context.Context, req *connect.Request[v
 		OrgID:          org.ID,
 		Name:           msg.Name,
 		Hostname:       hostname,
+		Port:           int(msg.Port),
 		MapUnqualified: msg.MapUnqualified,
 		Rules:          rulesJSON,
 		AllowPush:      msg.AllowPush,
@@ -154,8 +187,8 @@ func (s *PortalService) CreatePortal(ctx context.Context, req *connect.Request[v
 	if err := s.store.CreateRegistryPortal(ctx, portal); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.resolver.Invalidate()
-	s.log.Info("portal created: %s -> org %s (%s)", portal.Hostname, org.Name, portal.ID)
+	s.reconcile(ctx)
+	s.log.Info("portal created: %s port %d -> org %s (%s)", portal.Hostname, portal.Port, org.Name, portal.ID)
 
 	return connect.NewResponse(&v1.CreatePortalResponse{Portal: portalToProto(portal, org.Name)}), nil
 }
@@ -205,12 +238,20 @@ func (s *PortalService) UpdatePortal(ctx context.Context, req *connect.Request[v
 		}
 		portal.Name = *msg.Name
 	}
-	if msg.Hostname != nil {
-		hostname, err := s.validateHostname(ctx, *msg.Hostname, portal.ID)
+	if msg.Hostname != nil || msg.Port != nil {
+		hostname, port := portal.Hostname, portal.Port
+		if msg.Hostname != nil {
+			hostname = *msg.Hostname
+		}
+		if msg.Port != nil {
+			port = int(*msg.Port)
+		}
+		hostname, err := s.validatePlacement(ctx, hostname, port, portal.ID)
 		if err != nil {
 			return nil, err
 		}
 		portal.Hostname = hostname
+		portal.Port = port
 	}
 	if msg.MapUnqualified != nil {
 		portal.MapUnqualified = *msg.MapUnqualified
@@ -235,7 +276,7 @@ func (s *PortalService) UpdatePortal(ctx context.Context, req *connect.Request[v
 	if err := s.store.UpdateRegistryPortal(ctx, portal); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.resolver.Invalidate()
+	s.reconcile(ctx)
 
 	return connect.NewResponse(&v1.UpdatePortalResponse{Portal: portalToProto(portal, org.Name)}), nil
 }
@@ -252,10 +293,17 @@ func (s *PortalService) DeletePortal(ctx context.Context, req *connect.Request[v
 	if err := s.store.DeleteRegistryPortal(ctx, portal.ID); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.resolver.Invalidate()
+	s.reconcile(ctx)
 	s.log.Info("portal deleted: %s (%s)", portal.Hostname, portal.ID)
 
 	return connect.NewResponse(&v1.DeletePortalResponse{}), nil
+}
+
+// Probes/applies portal changes to the running proxies
+func (s *PortalService) reconcile(ctx context.Context) {
+	if err := s.proxies.Reconcile(ctx); err != nil {
+		s.log.Error("portal proxy reconcile: %v", err)
+	}
 }
 
 func portalToProto(p *storage.RegistryPortal, orgName string) *v1.RegistryPortal {
@@ -264,6 +312,7 @@ func portalToProto(p *storage.RegistryPortal, orgName string) *v1.RegistryPortal
 		OrgName:        orgName,
 		Name:           p.Name,
 		Hostname:       p.Hostname,
+		Port:           int32(p.Port),
 		MapUnqualified: p.MapUnqualified,
 		AllowPush:      p.AllowPush,
 		RequireAuth:    p.RequireAuth,

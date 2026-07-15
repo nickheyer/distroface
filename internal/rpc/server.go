@@ -33,7 +33,7 @@ type Server struct {
 	enforcer          *rbac.Enforcer
 	oidcHandler       *auth.OIDCHandler
 	webhookDispatcher *webhook.Dispatcher
-	portalResolver    *registry.PortalResolver
+	portalProxies     *registry.PortalProxyManager
 }
 
 type ServerDeps struct {
@@ -47,7 +47,7 @@ type ServerDeps struct {
 	Enforcer          *rbac.Enforcer
 	OIDCHandler       *auth.OIDCHandler
 	WebhookDispatcher *webhook.Dispatcher
-	PortalResolver    *registry.PortalResolver
+	PortalProxies     *registry.PortalProxyManager
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -62,7 +62,7 @@ func NewServer(deps ServerDeps) *Server {
 		enforcer:          deps.Enforcer,
 		oidcHandler:       deps.OIDCHandler,
 		webhookDispatcher: deps.WebhookDispatcher,
-		portalResolver:    deps.PortalResolver,
+		portalProxies:     deps.PortalProxies,
 	}
 	s.setupHandler()
 	return s
@@ -134,8 +134,8 @@ func (s *Server) setupHandler() {
 	webhookPath, webhookHandler := distrofacev1connect.NewWebhookServiceHandler(webhookService, opts...)
 	mux.Handle(webhookPath, webhookHandler)
 
-	if s.portalResolver != nil {
-		portalService := services.NewPortalService(s.store, s.enforcer, s.portalResolver, s.config, s.log)
+	if s.portalProxies != nil {
+		portalService := services.NewPortalService(s.store, s.enforcer, s.portalProxies, s.config, s.log)
 		portalPath, portalHandler := distrofacev1connect.NewPortalServiceHandler(portalService, opts...)
 		mux.Handle(portalPath, portalHandler)
 	}

@@ -13,6 +13,7 @@
 	import PortalFormPanel from '$lib/components/portal-form-panel.svelte';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { Globe, Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { parseEndpoint, formatEndpoint } from '$lib/portal-endpoint';
 
 	let { orgName }: { orgName: string } = $props();
 
@@ -25,7 +26,7 @@
 	// ── Create state ────────────────────────────────────────────────────
 	let createOpen = $state(false);
 	let newName = $state('');
-	let newHostname = $state('');
+	let newEndpoint = $state('');
 	let newMapUnqualified = $state(true);
 	let newAllowPush = $state(true);
 	let newRequireAuth = $state(false);
@@ -36,7 +37,7 @@
 	let editOpen = $state(false);
 	let editTarget = $state<RegistryPortal | null>(null);
 	let editName = $state('');
-	let editHostname = $state('');
+	let editEndpoint = $state('');
 	let editMapUnqualified = $state(true);
 	let editAllowPush = $state(true);
 	let editRequireAuth = $state(false);
@@ -55,6 +56,10 @@
 			.filter((r) => r.pattern !== '' || r.replace !== '');
 	}
 
+	function endpointOk(endpoint: string): boolean {
+		return parseEndpoint(endpoint).error === '';
+	}
+
 	// ── Handlers ────────────────────────────────────────────────────────
 	async function load() {
 		loading = true;
@@ -67,7 +72,7 @@
 
 	function openCreate() {
 		newName = '';
-		newHostname = '';
+		newEndpoint = '';
 		newMapUnqualified = true;
 		newAllowPush = true;
 		newRequireAuth = false;
@@ -76,12 +81,14 @@
 	}
 
 	async function submitCreate() {
+		const endpoint = parseEndpoint(newEndpoint);
 		creating = true;
 		try {
 			await rpcClient.portal.createPortal({
 				orgName,
 				name: newName.trim(),
-				hostname: newHostname.trim(),
+				hostname: endpoint.hostname,
+				port: endpoint.port,
 				mapUnqualified: newMapUnqualified,
 				rules: cleanRules(newRules),
 				allowPush: newAllowPush,
@@ -97,7 +104,7 @@
 	function openEdit(portal: RegistryPortal) {
 		editTarget = portal;
 		editName = portal.name;
-		editHostname = portal.hostname;
+		editEndpoint = formatEndpoint(portal.hostname, portal.port);
 		editMapUnqualified = portal.mapUnqualified;
 		editAllowPush = portal.allowPush;
 		editRequireAuth = portal.requireAuth;
@@ -114,7 +121,8 @@
 				orgName,
 				id: editTarget.id,
 				name: editName.trim(),
-				hostname: editHostname.trim(),
+				hostname: parseEndpoint(editEndpoint).hostname,
+				port: parseEndpoint(editEndpoint).port,
 				mapUnqualified: editMapUnqualified,
 				setRules: true,
 				rules: cleanRules(editRules),
@@ -154,10 +162,11 @@
 		<div class="min-w-0 space-y-1">
 			<h2 class="section-title">Registry Portals</h2>
 			<p class="text-[13px] text-muted-foreground leading-snug max-w-2xl">
-				Requests to a portal hostname are aliased into this organization's namespace — e.g.
-				<code class="font-mono text-xs">docker pull &lt;hostname&gt;/myimage</code> resolves to
-				<code class="font-mono text-xs">{orgName}/myimage</code>. Point DNS for the hostname at
-				this server.
+				Requests to a portal's hostname and/or dedicated port are aliased into this
+				organization's namespace — e.g.
+				<code class="font-mono text-xs">docker pull &lt;hostname-or-host:port&gt;/myimage</code>
+				resolves to <code class="font-mono text-xs">{orgName}/myimage</code>. Point DNS for portal
+				hostnames at this server.
 			</p>
 		</div>
 		<Button size="sm" class="shrink-0" onclick={openCreate}>
@@ -175,7 +184,7 @@
 		<EmptyState
 			icon={Globe}
 			message="No portals"
-			description="Add a portal to serve this organization's images from an alternate registry hostname."
+			description="Add a portal to serve this organization's images from an alternate registry hostname or dedicated port."
 		>
 			{#snippet actions()}
 				<Button variant="outline" size="sm" onclick={openCreate}>
@@ -188,7 +197,7 @@
 			<Table class="table-fixed">
 				<TableHeader>
 					<TableRow>
-						<TableHead class="th">Hostname</TableHead>
+						<TableHead class="th">Endpoint</TableHead>
 						<TableHead class="th w-32">Name</TableHead>
 						<TableHead class="th w-56">Options</TableHead>
 						<TableHead class="th w-20 text-center">Status</TableHead>
@@ -199,7 +208,11 @@
 					{#each portals as portal (portal.id)}
 						<TableRow>
 							<TableCell class="py-3 px-3">
-								<span class="font-mono text-xs truncate block">{portal.hostname}</span>
+								<span class="font-mono text-xs truncate block">
+									{formatEndpoint(portal.hostname, portal.port)}{#if portal.hostname === ''}<span class="font-sans text-muted-foreground/60">
+											(any host)</span
+										>{/if}
+								</span>
 							</TableCell>
 							<TableCell class="py-3 px-3">
 								<span class="text-sm truncate block">{portal.name}</span>
@@ -251,11 +264,11 @@
 <PortalFormPanel
 	bind:open={createOpen}
 	title="Add Portal"
-	description="Serve this organization's images from an alternate registry hostname."
+	description="Serve this organization's images from an alternate registry hostname or dedicated port."
 	formMode="create"
 	{orgName}
 	bind:name={newName}
-	bind:hostname={newHostname}
+	bind:endpoint={newEndpoint}
 	bind:mapUnqualified={newMapUnqualified}
 	bind:allowPush={newAllowPush}
 	bind:requireAuth={newRequireAuth}
@@ -263,7 +276,7 @@
 >
 	{#snippet footer()}
 		<Button variant="outline" onclick={() => (createOpen = false)}>Cancel</Button>
-		<Button onclick={submitCreate} disabled={creating || !newName.trim() || !newHostname.trim()}>
+		<Button onclick={submitCreate} disabled={creating || !newName.trim() || !endpointOk(newEndpoint)}>
 			{creating ? 'Creating...' : 'Create Portal'}
 		</Button>
 	{/snippet}
@@ -278,7 +291,7 @@
 	idPrefix="portal-edit"
 	{orgName}
 	bind:name={editName}
-	bind:hostname={editHostname}
+	bind:endpoint={editEndpoint}
 	bind:mapUnqualified={editMapUnqualified}
 	bind:allowPush={editAllowPush}
 	bind:requireAuth={editRequireAuth}
@@ -287,7 +300,7 @@
 >
 	{#snippet footer()}
 		<Button variant="outline" onclick={() => (editOpen = false)}>Cancel</Button>
-		<Button onclick={submitEdit} disabled={saving || !editName.trim() || !editHostname.trim()}>
+		<Button onclick={submitEdit} disabled={saving || !editName.trim() || !endpointOk(editEndpoint)}>
 			{saving ? 'Saving...' : 'Save Changes'}
 		</Button>
 	{/snippet}
@@ -297,7 +310,7 @@
 <ConfirmDialog bind:open={deleteOpen} title="Delete Portal" confirmLabel="Delete" onConfirm={doDelete} loading={deleting} icon={Trash2}>
 	{#snippet description()}
 		Are you sure you want to delete the portal
-		<strong>{deleteTarget?.hostname}</strong>? Clients using this hostname will stop working
-		immediately. This action cannot be undone.
+		<strong>{deleteTarget ? formatEndpoint(deleteTarget.hostname, deleteTarget.port) : ''}</strong>? Clients using this
+		endpoint will stop working immediately. This action cannot be undone.
 	{/snippet}
 </ConfirmDialog>
