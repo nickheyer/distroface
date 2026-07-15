@@ -36,7 +36,7 @@
 					</div>
 					<Badge
 						variant="outline"
-						class="text-[10px] shrink-0 gap-0.5 py-0 h-4.5sPrivate
+						class="text-[10px] shrink-0 gap-0.5 py-0 h-4.5 {isPrivate
 							? 'border-amber-500/30 text-amber-600 dark:text-amber-400'
 							: 'border-primary/20 dark:text-primary/70'}"
 					>

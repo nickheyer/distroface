@@ -7,7 +7,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { Button } from '$lib/components/ui/button';
 	import { Globe, Plus, X } from '@lucide/svelte';
-	import { parseEndpoint } from '$lib/portal-endpoint';
+	import { parseAddress } from '$lib/portal-address';
 
 	type RuleDraft = { pattern: string; replace: string };
 
@@ -15,35 +15,31 @@
 		open = $bindable(false),
 		title,
 		description = '',
-		formMode = 'create',
 		idPrefix = 'portal',
 		orgName,
 		name = $bindable(''),
-		endpoint = $bindable(''),
+		address = $bindable(''),
 		mapUnqualified = $bindable(true),
 		allowPush = $bindable(true),
 		requireAuth = $bindable(false),
-		enabled = $bindable(true),
 		rules = $bindable<RuleDraft[]>([]),
 		footer
 	}: {
 		open: boolean;
 		title: string;
 		description?: string;
-		formMode?: 'create' | 'edit';
 		idPrefix?: string;
 		orgName: string;
 		name: string;
-		endpoint: string;
+		address: string;
 		mapUnqualified: boolean;
 		allowPush: boolean;
 		requireAuth: boolean;
-		enabled?: boolean;
 		rules: RuleDraft[];
 		footer?: Snippet;
 	} = $props();
 
-	const endpointError = $derived(parseEndpoint(endpoint).error);
+	const addressError = $derived(address.trim() === '' ? '' : parseAddress(address).error);
 
 	function addRule() {
 		rules = [...rules, { pattern: '', replace: '' }];
@@ -58,22 +54,22 @@
 	<div class="space-y-6">
 		<FormSection title="Portal">
 			<div class="space-y-3">
-				<FormField label="Name" id="{idPrefix}-name" required help="A short label for this portal.">
+				<FormField label="Name" id="{idPrefix}-name" required help="Short label for this portal.">
 					<Input id="{idPrefix}-name" bind:value={name} placeholder="e.g. mirror" />
 				</FormField>
 
 				<FormField
-					label="Endpoint"
-					id="{idPrefix}-endpoint"
+					label="Address"
+					id="{idPrefix}-address"
 					required
-					error={endpointError}
-					help="Where this portal answers - host, host:port, or :port. A port opens a dedicated proxy listener (shareable between portals), :port alone catches any hostname on it. Point DNS for hostnames at this server."
+					error={addressError}
+					help="A hostname (inherit port), hostname:port, or :port (inherit hostname). Point hostname DNS at this server."
 				>
 					<Input
-						id="{idPrefix}-endpoint"
-						bind:value={endpoint}
+						id="{idPrefix}-address"
+						bind:value={address}
 						class="font-mono"
-						placeholder="registry.example.com, registry.example.com:5001, or :5001"
+						placeholder="registry.example.com"
 					/>
 				</FormField>
 			</div>
@@ -81,37 +77,23 @@
 
 		<FormSection title="Options">
 			<div class="space-y-3">
-				<FormField
-					label="Map unqualified names into org namespace"
-					horizontal
-					help="e.g. myimage resolves to {orgName}/myimage."
-				>
+				<FormField label="Map bare image names" horizontal help="myimage → {orgName}/myimage">
 					<Switch bind:checked={mapUnqualified} />
 				</FormField>
 
-				<FormField label="Allow push" horizontal help="Off makes this a read-only portal.">
+				<FormField label="Allow push" horizontal help="Off makes this portal pull-only.">
 					<Switch bind:checked={allowPush} />
 				</FormField>
 
-				<FormField
-					label="Require authentication"
-					horizontal
-					help="Require auth for all access, including pulls of public repositories."
-				>
+				<FormField label="Require authentication" horizontal help="Require login even for public pulls.">
 					<Switch bind:checked={requireAuth} />
 				</FormField>
-
-				{#if formMode === 'edit'}
-					<FormField label="Enabled" horizontal help="Disabled portals reject all requests.">
-						<Switch bind:checked={enabled} />
-					</FormField>
-				{/if}
 			</div>
 		</FormSection>
 
 		<FormSection
-			title="Custom rules"
-			description="Advanced: regex rewrites applied to requested repository names, in order — first match wins."
+			title="Rewrite rules"
+			description="Optional regex rewrites for requested image names. First match wins. Results must be under {orgName}/."
 		>
 			{#snippet actions()}
 				<Button variant="outline" size="sm" onclick={addRule}>
@@ -120,9 +102,7 @@
 			{/snippet}
 
 			{#if rules.length === 0}
-				<p class="text-[13px] text-muted-foreground/70">
-					No custom rules. Most portals only need the options above.
-				</p>
+				<p class="text-[13px] text-muted-foreground/70">No rules. Most portals don't need any.</p>
 			{:else}
 				<div class="space-y-2">
 					{#each rules as rule, i (i)}
@@ -130,14 +110,14 @@
 							<Input
 								bind:value={rule.pattern}
 								class="font-mono text-xs"
-								placeholder="pattern (regex)"
+								placeholder="legacy/(.+)"
 								aria-label="Rule pattern"
 							/>
 							<span class="text-xs text-muted-foreground shrink-0">→</span>
 							<Input
 								bind:value={rule.replace}
 								class="font-mono text-xs"
-								placeholder="replace ($1, ...)"
+								placeholder="{orgName}/$1"
 								aria-label="Rule replacement"
 							/>
 							<Button
