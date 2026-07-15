@@ -121,9 +121,9 @@ func (e *Enforcer) Enforce(roles []string, resource, action, objectID string) (b
 }
 
 // GetAllowedObjects checks the given roles for a resource+action and returns
-// whether access is unrestricted (wildcard) or limited to specific object IDs.
+// Whether access is unrestricted (wildcard) or limited to specific object IDs.
 // If allowAll is true, the caller should not filter. Otherwise, only the
-// returned objectIDs are permitted.
+// Returned objectIDs are permitted.
 func (e *Enforcer) GetAllowedObjects(roles []string, resource, action string) (allowAll bool, objectIDs []string) {
 	seen := make(map[string]bool)
 	for _, role := range roles {
@@ -228,6 +228,31 @@ func (e *Enforcer) SetPermissionsForRole(role string, perms []Permission) error 
 		if err != nil {
 			return err
 		}
+	}
+
+	return e.enforcer.SavePolicy()
+}
+
+// Move casbin policies to new role name
+func (e *Enforcer) RenameRole(oldName, newName string) error {
+	if strings.ToLower(oldName) == "admin" || strings.ToLower(newName) == "admin" {
+		return fmt.Errorf("cannot rename the admin role")
+	}
+
+	policies, err := e.enforcer.GetFilteredPolicy(0, oldName)
+	if err != nil {
+		return err
+	}
+	for _, p := range policies {
+		if len(p) < 4 {
+			continue
+		}
+		if _, err := e.enforcer.AddPolicy(newName, p[1], p[2], p[3]); err != nil {
+			return err
+		}
+	}
+	if _, err := e.enforcer.RemoveFilteredPolicy(0, oldName); err != nil {
+		return err
 	}
 
 	return e.enforcer.SavePolicy()

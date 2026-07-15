@@ -73,9 +73,9 @@ message UpdateWebhookRequest {
   string url = 2;
   string secret = 3;
   repeated WebhookEvent events = 4;
-  bool active = 5;
+  optional bool active = 5;
   string content_type = 6;
-  string payload_template = 7;
+  optional string payload_template = 7;
 }
 
 // UpdateWebhookResponse is the response after updating a webhook.

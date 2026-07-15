@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -30,7 +31,7 @@ type OIDCHandler struct {
 }
 
 // NewOIDCHandler creates a new OIDC handler. If OIDC is disabled in config,
-// the handler is returned with a nil provider (IsEnabled() returns false).
+// The handler is returned with a nil provider (IsEnabled() returns false).
 func NewOIDCHandler(manager *Manager, store *db.Store, cfg *config.OIDCConfig, log *logger.Logger) *OIDCHandler {
 	h := &OIDCHandler{
 		manager: manager,
@@ -110,7 +111,7 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleCallback processes the OIDC callback, verifies the ID token,
-// finds or creates the user, maps roles, creates a session, and redirects.
+// Finds or creates the user, maps roles, creates a session, and redirects.
 func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	if !h.IsEnabled() {
 		http.Error(w, "OIDC is not enabled", http.StatusBadRequest)
@@ -227,10 +228,11 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.log.Info("OIDC: user %s authenticated via OIDC", user.Username)
-	http.Redirect(w, r, "/login?token="+token, http.StatusFound)
+	// Fragment keeps token out of server logs
+	http.Redirect(w, r, "/login#token="+url.QueryEscape(token), http.StatusFound)
 }
 
-// findOrCreateOIDCUser looks up a user by OIDC subject and creates them if new.
+// FindOrCreateOIDCUser looks up a user by OIDC subject and creates them if new.
 func (h *OIDCHandler) findOrCreateOIDCUser(ctx context.Context, sub, username, email string) (*db.User, error) {
 	user, err := h.store.GetUserByOIDCSubject(ctx, sub)
 	if err != nil {
@@ -271,31 +273,25 @@ func (h *OIDCHandler) findOrCreateOIDCUser(ctx context.Context, sub, username, e
 		return nil, err
 	}
 
-	// Assign default roles
+	// Local source so oidc reconcile never strips defaults
 	defaultRoles, _ := h.store.GetDefaultRoles(ctx)
 	for _, role := range defaultRoles {
-		_ = h.store.AssignRole(ctx, user.ID, role.Name, "oidc")
+		_ = h.store.AssignRole(ctx, user.ID, role.Name, "local")
 	}
 
 	h.log.Info("OIDC: created new user %s (sub: %s)", username, sub)
 	return user, nil
 }
 
-// mapClaimsToRoles maps OIDC claim values to local roles using the configured mapping.
+// Sync oidc claim roles add new drop revoked
 func (h *OIDCHandler) mapClaimsToRoles(ctx context.Context, userID string, claims map[string]any) {
 	if h.config.RoleClaim == "" {
 		return
 	}
 
-	claimVal, ok := claims[h.config.RoleClaim]
-	if !ok {
-		h.log.Debug("OIDC: role claim %q not found in token", h.config.RoleClaim)
-		return
-	}
-
 	var claimValues []string
-	switch v := claimVal.(type) {
-	case []interface{}:
+	switch v := claims[h.config.RoleClaim].(type) {
+	case []any:
 		for _, item := range v {
 			if s, ok := item.(string); ok {
 				claimValues = append(claimValues, s)
@@ -310,13 +306,33 @@ func (h *OIDCHandler) mapClaimsToRoles(ctx context.Context, userID string, claim
 		}
 	}
 
+	desired := make(map[string]bool)
 	for _, cv := range claimValues {
 		if len(h.config.RoleMapping) > 0 {
 			if localRole, ok := h.config.RoleMapping[cv]; ok {
-				_ = h.store.AssignRole(ctx, userID, localRole, "oidc")
+				desired[localRole] = true
 			}
 		} else {
-			_ = h.store.AssignRole(ctx, userID, cv, "oidc")
+			desired[cv] = true
+		}
+	}
+
+	current, err := h.store.GetUserRoleNamesBySource(ctx, userID, "oidc")
+	if err != nil {
+		h.log.Error("OIDC: failed to load existing claim roles for %s: %v", userID, err)
+		return
+	}
+
+	for _, roleName := range current {
+		if !desired[roleName] {
+			if err := h.store.UnassignRoleBySource(ctx, userID, roleName, "oidc"); err != nil {
+				h.log.Error("OIDC: failed to revoke role %q from %s: %v", roleName, userID, err)
+			}
+		}
+	}
+	for roleName := range desired {
+		if err := h.store.AssignRole(ctx, userID, roleName, "oidc"); err != nil {
+			h.log.Warn("OIDC: failed to assign role %q to %s: %v", roleName, userID, err)
 		}
 	}
 }

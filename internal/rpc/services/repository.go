@@ -30,9 +30,7 @@ func NewRepositoryService(store *storage.Store, reg *registry.RegistryAccess, en
 	return &RepositoryService{store: store, registry: reg, enforcer: enforcer, log: log}
 }
 
-// canReadRepo checks if the requesting user can read the given repo via RBAC.
-// Public repos are readable by anyone. Private repos require the user's roles
-// to have repositories.read on the specific object (namespace/name) or wildcard.
+// Checks if the requesting user can read the given repo via RBAC
 func (s *RepositoryService) canReadRepo(ctx context.Context, repo *storage.Repository) bool {
 	if !repo.IsPrivate {
 		return true
@@ -291,7 +289,7 @@ func repoToProto(r *storage.Repository) *v1.Repository {
 		FullName:       r.Namespace + "/" + r.Name,
 		Description:    r.Description,
 		Visibility:     vis,
-		OwnerId:       r.OwnerID,
+		OwnerId:        r.OwnerID,
 		PullCount:      r.PullCount,
 		PushCount:      r.PushCount,
 		CreatedAt:      timestamppb.New(r.CreatedAt),

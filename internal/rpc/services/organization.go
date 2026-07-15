@@ -266,11 +266,17 @@ func (s *OrganizationService) AddOrgMember(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
+	role := orgRoleToString(req.Msg.Role)
+
 	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
 	if !canManage {
 		requesterMember, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if requesterMember == nil || (requesterMember.Role != storage.OrgRoleOwner && requesterMember.Role != storage.OrgRoleAdmin) {
 			return nil, connect.NewError(connect.CodePermissionDenied, nil)
+		}
+		// Only owner can grant owner
+		if role == storage.OrgRoleOwner && requesterMember.Role != storage.OrgRoleOwner {
+			return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("only owners can grant the owner role"))
 		}
 	}
 
@@ -284,8 +290,6 @@ func (s *OrganizationService) AddOrgMember(ctx context.Context, req *connect.Req
 	if existing != nil {
 		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("user is already a member"))
 	}
-
-	role := orgRoleToString(req.Msg.Role)
 	member := &storage.OrgMember{
 		OrgID:  org.ID,
 		UserID: targetUser.ID,
@@ -331,6 +335,22 @@ func (s *OrganizationService) RemoveOrgMember(ctx context.Context, req *connect.
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
+	member, _ := s.store.GetOrgMember(ctx, org.ID, targetUser.ID)
+	if member == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("user is not a member"))
+	}
+
+	// Last owner cannot be removed
+	if member.Role == storage.OrgRoleOwner {
+		owners, err := s.store.CountOrgMembersByRole(ctx, org.ID, storage.OrgRoleOwner)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		if owners <= 1 {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("cannot remove the last owner of an organization"))
+		}
+	}
+
 	if err := s.store.RemoveOrgMember(ctx, org.ID, targetUser.ID); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -371,7 +391,20 @@ func (s *OrganizationService) UpdateOrgMemberRole(ctx context.Context, req *conn
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("user is not a member"))
 	}
 
-	member.Role = orgRoleToString(req.Msg.Role)
+	newRole := orgRoleToString(req.Msg.Role)
+
+	// Last owner cannot be demoted
+	if member.Role == storage.OrgRoleOwner && newRole != storage.OrgRoleOwner {
+		owners, err := s.store.CountOrgMembersByRole(ctx, org.ID, storage.OrgRoleOwner)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		if owners <= 1 {
+			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("cannot demote the last owner of an organization"))
+		}
+	}
+
+	member.Role = newRole
 	if err := s.store.UpdateOrgMember(ctx, member); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}

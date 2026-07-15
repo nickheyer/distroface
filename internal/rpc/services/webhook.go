@@ -4,8 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-
-	govalidator "github.com/asaskevich/govalidator"
+	"net/url"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -41,7 +40,7 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *connect.Request
 	if msg.Url == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("url is required"))
 	}
-	if !govalidator.IsURL(msg.Url) {
+	if !isValidWebhookURL(msg.Url) {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("url must be a valid HTTP or HTTPS URL"))
 	}
 	if len(msg.Events) == 0 {
@@ -105,7 +104,7 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *connect.Request
 	}
 
 	if msg.Secret != "" {
-		wh.SecretHash = msg.Secret // Store the actual secret for HMAC computation
+		wh.Secret = msg.Secret
 	}
 
 	if err := s.store.CreateWebhook(ctx, wh); err != nil {
@@ -203,13 +202,13 @@ func (s *WebhookService) UpdateWebhook(ctx context.Context, req *connect.Request
 	}
 
 	if msg.Url != "" {
-		if !govalidator.IsURL(msg.Url) {
+		if !isValidWebhookURL(msg.Url) {
 			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("url must be a valid HTTP or HTTPS URL"))
 		}
 		wh.URL = msg.Url
 	}
 	if msg.Secret != "" {
-		wh.SecretHash = msg.Secret
+		wh.Secret = msg.Secret
 	}
 	if len(msg.Events) > 0 {
 		events := eventsToStrings(msg.Events)
@@ -219,13 +218,17 @@ func (s *WebhookService) UpdateWebhook(ctx context.Context, req *connect.Request
 	if msg.ContentType != "" {
 		wh.ContentType = msg.ContentType
 	}
-	if msg.PayloadTemplate != "" {
-		if err := webhook.ValidateTemplate(msg.PayloadTemplate); err != nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("payload_template: %v", err))
+	if msg.PayloadTemplate != nil {
+		if *msg.PayloadTemplate != "" {
+			if err := webhook.ValidateTemplate(*msg.PayloadTemplate); err != nil {
+				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("payload_template: %v", err))
+			}
 		}
+		wh.PayloadTemplate = *msg.PayloadTemplate
 	}
-	wh.PayloadTemplate = msg.PayloadTemplate
-	wh.Active = msg.Active
+	if msg.Active != nil {
+		wh.Active = *msg.Active
+	}
 
 	if err := s.store.UpdateWebhook(ctx, wh); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -346,6 +349,15 @@ func (s *WebhookService) RedeliverWebhook(ctx context.Context, req *connect.Requ
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
+// Allow only absolute http or https urls
+func isValidWebhookURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 func (s *WebhookService) checkRepoPermission(ctx context.Context, user *auth.AuthenticatedUser, repoID, action string) error {
 	repo := s.getRepoByID(ctx, repoID)
 	if repo == nil {
@@ -432,7 +444,7 @@ func (s *WebhookService) webhookToProto(ctx context.Context, wh *storage.Webhook
 		RepoId:          derefStr(wh.RepoID),
 		OrgId:           derefStr(wh.OrgID),
 		Url:             wh.URL,
-		HasSecret:       wh.SecretHash != "",
+		HasSecret:       wh.Secret != "",
 		Events:          protoEvents,
 		Active:          wh.Active,
 		ContentType:     wh.ContentType,

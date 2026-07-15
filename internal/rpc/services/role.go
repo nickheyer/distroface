@@ -114,7 +114,15 @@ func (s *RoleService) UpdateRole(ctx context.Context, req *connect.Request[v1.Up
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("cannot modify system role"))
 	}
 
-	if req.Msg.Name != nil {
+	oldName := role.Name
+	if req.Msg.Name != nil && *req.Msg.Name != "" && *req.Msg.Name != oldName {
+		existing, err := s.store.GetRoleByName(ctx, *req.Msg.Name)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		if existing != nil {
+			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("role %q already exists", *req.Msg.Name))
+		}
 		role.Name = *req.Msg.Name
 	}
 	if req.Msg.Description != nil {
@@ -124,7 +132,15 @@ func (s *RoleService) UpdateRole(ctx context.Context, req *connect.Request[v1.Up
 		role.IsDefault = *req.Msg.IsDefault
 	}
 
-	if err := s.store.UpdateRole(ctx, role); err != nil {
+	if role.Name != oldName {
+		// Repoint assignments and policies so nothing gets orphaned
+		if err := s.store.RenameRole(ctx, role, oldName); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		if err := s.enforcer.RenameRole(oldName, role.Name); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("role renamed but policy migration failed: %w", err))
+		}
+	} else if err := s.store.UpdateRole(ctx, role); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 

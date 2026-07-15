@@ -7,6 +7,7 @@ import (
 	"time"
 
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"golang.org/x/crypto/bcrypt"
@@ -26,6 +27,7 @@ type TokenHandler struct {
 	authManager  *Manager
 	enforcer     *rbac.Enforcer
 	policy       RegistryAccessPolicy
+	authLimiter  *ratelimit.Limiter // Failed-credential lockout per client IP, nil disables
 	log          *logger.Logger
 }
 
@@ -36,14 +38,15 @@ type tokenResponse struct {
 	IssuedAt    string `json:"issued_at"`
 }
 
-// Creates docker token auth endpoint handler, nil disables mapping
-func NewTokenHandler(ts *TokenService, store *storage.Store, manager *Manager, enforcer *rbac.Enforcer, policy RegistryAccessPolicy, log *logger.Logger) *TokenHandler {
+// Makes docker token endpoint nil args disable extras
+func NewTokenHandler(ts *TokenService, store *storage.Store, manager *Manager, enforcer *rbac.Enforcer, policy RegistryAccessPolicy, authLimiter *ratelimit.Limiter, log *logger.Logger) *TokenHandler {
 	return &TokenHandler{
 		tokenService: ts,
 		store:        store,
 		authManager:  manager,
 		enforcer:     enforcer,
 		policy:       policy,
+		authLimiter:  authLimiter,
 		log:          log,
 	}
 }
@@ -57,12 +60,22 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hasCreds = username != ""
 	}
 
+	clientIP := ratelimit.ClientIP(r.RemoteAddr, r.Header)
+
+	// Brute-force lockout: too many failed credential attempts from this IP
+	if hasCreds && h.authLimiter != nil && h.authLimiter.Blocked(clientIP) {
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, "too many failed authentication attempts", http.StatusTooManyRequests)
+		return
+	}
+
 	var authUser *AuthenticatedUser
 	if hasCreds && username != "" {
 		// Check if password is an API token (df_ prefix)
 		if strings.HasPrefix(password, "df_") {
 			user, err := h.authManager.ValidateAPIToken(r.Context(), password)
 			if err != nil {
+				h.recordAuthFailure(clientIP)
 				w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -77,6 +90,7 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if u == nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+				h.recordAuthFailure(clientIP)
 				w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -99,6 +113,16 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if account == "" && authUser != nil {
 			account = authUser.Username
 		}
+		if h.authLimiter != nil {
+			h.authLimiter.Reset(clientIP)
+		}
+	}
+
+	// Refuse anon token when anon access turned off
+	if authUser == nil && h.authManager.IsAnyAuthEnabled() && !h.authManager.IsAnonymousAccessEnabled() {
+		w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
 	}
 
 	// Portals may require auth for all access
@@ -133,6 +157,12 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.log.Error("token auth: failed to json encode token response: %v", err)
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+}
+
+func (h *TokenHandler) recordAuthFailure(clientIP string) {
+	if h.authLimiter != nil {
+		h.authLimiter.Record(clientIP)
 	}
 }
 

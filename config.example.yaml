@@ -24,6 +24,18 @@ auth:
   session_duration: 86400       # 24 hours in seconds
   token_expiry: 900             # 15 minutes for registry tokens
 
+# Webhook delivery
+webhooks:
+  # Private lan targets blocked unless this turned on
+  allow_private_networks: false
+
+# Rate limiting
+rate_limit:
+  auth_failure_limit: 10     # Failed tries per ip before lockout zero disables
+  auth_failure_window: 300   # Lockout window in seconds
+  pull_per_minute: 0         # Pulls per user per minute zero means unlimited
+  anon_pull_per_minute: 0    # Anon pulls per ip per minute zero means unlimited
+
 # Storage configuration
 storage:
   data_dir: "./data"

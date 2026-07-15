@@ -8,6 +8,7 @@ import (
 	"connectrpc.com/grpcreflect"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc/services"
@@ -34,6 +35,7 @@ type Server struct {
 	oidcHandler       *auth.OIDCHandler
 	webhookDispatcher *webhook.Dispatcher
 	portalProxies     *registry.PortalProxyManager
+	authLimiter       *ratelimit.Limiter
 }
 
 type ServerDeps struct {
@@ -48,6 +50,7 @@ type ServerDeps struct {
 	OIDCHandler       *auth.OIDCHandler
 	WebhookDispatcher *webhook.Dispatcher
 	PortalProxies     *registry.PortalProxyManager
+	AuthLimiter       *ratelimit.Limiter // Lockout limiter nil disables
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -63,6 +66,7 @@ func NewServer(deps ServerDeps) *Server {
 		oidcHandler:       deps.OIDCHandler,
 		webhookDispatcher: deps.WebhookDispatcher,
 		portalProxies:     deps.PortalProxies,
+		authLimiter:       deps.AuthLimiter,
 	}
 	s.setupHandler()
 	return s
@@ -72,6 +76,7 @@ func (s *Server) setupHandler() {
 	mux := http.NewServeMux()
 
 	interceptors := []connect.Interceptor{
+		connect.UnaryInterceptorFunc(s.rateLimitInterceptor()),
 		connect.UnaryInterceptorFunc(s.authInterceptor()),
 		&loggingInterceptor{log: s.log},
 	}
@@ -140,7 +145,7 @@ func (s *Server) setupHandler() {
 		mux.Handle(portalPath, portalHandler)
 	}
 
-	// gRPC reflection
+	// GRPC reflection
 	reflector := grpcreflect.NewStaticReflector(
 		distrofacev1connect.HealthServiceName,
 		distrofacev1connect.AuthServiceName,
@@ -153,8 +158,10 @@ func (s *Server) setupHandler() {
 		distrofacev1connect.WebhookServiceName,
 		distrofacev1connect.PortalServiceName,
 	)
-	mux.Handle(grpcreflect.NewHandlerV1(reflector))
-	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))
+	reflectV1Path, reflectV1Handler := grpcreflect.NewHandlerV1(reflector)
+	mux.Handle(reflectV1Path, s.requireAuth(reflectV1Handler))
+	reflectV1AlphaPath, reflectV1AlphaHandler := grpcreflect.NewHandlerV1Alpha(reflector)
+	mux.Handle(reflectV1AlphaPath, s.requireAuth(reflectV1AlphaHandler))
 
 	// Serve frontend for non-RPC routes
 	s.setupFrontend(mux)
@@ -164,6 +171,35 @@ func (s *Server) setupHandler() {
 
 func (s *Server) Handler() http.Handler {
 	return s.handler
+}
+
+// Gate plain http handlers behind session or token auth
+func (s *Server) requireAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.authManager.IsAnyAuthEnabled() {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		token := auth.ExtractToken(r.Header)
+		if token == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		var err error
+		if strings.HasPrefix(token, "df_") {
+			_, err = s.authManager.ValidateAPIToken(r.Context(), token)
+		} else {
+			_, err = s.authManager.ValidateSession(r.Context(), token)
+		}
+		if err != nil {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) setupFrontend(mux *http.ServeMux) {

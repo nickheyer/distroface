@@ -12,7 +12,7 @@ const (
 type User struct {
 	ID           string     `json:"id" gorm:"primaryKey"`
 	Username     string     `json:"username" gorm:"not null;uniqueIndex:idx_user_provider"`
-	Email        *string    `json:"email" gorm:"index"`
+	Email        *string    `json:"email" gorm:"uniqueIndex:idx_user_email,where:email IS NOT NULL AND email <> ''"`
 	PasswordHash string     `json:"-" gorm:"column:password_hash"`
 	DisplayName  string     `json:"display_name"`
 	AuthProvider string     `json:"auth_provider" gorm:"not null;default:'local';uniqueIndex:idx_user_provider"`
@@ -114,7 +114,7 @@ type Webhook struct {
 	RepoID          *string       `json:"repo_id" gorm:"index;column:repo_id"`
 	OrgID           *string       `json:"org_id" gorm:"index;column:org_id"`
 	URL             string        `json:"url" gorm:"not null"`
-	SecretHash      string        `json:"-" gorm:"column:secret_hash"`
+	Secret          string        `json:"-" gorm:"column:secret"` // Plaintext secret needed for hmac signing
 	Events          string        `json:"events" gorm:"not null"` // JSON array: ["push","pull","delete"]
 	Active          bool          `json:"active" gorm:"not null;default:true"`
 	ContentType     string        `json:"content_type" gorm:"not null;default:'application/json'"`
@@ -145,7 +145,7 @@ type RegistryPortal struct { // Alternate org-owned registry host and/or proxy p
 	OrgID          string        `json:"org_id" gorm:"not null;index;column:org_id"`
 	Name           string        `json:"name" gorm:"not null"`
 	Hostname       string        `json:"hostname" gorm:"not null;index"` // Empty matches any host on Port
-	Port           int           `json:"port" gorm:"not null;index"`    // 0 serves on the main port only, ports may be shared
+	Port           int           `json:"port" gorm:"not null;index"`     // 0 serves on the main port only, ports may be shared
 	MapUnqualified bool          `json:"map_unqualified" gorm:"not null"`
 	Rules          string        `json:"rules" gorm:"not null;default:'[]'"` // JSON array of {pattern, replace}
 	AllowPush      bool          `json:"allow_push" gorm:"not null"`

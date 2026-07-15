@@ -39,6 +39,23 @@ func (s *UserService) GetUser(ctx context.Context, req *connect.Request[v1.GetUs
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
+	// Only self or users read permission sees private fields
+	caller := auth.UserFromContext(ctx)
+	privileged := false
+	if caller != nil {
+		if caller.ID == user.ID {
+			privileged = true
+		} else if s.enforcer != nil {
+			privileged, _ = s.enforcer.Enforce(caller.Roles, rbac.ResourceUsers, rbac.ActionRead, "*")
+		}
+	}
+
+	if !privileged {
+		return connect.NewResponse(&v1.GetUserResponse{
+			User: publicUserToProto(user),
+		}), nil
+	}
+
 	roleNames, _ := s.store.GetUserRoleNames(ctx, user.ID)
 
 	return connect.NewResponse(&v1.GetUserResponse{
@@ -141,11 +158,33 @@ func (s *UserService) AdminUpdateUser(ctx context.Context, req *connect.Request[
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
+	if msg.Email != nil && *msg.Email != "" {
+		existing, err := s.store.GetUserByEmail(ctx, *msg.Email)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		if existing != nil && existing.ID != user.ID {
+			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("email already in use"))
+		}
+	}
 	if msg.Email != nil {
 		user.Email = msg.Email
 	}
 	if msg.IsActive != nil {
 		user.IsActive = *msg.IsActive
+	}
+
+	// Validate the requested role set before mutating anything
+	if len(msg.Roles) > 0 {
+		for _, r := range msg.Roles {
+			role, err := s.store.GetRoleByName(ctx, r)
+			if err != nil {
+				return nil, connect.NewError(connect.CodeInternal, err)
+			}
+			if role == nil {
+				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("role %q does not exist", r))
+			}
+		}
 	}
 
 	if err := s.store.UpdateUser(ctx, user); err != nil {
@@ -168,13 +207,17 @@ func (s *UserService) AdminUpdateUser(ctx context.Context, req *connect.Request[
 		// Unassign removed roles
 		for _, r := range currentRoles {
 			if !newSet[r] {
-				_ = s.store.UnassignRole(ctx, user.ID, r)
+				if err := s.store.UnassignRole(ctx, user.ID, r); err != nil {
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unassign role %q: %w", r, err))
+				}
 			}
 		}
 		// Assign new roles
 		for _, r := range msg.Roles {
 			if !currentSet[r] {
-				_ = s.store.AssignRole(ctx, user.ID, r, "local")
+				if err := s.store.AssignRole(ctx, user.ID, r, "local"); err != nil {
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("assign role %q: %w", r, err))
+				}
 			}
 		}
 	}

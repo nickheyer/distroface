@@ -12,6 +12,7 @@ import (
 	"github.com/distribution/distribution/v3/registry/handlers"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc"
@@ -121,7 +122,7 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("creating registry storage directory: %w", err)
 	}
 
-	dispatcher := webhook.NewDispatcher(store, registryLog)
+	dispatcher := webhook.NewDispatcher(store, registryLog, cfg.Webhooks.AllowPrivateNetworks)
 
 	registry.RegisterListenerMiddleware(store, registryLog, dispatcher)
 
@@ -138,9 +139,21 @@ func New() (*App, error) {
 
 	portalResolver := registry.NewPortalResolver(store, registryLog)
 
-	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, registryLog)
+	// Rate limiters nil means tier off
+	var authLimiter, pullLimiter, anonPullLimiter *ratelimit.Limiter
+	if cfg.RateLimit.AuthFailureLimit > 0 && cfg.RateLimit.AuthFailureWindow > 0 {
+		authLimiter = ratelimit.New(cfg.RateLimit.AuthFailureLimit, time.Duration(cfg.RateLimit.AuthFailureWindow)*time.Second)
+	}
+	if cfg.RateLimit.PullPerMinute > 0 {
+		pullLimiter = ratelimit.New(cfg.RateLimit.PullPerMinute, time.Minute)
+	}
+	if cfg.RateLimit.AnonPullPerMinute > 0 {
+		anonPullLimiter = ratelimit.New(cfg.RateLimit.AnonPullPerMinute, time.Minute)
+	}
 
-	registryHandler := portalResolver.Middleware(registryApp)
+	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, authLimiter, registryLog)
+
+	registryHandler := registry.PullRateLimit(portalResolver.Middleware(registryApp), tokenService, pullLimiter, anonPullLimiter, registryLog)
 
 	// Portal proxies serve just the docker surface on their own ports
 	portalMux := http.NewServeMux()
@@ -166,6 +179,7 @@ func New() (*App, error) {
 		OIDCHandler:       oidcHandler,
 		WebhookDispatcher: dispatcher,
 		PortalProxies:     portalProxies,
+		AuthLimiter:       authLimiter,
 	})
 
 	srv := &http.Server{
@@ -188,8 +202,7 @@ func New() (*App, error) {
 	}, nil
 }
 
-// Start begins listening and blocks until a SIGINT/SIGTERM is received,
-// then gracefully shuts down the server.
+// Starts listening and blocks until a SIGINT/SIGTERM is received then shuts down
 func (a *App) Start() error {
 	go func() {
 		a.Log.Info("Starting Distroface on %s", a.Server.Addr)

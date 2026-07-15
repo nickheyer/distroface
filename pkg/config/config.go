@@ -9,25 +9,43 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server" json:"server"`
-	Database DatabaseConfig `mapstructure:"database" json:"database"`
-	Storage  StorageConfig  `mapstructure:"storage" json:"storage"`
-	Logging  LoggingConfig  `mapstructure:"logging" json:"logging"`
-	Registry RegistryConfig `mapstructure:"registry" json:"registry"`
-	Auth     AuthConfig     `mapstructure:"auth" json:"auth"`
+	Server    ServerConfig    `mapstructure:"server" json:"server"`
+	Database  DatabaseConfig  `mapstructure:"database" json:"database"`
+	Storage   StorageConfig   `mapstructure:"storage" json:"storage"`
+	Logging   LoggingConfig   `mapstructure:"logging" json:"logging"`
+	Registry  RegistryConfig  `mapstructure:"registry" json:"registry"`
+	Auth      AuthConfig      `mapstructure:"auth" json:"auth"`
+	Webhooks  WebhookConfig   `mapstructure:"webhooks" json:"webhooks"`
+	RateLimit RateLimitConfig `mapstructure:"rate_limit" json:"rate_limit"`
+}
+
+type WebhookConfig struct {
+	// Lets webhooks reach private lan addresses when true
+	AllowPrivateNetworks bool `mapstructure:"allow_private_networks" json:"allow_private_networks"`
+}
+
+type RateLimitConfig struct {
+	// Failed tries before lockout zero disables
+	AuthFailureLimit int `mapstructure:"auth_failure_limit" json:"auth_failure_limit"`
+	// Failure window in seconds
+	AuthFailureWindow int `mapstructure:"auth_failure_window" json:"auth_failure_window"`
+	// Pulls per user per minute zero means unlimited
+	PullPerMinute int `mapstructure:"pull_per_minute" json:"pull_per_minute"`
+	// Anon pulls per ip per minute zero means unlimited
+	AnonPullPerMinute int `mapstructure:"anon_pull_per_minute" json:"anon_pull_per_minute"`
 }
 
 type MigrateConfig struct {
-	V1DB      string // path to v1 distro.db
-	V1Root    string // v1 storage root (contains blobs/, repositories/, artifacts/)
-	V2DB      string // path to v2 sqlite db (direct writes: users, orgs, visibility, webhook toggle)
-	Registry  string // v2 registry host[:port] for docker API push-replay
-	User      string // v2 username for registry auth
-	Pass      string // v2 password or df_ API token (or V2_PASSWORD env)
-	PlainHTTP bool   // registry is plain http (dev / behind TLS terminator)
-	LegacyNS  string // org namespace that flat v1 names are mapped into
-	DryRun    bool   // print planned actions without writing
-	Jobs      int    // concurrent repo pushes
+	V1DB      string // Path to v1 distro.db
+	V1Root    string // V1 storage root (contains blobs/, repositories/, artifacts/)
+	V2DB      string // Path to v2 sqlite db (direct writes: users, orgs, visibility, webhook toggle)
+	Registry  string // V2 registry host[:port] for docker API push-replay
+	User      string // V2 username for registry auth
+	Pass      string // V2 password or df_ API token (or V2_PASSWORD env)
+	PlainHTTP bool   // Registry is plain http (dev / behind TLS terminator)
+	LegacyNS  string // Org namespace that flat v1 names are mapped into
+	DryRun    bool   // Print planned actions without writing
+	Jobs      int    // Concurrent repo pushes
 	Verbose   bool
 }
 
@@ -163,6 +181,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.oidc.scopes", []string{})
 	v.SetDefault("auth.oidc.role_claim", "")
 	v.SetDefault("auth.oidc.skip_tls_verify", false)
+
+	v.SetDefault("webhooks.allow_private_networks", false)
+
+	v.SetDefault("rate_limit.auth_failure_limit", 10)
+	v.SetDefault("rate_limit.auth_failure_window", 300)
+	v.SetDefault("rate_limit.pull_per_minute", 0)
+	v.SetDefault("rate_limit.anon_pull_per_minute", 0)
 
 	v.SetDefault("logging.enabled", true)
 	v.SetDefault("logging.dir", "./data/logs")

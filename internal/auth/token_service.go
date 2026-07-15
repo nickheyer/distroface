@@ -40,14 +40,14 @@ type ResourceActions struct {
 
 // ClaimSet matches the Distribution v3 token.ClaimSet format.
 type ClaimSet struct {
-	Issuer     string             `json:"iss"`
-	Subject    string             `json:"sub"`
-	Audience   josejwt.Audience   `json:"aud"`
+	Issuer     string               `json:"iss"`
+	Subject    string               `json:"sub"`
+	Audience   josejwt.Audience     `json:"aud"`
 	Expiration *josejwt.NumericDate `json:"exp"`
 	NotBefore  *josejwt.NumericDate `json:"nbf"`
 	IssuedAt   *josejwt.NumericDate `json:"iat"`
-	JWTID      string             `json:"jti"`
-	Access     []*ResourceActions `json:"access"`
+	JWTID      string               `json:"jti"`
+	Access     []*ResourceActions   `json:"access"`
 }
 
 // NewTokenService initializes keys from disk or generates them, then returns a TokenService.
@@ -119,6 +119,19 @@ func (ts *TokenService) SignToken(subject string, access []*ResourceActions) (st
 
 func (ts *TokenService) certChain() [][]byte {
 	return [][]byte{ts.cert.Raw}
+}
+
+// Checks token signature gives subject for limit keys
+func (ts *TokenService) VerifyTokenSubject(raw string) (string, error) {
+	tok, err := josejwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
+	if err != nil {
+		return "", err
+	}
+	var claims ClaimSet
+	if err := tok.Claims(ts.privateKey.Public(), &claims); err != nil {
+		return "", err
+	}
+	return claims.Subject, nil
 }
 
 func (ts *TokenService) loadOrGenerate(keyPath, certPath string) error {

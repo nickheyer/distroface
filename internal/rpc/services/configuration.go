@@ -16,14 +16,9 @@ import (
 
 var _ distrofacev1connect.ConfigurationServiceHandler = (*ConfigurationService)(nil)
 
-var privateKeys = []string{
-	"database.path",
-	"database.max_connections",
-	"database.max_idle_conns",
-	"database.conn_max_lifetime",
-	"storage.data_dir",
-	"registry.storage_path",
-	"logging.dir",
+// Only these config keys leave the public rpc
+var publicKeys = []string{
+	"server.hostname",
 }
 
 type ConfigurationService struct {
@@ -43,7 +38,7 @@ func (s *ConfigurationService) GetConfiguration(ctx context.Context, req *connec
 
 	var entries []*v1.ConfigEntry
 	for key, val := range flat {
-		if slices.Contains(privateKeys, key) {
+		if !slices.Contains(publicKeys, key) {
 			continue
 		}
 		pbVal, err := structpb.NewValue(val)

@@ -491,6 +491,17 @@ func (s *AuthService) getPermissionsForRoles(roles []string) []*v1.Permission {
 	return perms
 }
 
+// Public view hides email roles and status
+func publicUserToProto(u *storage.User) *v1.User {
+	return &v1.User{
+		Id:          u.ID,
+		Username:    u.Username,
+		DisplayName: u.DisplayName,
+		CreatedAt:   timestamppb.New(u.CreatedAt),
+		UpdatedAt:   timestamppb.New(u.UpdatedAt),
+	}
+}
+
 func userToProto(u *storage.User, roles []string) *v1.User {
 	proto := &v1.User{
 		Id:           u.ID,

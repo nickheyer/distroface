@@ -53,12 +53,13 @@ type Dispatcher struct {
 }
 
 // NewDispatcher creates a new webhook dispatcher.
-func NewDispatcher(store *db.Store, log *logger.Logger) *Dispatcher {
+func NewDispatcher(store *db.Store, log *logger.Logger, allowPrivateNetworks bool) *Dispatcher {
 	return &Dispatcher{
 		store: store,
 		log:   log,
 		client: &http.Client{
-			Timeout: requestTimeout,
+			Timeout:   requestTimeout,
+			Transport: newSafeTransport(allowPrivateNetworks),
 		},
 	}
 }
@@ -180,8 +181,8 @@ func (d *Dispatcher) deliver(wh *db.Webhook, body []byte, event string) *db.Webh
 	req.Header.Set(deliveryHeader, deliveryID)
 
 	// HMAC-SHA256 signing
-	if wh.SecretHash != "" {
-		sig := computeHMAC(wh.SecretHash, body)
+	if wh.Secret != "" {
+		sig := computeHMAC(wh.Secret, body)
 		req.Header.Set(signatureHeader, "sha256="+sig)
 	}
 

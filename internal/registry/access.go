@@ -137,4 +137,3 @@ func (r *RegistryAccess) ResolveTag(ctx context.Context, namespace, name, tag st
 
 	return utils.ResolveDescriptor(ctx, repo, desc.Digest, desc.MediaType)
 }
-

@@ -7,11 +7,47 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
+	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 )
 
-// authInterceptor creates a Connect interceptor for authentication and authorization.
+// Credential rpcs that get brute force lockout
+var throttledProcedures = map[string]bool{
+	distrofacev1connect.AuthServiceLoginProcedure:          true,
+	distrofacev1connect.AuthServiceRegisterProcedure:       true,
+	distrofacev1connect.UserServiceChangePasswordProcedure: true,
+}
+
+// Failed auth counts toward lockout success clears it
+func (s *Server) rateLimitInterceptor() connect.UnaryInterceptorFunc {
+	return func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			if s.authLimiter == nil || !throttledProcedures[req.Spec().Procedure] {
+				return next(ctx, req)
+			}
+
+			clientIP := ratelimit.ClientIP(req.Peer().Addr, req.Header())
+			if s.authLimiter.Blocked(clientIP) {
+				return nil, connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("too many failed attempts, try again later"))
+			}
+
+			resp, err := next(ctx, req)
+			if err != nil {
+				switch connect.CodeOf(err) {
+				case connect.CodeUnauthenticated, connect.CodePermissionDenied:
+					s.authLimiter.Record(clientIP)
+				}
+			} else {
+				s.authLimiter.Reset(clientIP)
+			}
+			return resp, err
+		}
+	}
+}
+
+// Creates a Connect interceptor for authentication and authorization.
 func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {

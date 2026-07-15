@@ -73,8 +73,11 @@
 		const urlParams = new URLSearchParams(page.url.search);
 
 		// Handle OIDC callback token
-		const token = urlParams.get('token');
+		const hashParams = new URLSearchParams(window.location.hash.slice(1));
+		const token = hashParams.get('token') ?? urlParams.get('token');
 		if (token) {
+			// Scrub token from address bar right away
+			history.replaceState(null, '', window.location.pathname);
 			processingOidc = true;
 			authStore.setToken(token);
 			try {
@@ -163,9 +166,10 @@
 		try {
 			await authStore.login(identifier, password);
 			toast.success('Signed in successfully');
+			// eslint-disable-next-line svelte/no-navigation-without-resolve
 			goto('/');
 		} catch {
-			// error interceptor handles the toast
+			// Error interceptor handles the toast
 		} finally {
 			isSubmitting = false;
 		}
@@ -192,7 +196,7 @@
 			);
 			goto('/');
 		} catch {
-			// error interceptor handles the toast
+			// Error interceptor handles the toast
 		} finally {
 			isSubmitting = false;
 		}

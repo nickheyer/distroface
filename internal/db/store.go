@@ -75,6 +75,15 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) Migrate() error {
+	// Rename old webhook secret column keeping stored values
+	if s.db.Migrator().HasTable("webhooks") &&
+		s.db.Migrator().HasColumn(&Webhook{}, "secret_hash") &&
+		!s.db.Migrator().HasColumn(&Webhook{}, "secret") {
+		if err := s.db.Exec("ALTER TABLE webhooks RENAME COLUMN secret_hash TO secret").Error; err != nil {
+			return fmt.Errorf("failed to rename webhook secret column: %w", err)
+		}
+	}
+
 	if err := s.db.AutoMigrate(
 		&User{},
 		&Role{},
@@ -298,6 +307,16 @@ func (s *Store) UpdateRole(ctx context.Context, role *Role) error {
 	return s.db.WithContext(ctx).Save(role).Error
 }
 
+// Rename role and repoint user rows one transaction
+func (s *Store) RenameRole(ctx context.Context, role *Role, oldName string) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Save(role).Error; err != nil {
+			return err
+		}
+		return tx.Model(&UserRole{}).Where("role_name = ?", oldName).Update("role_name", role.Name).Error
+	})
+}
+
 func (s *Store) DeleteRole(ctx context.Context, id string) error {
 	var role Role
 	if err := s.db.WithContext(ctx).First(&role, "id = ?", id).Error; err != nil {
@@ -314,11 +333,17 @@ func (s *Store) DeleteRole(ctx context.Context, id string) error {
 	})
 }
 
-// ── UserRole operations ──────────────────────────────────────────────────
-
 func (s *Store) AssignRole(ctx context.Context, userID, roleName, source string) error {
+	role, err := s.GetRoleByName(ctx, roleName)
+	if err != nil {
+		return err
+	}
+	if role == nil {
+		return fmt.Errorf("role %q does not exist", roleName)
+	}
+
 	var existing UserRole
-	err := s.db.WithContext(ctx).Where("user_id = ? AND role_name = ?", userID, roleName).First(&existing).Error
+	err = s.db.WithContext(ctx).Where("user_id = ? AND role_name = ?", userID, roleName).First(&existing).Error
 	if err == nil {
 		return nil // Already assigned
 	}
@@ -333,6 +358,24 @@ func (s *Store) AssignRole(ctx context.Context, userID, roleName, source string)
 
 func (s *Store) UnassignRole(ctx context.Context, userID, roleName string) error {
 	return s.db.WithContext(ctx).Where("user_id = ? AND role_name = ?", userID, roleName).Delete(&UserRole{}).Error
+}
+
+// Remove role only when granted by this source
+func (s *Store) UnassignRoleBySource(ctx context.Context, userID, roleName, source string) error {
+	return s.db.WithContext(ctx).Where("user_id = ? AND role_name = ? AND source = ?", userID, roleName, source).Delete(&UserRole{}).Error
+}
+
+// Role names user got from one source
+func (s *Store) GetUserRoleNamesBySource(ctx context.Context, userID, source string) ([]string, error) {
+	var names []string
+	err := s.db.WithContext(ctx).
+		Model(&UserRole{}).
+		Where("user_id = ? AND source = ?", userID, source).
+		Pluck("role_name", &names).Error
+	if err != nil {
+		return nil, err
+	}
+	return names, nil
 }
 
 func (s *Store) GetUserRoleNames(ctx context.Context, userID string) ([]string, error) {
@@ -596,6 +639,14 @@ func (s *Store) ListOrgMembers(ctx context.Context, orgID string, limit, offset 
 	return members, total, err
 }
 
+func (s *Store) CountOrgMembersByRole(ctx context.Context, orgID, role string) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Model(&OrgMember{}).
+		Where("org_id = ? AND role = ?", orgID, role).
+		Count(&count).Error
+	return count, err
+}
+
 func (s *Store) UpdateOrgMember(ctx context.Context, member *OrgMember) error {
 	return s.db.WithContext(ctx).Save(member).Error
 }
@@ -827,8 +878,7 @@ func (s *Store) DeleteWebhook(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Delete(&Webhook{}, "id = ?", id).Error
 }
 
-// GetActiveWebhooksForRepo returns active webhooks for a repo: direct repo-scoped
-// webhooks plus org-scoped webhooks matching the repo's namespace.
+// Returns active webhooks for a repo
 func (s *Store) GetActiveWebhooksForRepo(ctx context.Context, namespace, name string) ([]*Webhook, error) {
 	var webhooks []*Webhook
 
