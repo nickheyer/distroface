@@ -33,6 +33,7 @@ type Server struct {
 	enforcer          *rbac.Enforcer
 	oidcHandler       *auth.OIDCHandler
 	webhookDispatcher *webhook.Dispatcher
+	portalResolver    *registry.PortalResolver
 }
 
 type ServerDeps struct {
@@ -46,6 +47,7 @@ type ServerDeps struct {
 	Enforcer          *rbac.Enforcer
 	OIDCHandler       *auth.OIDCHandler
 	WebhookDispatcher *webhook.Dispatcher
+	PortalResolver    *registry.PortalResolver
 }
 
 func NewServer(deps ServerDeps) *Server {
@@ -60,6 +62,7 @@ func NewServer(deps ServerDeps) *Server {
 		enforcer:          deps.Enforcer,
 		oidcHandler:       deps.OIDCHandler,
 		webhookDispatcher: deps.WebhookDispatcher,
+		portalResolver:    deps.PortalResolver,
 	}
 	s.setupHandler()
 	return s
@@ -131,6 +134,12 @@ func (s *Server) setupHandler() {
 	webhookPath, webhookHandler := distrofacev1connect.NewWebhookServiceHandler(webhookService, opts...)
 	mux.Handle(webhookPath, webhookHandler)
 
+	if s.portalResolver != nil {
+		portalService := services.NewPortalService(s.store, s.enforcer, s.portalResolver, s.config, s.log)
+		portalPath, portalHandler := distrofacev1connect.NewPortalServiceHandler(portalService, opts...)
+		mux.Handle(portalPath, portalHandler)
+	}
+
 	// gRPC reflection
 	reflector := grpcreflect.NewStaticReflector(
 		distrofacev1connect.HealthServiceName,
@@ -142,6 +151,7 @@ func (s *Server) setupHandler() {
 		distrofacev1connect.TokenServiceName,
 		distrofacev1connect.OrganizationServiceName,
 		distrofacev1connect.WebhookServiceName,
+		distrofacev1connect.PortalServiceName,
 	)
 	mux.Handle(grpcreflect.NewHandlerV1(reflector))
 	mux.Handle(grpcreflect.NewHandlerV1Alpha(reflector))

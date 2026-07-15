@@ -133,7 +133,9 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("initializing registry access: %w", err)
 	}
 
-	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, registryLog)
+	portalResolver := registry.NewPortalResolver(store, registryLog)
+
+	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, registryLog)
 
 	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, log)
 
@@ -141,13 +143,14 @@ func New() (*App, error) {
 		Store:             store,
 		Config:            cfg,
 		Log:               log,
-		RegistryHandler:   registryApp,
+		RegistryHandler:   portalResolver.Middleware(registryApp),
 		RegistryAccess:    registryAccess,
 		TokenHandler:      tokenHandler,
 		AuthManager:       authManager,
 		Enforcer:          enforcer,
 		OIDCHandler:       oidcHandler,
 		WebhookDispatcher: dispatcher,
+		PortalResolver:    portalResolver,
 	})
 
 	srv := &http.Server{

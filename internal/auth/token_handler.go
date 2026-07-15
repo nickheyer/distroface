@@ -12,12 +12,20 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// Applies per-host portal rules at the token endpoint
+type RegistryAccessPolicy interface {
+	MapName(host, name string) string // Rewrites repo name for given host
+	AllowAnonymous(host string) bool  // Check if anon access permitted
+	AllowPush(host string) bool       // Check if push permitted
+}
+
 // TokenHandler implements the Docker Token Authentication Specification.
 type TokenHandler struct {
 	tokenService *TokenService
 	store        *storage.Store
 	authManager  *Manager
 	enforcer     *rbac.Enforcer
+	policy       RegistryAccessPolicy
 	log          *logger.Logger
 }
 
@@ -28,13 +36,14 @@ type tokenResponse struct {
 	IssuedAt    string `json:"issued_at"`
 }
 
-// NewTokenHandler creates a new Docker token auth endpoint handler.
-func NewTokenHandler(ts *TokenService, store *storage.Store, manager *Manager, enforcer *rbac.Enforcer, log *logger.Logger) *TokenHandler {
+// Creates docker token auth endpoint handler, nil disables mapping
+func NewTokenHandler(ts *TokenService, store *storage.Store, manager *Manager, enforcer *rbac.Enforcer, policy RegistryAccessPolicy, log *logger.Logger) *TokenHandler {
 	return &TokenHandler{
 		tokenService: ts,
 		store:        store,
 		authManager:  manager,
 		enforcer:     enforcer,
+		policy:       policy,
 		log:          log,
 	}
 }
@@ -92,6 +101,13 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Portals may require auth for all access on their hostname
+	if authUser == nil && h.policy != nil && !h.policy.AllowAnonymous(r.Host) {
+		w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
 	var access []*ResourceActions
 	if scopeStr != "" {
 		access = h.resolveAccess(r, authUser, scopeStr)
@@ -137,7 +153,15 @@ func (h *TokenHandler) resolveAccess(r *http.Request, user *AuthenticatedUser, s
 			continue
 		}
 
+		// Granted claims must carry the mapped name to match the rewritten URL
+		if h.policy != nil {
+			resourceName = h.policy.MapName(r.Host, resourceName)
+		}
+
 		granted := h.filterActions(r, user, resourceName, requestedActions)
+		if h.policy != nil && !h.policy.AllowPush(r.Host) {
+			granted = withoutAction(granted, "push")
+		}
 		if len(granted) > 0 {
 			result = append(result, &ResourceActions{
 				Type:    resourceType,
@@ -148,6 +172,16 @@ func (h *TokenHandler) resolveAccess(r *http.Request, user *AuthenticatedUser, s
 	}
 
 	return result
+}
+
+func withoutAction(actions []string, drop string) []string {
+	var kept []string
+	for _, a := range actions {
+		if a != drop {
+			kept = append(kept, a)
+		}
+	}
+	return kept
 }
 
 func (h *TokenHandler) filterActions(r *http.Request, user *AuthenticatedUser, repoName string, requested []string) []string {

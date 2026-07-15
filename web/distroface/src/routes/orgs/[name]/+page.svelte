@@ -22,6 +22,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import WebhookManager from '$lib/components/webhook-manager.svelte';
+	import PortalManager from '$lib/components/portal-manager.svelte';
 	import UserSearch from '$lib/components/user-search.svelte';
 	import RepoList from '$lib/components/repo-list.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
@@ -286,6 +287,7 @@
 				<TabsTrigger value="repositories">Repositories</TabsTrigger>
 				{#if canUpdateOrg}
 					<TabsTrigger value="webhooks">Webhooks</TabsTrigger>
+					<TabsTrigger value="portals">Portals</TabsTrigger>
 				{/if}
 			</TabsList>
 
@@ -398,6 +400,12 @@
 						emptyDescription="Add a webhook to get notified when images are pushed, pulled, or deleted in any repository under this organization."
 						createDescription="Receive HTTP POST notifications for all repositories in this organization."
 					/>
+				</TabsContent>
+			{/if}
+
+			{#if org && canUpdateOrg}
+				<TabsContent value="portals" class="space-y-4 mt-4">
+					<PortalManager orgName={org.name} />
 				</TabsContent>
 			{/if}
 		</Tabs>

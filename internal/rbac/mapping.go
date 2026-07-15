@@ -94,6 +94,13 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.OrganizationServiceRemoveOrgMemberProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 	distrofacev1connect.OrganizationServiceUpdateOrgMemberRoleProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 
+	// ── PortalService (org-scoped; owner/admin checks in-service) ──────
+	distrofacev1connect.PortalServiceCreatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.PortalServiceGetPortalProcedure:    {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
+	distrofacev1connect.PortalServiceListPortalsProcedure:  {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
+	distrofacev1connect.PortalServiceUpdatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.PortalServiceDeletePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+
 	// ── WebhookService ────────────────────────────────────────────────
 	distrofacev1connect.WebhookServiceCreateWebhookProcedure:         {Resource: ResourceWebhooks, Action: ActionCreate},
 	distrofacev1connect.WebhookServiceListWebhooksProcedure:          {Resource: ResourceWebhooks, Action: ActionRead},

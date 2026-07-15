@@ -140,6 +140,21 @@ type WebhookDelivery struct {
 	Webhook      *Webhook  `json:"-" gorm:"foreignKey:WebhookID;constraint:OnDelete:CASCADE"`
 }
 
+type RegistryPortal struct { // Alternate org-owned registry host
+	ID             string        `json:"id" gorm:"primaryKey"`
+	OrgID          string        `json:"org_id" gorm:"not null;index;column:org_id"`
+	Name           string        `json:"name" gorm:"not null"`
+	Hostname       string        `json:"hostname" gorm:"not null;uniqueIndex"`
+	MapUnqualified bool          `json:"map_unqualified" gorm:"not null"`
+	Rules          string        `json:"rules" gorm:"not null;default:'[]'"` // JSON array of {pattern, replace}
+	AllowPush      bool          `json:"allow_push" gorm:"not null"`
+	RequireAuth    bool          `json:"require_auth" gorm:"not null"`
+	Enabled        bool          `json:"enabled" gorm:"not null"`
+	CreatedAt      time.Time     `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt      time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
+	Org            *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
 type RegistrationInvite struct {
 	ID          string     `json:"id" gorm:"primaryKey"`
 	Code        string     `json:"code" gorm:"not null;uniqueIndex"`
