@@ -161,6 +161,16 @@ func Load(configPath string) (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
+	// Short alias used by the compose examples
+	_ = v.BindEnv("storage.data_dir", "DISTROFACE_STORAGE_DATA_DIR", "DISTROFACE_DATA_DIR")
+
+	// Keys without defaults need explicit env binding
+	_ = v.BindEnv("database.path")
+	_ = v.BindEnv("registry.storage_path")
+	_ = v.BindEnv("artifacts.storage_path")
+	_ = v.BindEnv("logging.dir")
+	_ = v.BindEnv("auth.jwt_secret")
+
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, fmt.Errorf("error reading config file: %w", err)
@@ -171,6 +181,8 @@ func Load(configPath string) (*Config, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
+
+	applyDerivedPaths(&cfg)
 
 	if err := validateConfig(&cfg); err != nil {
 		return nil, fmt.Errorf("config validation error: %w", err)
@@ -187,18 +199,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.write_timeout", 15)
 	v.SetDefault("server.idle_timeout", 60)
 
-	v.SetDefault("database.path", "./data/distroface.db")
 	v.SetDefault("database.max_connections", 25)
 	v.SetDefault("database.max_idle_conns", 5)
 	v.SetDefault("database.conn_max_lifetime", 300)
 
-	dataDir, err := filepath.Abs("./data")
-	if err != nil {
-		panic("unable to resolve data dir")
-	}
-	v.SetDefault("storage.data_dir", dataDir)
-
-	v.SetDefault("registry.storage_path", "./data/registry")
+	v.SetDefault("storage.data_dir", "./data")
 
 	v.SetDefault("auth.session_timeout", 86400)
 	v.SetDefault("auth.token_expiry", 900)
@@ -217,7 +222,6 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("webhooks.allow_private_networks", false)
 
-	v.SetDefault("artifacts.storage_path", "./data/artifacts")
 	v.SetDefault("artifacts.max_file_size_mb", 10240)
 	v.SetDefault("artifacts.v1_compat", true)
 	v.SetDefault("artifacts.retention.enabled", false)
@@ -235,12 +239,27 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("rate_limit.anon_pull_per_minute", 0)
 
 	v.SetDefault("logging.enabled", true)
-	v.SetDefault("logging.dir", "./data/logs")
 	v.SetDefault("logging.default_module", "distroface-app")
 	v.SetDefault("logging.max_size", 10)
 	v.SetDefault("logging.max_backups", 5)
 	v.SetDefault("logging.max_age", 30)
 	v.SetDefault("logging.compress", true)
+}
+
+// Paths left unset land under the data dir
+func applyDerivedPaths(cfg *Config) {
+	if cfg.Database.Path == "" {
+		cfg.Database.Path = filepath.Join(cfg.Storage.DataDir, "distroface.db")
+	}
+	if cfg.Registry.StoragePath == "" {
+		cfg.Registry.StoragePath = filepath.Join(cfg.Storage.DataDir, "registry")
+	}
+	if cfg.Artifacts.StoragePath == "" {
+		cfg.Artifacts.StoragePath = filepath.Join(cfg.Storage.DataDir, "artifacts")
+	}
+	if cfg.Logging.Dir == "" {
+		cfg.Logging.Dir = filepath.Join(cfg.Storage.DataDir, "logs")
+	}
 }
 
 func validateConfig(cfg *Config) error {

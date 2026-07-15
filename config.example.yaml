@@ -3,26 +3,35 @@
 server:
   port: "8080"
   host: "0.0.0.0"
+  hostname: "localhost:8080"
   read_timeout: 15
   write_timeout: 15
   idle_timeout: 60
 
+# Storage configuration
+storage:
+  data_dir: "./data"
+
 # Database configuration
 database:
-  path: "./data/distroface.db"
+  # path: "./data/distroface.db"    # Derived from storage.data_dir when unset
   max_connections: 25
   max_idle_conns: 5
   conn_max_lifetime: 300
 
-
 # Registry configuration
 registry:
-  storage_path: "./data/registry"
+  # storage_path: "./data/registry"   # Derived from storage.data_dir when unset
 
 # Auth configuration
 auth:
-  session_duration: 86400       # 24 hours in seconds
-  token_expiry: 900             # 15 minutes for registry tokens
+  session_timeout: 86400      # 24 hours in seconds
+  token_expiry: 900           # 15 minutes for registry tokens
+  anonymous_access: false
+  # jwt_secret: ""              # Generated and persisted when unset
+  local:
+    enabled: true
+    allow_registration: true
   # oidc:
   #   enabled: true
   #   issuer_uri: "https://idp.example.com/realms/main"
@@ -30,9 +39,22 @@ auth:
   #   client_secret: "..."
   #   redirect_url: "https://registry.example.com/api/v1/auth/oidc/callback"
   #   role_claim: "roles"        # Claim mapped to distroface roles
+  #   role_mapping:              # Idp role value -> distroface role
+  #     registry-admins: admin
   #   group_claim: "groups"      # Claim listing idp groups
   #   group_org_mapping:         # Idp group -> org membership
   #     platform-team: platform
+
+# Artifact repositories
+artifacts:
+  # storage_path: "./data/artifacts"  # Derived from storage.data_dir when unset
+  max_file_size_mb: 10240     # Zero means unlimited
+  v1_compat: true             # Serve the v1 facade for old dfcli and ci
+  retention:
+    enabled: false
+    max_versions: 5           # Newest versions kept per path zero means unlimited
+    max_age_days: 0           # Age based pruning in days zero disables
+    exclude_latest: true      # Never age-prune the newest artifact of a path
 
 # Registry garbage collection
 gc:
@@ -52,17 +74,10 @@ rate_limit:
   pull_per_minute: 0         # Pulls per user per minute zero means unlimited
   anon_pull_per_minute: 0    # Anon pulls per ip per minute zero means unlimited
 
-# Storage configuration
-storage:
-  data_dir: "./data"
-  backup_dir: "./backups"
-  temp_dir: "./tmp"
-  max_upload_size: 524288000  # 500MB in bytes
-
 # Logging configuration
 logging:
   enabled: true
-  file_path: "./data/distroface.log"
+  # dir: "./data/logs"          # Derived from storage.data_dir when unset
   max_size: 10
   max_backups: 5
   max_age: 30

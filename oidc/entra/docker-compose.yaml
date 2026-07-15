@@ -13,10 +13,14 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /tmp/distroface:/app/data
+      # Container runs as uid 1000, chown host dir to match
+      - /opt/distroface:/app/data
     environment:
       - DISTROFACE_DATA_DIR=/app/data
       - TZ=UTC
+
+      # Public hostname, set when serving behind a real domain
+      #- DISTROFACE_SERVER_HOSTNAME=registry.example.com
 
       - DISTROFACE_AUTH_LOCAL_ENABLED=true
       - DISTROFACE_AUTH_OIDC_ENABLED=true

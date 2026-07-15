@@ -44,14 +44,25 @@ FROM alpine:latest
 
 ARG APP_VERSION
 ENV APP_VERSION=${APP_VERSION}
+ENV DISTROFACE_DATA_DIR=/app/data
 
 RUN apk --no-cache add ca-certificates sqlite-libs
+
+RUN addgroup -g 1000 -S distroface && \
+    adduser -u 1000 -S -G distroface -h /app -H -s /sbin/nologin distroface
 
 WORKDIR /app
 
 COPY --from=backend-builder /app/distroface .
-COPY config.example.yaml ./
+
+RUN mkdir -p /app/data && chown distroface:distroface /app/data
+
+USER 1000:1000
 
 EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -qO /dev/null --post-data='{}' --header='Content-Type: application/json' \
+    http://127.0.0.1:8080/distroface.v1.HealthService/HealthCheck || exit 1
 
 CMD ["./distroface"]
