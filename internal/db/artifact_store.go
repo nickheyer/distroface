@@ -2,11 +2,34 @@ package db
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
+	"sort"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// Property update would collide with another artifact
+var ErrDuplicateIdentity = errors.New("an artifact with this version, path, and property set already exists")
+
+// Canonical hash of a property set, empty keys skipped
+func PropsFingerprint(properties map[string]string) string {
+	keys := make([]string, 0, len(properties))
+	for k := range properties {
+		if k != "" {
+			keys = append(keys, k)
+		}
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	for _, k := range keys {
+		fmt.Fprintf(h, "%d:%s%d:%s;", len(k), k, len(properties[k]), properties[k])
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
 
 // ── Artifact repository operations ───────────────────────────────────────
 
@@ -120,15 +143,16 @@ func (s *Store) GetArtifactRepoStats(ctx context.Context, repoIDs []int64) (map[
 
 // ── Artifact operations ──────────────────────────────────────────────────
 
-// Inserts replacing same version path, returns replaced digest
+// Inserts replacing same version path properties, returns replaced digest
 func (s *Store) CreateArtifact(ctx context.Context, artifact *Artifact, properties map[string]string) (replacedDigest string, err error) {
 	if artifact.ID == "" {
 		artifact.ID = uuid.New().String()
 	}
+	artifact.PropsHash = PropsFingerprint(properties)
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing Artifact
-		findErr := tx.First(&existing, "repo_id = ? AND version = ? AND path = ?",
-			artifact.RepoID, artifact.Version, artifact.Path).Error
+		findErr := tx.First(&existing, "repo_id = ? AND version = ? AND path = ? AND props_hash = ?",
+			artifact.RepoID, artifact.Version, artifact.Path, artifact.PropsHash).Error
 		if findErr == nil {
 			replacedDigest = existing.Digest
 			if err := tx.Delete(&Artifact{}, "id = ?", existing.ID).Error; err != nil {
@@ -177,9 +201,28 @@ func (s *Store) GetArtifact(ctx context.Context, id string) (*Artifact, error) {
 	return &artifact, nil
 }
 
+// Newest match, property variants can share version and path
 func (s *Store) GetArtifactByPathVersion(ctx context.Context, repoID int64, version, path string) (*Artifact, error) {
 	var artifact Artifact
-	err := s.db.WithContext(ctx).First(&artifact, "repo_id = ? AND version = ? AND path = ?", repoID, version, path).Error
+	err := s.db.WithContext(ctx).Order("created_at DESC, id DESC").
+		First(&artifact, "repo_id = ? AND version = ? AND path = ?", repoID, version, path).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := s.loadArtifactProperties(ctx, []*Artifact{&artifact}); err != nil {
+		return nil, err
+	}
+	return &artifact, nil
+}
+
+// Row matching the full four part identity
+func (s *Store) GetArtifactByIdentity(ctx context.Context, repoID int64, version, path string, properties map[string]string) (*Artifact, error) {
+	var artifact Artifact
+	err := s.db.WithContext(ctx).First(&artifact, "repo_id = ? AND version = ? AND path = ? AND props_hash = ?",
+		repoID, version, path, PropsFingerprint(properties)).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -289,14 +332,53 @@ func (s *Store) UpdateArtifact(ctx context.Context, artifact *Artifact) error {
 	return s.db.WithContext(ctx).Save(artifact).Error
 }
 
-// Replaces the full property set
+// Replaces the full property set, identity hash follows
 func (s *Store) SetArtifactProperties(ctx context.Context, artifactID string, properties map[string]string) error {
+	hash := PropsFingerprint(properties)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var artifact Artifact
+		if err := tx.First(&artifact, "id = ?", artifactID).Error; err != nil {
+			return err
+		}
+		if artifact.PropsHash != hash {
+			var occupied int64
+			if err := tx.Model(&Artifact{}).Where("repo_id = ? AND version = ? AND path = ? AND props_hash = ?",
+				artifact.RepoID, artifact.Version, artifact.Path, hash).Count(&occupied).Error; err != nil {
+				return err
+			}
+			if occupied > 0 {
+				return ErrDuplicateIdentity
+			}
+			if err := tx.Model(&Artifact{}).Where("id = ?", artifactID).Update("props_hash", hash).Error; err != nil {
+				return err
+			}
+		}
 		if err := tx.Delete(&ArtifactProperty{}, "artifact_id = ?", artifactID).Error; err != nil {
 			return err
 		}
 		return createPropertiesTx(tx, artifactID, properties)
 	})
+}
+
+// Backfills identity hashes for rows predating props_hash
+func (s *Store) backfillArtifactPropsHash() error {
+	var rows []*Artifact
+	if err := s.db.Where("props_hash = ''").Find(&rows).Error; err != nil {
+		return err
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	if err := s.loadArtifactProperties(context.Background(), rows); err != nil {
+		return err
+	}
+	for _, a := range rows {
+		if err := s.db.Model(&Artifact{}).Where("id = ?", a.ID).
+			Update("props_hash", PropsFingerprint(a.Properties)).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // Properties cascade with the row

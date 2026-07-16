@@ -451,12 +451,20 @@ func TestV1PropertiesMetadataRename(t *testing.T) {
 		t.Fatalf("old path after rename: got %d", rec.Code)
 	}
 
-	// Rename onto existing version path gives conflict
-	e.uploadArtifact(token, "myrepo", "1.0.0", "dir/other.txt", "other", nil)
+	// Rename onto matching version path properties gives conflict
+	e.uploadArtifact(token, "myrepo", "1.0.0", "dir/other.txt", "other", map[string]string{"build": "2"})
 	otherID := e.artifactID("myrepo", "1.0.0", "dir/other.txt")
 	rec = e.doJSON(http.MethodPut, "/api/v1/artifacts/myrepo/"+otherID+"/rename", token, map[string]string{"name": "new.txt"})
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("rename conflict: got %d", rec.Code)
+	}
+
+	// Different property set may share version and path
+	e.uploadArtifact(token, "myrepo", "1.0.0", "dir/third.txt", "third", map[string]string{"build": "3"})
+	thirdID := e.artifactID("myrepo", "1.0.0", "dir/third.txt")
+	rec = e.doJSON(http.MethodPut, "/api/v1/artifacts/myrepo/"+thirdID+"/rename", token, map[string]string{"name": "new.txt"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("variant rename: got %d body %q", rec.Code, rec.Body.String())
 	}
 }
 
@@ -542,6 +550,65 @@ func TestV1ReplaceAndRetention(t *testing.T) {
 	}
 	if rec := e.do(http.MethodGet, "/api/v1/artifacts/myrepo/3.0.0/app.zip", token, nil); rec.Code != http.StatusOK {
 		t.Fatalf("retention pruned newest version: got %d", rec.Code)
+	}
+}
+
+func TestV1PropertyVariantIdentity(t *testing.T) {
+	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	token := e.newUser("alice", "user")
+	e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", token, map[string]any{"name": "myrepo"})
+
+	// Same version path with different properties both survive
+	e.uploadArtifact(token, "myrepo", "1.0.0", "app.zip", "x86-content", map[string]string{"arch": "x86"})
+	e.uploadArtifact(token, "myrepo", "1.0.0", "app.zip", "arm-content", map[string]string{"arch": "arm"})
+
+	var count int64
+	e.store.DB().Model(&storage.Artifact{}).Count(&count)
+	if count != 2 {
+		t.Fatalf("property variants collapsed: %d rows, want 2", count)
+	}
+
+	// Matching properties replace only their own variant
+	e.uploadArtifact(token, "myrepo", "1.0.0", "app.zip", "arm-content-v2", map[string]string{"arch": "arm"})
+	e.store.DB().Model(&storage.Artifact{}).Count(&count)
+	if count != 2 {
+		t.Fatalf("same-props re-upload: %d rows, want 2", count)
+	}
+
+	// Property query selects the right variant
+	for arch, want := range map[string]string{"x86": "x86-content", "arm": "arm-content-v2"} {
+		rec := e.do(http.MethodGet, "/api/v1/artifacts/myrepo/query?arch="+arch, token, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("query arch=%s: got %d body %q", arch, rec.Code, rec.Body.String())
+		}
+		zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
+		if err != nil || len(zr.File) != 1 {
+			t.Fatalf("query arch=%s zip: %v", arch, err)
+		}
+		f, _ := zr.File[0].Open()
+		got, _ := io.ReadAll(f)
+		f.Close()
+		if string(got) != want {
+			t.Fatalf("query arch=%s content: %q want %q", arch, got, want)
+		}
+	}
+
+	// Property edit onto an occupied identity conflicts
+	ctx := context.Background()
+	r, _ := e.store.GetArtifactRepository(ctx, "myrepo")
+	x86, err := e.store.GetArtifactByIdentity(ctx, r.ID, "1.0.0", "app.zip", map[string]string{"arch": "x86"})
+	if err != nil || x86 == nil {
+		t.Fatalf("GetArtifactByIdentity: %v %v", x86, err)
+	}
+	rec := e.doJSON(http.MethodPut, "/api/v1/artifacts/myrepo/"+x86.ID+"/properties", token, map[string]string{"arch": "arm"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("props collision: got %d body %q", rec.Code, rec.Body.String())
+	}
+
+	// Bare download resolves the newest variant
+	rec = e.do(http.MethodGet, "/api/v1/artifacts/myrepo/1.0.0/app.zip", token, nil)
+	if rec.Code != http.StatusOK || rec.Body.String() != "arm-content-v2" {
+		t.Fatalf("bare download: got %d body %q", rec.Code, rec.Body.String())
 	}
 }
 

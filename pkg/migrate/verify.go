@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/nickheyer/distroface/internal/artifacts"
+	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
@@ -176,7 +177,7 @@ func verifyArtifacts(ctx context.Context, cfg *config.MigrateConfig, v2db *V2, v
 		}
 		if row == nil {
 			if v2RepoID, found := repoIDs[a.RepoID]; found {
-				if row, err = v2db.Store.GetArtifactByPathVersion(ctx, v2RepoID, a.Version, a.Path); err != nil {
+				if row, err = v2db.Store.GetArtifactByIdentity(ctx, v2RepoID, a.Version, a.Path, plan.Props[a.ID]); err != nil {
 					return ok, missing, bad, err
 				}
 			}
@@ -190,6 +191,10 @@ func verifyArtifacts(ctx context.Context, cfg *config.MigrateConfig, v2db *V2, v
 		divergent := false
 		if info, statErr := os.Stat(v1s.ArtifactFilePath(a)); statErr == nil && info.Size() != row.Size {
 			fmt.Printf("ART MISMATCH %s %s@%s: v1 file %d bytes, v2 row %d bytes\n", a.RepoName, a.Path, a.Version, info.Size(), row.Size)
+			divergent = true
+		}
+		if row.PropsHash != db.PropsFingerprint(plan.Props[a.ID]) {
+			fmt.Printf("ART MISMATCH %s %s@%s: v2 property set diverges from v1\n", a.RepoName, a.Path, a.Version)
 			divergent = true
 		}
 		if blobs != nil && !divergent {

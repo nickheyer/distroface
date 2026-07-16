@@ -391,6 +391,9 @@ func (s *ArtifactService) SetArtifactProperties(ctx context.Context, req *connec
 	}
 
 	if err := s.store.SetArtifactProperties(ctx, artifact.ID, msg.Properties); err != nil {
+		if errors.Is(err, storage.ErrDuplicateIdentity) {
+			return nil, connect.NewError(connect.CodeAlreadyExists, err)
+		}
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	artifact.Properties = msg.Properties

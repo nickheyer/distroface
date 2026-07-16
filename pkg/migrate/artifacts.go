@@ -15,12 +15,14 @@ import (
 )
 
 // ArtifactPlan is the resolved v1 -> v2 artifact import set. V1 kept every
-// re-upload of the same (repo, version, path); v2 enforces uniqueness with
-// replace-on-push semantics, so the plan keeps only the newest row per
-// identity — exactly what v2 would have retained had it been running all along.
+// re-upload of the same (repo, version, path, properties); v2 enforces
+// uniqueness on that full identity with replace-on-push semantics, so the plan
+// keeps only the newest row per identity — exactly what v2 would have retained
+// had it been running all along. Properties are part of the identity: the same
+// version+path uploaded with different build metadata is a distinct artifact.
 type ArtifactPlan struct {
 	Repos      []V1ArtifactRepo
-	Artifacts  []V1Artifact // newest per (repo, version, path), in v1 db order
+	Artifacts  []V1Artifact // newest per (repo, version, path, properties), in v1 db order
 	Props      map[string]map[string]string
 	DupSkipped map[int64]int // per v1 repo ID, older duplicate rows dropped
 	Invalid    []string      // rows v2 cannot address (bad version/path), skipped
@@ -53,8 +55,12 @@ func PlanArtifacts(v1db *V1DB) (*ArtifactPlan, error) {
 	}
 
 	type key struct {
-		repoID        int64
-		version, path string
+		repoID           int64
+		version, path    string
+		propsFingerprint string
+	}
+	identity := func(a V1Artifact) key {
+		return key{a.RepoID, a.Version, a.Path, db.PropsFingerprint(plan.Props[a.ID])}
 	}
 	newest := map[key]V1Artifact{}
 	valid := make([]V1Artifact, 0, len(arts))
@@ -69,7 +75,7 @@ func PlanArtifacts(v1db *V1DB) (*ArtifactPlan, error) {
 		}
 		valid = append(valid, a)
 
-		k := key{a.RepoID, a.Version, a.Path}
+		k := identity(a)
 		cur, seen := newest[k]
 		if !seen || a.CreatedAt.After(cur.CreatedAt) ||
 			(a.CreatedAt.Equal(cur.CreatedAt) && a.RowID > cur.RowID) {
@@ -77,7 +83,7 @@ func PlanArtifacts(v1db *V1DB) (*ArtifactPlan, error) {
 		}
 	}
 	for _, a := range valid {
-		if newest[key{a.RepoID, a.Version, a.Path}].ID == a.ID {
+		if newest[identity(a)].ID == a.ID {
 			plan.Artifacts = append(plan.Artifacts, a)
 		} else {
 			plan.DupSkipped[a.RepoID]++
@@ -91,7 +97,7 @@ type ArtifactStatus string
 const (
 	ArtImported ArtifactStatus = "imported"
 	ArtExists   ArtifactStatus = "exists"   // same v1 artifact ID already in v2
-	ArtOccupied ArtifactStatus = "occupied" // identity taken by a different (newer) v2 row
+	ArtOccupied ArtifactStatus = "occupied" // full identity taken by a different (newer) v2 row
 	ArtFailed   ArtifactStatus = "failed"
 )
 
@@ -200,7 +206,7 @@ func importArtifacts(ctx context.Context, cfg *config.MigrateConfig, v2 *V2, blo
 		case ArtExists:
 			logger.Logv(cfg, "  exists   %s %s@%s (skipped)", a.RepoName, a.Path, a.Version)
 		case ArtOccupied:
-			fmt.Printf("  kept v2  %s %s@%s (a different artifact already holds this version+path)\n", a.RepoName, a.Path, a.Version)
+			fmt.Printf("  kept v2  %s %s@%s (a different artifact already holds this version+path+properties)\n", a.RepoName, a.Path, a.Version)
 		case ArtFailed:
 			fmt.Fprintf(os.Stderr, "  FAILED   %s %s@%s: %v\n", a.RepoName, a.Path, a.Version, err)
 		}
@@ -275,7 +281,7 @@ func stageArtifact(ctx context.Context, v2 *V2, blobs *artifacts.BlobStore, v1s 
 	} else if existing != nil {
 		return none, ArtExists, nil
 	}
-	if occupant, err := v2.Store.GetArtifactByPathVersion(ctx, repoID, a.Version, a.Path); err != nil {
+	if occupant, err := v2.Store.GetArtifactByIdentity(ctx, repoID, a.Version, a.Path, props); err != nil {
 		return none, ArtFailed, err
 	} else if occupant != nil {
 		return none, ArtOccupied, nil
@@ -387,7 +393,7 @@ func printArtifactPlan(plan *ArtifactPlan, v1s *V1Storage) {
 	}
 
 	if n := plan.TotalDupSkipped(); n > 0 {
-		fmt.Printf("\ndropping %d older duplicate row(s): v1 kept every re-upload of the same repo/version/path, v2 keeps only the newest (replace-on-push)\n", n)
+		fmt.Printf("\ndropping %d older duplicate row(s): v1 kept every re-upload of the same repo/version/path/properties, v2 keeps only the newest (replace-on-push)\n", n)
 	}
 	for _, msg := range plan.Invalid {
 		fmt.Printf("  !! not importable in v2: %s\n", msg)

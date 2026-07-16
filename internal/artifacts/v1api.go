@@ -706,6 +706,10 @@ func (a *V1API) handleUpdateProperties(w http.ResponseWriter, r *http.Request, u
 	}
 
 	if err := a.store.SetArtifactProperties(r.Context(), artifact.ID, properties); err != nil {
+		if errors.Is(err, storage.ErrDuplicateIdentity) {
+			http.Error(w, "Artifact with this version, path, and property set exists", http.StatusConflict)
+			return
+		}
 		http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
 		return
 	}

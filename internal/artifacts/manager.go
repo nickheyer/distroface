@@ -93,7 +93,7 @@ func SanitizePath(name string) string {
 	return s
 }
 
-// Finalizes upload, replaces existing same version and path
+// Finalizes upload, replaces existing same version path properties
 func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata string, properties map[string]string) (*storage.Artifact, error) {
 	if err := ValidateVersion(version); err != nil {
 		return nil, err
@@ -178,7 +178,7 @@ func (m *Manager) DeleteRepository(ctx context.Context, repo *storage.ArtifactRe
 	return nil
 }
 
-// Prunes synchronously per path group unlike v1 property grouping
+// Prunes synchronously per path plus property set group
 func (m *Manager) ApplyRetention(ctx context.Context, repoID int64) error {
 	r := m.cfg.Retention
 	if !r.Enabled || (r.MaxVersions <= 0 && r.MaxAgeDays <= 0) {
@@ -190,9 +190,10 @@ func (m *Manager) ApplyRetention(ctx context.Context, repoID int64) error {
 		return err
 	}
 
-	byPath := make(map[string][]*storage.Artifact)
+	byGroup := make(map[string][]*storage.Artifact)
 	for _, a := range all {
-		byPath[a.Path] = append(byPath[a.Path], a)
+		key := a.Path + "\x00" + a.PropsHash
+		byGroup[key] = append(byGroup[key], a)
 	}
 
 	var cutoff time.Time
@@ -200,7 +201,7 @@ func (m *Manager) ApplyRetention(ctx context.Context, repoID int64) error {
 		cutoff = time.Now().UTC().AddDate(0, 0, -r.MaxAgeDays)
 	}
 
-	for _, group := range byPath {
+	for _, group := range byGroup {
 		sort.Slice(group, func(i, j int) bool {
 			return group[i].CreatedAt.After(group[j].CreatedAt)
 		})

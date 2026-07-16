@@ -183,7 +183,8 @@ type Artifact struct {
 	Path       string              `json:"path" gorm:"not null;uniqueIndex:idx_artifact_identity"`
 	UploadID   string              `json:"upload_id" gorm:"not null;column:upload_id"`
 	Version    string              `json:"version" gorm:"not null;uniqueIndex:idx_artifact_identity"`
-	Digest     string              `json:"digest" gorm:"not null;index"` // Full sha256 content address
+	PropsHash  string              `json:"-" gorm:"not null;default:'';uniqueIndex:idx_artifact_identity;column:props_hash"` // Property set fingerprint, fourth identity component
+	Digest     string              `json:"digest" gorm:"not null;index"`                                                     // Full sha256 content address
 	Size       int64               `json:"size" gorm:"not null"`
 	MimeType   string              `json:"mime_type" gorm:"column:mime_type"`
 	Metadata   string              `json:"metadata" gorm:"type:text;not null;default:'{}'"` // Arbitrary JSON object

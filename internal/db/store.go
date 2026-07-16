@@ -84,6 +84,13 @@ func (s *Store) Migrate() error {
 		}
 	}
 
+	// Identity index gains props_hash, drop stale three column version
+	if s.db.Migrator().HasTable(&Artifact{}) && !s.db.Migrator().HasColumn(&Artifact{}, "props_hash") {
+		if err := s.db.Exec("DROP INDEX IF EXISTS idx_artifact_identity").Error; err != nil {
+			return fmt.Errorf("failed to drop artifact identity index: %w", err)
+		}
+	}
+
 	if err := s.db.AutoMigrate(
 		&User{},
 		&Role{},
@@ -111,6 +118,10 @@ func (s *Store) Migrate() error {
 	s.db.Exec("DROP INDEX IF EXISTS idx_users_email")
 	s.db.Exec("DROP INDEX IF EXISTS uni_users_username")
 	s.db.Exec("DROP INDEX IF EXISTS uni_users_email")
+
+	if err := s.backfillArtifactPropsHash(); err != nil {
+		return fmt.Errorf("failed to backfill artifact props hash: %w", err)
+	}
 
 	if err := s.SeedSystemRoles(); err != nil {
 		return fmt.Errorf("failed to seed system roles: %w", err)
