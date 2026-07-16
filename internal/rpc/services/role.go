@@ -238,9 +238,10 @@ func (s *RoleService) GetPermissionMatrix(ctx context.Context, req *connect.Requ
 				return nil, connect.NewError(connect.CodeInternal, err)
 			}
 			for _, r := range artifactRepos {
+				fullName := r.Namespace + "/" + r.Name
 				availableObjects = append(availableObjects, &v1.ScopeableObject{
-					Id:          r.Name,
-					Name:        r.Name,
+					Id:          fullName,
+					Name:        fullName,
 					Resource:    rbac.ResourceArtifacts,
 					ScopeSource: rbac.ResourceArtifacts,
 				})

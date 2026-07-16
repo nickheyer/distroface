@@ -1,6 +1,7 @@
 package artifacts
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,11 +46,16 @@ func NewV1API(store *storage.Store, manager *Manager, authMgr *auth.Manager, enf
 	return a
 }
 
-func (a *V1API) Register(mux *http.ServeMux) {
+// Mounts login and refresh, never namespace rewritten
+func (a *V1API) RegisterAuth(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)
 	mux.HandleFunc("POST /api/v1/auth/refresh", a.handleRefresh)
-	mux.Handle("/api/v1/artifacts", a)
-	mux.Handle("/api/v1/artifacts/", a)
+}
+
+// Mounts the artifact data plane behind an optional wrapper
+func (a *V1API) RegisterArtifacts(mux *http.ServeMux, handler http.Handler) {
+	mux.Handle("/api/v1/artifacts", handler)
+	mux.Handle("/api/v1/artifacts/", handler)
 }
 
 // ── Ordered router ───────────────────────────────────────────────────────
@@ -84,6 +90,15 @@ func (a *V1API) buildRoutes() {
 }
 
 func (a *V1API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// Portal injects the org namespace as a reserved marker segment
+	forcedNS := ""
+	if rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/artifacts/_ns/"); ok {
+		if i := strings.IndexByte(rest, '/'); i > 0 {
+			forcedNS = rest[:i]
+			r.URL.Path = "/api/v1/artifacts/" + rest[i+1:]
+		}
+	}
+
 	pathMatched := false
 	for _, route := range a.routes {
 		m := route.pattern.FindStringSubmatch(r.URL.Path)
@@ -100,9 +115,12 @@ func (a *V1API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		vars := make(map[string]string, len(route.vars))
+		vars := make(map[string]string, len(route.vars)+1)
 		for i, name := range route.vars {
 			vars[name] = m[i+1]
+		}
+		if forcedNS != "" {
+			vars["namespace"] = forcedNS
 		}
 		route.handler(w, r, user, vars)
 		return
@@ -231,6 +249,8 @@ func (a *V1API) handleRefresh(w http.ResponseWriter, r *http.Request) {
 type v1Repo struct {
 	ID          int64     `json:"id"`
 	Name        string    `json:"name"`
+	Namespace   string    `json:"namespace"`
+	FullName    string    `json:"full_name"`
 	Description string    `json:"description"`
 	Owner       string    `json:"owner"`
 	Private     bool      `json:"private"`
@@ -246,6 +266,7 @@ func (a *V1API) handleCreateRepo(w http.ResponseWriter, r *http.Request, user *a
 
 	var req struct {
 		Name        string `json:"name"`
+		Namespace   string `json:"namespace"`
 		Description string `json:"description"`
 		Private     bool   `json:"private"`
 	}
@@ -258,7 +279,16 @@ func (a *V1API) handleCreateRepo(w http.ResponseWriter, r *http.Request, user *a
 		return
 	}
 
-	existing, err := a.store.GetArtifactRepository(r.Context(), req.Name)
+	ns := req.Namespace
+	if ns == "" {
+		ns = user.Username
+	}
+	if !a.canCreateInNamespace(r.Context(), user, ns) {
+		http.Error(w, "FORBIDDEN", http.StatusForbidden)
+		return
+	}
+
+	existing, err := a.store.GetArtifactRepository(r.Context(), ns, req.Name)
 	if err != nil {
 		http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
 		return
@@ -268,11 +298,16 @@ func (a *V1API) handleCreateRepo(w http.ResponseWriter, r *http.Request, user *a
 		return
 	}
 
+	isPrivate := req.Private
+	if !isPrivate && ns != user.Username {
+		isPrivate = a.manager.EffectivePrivateByDefault(r.Context(), ns)
+	}
 	repo := &storage.ArtifactRepository{
+		Namespace:   ns,
 		Name:        req.Name,
 		Description: req.Description,
 		OwnerID:     user.ID,
-		IsPrivate:   req.Private,
+		IsPrivate:   isPrivate,
 	}
 	if err := a.store.CreateArtifactRepository(r.Context(), repo); err != nil {
 		http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
@@ -287,7 +322,7 @@ func (a *V1API) handleListRepos(w http.ResponseWriter, r *http.Request, user *au
 		return
 	}
 
-	repos, err := a.listVisibleRepos(r, user)
+	repos, err := a.listVisibleRepos(r, user, r.URL.Query().Get("namespace"))
 	if err != nil {
 		http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
 		return
@@ -302,11 +337,11 @@ func (a *V1API) handleListRepos(w http.ResponseWriter, r *http.Request, user *au
 }
 
 func (a *V1API) handleDeleteRepo(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionDelete)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionDelete)
 	if !ok {
 		return
 	}
-	if !a.hasRepoAccess(user, repo, rbac.ActionDelete) {
+	if !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionDelete) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -321,11 +356,11 @@ func (a *V1API) handleDeleteRepo(w http.ResponseWriter, r *http.Request, user *a
 // ── Upload handlers ──────────────────────────────────────────────────────
 
 func (a *V1API) handleInitiateUpload(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionPush)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionPush)
 	if !ok {
 		return
 	}
-	if repo.IsPrivate && !a.hasRepoAccess(user, repo, rbac.ActionPush) {
+	if repo.IsPrivate && !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionPush) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -336,7 +371,12 @@ func (a *V1API) handleInitiateUpload(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 
-	w.Header().Set("Location", fmt.Sprintf("/api/v1/artifacts/%s/upload/%s", repo.Name, uploadID))
+	location := fmt.Sprintf("/api/v1/artifacts/%s/upload/%s", repo.Name, uploadID)
+	if user == nil || repo.Namespace != user.Username {
+		// Org repos carry the marker so follow-up requests stay namespaced
+		location = fmt.Sprintf("/api/v1/artifacts/_ns/%s/%s/upload/%s", repo.Namespace, repo.Name, uploadID)
+	}
+	w.Header().Set("Location", location)
 	w.Header().Set("Upload-ID", uploadID)
 	w.WriteHeader(http.StatusAccepted)
 }
@@ -359,11 +399,11 @@ func (a *V1API) handleCompleteUpload(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionPush)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionPush)
 	if !ok {
 		return
 	}
-	if repo.IsPrivate && !a.hasRepoAccess(user, repo, rbac.ActionPush) {
+	if repo.IsPrivate && !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionPush) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -392,11 +432,11 @@ func (a *V1API) handleCompleteUpload(w http.ResponseWriter, r *http.Request, use
 // ── Download handlers ────────────────────────────────────────────────────
 
 func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionPull)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionPull)
 	if !ok {
 		return
 	}
-	if !a.canSee(user, repo) {
+	if !a.canSee(r.Context(), user, repo) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -426,11 +466,11 @@ func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *aut
 }
 
 func (a *V1API) handleQuery(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionPull)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionPull)
 	if !ok {
 		return
 	}
-	if !a.canSee(user, repo) {
+	if !a.canSee(r.Context(), user, repo) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -484,11 +524,11 @@ func (a *V1API) handleQuery(w http.ResponseWriter, r *http.Request, user *auth.A
 }
 
 func (a *V1API) handleListVersions(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionRead)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionRead)
 	if !ok {
 		return
 	}
-	if !a.canSee(user, repo) {
+	if !a.canSee(r.Context(), user, repo) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -560,8 +600,13 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 		criteria.Offset = n
 	}
 
+	searchNS := query.Get("namespace")
 	if repoName := query.Get("repo"); repoName != "" {
-		repo, err := a.store.GetArtifactRepository(r.Context(), repoName)
+		ns := searchNS
+		if ns == "" && user != nil {
+			ns = user.Username
+		}
+		repo, err := a.store.GetArtifactRepository(r.Context(), ns, repoName)
 		if err != nil {
 			http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
 			return
@@ -570,13 +615,13 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 			http.Error(w, "Repository not found", http.StatusNotFound)
 			return
 		}
-		if !a.canSee(user, repo) {
+		if !a.canSee(r.Context(), user, repo) {
 			http.Error(w, "Access denied", http.StatusForbidden)
 			return
 		}
 		criteria.RepoID = &repo.ID
 	} else {
-		repos, err := a.listVisibleRepos(r, user)
+		repos, err := a.listVisibleRepos(r, user, searchNS)
 		if err != nil {
 			http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
 			return
@@ -590,7 +635,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 		}
 	}
 
-	skip := map[string]bool{"username": true, "repo": true, "num": true, "offset": true, "archive": true, "format": true, "name": true, "version": true, "path": true, "sort": true, "order": true}
+	skip := map[string]bool{"username": true, "repo": true, "namespace": true, "num": true, "offset": true, "archive": true, "format": true, "name": true, "version": true, "path": true, "sort": true, "order": true}
 	for key, values := range query {
 		if skip[key] || len(values) == 0 {
 			continue
@@ -623,11 +668,11 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 // ── Artifact mutation handlers ───────────────────────────────────────────
 
 func (a *V1API) handleDeleteArtifact(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionDelete)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionDelete)
 	if !ok {
 		return
 	}
-	if !a.hasRepoAccess(user, repo, rbac.ActionDelete) {
+	if !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionDelete) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -650,12 +695,12 @@ func (a *V1API) handleDeleteArtifact(w http.ResponseWriter, r *http.Request, use
 }
 
 func (a *V1API) handleUpdateMetadata(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionUpdate)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionUpdate)
 	if !ok {
 		return
 	}
 	// V1 allowed metadata updates on any visible repo
-	if !a.canSee(user, repo) {
+	if !a.canSee(r.Context(), user, repo) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -685,11 +730,11 @@ func (a *V1API) handleUpdateMetadata(w http.ResponseWriter, r *http.Request, use
 }
 
 func (a *V1API) handleUpdateProperties(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionUpdate)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionUpdate)
 	if !ok {
 		return
 	}
-	if !a.hasRepoAccess(user, repo, rbac.ActionUpdate) {
+	if !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionUpdate) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -717,11 +762,11 @@ func (a *V1API) handleUpdateProperties(w http.ResponseWriter, r *http.Request, u
 }
 
 func (a *V1API) handleRename(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
-	repo, ok := a.getRepo(w, r, user, vars["repo"], rbac.ActionUpdate)
+	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionUpdate)
 	if !ok {
 		return
 	}
-	if !a.hasRepoAccess(user, repo, rbac.ActionUpdate) {
+	if !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionUpdate) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -798,13 +843,48 @@ func (a *V1API) canAny(user *auth.AuthenticatedUser, action string) bool {
 	return user != nil && len(a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, action)) > 0
 }
 
+// Owner username, org owner/admin, or manage into an existing namespace
+func (a *V1API) canCreateInNamespace(ctx context.Context, user *auth.AuthenticatedUser, namespace string) bool {
+	if user == nil {
+		return false
+	}
+	if namespace == user.Username {
+		return true
+	}
+	if isMember, role, _ := a.store.IsOrgMember(ctx, namespace, user.ID); isMember {
+		return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
+	}
+	if !a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
+		return false
+	}
+	if u, _ := a.store.GetUserByUsername(ctx, namespace); u != nil {
+		return true
+	}
+	org, _ := a.store.GetOrganization(ctx, namespace)
+	return org != nil
+}
+
+// Resolves the request namespace, marker takes precedence over caller
+func (a *V1API) repoNS(user *auth.AuthenticatedUser, vars map[string]string) string {
+	if ns := vars["namespace"]; ns != "" {
+		return ns
+	}
+	if user != nil {
+		return user.Username
+	}
+	return ""
+}
+
 // Route permission check plus repo fetch
-func (a *V1API) getRepo(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, name, action string) (*storage.ArtifactRepository, bool) {
-	if !a.can(user, action, name) {
+func (a *V1API) getRepo(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, namespace, name, action string) (*storage.ArtifactRepository, bool) {
+	if namespace == "" && user != nil {
+		namespace = user.Username
+	}
+	if !a.can(user, action, namespace+"/"+name) {
 		http.Error(w, "FORBIDDEN", http.StatusForbidden)
 		return nil, false
 	}
-	repo, err := a.store.GetArtifactRepository(r.Context(), name)
+	repo, err := a.store.GetArtifactRepository(r.Context(), namespace, name)
 	if err != nil {
 		http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
 		return nil, false
@@ -829,8 +909,8 @@ func (a *V1API) getRepoArtifact(w http.ResponseWriter, r *http.Request, repo *st
 	return artifact, true
 }
 
-// Owner, manage permission, or scoped grant
-func (a *V1API) hasRepoAccess(user *auth.AuthenticatedUser, repo *storage.ArtifactRepository, action string) bool {
+// Owner, manage permission, org membership, or scoped grant
+func (a *V1API) hasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.ArtifactRepository, action string) bool {
 	if user == nil {
 		return false
 	}
@@ -840,42 +920,37 @@ func (a *V1API) hasRepoAccess(user *auth.AuthenticatedUser, repo *storage.Artifa
 	if a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
 		return true
 	}
-	return slices.Contains(a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, action), repo.Name)
+	if repo.Namespace == user.Username {
+		return true
+	}
+	if isMember, role, _ := a.store.IsOrgMember(ctx, repo.Namespace, user.ID); isMember {
+		switch action {
+		case rbac.ActionRead, rbac.ActionPull:
+			return true
+		default:
+			return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
+		}
+	}
+	return slices.Contains(a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, action), repo.Namespace+"/"+repo.Name)
 }
 
-func (a *V1API) canSee(user *auth.AuthenticatedUser, repo *storage.ArtifactRepository) bool {
-	return !repo.IsPrivate || a.hasRepoAccess(user, repo, rbac.ActionRead)
+func (a *V1API) canSee(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.ArtifactRepository) bool {
+	return !repo.IsPrivate || a.hasRepoAccess(ctx, user, repo, rbac.ActionRead)
 }
 
-// Public repos plus own plus scoped grants
-func (a *V1API) listVisibleRepos(r *http.Request, user *auth.AuthenticatedUser) ([]*storage.ArtifactRepository, error) {
-	opts := storage.ArtifactRepoListOptions{}
+// Public repos plus own plus org plus scoped grants
+func (a *V1API) listVisibleRepos(r *http.Request, user *auth.AuthenticatedUser, namespace string) ([]*storage.ArtifactRepository, error) {
+	opts := storage.ArtifactRepoListOptions{Namespace: namespace}
 	if user != nil {
 		opts.ViewerID = user.ID
 		opts.IncludePrivate = a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage)
+		if !opts.IncludePrivate {
+			opts.GrantedRepos = a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
+		}
 	}
 	repos, _, err := a.store.ListArtifactRepositories(r.Context(), opts)
 	if err != nil {
 		return nil, err
-	}
-
-	if user != nil && !opts.IncludePrivate {
-		granted := a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
-		if len(granted) > 0 {
-			all, _, err := a.store.ListArtifactRepositories(r.Context(), storage.ArtifactRepoListOptions{IncludePrivate: true})
-			if err != nil {
-				return nil, err
-			}
-			seen := make(map[int64]bool, len(repos))
-			for _, repo := range repos {
-				seen[repo.ID] = true
-			}
-			for _, repo := range all {
-				if !seen[repo.ID] && slices.Contains(granted, repo.Name) {
-					repos = append(repos, repo)
-				}
-			}
-		}
 	}
 	return repos, nil
 }
@@ -929,6 +1004,8 @@ func (a *V1API) repoToV1(r *http.Request, repo *storage.ArtifactRepository, owne
 	return v1Repo{
 		ID:          repo.ID,
 		Name:        repo.Name,
+		Namespace:   repo.Namespace,
+		FullName:    repo.Namespace + "/" + repo.Name,
 		Description: repo.Description,
 		Owner:       owner,
 		Private:     repo.IsPrivate,

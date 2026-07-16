@@ -47,6 +47,13 @@ type SystemSetting struct {
 	Value string `gorm:"not null"`
 }
 
+type OrgSetting struct { // Per-org key value overrides for global config defaults
+	OrgID string        `json:"org_id" gorm:"primaryKey;column:org_id"`
+	Key   string        `json:"key" gorm:"primaryKey;column:key"`
+	Value string        `json:"value" gorm:"not null"`
+	Org   *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
 type Session struct {
 	ID        string    `json:"id" gorm:"primaryKey"`
 	UserID    string    `json:"user_id" gorm:"index;not null;column:user_id"`
@@ -168,7 +175,8 @@ type RegistryPortal struct { // Alternate org-owned registry host and/or proxy p
 
 type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v1 parity
 	ID          int64     `json:"id" gorm:"primaryKey;autoIncrement"`
-	Name        string    `json:"name" gorm:"not null;uniqueIndex"`
+	Namespace   string    `json:"namespace" gorm:"not null;default:'';uniqueIndex:idx_artifact_repo_namespace_name;column:namespace"` // Org name or owner username
+	Name        string    `json:"name" gorm:"not null;uniqueIndex:idx_artifact_repo_namespace_name"`
 	Description string    `json:"description"`
 	OwnerID     string    `json:"owner_id" gorm:"index;column:owner_id"`
 	IsPrivate   bool      `json:"private" gorm:"not null;default:false"`

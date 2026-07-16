@@ -91,6 +91,15 @@ func (s *Store) Migrate() error {
 		}
 	}
 
+	// Artifact repos gain a namespace, identity moves from global name to composite
+	if s.db.Migrator().HasTable(&ArtifactRepository{}) && !s.db.Migrator().HasColumn(&ArtifactRepository{}, "namespace") {
+		if err := s.db.Exec("ALTER TABLE artifact_repositories ADD COLUMN namespace TEXT NOT NULL DEFAULT ''").Error; err != nil {
+			return fmt.Errorf("failed to add artifact repo namespace column: %w", err)
+		}
+		s.db.Exec("DROP INDEX IF EXISTS idx_artifact_repositories_name")
+		s.db.Exec("DROP INDEX IF EXISTS uni_artifact_repositories_name")
+	}
+
 	if err := s.db.AutoMigrate(
 		&User{},
 		&Role{},
@@ -102,6 +111,7 @@ func (s *Store) Migrate() error {
 		&Repository{},
 		&Star{},
 		&SystemSetting{},
+		&OrgSetting{},
 		&RegistrationInvite{},
 		&Webhook{},
 		&WebhookDelivery{},
@@ -121,6 +131,10 @@ func (s *Store) Migrate() error {
 
 	if err := s.backfillArtifactPropsHash(); err != nil {
 		return fmt.Errorf("failed to backfill artifact props hash: %w", err)
+	}
+
+	if err := s.backfillArtifactRepoNamespace(); err != nil {
+		return fmt.Errorf("failed to backfill artifact repo namespace: %w", err)
 	}
 
 	if err := s.SeedSystemRoles(); err != nil {
@@ -532,6 +546,41 @@ func (s *Store) GetSystemSetting(ctx context.Context, key string) (string, error
 func (s *Store) SetSystemSetting(ctx context.Context, key, value string) error {
 	setting := SystemSetting{Key: key, Value: value}
 	return s.db.WithContext(ctx).Save(&setting).Error
+}
+
+// ── Org setting operations ───────────────────────────────────────────────
+
+func (s *Store) GetOrgSetting(ctx context.Context, orgID, key string) (string, bool, error) {
+	var setting OrgSetting
+	err := s.db.WithContext(ctx).First(&setting, "org_id = ? AND key = ?", orgID, key).Error
+	if err == gorm.ErrRecordNotFound {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return setting.Value, true, nil
+}
+
+func (s *Store) SetOrgSetting(ctx context.Context, orgID, key, value string) error {
+	setting := OrgSetting{OrgID: orgID, Key: key, Value: value}
+	return s.db.WithContext(ctx).Save(&setting).Error
+}
+
+func (s *Store) ListOrgSettings(ctx context.Context, orgID string) (map[string]string, error) {
+	var rows []OrgSetting
+	if err := s.db.WithContext(ctx).Where("org_id = ?", orgID).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, r := range rows {
+		out[r.Key] = r.Value
+	}
+	return out, nil
+}
+
+func (s *Store) DeleteOrgSetting(ctx context.Context, orgID, key string) error {
+	return s.db.WithContext(ctx).Delete(&OrgSetting{}, "org_id = ? AND key = ?", orgID, key).Error
 }
 
 // ── Organization operations ──────────────────────────────────────────────

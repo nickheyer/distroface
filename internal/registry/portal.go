@@ -224,6 +224,46 @@ func (pr *PortalResolver) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// Rewrites artifact repo names on portal traffic, enforces read-only and
+// require-auth. Artifacts use df_/session tokens so there is no realm rewrite;
+// the namespace is injected as a marker segment the v1 facade strips
+func (pr *PortalResolver) ArtifactMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		entry := pr.resolve(r)
+		if entry != nil && !strings.HasPrefix(r.URL.Path, "/api/v1/artifacts/_ns/") {
+			if !entry.portal.AllowPush && r.Method != http.MethodGet && r.Method != http.MethodHead {
+				writeRegistryDenied(w, "portal is read-only")
+				return
+			}
+			if entry.portal.RequireAuth && !hasBearerToken(r) {
+				w.Header().Set("Www-Authenticate", fmt.Sprintf(`Bearer realm="%s://%s/api/v1/auth/login"`, requestScheme(r), r.Host))
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			if match := artifactRoutePattern.FindStringSubmatch(r.URL.Path); match != nil {
+				repo, suffix := match[1], match[2]
+				if !artifactReservedRepo[repo] {
+					if repo == entry.orgName {
+						// Org qualified path, inject the marker so the facade splits it
+						r.URL.Path = "/api/v1/artifacts/_ns/" + entry.orgName + "/" + suffix
+						r.URL.RawPath = ""
+					} else if mapped := entry.mapName(repo); mapped != repo {
+						pr.log.Debug("artifact path mapping: %s -> %s (host %s, %s %s)", repo, mapped, r.Host, r.Method, r.URL.Path)
+						r.URL.Path = "/api/v1/artifacts/_ns/" + mapped + "/" + suffix
+						r.URL.RawPath = ""
+					}
+				}
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// Minimal bearer presence check avoiding an internal/auth import cycle
+func hasBearerToken(r *http.Request) bool {
+	return strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")
+}
+
 func writeRegistryDenied(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)

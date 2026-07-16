@@ -50,11 +50,16 @@ artifacts:
   # storage_path: "./data/artifacts"  # Derived from storage.data_dir when unset
   max_file_size_mb: 10240     # Zero means unlimited
   v1_compat: true             # Serve the v1 facade for old dfcli and ci
+  stale_upload_cleanup_hours: 24  # Abandoned upload sessions swept after this
   retention:
     enabled: false
     max_versions: 5           # Newest versions kept per path zero means unlimited
     max_age_days: 0           # Age based pruning in days zero disables
+    max_total_size: 0         # Total bytes kept per repo zero means unlimited
     exclude_latest: true      # Never age-prune the newest artifact of a path
+  reaper:
+    enabled: false            # Scheduled retention sweep across all repos
+    interval_hours: 24
 
 # Registry garbage collection
 gc:

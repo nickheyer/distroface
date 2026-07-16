@@ -37,6 +37,9 @@ type ArtifactsConfig struct {
 	// Serve the v1 facade for old dfcli and ci
 	V1Compat  bool                    `mapstructure:"v1_compat" json:"v1_compat"`
 	Retention ArtifactRetentionConfig `mapstructure:"retention" json:"retention"`
+	Reaper    ArtifactReaperConfig    `mapstructure:"reaper" json:"reaper"`
+	// Hours before an abandoned upload session is swept
+	StaleUploadCleanupHours int `mapstructure:"stale_upload_cleanup_hours" json:"stale_upload_cleanup_hours"`
 }
 
 type ArtifactRetentionConfig struct {
@@ -45,8 +48,17 @@ type ArtifactRetentionConfig struct {
 	MaxVersions int `mapstructure:"max_versions" json:"max_versions"`
 	// Age based pruning in days zero disables
 	MaxAgeDays int `mapstructure:"max_age_days" json:"max_age_days"`
+	// Total bytes kept per repo zero means unlimited
+	MaxTotalSize int64 `mapstructure:"max_total_size" json:"max_total_size"`
 	// Never age-prune the newest artifact of a path
 	ExcludeLatest bool `mapstructure:"exclude_latest" json:"exclude_latest"`
+}
+
+type ArtifactReaperConfig struct {
+	// Scheduled retention sweep off by default
+	Enabled bool `mapstructure:"enabled" json:"enabled"`
+	// Hours between scheduled sweeps
+	IntervalHours int `mapstructure:"interval_hours" json:"interval_hours"`
 }
 
 type WebhookConfig struct {
@@ -227,7 +239,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("artifacts.retention.enabled", false)
 	v.SetDefault("artifacts.retention.max_versions", 5)
 	v.SetDefault("artifacts.retention.max_age_days", 0)
+	v.SetDefault("artifacts.retention.max_total_size", 0)
 	v.SetDefault("artifacts.retention.exclude_latest", true)
+	v.SetDefault("artifacts.reaper.enabled", false)
+	v.SetDefault("artifacts.reaper.interval_hours", 24)
+	v.SetDefault("artifacts.stale_upload_cleanup_hours", 24)
 
 	v.SetDefault("gc.enabled", false)
 	v.SetDefault("gc.interval_hours", 24)

@@ -36,45 +36,51 @@ type Server struct {
 	enforcer          *rbac.Enforcer
 	oidcHandler       *auth.OIDCHandler
 	webhookDispatcher *webhook.Dispatcher
-	portalProxies     *registry.PortalProxyManager
-	authLimiter       *ratelimit.Limiter
-	artifactManager   *artifacts.Manager
-	gcCollector       *gc.Collector
+	portalProxies         *registry.PortalProxyManager
+	authLimiter           *ratelimit.Limiter
+	artifactManager       *artifacts.Manager
+	artifactV1Facade      *artifacts.V1API
+	artifactPortalHandler http.Handler
+	gcCollector           *gc.Collector
 }
 
 type ServerDeps struct {
-	Store             *storage.Store
-	Config            *config.Config
-	Log               *logger.Logger
-	RegistryHandler   http.Handler
-	RegistryAccess    *registry.RegistryAccess
-	TokenHandler      *auth.TokenHandler
-	AuthManager       *auth.Manager
-	Enforcer          *rbac.Enforcer
-	OIDCHandler       *auth.OIDCHandler
-	WebhookDispatcher *webhook.Dispatcher
-	PortalProxies     *registry.PortalProxyManager
-	AuthLimiter       *ratelimit.Limiter // Lockout limiter nil disables
-	ArtifactManager   *artifacts.Manager
-	GCCollector       *gc.Collector
+	Store                 *storage.Store
+	Config                *config.Config
+	Log                   *logger.Logger
+	RegistryHandler       http.Handler
+	RegistryAccess        *registry.RegistryAccess
+	TokenHandler          *auth.TokenHandler
+	AuthManager           *auth.Manager
+	Enforcer              *rbac.Enforcer
+	OIDCHandler           *auth.OIDCHandler
+	WebhookDispatcher     *webhook.Dispatcher
+	PortalProxies         *registry.PortalProxyManager
+	AuthLimiter           *ratelimit.Limiter // Lockout limiter nil disables
+	ArtifactManager       *artifacts.Manager
+	ArtifactV1Facade      *artifacts.V1API
+	ArtifactPortalHandler http.Handler
+	GCCollector           *gc.Collector
 }
 
 func NewServer(deps ServerDeps) *Server {
 	s := &Server{
-		store:             deps.Store,
-		config:            deps.Config,
-		log:               deps.Log,
-		registryHandler:   deps.RegistryHandler,
-		registryAccess:    deps.RegistryAccess,
-		tokenHandler:      deps.TokenHandler,
-		authManager:       deps.AuthManager,
-		enforcer:          deps.Enforcer,
-		oidcHandler:       deps.OIDCHandler,
-		webhookDispatcher: deps.WebhookDispatcher,
-		portalProxies:     deps.PortalProxies,
-		authLimiter:       deps.AuthLimiter,
-		artifactManager:   deps.ArtifactManager,
-		gcCollector:       deps.GCCollector,
+		store:                 deps.Store,
+		config:                deps.Config,
+		log:                   deps.Log,
+		registryHandler:       deps.RegistryHandler,
+		registryAccess:        deps.RegistryAccess,
+		tokenHandler:          deps.TokenHandler,
+		authManager:           deps.AuthManager,
+		enforcer:              deps.Enforcer,
+		oidcHandler:           deps.OIDCHandler,
+		webhookDispatcher:     deps.WebhookDispatcher,
+		portalProxies:         deps.PortalProxies,
+		authLimiter:           deps.AuthLimiter,
+		artifactManager:       deps.ArtifactManager,
+		artifactV1Facade:      deps.ArtifactV1Facade,
+		artifactPortalHandler: deps.ArtifactPortalHandler,
+		gcCollector:           deps.GCCollector,
 	}
 	s.setupHandler()
 	return s
@@ -110,10 +116,10 @@ func (s *Server) setupHandler() {
 		mux.HandleFunc("/api/v1/auth/oidc/callback", s.oidcHandler.HandleCallback)
 	}
 
-	// V1 artifact facade for old dfcli and ci
-	if s.artifactManager != nil && s.config.Artifacts.V1Compat {
-		v1Facade := artifacts.NewV1API(s.store, s.artifactManager, s.authManager, s.enforcer, s.authLimiter, s.log)
-		v1Facade.Register(mux)
+	// V1 artifact facade for old dfcli and ci, portal wrapped for org hosts
+	if s.artifactV1Facade != nil && s.config.Artifacts.V1Compat {
+		s.artifactV1Facade.RegisterAuth(mux)
+		s.artifactV1Facade.RegisterArtifacts(mux, s.artifactPortalHandler)
 	}
 
 	// Register RPC services
@@ -145,7 +151,7 @@ func (s *Server) setupHandler() {
 	tokenSvcPath, tokenSvcHandler := distrofacev1connect.NewTokenServiceHandler(tokenService, opts...)
 	mux.Handle(tokenSvcPath, tokenSvcHandler)
 
-	orgService := services.NewOrganizationService(s.store, s.registryAccess, s.enforcer, s.log)
+	orgService := services.NewOrganizationService(s.store, s.registryAccess, s.enforcer, s.config, s.log)
 	orgPath, orgHandler := distrofacev1connect.NewOrganizationServiceHandler(orgService, opts...)
 	mux.Handle(orgPath, orgHandler)
 

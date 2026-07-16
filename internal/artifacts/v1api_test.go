@@ -32,6 +32,7 @@ type testEnv struct {
 	enforcer *rbac.Enforcer
 	manager  *Manager
 	blobs    *BlobStore
+	v1       *V1API
 	mux      *http.ServeMux
 	blobRoot string
 }
@@ -77,9 +78,11 @@ func newTestEnv(t *testing.T, retention config.ArtifactRetentionConfig) *testEnv
 	}, log)
 
 	mux := http.NewServeMux()
-	NewV1API(store, manager, authMgr, enforcer, nil, log).Register(mux)
+	v1 := NewV1API(store, manager, authMgr, enforcer, nil, log)
+	v1.RegisterAuth(mux)
+	v1.RegisterArtifacts(mux, v1)
 
-	return &testEnv{t: t, store: store, authMgr: authMgr, enforcer: enforcer, manager: manager, blobs: blobs, mux: mux, blobRoot: blobRoot}
+	return &testEnv{t: t, store: store, authMgr: authMgr, enforcer: enforcer, manager: manager, blobs: blobs, v1: v1, mux: mux, blobRoot: blobRoot}
 }
 
 // Local user with roles, returns session token
@@ -595,7 +598,7 @@ func TestV1PropertyVariantIdentity(t *testing.T) {
 
 	// Property edit onto an occupied identity conflicts
 	ctx := context.Background()
-	r, _ := e.store.GetArtifactRepository(ctx, "myrepo")
+	r := e.repoByName("myrepo")
 	x86, err := e.store.GetArtifactByIdentity(ctx, r.ID, "1.0.0", "app.zip", map[string]string{"arch": "x86"})
 	if err != nil || x86 == nil {
 		t.Fatalf("GetArtifactByIdentity: %v %v", x86, err)
@@ -620,15 +623,20 @@ func TestV1AccessControl(t *testing.T) {
 	e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", owner, map[string]any{"name": "secret", "private": true})
 	e.uploadArtifact(owner, "secret", "1.0.0", "s.txt", "sssh", nil)
 
-	// Other users can't see or touch private repos
-	if rec := e.do(http.MethodGet, "/api/v1/artifacts/secret/1.0.0/s.txt", other, nil); rec.Code != http.StatusForbidden {
+	// Other users can't touch alice's private repo, even addressed directly
+	if rec := e.do(http.MethodGet, "/api/v1/artifacts/_ns/alice/secret/1.0.0/s.txt", other, nil); rec.Code != http.StatusForbidden {
 		t.Fatalf("private download by non-owner: got %d", rec.Code)
 	}
-	if rec := e.do(http.MethodPost, "/api/v1/artifacts/secret/upload", other, nil); rec.Code != http.StatusForbidden {
+	if rec := e.do(http.MethodPost, "/api/v1/artifacts/_ns/alice/secret/upload", other, nil); rec.Code != http.StatusForbidden {
 		t.Fatalf("private upload by non-owner: got %d", rec.Code)
 	}
-	if rec := e.do(http.MethodDelete, "/api/v1/artifacts/repos/secret", other, nil); rec.Code != http.StatusForbidden {
+	if rec := e.do(http.MethodDelete, "/api/v1/artifacts/_ns/alice/repos/secret", other, nil); rec.Code != http.StatusForbidden {
 		t.Fatalf("repo delete by non-owner: got %d", rec.Code)
+	}
+
+	// Bare names resolve to the caller's own namespace, hiding others' repos
+	if rec := e.do(http.MethodGet, "/api/v1/artifacts/secret/1.0.0/s.txt", other, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("bare cross-namespace download: got %d", rec.Code)
 	}
 
 	// Private repos hidden from other listings
@@ -655,12 +663,25 @@ func TestV1AccessControl(t *testing.T) {
 
 // ── Test helpers ─────────────────────────────────────────────────────────
 
+// Finds a repo by bare name across namespaces for tests
+func (e *testEnv) repoByName(name string) *storage.ArtifactRepository {
+	e.t.Helper()
+	repos, _, err := e.store.ListArtifactRepositories(context.Background(), storage.ArtifactRepoListOptions{IncludePrivate: true})
+	if err != nil {
+		e.t.Fatalf("list repos: %v", err)
+	}
+	for _, r := range repos {
+		if r.Name == name {
+			return r
+		}
+	}
+	e.t.Fatalf("repo %s not found", name)
+	return nil
+}
+
 func (e *testEnv) artifactID(repo, version, path string) string {
 	e.t.Helper()
-	r, err := e.store.GetArtifactRepository(context.Background(), repo)
-	if err != nil || r == nil {
-		e.t.Fatalf("repo %s not found", repo)
-	}
+	r := e.repoByName(repo)
 	a, err := e.store.GetArtifactByPathVersion(context.Background(), r.ID, version, path)
 	if err != nil || a == nil {
 		e.t.Fatalf("artifact %s@%s not found", path, version)
@@ -681,4 +702,65 @@ func (e *testEnv) blobFiles() []string {
 		return nil
 	})
 	return files
+}
+
+// Org namespace repos follow membership for access
+func TestV1OrgNamespaceAccess(t *testing.T) {
+	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	ctx := context.Background()
+
+	owner := e.newUser("orgowner", "user")
+	member := e.newUser("orgmember", "user")
+	outsider := e.newUser("outsider", "user")
+
+	org := &storage.Organization{Name: "acme", DisplayName: "Acme", CreatedBy: "test"}
+	if err := e.store.CreateOrganization(ctx, org); err != nil {
+		t.Fatalf("CreateOrganization: %v", err)
+	}
+	addMember := func(username, role string) {
+		u, err := e.store.GetUserByUsername(ctx, username)
+		if err != nil || u == nil {
+			t.Fatalf("GetUserByUsername(%s): %v", username, err)
+		}
+		if err := e.store.AddOrgMember(ctx, &storage.OrgMember{OrgID: org.ID, UserID: u.ID, Role: role}); err != nil {
+			t.Fatalf("AddOrgMember(%s): %v", username, err)
+		}
+	}
+	addMember("orgowner", storage.OrgRoleOwner)
+	addMember("orgmember", storage.OrgRoleMember)
+
+	// Plain members cannot create org repos
+	if rec := e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", member, map[string]any{"name": "kits", "namespace": "acme", "private": true}); rec.Code != http.StatusForbidden {
+		t.Fatalf("member create in org: got %d", rec.Code)
+	}
+	// Unknown namespaces reject creation outright
+	if rec := e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", owner, map[string]any{"name": "kits", "namespace": "ghost"}); rec.Code != http.StatusForbidden {
+		t.Fatalf("create in unknown namespace: got %d", rec.Code)
+	}
+	// Org owners create org repos
+	if rec := e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", owner, map[string]any{"name": "kits", "namespace": "acme", "private": true}); rec.Code != http.StatusCreated {
+		t.Fatalf("owner create in org: got %d body %q", rec.Code, rec.Body.String())
+	}
+
+	// Upload follows the namespaced Location header end to end
+	e.uploadArtifact(owner, "_ns/acme/kits", "1.0.0", "kit.bin", "data", nil)
+
+	// Members read private org repos, plain push stays denied
+	if rec := e.do(http.MethodGet, "/api/v1/artifacts/_ns/acme/kits/1.0.0/kit.bin", member, nil); rec.Code != http.StatusOK {
+		t.Fatalf("member download: got %d body %q", rec.Code, rec.Body.String())
+	}
+	if rec := e.do(http.MethodPost, "/api/v1/artifacts/_ns/acme/kits/upload", member, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("member upload: got %d", rec.Code)
+	}
+	if rec := e.do(http.MethodGet, "/api/v1/artifacts/_ns/acme/kits/1.0.0/kit.bin", outsider, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("outsider download: got %d", rec.Code)
+	}
+
+	// Destructive operations stay owner/admin only
+	if rec := e.do(http.MethodDelete, "/api/v1/artifacts/_ns/acme/repos/kits", member, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("member repo delete: got %d", rec.Code)
+	}
+	if rec := e.do(http.MethodDelete, "/api/v1/artifacts/_ns/acme/repos/kits", owner, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("owner repo delete: got %d body %q", rec.Code, rec.Body.String())
+	}
 }

@@ -143,14 +143,6 @@ func (v *V2) EnsureOrg(ctx context.Context, name, ownerUsername string) (created
 // name, description, privacy, and timestamps. The v1 owner username must
 // already exist in v2 (run users import first).
 func (v *V2) EnsureArtifactRepo(ctx context.Context, r V1ArtifactRepo) (repoID int64, created bool, err error) {
-	existing, err := v.Store.GetArtifactRepository(ctx, r.Name)
-	if err != nil {
-		return 0, false, err
-	}
-	if existing != nil {
-		return existing.ID, false, nil
-	}
-
 	owner, err := v.Store.GetUserByUsername(ctx, r.Owner)
 	if err != nil {
 		return 0, false, err
@@ -159,7 +151,16 @@ func (v *V2) EnsureArtifactRepo(ctx context.Context, r V1ArtifactRepo) (repoID i
 		return 0, false, fmt.Errorf("owner %q not found in v2 (run users import first)", r.Owner)
 	}
 
+	existing, err := v.Store.GetArtifactRepository(ctx, owner.Username, r.Name)
+	if err != nil {
+		return 0, false, err
+	}
+	if existing != nil {
+		return existing.ID, false, nil
+	}
+
 	repo := &db.ArtifactRepository{
+		Namespace:   owner.Username,
 		Name:        r.Name,
 		Description: r.Desc,
 		OwnerID:     owner.ID,

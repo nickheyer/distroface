@@ -26,6 +26,12 @@ service OrganizationService {
   rpc RemoveOrgMember(RemoveOrgMemberRequest) returns (RemoveOrgMemberResponse) {}
   // UpdateOrgMemberRole changes a member's role in an organization.
   rpc UpdateOrgMemberRole(UpdateOrgMemberRoleRequest) returns (UpdateOrgMemberRoleResponse) {}
+  // GetOrgSettings returns an organization's setting overrides and the instance defaults.
+  rpc GetOrgSettings(GetOrgSettingsRequest) returns (GetOrgSettingsResponse) {}
+  // UpdateOrgSettings sets or clears per-organization setting overrides.
+  rpc UpdateOrgSettings(UpdateOrgSettingsRequest) returns (UpdateOrgSettingsResponse) {}
+  // TransferOrgOwnership makes another member the owner and demotes the caller to admin.
+  rpc TransferOrgOwnership(TransferOrgOwnershipRequest) returns (TransferOrgOwnershipResponse) {}
 }
 
 // CreateOrganizationRequest contains the fields to create a new organization.
@@ -129,4 +135,41 @@ message UpdateOrgMemberRoleRequest {
 message UpdateOrgMemberRoleResponse {
   OrgMember member = 1;
 }
+
+// GetOrgSettingsRequest identifies the organization.
+message GetOrgSettingsRequest {
+  string org_name = 1;
+}
+
+// GetOrgSettingsResponse carries stored overrides and instance defaults.
+message GetOrgSettingsResponse {
+  // overrides holds only the keys explicitly set for this org.
+  map<string, string> overrides = 1;
+  // defaults holds the instance-level value for every known setting key.
+  map<string, string> defaults = 2;
+}
+
+// UpdateOrgSettingsRequest sets or clears per-organization setting overrides.
+message UpdateOrgSettingsRequest {
+  string org_name = 1;
+  // set upserts these key/value overrides after validation.
+  map<string, string> set = 2;
+  // reset deletes these overrides, falling back to instance defaults.
+  repeated string reset = 3;
+}
+
+// UpdateOrgSettingsResponse returns the stored state after the update.
+message UpdateOrgSettingsResponse {
+  map<string, string> overrides = 1;
+  map<string, string> defaults = 2;
+}
+
+// TransferOrgOwnershipRequest names the member receiving ownership.
+message TransferOrgOwnershipRequest {
+  string org_name = 1;
+  string username = 2;
+}
+
+// TransferOrgOwnershipResponse is empty on success.
+message TransferOrgOwnershipResponse {}
 

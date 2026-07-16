@@ -156,7 +156,7 @@ func verifyArtifacts(ctx context.Context, cfg *config.MigrateConfig, v2db *V2, v
 
 	repoIDs := map[int64]int64{}
 	for _, r := range plan.Repos {
-		v2r, err := v2db.Store.GetArtifactRepository(ctx, r.Name)
+		v2r, err := v2db.Store.GetArtifactRepository(ctx, r.Owner, r.Name)
 		if err != nil {
 			return 0, 0, 0, err
 		}

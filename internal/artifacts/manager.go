@@ -8,6 +8,7 @@ import (
 	"os"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,26 @@ import (
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
+
+// Per-org OrgSetting keys mirroring the global artifacts config
+const (
+	SettingRetentionEnabled       = "artifacts.retention.enabled"
+	SettingRetentionMaxVersions   = "artifacts.retention.max_versions"
+	SettingRetentionMaxAgeDays    = "artifacts.retention.max_age_days"
+	SettingRetentionMaxTotalSize  = "artifacts.retention.max_total_size"
+	SettingRetentionExcludeLatest = "artifacts.retention.exclude_latest"
+	SettingMaxFileSizeMB          = "artifacts.max_file_size_mb"
+	SettingPrivateByDefault       = "artifacts.private_by_default"
+)
+
+// Resolved retention rules for a single repo
+type RetentionPolicy struct {
+	Enabled       bool
+	MaxVersions   int
+	MaxAgeDays    int
+	MaxTotalSize  int64
+	ExcludeLatest bool
+}
 
 // Caller errors that map to 400 or InvalidArgument
 var ErrInvalid = errors.New("invalid argument")
@@ -110,14 +131,14 @@ func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepo
 		return nil, fmt.Errorf("%w: metadata must be valid JSON", ErrInvalid)
 	}
 
-	if maxBytes := m.MaxFileSizeBytes(); maxBytes > 0 {
+	if maxBytes := m.EffectiveMaxFileSizeBytes(ctx, repo.Namespace); maxBytes > 0 {
 		size, err := m.blobs.UploadSize(uploadID)
 		if err != nil {
 			return nil, ErrUploadNotFound
 		}
 		if size > maxBytes {
 			m.blobs.CancelUpload(uploadID)
-			return nil, fmt.Errorf("%w: artifact exceeds maximum size of %dMB", ErrInvalid, m.cfg.MaxFileSizeMB)
+			return nil, fmt.Errorf("%w: artifact exceeds maximum size of %dMB", ErrInvalid, maxBytes/(1024*1024))
 		}
 	}
 
@@ -150,7 +171,7 @@ func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepo
 		m.gcBlob(ctx, replacedDigest)
 	}
 
-	if err := m.ApplyRetention(ctx, repo.ID); err != nil {
+	if err := m.ApplyRetention(ctx, repo); err != nil {
 		m.log.Error("artifact retention for repo %d: %v", repo.ID, err)
 	}
 
@@ -178,10 +199,99 @@ func (m *Manager) DeleteRepository(ctx context.Context, repo *storage.ArtifactRe
 	return nil
 }
 
-// Prunes synchronously per path plus property set group
-func (m *Manager) ApplyRetention(ctx context.Context, repoID int64) error {
-	r := m.cfg.Retention
-	if !r.Enabled || (r.MaxVersions <= 0 && r.MaxAgeDays <= 0) {
+// Resolves the effective retention policy for a namespace
+func (m *Manager) EffectiveRetention(ctx context.Context, namespace string) RetentionPolicy {
+	p := RetentionPolicy{
+		Enabled:       m.cfg.Retention.Enabled,
+		MaxVersions:   m.cfg.Retention.MaxVersions,
+		MaxAgeDays:    m.cfg.Retention.MaxAgeDays,
+		MaxTotalSize:  m.cfg.Retention.MaxTotalSize,
+		ExcludeLatest: m.cfg.Retention.ExcludeLatest,
+	}
+	kv := m.orgSettings(ctx, namespace)
+	if kv == nil {
+		return p
+	}
+	if v, ok := kv[SettingRetentionEnabled]; ok {
+		p.Enabled = parseBool(v, p.Enabled)
+	}
+	if v, ok := kv[SettingRetentionMaxVersions]; ok {
+		p.MaxVersions = int(parseInt64(v, int64(p.MaxVersions)))
+	}
+	if v, ok := kv[SettingRetentionMaxAgeDays]; ok {
+		p.MaxAgeDays = int(parseInt64(v, int64(p.MaxAgeDays)))
+	}
+	if v, ok := kv[SettingRetentionMaxTotalSize]; ok {
+		p.MaxTotalSize = parseInt64(v, p.MaxTotalSize)
+	}
+	if v, ok := kv[SettingRetentionExcludeLatest]; ok {
+		p.ExcludeLatest = parseBool(v, p.ExcludeLatest)
+	}
+	return p
+}
+
+// Effective max upload size in bytes zero means unlimited
+func (m *Manager) EffectiveMaxFileSizeBytes(ctx context.Context, namespace string) int64 {
+	mb := m.cfg.MaxFileSizeMB
+	if kv := m.orgSettings(ctx, namespace); kv != nil {
+		if v, ok := kv[SettingMaxFileSizeMB]; ok {
+			mb = parseInt64(v, mb)
+		}
+	}
+	if mb <= 0 {
+		return 0
+	}
+	return mb * 1024 * 1024
+}
+
+// Effective private-by-default for new repos in a namespace
+func (m *Manager) EffectivePrivateByDefault(ctx context.Context, namespace string) bool {
+	if kv := m.orgSettings(ctx, namespace); kv != nil {
+		if v, ok := kv[SettingPrivateByDefault]; ok {
+			return parseBool(v, false)
+		}
+	}
+	return false
+}
+
+// Loads org overrides for a namespace, nil when not an org
+func (m *Manager) orgSettings(ctx context.Context, namespace string) map[string]string {
+	if namespace == "" {
+		return nil
+	}
+	org, err := m.store.GetOrganization(ctx, namespace)
+	if err != nil || org == nil {
+		return nil
+	}
+	kv, err := m.store.ListOrgSettings(ctx, org.ID)
+	if err != nil {
+		return nil
+	}
+	return kv
+}
+
+func parseBool(v string, def bool) bool {
+	if b, err := strconv.ParseBool(v); err == nil {
+		return b
+	}
+	return def
+}
+
+func parseInt64(v string, def int64) int64 {
+	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+		return n
+	}
+	return def
+}
+
+// Resolves the effective policy then prunes the repo
+func (m *Manager) ApplyRetention(ctx context.Context, repo *storage.ArtifactRepository) error {
+	return m.ApplyRetentionPolicy(ctx, repo.ID, m.EffectiveRetention(ctx, repo.Namespace))
+}
+
+// Prunes per path plus property set group then caps total size
+func (m *Manager) ApplyRetentionPolicy(ctx context.Context, repoID int64, p RetentionPolicy) error {
+	if !p.Enabled || (p.MaxVersions <= 0 && p.MaxAgeDays <= 0 && p.MaxTotalSize <= 0) {
 		return nil
 	}
 
@@ -197,29 +307,62 @@ func (m *Manager) ApplyRetention(ctx context.Context, repoID int64) error {
 	}
 
 	var cutoff time.Time
-	if r.MaxAgeDays > 0 {
-		cutoff = time.Now().UTC().AddDate(0, 0, -r.MaxAgeDays)
+	if p.MaxAgeDays > 0 {
+		cutoff = time.Now().UTC().AddDate(0, 0, -p.MaxAgeDays)
 	}
 
+	// Phase 1 prunes by version count and age, tracks survivors
+	type survivor struct {
+		a         *storage.Artifact
+		protected bool
+	}
+	var survivors []survivor
 	for _, group := range byGroup {
 		sort.Slice(group, func(i, j int) bool {
 			return group[i].CreatedAt.After(group[j].CreatedAt)
 		})
 		for i, artifact := range group {
 			prune := false
-			if r.MaxVersions > 0 && i >= r.MaxVersions {
+			if p.MaxVersions > 0 && i >= p.MaxVersions {
 				prune = true
 			}
-			if !cutoff.IsZero() && artifact.CreatedAt.Before(cutoff) && !(r.ExcludeLatest && i == 0) {
+			if !cutoff.IsZero() && artifact.CreatedAt.Before(cutoff) && !(p.ExcludeLatest && i == 0) {
 				prune = true
 			}
 			if !prune {
+				survivors = append(survivors, survivor{a: artifact, protected: p.ExcludeLatest && i == 0})
 				continue
 			}
 			if err := m.DeleteArtifact(ctx, artifact); err != nil {
 				return err
 			}
 			m.log.Info("retention pruned artifact %s (%s@%s) from repo %d", artifact.ID, artifact.Path, artifact.Version, repoID)
+		}
+	}
+
+	// Phase 2 caps total size, deletes oldest unprotected first
+	if p.MaxTotalSize > 0 {
+		var total int64
+		for _, s := range survivors {
+			total += s.a.Size
+		}
+		if total > p.MaxTotalSize {
+			sort.Slice(survivors, func(i, j int) bool {
+				return survivors[i].a.CreatedAt.Before(survivors[j].a.CreatedAt)
+			})
+			for _, s := range survivors {
+				if total <= p.MaxTotalSize {
+					break
+				}
+				if s.protected {
+					continue
+				}
+				if err := m.DeleteArtifact(ctx, s.a); err != nil {
+					return err
+				}
+				total -= s.a.Size
+				m.log.Info("retention size-capped artifact %s (%s@%s) from repo %d", s.a.ID, s.a.Path, s.a.Version, repoID)
+			}
 		}
 	}
 	return nil

@@ -35,6 +35,7 @@
 
 	const SESSION_KEY = 'distroface_session';
 	const repoName = $derived(page.params.repo ?? '');
+	const namespace = $derived(page.params.namespace ?? '');
 
 	let repo = $state<ArtifactRepository | null>(null);
 	let versions = $state<ArtifactVersionGroup[]>([]);
@@ -82,14 +83,16 @@
 
 	const canMutate = $derived(
 		!!repo &&
-			(repo.owner === authStore.user?.username || authStore.hasPermission('artifacts', 'manage'))
+			(repo.owner === authStore.user?.username ||
+				authStore.hasPermission('artifacts', 'manage') ||
+				authStore.hasPermission('organizations', 'update', namespace))
 	);
 
 	async function loadRepo() {
 		loading = true;
 		notFound = false;
 		try {
-			const resp = await rpcClient.artifact.getArtifactRepository({ name: repoName });
+			const resp = await rpcClient.artifact.getArtifactRepository({ name: repoName, namespace });
 			repo = resp.repository ?? null;
 			await loadVersions();
 		} catch {
@@ -100,7 +103,7 @@
 	}
 
 	async function loadVersions() {
-		const resp = await rpcClient.artifact.listArtifactVersions({ repoName });
+		const resp = await rpcClient.artifact.listArtifactVersions({ repoName, namespace });
 		versions = resp.versions;
 		if (versions.length > 0 && Object.keys(expandedVersions).length === 0) {
 			expandedVersions = { [versions[0].version]: true };
@@ -123,6 +126,7 @@
 		try {
 			const resp = await rpcClient.artifact.searchArtifacts({
 				repoName,
+				namespace,
 				name: q,
 				pageSize: 100
 			});
@@ -137,7 +141,8 @@
 	// ── Download ─────────────────────────────────────────────────────────
 
 	async function downloadArtifact(artifact: Artifact) {
-		const url = `/api/v1/artifacts/${encodeURIComponent(repoName)}/${encodeURIComponent(artifact.version)}/${artifact.path.split('/').map(encodeURIComponent).join('/')}`;
+		const prefix = `/api/v1/artifacts/_ns/${encodeURIComponent(namespace)}/${encodeURIComponent(repoName)}`;
+		const url = `${prefix}/${encodeURIComponent(artifact.version)}/${artifact.path.split('/').map(encodeURIComponent).join('/')}`;
 		try {
 			const token = localStorage.getItem(SESSION_KEY);
 			const resp = await fetch(url, {
@@ -172,7 +177,7 @@
 		uploading = true;
 		try {
 			uploadStage = 'Initiating...';
-			const init = await rpcClient.artifact.initiateArtifactUpload({ repoName });
+			const init = await rpcClient.artifact.initiateArtifactUpload({ repoName, namespace });
 
 			uploadStage = 'Uploading...';
 			const token = localStorage.getItem(SESSION_KEY);
@@ -193,6 +198,7 @@
 			}
 			await rpcClient.artifact.completeArtifactUpload({
 				repoName,
+				namespace,
 				uploadId: init.uploadId,
 				version: uploadVersion.trim(),
 				path: uploadPath.trim(),
@@ -231,6 +237,7 @@
 		try {
 			const resp = await rpcClient.artifact.updateArtifactRepository({
 				name: repoName,
+				namespace,
 				description: settingsDescription,
 				isPrivate: settingsPrivate
 			});
@@ -263,6 +270,7 @@
 			}
 			await rpcClient.artifact.setArtifactProperties({
 				repoName,
+				namespace,
 				id: propsTarget.id,
 				properties
 			});
@@ -291,6 +299,7 @@
 		try {
 			await rpcClient.artifact.updateArtifact({
 				repoName,
+				namespace,
 				id: renameTarget.id,
 				path: renamePath.trim(),
 				version: renameVersion.trim() || undefined
@@ -316,7 +325,7 @@
 		if (!deleteTarget) return;
 		deleting = true;
 		try {
-			await rpcClient.artifact.deleteArtifact({ repoName, id: deleteTarget.id });
+			await rpcClient.artifact.deleteArtifact({ repoName, namespace, id: deleteTarget.id });
 			toast.success('Artifact deleted');
 			deleteDialogOpen = false;
 			await refreshAfterMutation();
@@ -336,7 +345,7 @@
 </script>
 
 <svelte:head>
-	<title>{repoName} - Artifacts - Distroface</title>
+	<title>{namespace}/{repoName} - Artifacts - Distroface</title>
 </svelte:head>
 
 {#snippet artifactTable(artifacts: Artifact[])}
@@ -439,7 +448,9 @@
 			</div>
 			<div class="flex-1 min-w-0">
 				<div class="flex items-center gap-2">
-					<h1 class="text-2xl font-bold tracking-tight">{repo.name}</h1>
+					<h1 class="text-2xl font-bold tracking-tight">
+						<span class="text-muted-foreground font-normal">{namespace}/</span>{repo.name}
+					</h1>
 					<Badge variant="outline" class="text-xs gap-1">
 						{#if repo.isPrivate}
 							<Lock class="h-2.5 w-2.5" />Private

@@ -157,11 +157,23 @@ func New() (*App, error) {
 
 	registryHandler := registry.PullRateLimit(portalResolver.Middleware(registryApp), tokenService, pullLimiter, anonPullLimiter, registryLog)
 
-	// Portal proxies serve just the docker surface on their own ports
+	blobStore, err := artifacts.NewBlobStore(cfg.Artifacts.StoragePath)
+	if err != nil {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("initializing artifact storage: %w", err)
+	}
+	artifactManager := artifacts.NewManager(store, blobStore, cfg.Artifacts, log)
+	artifactV1Facade := artifacts.NewV1API(store, artifactManager, authManager, enforcer, authLimiter, log)
+	artifactPortalHandler := portalResolver.ArtifactMiddleware(artifactV1Facade)
+
+	// Portal proxies serve the docker and artifact surfaces on their own ports
 	portalMux := http.NewServeMux()
 	portalMux.Handle("/v2/", registryHandler)
 	portalMux.Handle("GET /auth/token", tokenHandler)
 	portalMux.Handle("POST /auth/token", tokenHandler)
+	artifactV1Facade.RegisterAuth(portalMux)
+	artifactV1Facade.RegisterArtifacts(portalMux, artifactPortalHandler)
 	portalProxies := registry.NewPortalProxyManager(portalResolver, h2c.NewHandler(portalMux, &http2.Server{}), cfg.Server.Host, registryLog)
 	if err := portalProxies.Reconcile(context.Background()); err != nil {
 		registryLog.Error("portal proxy startup: %v", err)
@@ -180,34 +192,36 @@ func New() (*App, error) {
 		log.Info("Scheduled registry GC every %dh (remove_untagged=%v)", cfg.GC.IntervalHours, cfg.GC.RemoveUntagged)
 	}
 
-	blobStore, err := artifacts.NewBlobStore(cfg.Artifacts.StoragePath)
-	if err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("initializing artifact storage: %w", err)
-	}
-	artifactManager := artifacts.NewManager(store, blobStore, cfg.Artifacts, log)
-	if removed, err := blobStore.CleanStaleUploads(24 * time.Hour); err != nil {
+	staleAge := time.Duration(cfg.Artifacts.StaleUploadCleanupHours) * time.Hour
+	if removed, err := blobStore.CleanStaleUploads(staleAge); err != nil {
 		log.Error("cleaning stale artifact uploads: %v", err)
 	} else if removed > 0 {
 		log.Info("Cleaned %d stale artifact upload sessions", removed)
 	}
 
+	artifactReaper := artifacts.NewReaper(artifactManager, store, staleAge, log)
+	if cfg.Artifacts.Reaper.Enabled && cfg.Artifacts.Reaper.IntervalHours > 0 {
+		artifactReaper.Schedule(context.Background(), time.Duration(cfg.Artifacts.Reaper.IntervalHours)*time.Hour)
+		log.Info("Scheduled artifact reaper every %dh", cfg.Artifacts.Reaper.IntervalHours)
+	}
+
 	rpcServer := rpc.NewServer(rpc.ServerDeps{
-		Store:             store,
-		Config:            cfg,
-		Log:               log,
-		RegistryHandler:   registryHandler,
-		RegistryAccess:    registryAccess,
-		TokenHandler:      tokenHandler,
-		AuthManager:       authManager,
-		Enforcer:          enforcer,
-		OIDCHandler:       oidcHandler,
-		WebhookDispatcher: dispatcher,
-		PortalProxies:     portalProxies,
-		AuthLimiter:       authLimiter,
-		ArtifactManager:   artifactManager,
-		GCCollector:       gcCollector,
+		Store:                 store,
+		Config:                cfg,
+		Log:                   log,
+		RegistryHandler:       registryHandler,
+		RegistryAccess:        registryAccess,
+		TokenHandler:          tokenHandler,
+		AuthManager:           authManager,
+		Enforcer:              enforcer,
+		OIDCHandler:           oidcHandler,
+		WebhookDispatcher:     dispatcher,
+		PortalProxies:         portalProxies,
+		AuthLimiter:           authLimiter,
+		ArtifactManager:       artifactManager,
+		ArtifactV1Facade:      artifactV1Facade,
+		ArtifactPortalHandler: artifactPortalHandler,
+		GCCollector:           gcCollector,
 	})
 
 	srv := &http.Server{

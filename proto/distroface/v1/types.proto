@@ -262,6 +262,10 @@ message ArtifactRepository {
   int64 artifact_count = 8;
   // total_size is the sum of artifact sizes in bytes.
   int64 total_size = 9;
+  // namespace is the org name or owner username the repo lives under.
+  string namespace = 10;
+  // full_name is namespace/name.
+  string full_name = 11;
 }
 
 // Artifact is a single stored artifact (file) within an artifact repository.

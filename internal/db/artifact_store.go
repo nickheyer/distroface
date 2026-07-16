@@ -37,9 +37,9 @@ func (s *Store) CreateArtifactRepository(ctx context.Context, repo *ArtifactRepo
 	return s.db.WithContext(ctx).Create(repo).Error
 }
 
-func (s *Store) GetArtifactRepository(ctx context.Context, name string) (*ArtifactRepository, error) {
+func (s *Store) GetArtifactRepository(ctx context.Context, namespace, name string) (*ArtifactRepository, error) {
 	var repo ArtifactRepository
-	err := s.db.WithContext(ctx).First(&repo, "name = ?", name).Error
+	err := s.db.WithContext(ctx).First(&repo, "namespace = ? AND name = ?", namespace, name).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
 	}
@@ -62,24 +62,37 @@ func (s *Store) GetArtifactRepositoryByID(ctx context.Context, id int64) (*Artif
 }
 
 type ArtifactRepoListOptions struct {
-	ViewerID       string // Owner whose private repos are visible
-	IncludePrivate bool   // True bypasses visibility filtering
-	Search         string // Name substring filter
-	Limit          int    // Zero means no limit
+	Namespace      string   // Optional exact namespace filter
+	ViewerID       string   // Owner whose private repos are visible
+	IncludePrivate bool     // True bypasses visibility filtering
+	GrantedRepos   []string // RBAC granted repos as namespace/name
+	Search         string   // Name substring filter
+	Limit          int      // Zero means no limit
 	Offset         int
 }
 
 func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoListOptions) ([]*ArtifactRepository, int64, error) {
 	q := s.db.WithContext(ctx).Model(&ArtifactRepository{})
+	if opts.Namespace != "" {
+		q = q.Where("namespace = ?", opts.Namespace)
+	}
 	if !opts.IncludePrivate {
 		if opts.ViewerID != "" {
-			q = q.Where("is_private = ? OR owner_id = ?", false, opts.ViewerID)
+			cond := "is_private = ? OR owner_id = ? " +
+				"OR namespace IN (SELECT username FROM users WHERE id = ?) " +
+				"OR namespace IN (SELECT o.name FROM organizations o JOIN org_members om ON o.id = om.org_id WHERE om.user_id = ?)"
+			args := []any{false, opts.ViewerID, opts.ViewerID, opts.ViewerID}
+			if len(opts.GrantedRepos) > 0 {
+				cond += " OR (namespace || '/' || name) IN ?"
+				args = append(args, opts.GrantedRepos)
+			}
+			q = q.Where(cond, args...)
 		} else {
 			q = q.Where("is_private = ?", false)
 		}
 	}
 	if opts.Search != "" {
-		q = q.Where("name LIKE ?", "%"+opts.Search+"%")
+		q = q.Where("name LIKE ? OR namespace LIKE ? OR description LIKE ?", "%"+opts.Search+"%", "%"+opts.Search+"%", "%"+opts.Search+"%")
 	}
 
 	var total int64
@@ -376,6 +389,39 @@ func (s *Store) backfillArtifactPropsHash() error {
 		if err := s.db.Model(&Artifact{}).Where("id = ?", a.ID).
 			Update("props_hash", PropsFingerprint(a.Properties)).Error; err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// Backfills namespace for repos predating org scoping
+func (s *Store) backfillArtifactRepoNamespace() error {
+	var repos []*ArtifactRepository
+	if err := s.db.Where("namespace = '' OR namespace IS NULL").Find(&repos).Error; err != nil {
+		return err
+	}
+	ctx := context.Background()
+	hasCasbin := s.db.Migrator().HasTable("casbin_rule")
+	for _, r := range repos {
+		ns := ""
+		if r.OwnerID != "" {
+			if u, err := s.GetUserByID(ctx, r.OwnerID); err == nil && u != nil {
+				ns = u.Username
+			} else if org, err := s.GetOrganizationByID(ctx, r.OwnerID); err == nil && org != nil {
+				ns = org.Name
+			}
+		}
+		if ns == "" {
+			ns = r.Name // Names were globally unique pre migration so this stays unique
+		}
+		if err := s.db.Model(&ArtifactRepository{}).Where("id = ?", r.ID).Update("namespace", ns).Error; err != nil {
+			return err
+		}
+		// Scoped grants match on the object string, follow the rename
+		if hasCasbin {
+			if err := s.db.Exec("UPDATE casbin_rule SET v3 = ? WHERE ptype = 'p' AND v1 = 'artifacts' AND v3 = ?", ns+"/"+r.Name, r.Name).Error; err != nil {
+				return err
+			}
 		}
 	}
 	return nil

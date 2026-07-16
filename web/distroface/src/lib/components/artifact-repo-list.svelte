@@ -10,50 +10,33 @@
 	import {
 		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 	} from '$lib/components/ui/table';
-	import {
-		Select, SelectContent, SelectItem, SelectTrigger
-	} from '$lib/components/ui/select';
 	import FormPanel from '$lib/components/form-panel.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
-	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import { Archive, Plus, Search, Trash2, Lock, Globe } from '@lucide/svelte';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { Archive, Plus, Trash2, Lock, Globe } from '@lucide/svelte';
+	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime, pageToToken, formatBytes } from '$lib/utils';
 	import type { ArtifactRepository } from '$lib/proto/distroface/v1/types_pb';
 
+	let { namespace, canCreate = false }: { namespace: string; canCreate?: boolean } = $props();
+
 	let repos = $state<ArtifactRepository[]>([]);
 	let loading = $state(true);
 	let totalCount = $state(0);
 	let currentPage = $state(1);
-	let searchQuery = $state('');
 	const pageSize = 20;
 
 	let createPanelOpen = $state(false);
 	let newName = $state('');
-	let newNamespace = $state('');
 	let newDescription = $state('');
 	let newPrivate = $state(false);
 	let creating = $state(false);
-	let orgNames = $state<string[]>([]);
-
-	const ownNamespace = $derived(authStore.user?.username ?? '');
-	const namespaceChoices = $derived([ownNamespace, ...orgNames].filter(Boolean));
-
-	async function loadNamespaces() {
-		try {
-			const resp = await rpcClient.organization.listOrganizations({ pageSize: 100 }, silentCallOptions);
-			orgNames = resp.organizations.map((o) => o.name).sort();
-		} catch {
-			orgNames = [];
-		}
-	}
 
 	let deleteDialogOpen = $state(false);
 	let deleteTarget = $state<ArtifactRepository | null>(null);
@@ -63,9 +46,9 @@
 		loading = true;
 		try {
 			const resp = await rpcClient.artifact.listArtifactRepositories({
+				namespace,
 				pageSize,
-				pageToken: pageToToken(currentPage, pageSize),
-				search: searchQuery
+				pageToken: pageToToken(currentPage, pageSize)
 			});
 			repos = resp.repositories;
 			totalCount = Number(resp.totalCount);
@@ -77,18 +60,13 @@
 		}
 	}
 
-	function handleSearch() {
-		currentPage = 1;
-		loadRepos();
-	}
-
 	async function createRepo() {
 		if (!newName.trim()) return;
 		creating = true;
 		try {
 			await rpcClient.artifact.createArtifactRepository({
 				name: newName.trim(),
-				namespace: newNamespace || ownNamespace,
+				namespace,
 				description: newDescription.trim(),
 				isPrivate: newPrivate
 			});
@@ -105,7 +83,6 @@
 	function closeCreatePanel() {
 		createPanelOpen = false;
 		newName = '';
-		newNamespace = '';
 		newDescription = '';
 		newPrivate = false;
 	}
@@ -120,7 +97,10 @@
 		if (!deleteTarget) return;
 		deleting = true;
 		try {
-			await rpcClient.artifact.deleteArtifactRepository({ name: deleteTarget.name, namespace: deleteTarget.namespace });
+			await rpcClient.artifact.deleteArtifactRepository({
+				name: deleteTarget.name,
+				namespace: deleteTarget.namespace
+			});
 			toast.success('Repository deleted');
 			deleteDialogOpen = false;
 			await loadRepos();
@@ -133,47 +113,25 @@
 
 	function canDelete(repo: ArtifactRepository): boolean {
 		return (
+			canCreate ||
 			repo.owner === authStore.user?.username ||
 			authStore.hasPermission('artifacts', 'manage')
 		);
 	}
 
-	onMount(() => {
-		loadRepos();
-		loadNamespaces();
-	});
+	onMount(loadRepos);
 </script>
 
-<svelte:head>
-	<title>Artifacts - Distroface</title>
-</svelte:head>
-
-<div class="space-y-6">
-	<div class="flex items-center gap-4">
-		<div class="h-12 w-12 rounded-xl bg-linear-to-br from-primary/15 to-primary/5 flex items-center justify-center shrink-0 border border-primary/10">
-			<Archive class="h-6 w-6 text-primary" />
-		</div>
-		<div>
-			<h1 class="text-2xl font-bold tracking-tight">Artifacts</h1>
-			<p class="text-[13px] text-muted-foreground mt-0.5">Generic artifact repositories for build outputs and packages</p>
-		</div>
-		<div class="ml-auto">
-			<PermissionGate resource="artifacts" action="create">
-				<Button size="sm" onclick={() => (createPanelOpen = true)}>
-					<Plus class="h-4 w-4 mr-1.5" />
-					New Repository
-				</Button>
-			</PermissionGate>
-		</div>
+<div class="space-y-4">
+	<div class="section-header">
+		<h2 class="section-title">Artifact Repositories</h2>
+		{#if canCreate}
+			<Button size="sm" onclick={() => (createPanelOpen = true)}>
+				<Plus class="h-4 w-4 mr-1.5" />
+				New Repository
+			</Button>
+		{/if}
 	</div>
-
-	<form
-		class="relative max-w-sm"
-		onsubmit={(e) => { e.preventDefault(); handleSearch(); }}
-	>
-		<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-		<Input bind:value={searchQuery} placeholder="Search repositories..." class="pl-9" oninput={handleSearch} />
-	</form>
 
 	{#if loading}
 		<div class="space-y-2">
@@ -184,19 +142,15 @@
 	{:else if repos.length === 0}
 		<EmptyState
 			icon={Archive}
-			message={searchQuery ? 'No repositories found' : 'No artifact repositories yet'}
-			description={searchQuery
-				? `No results for "${searchQuery}"`
-				: 'Create a repository to store build artifacts, packages, and other files.'}
+			message="No artifact repositories yet"
+			description="Repositories under {namespace} hold build artifacts, packages, and other files."
 		>
 			{#snippet actions()}
-				{#if !searchQuery}
-					<PermissionGate resource="artifacts" action="create">
-						<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>
-							<Plus class="h-4 w-4 mr-1.5" />
-							New Repository
-						</Button>
-					</PermissionGate>
+				{#if canCreate}
+					<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>
+						<Plus class="h-4 w-4 mr-1.5" />
+						New Repository
+					</Button>
 				{/if}
 			{/snippet}
 		</EmptyState>
@@ -206,7 +160,6 @@
 				<TableHeader>
 					<TableRow class="bg-muted/30 hover:bg-muted/30">
 						<TableHead class="th">Name</TableHead>
-						<TableHead class="th">Owner</TableHead>
 						<TableHead class="th">Artifacts</TableHead>
 						<TableHead class="th">Size</TableHead>
 						<TableHead class="th">Created</TableHead>
@@ -218,9 +171,7 @@
 						<TableRow class="cursor-pointer" onclick={() => goto(resolve('/artifacts/[namespace]/[repo]', { namespace: repo.namespace, repo: repo.name }))}>
 							<TableCell class="py-3 px-3">
 								<div class="flex items-center gap-2">
-									<span class="font-medium">
-										{#if repo.namespace}<span class="text-muted-foreground font-normal">{repo.namespace}/</span>{/if}{repo.name}
-									</span>
+									<span class="font-medium">{repo.name}</span>
 									<Badge variant="outline" class="text-xs gap-1">
 										{#if repo.isPrivate}
 											<Lock class="h-2.5 w-2.5" />Private
@@ -233,7 +184,6 @@
 									<p class="text-xs text-muted-foreground mt-0.5 line-clamp-1">{repo.description}</p>
 								{/if}
 							</TableCell>
-							<TableCell class="text-muted-foreground text-sm py-3 px-3">{repo.owner || '-'}</TableCell>
 							<TableCell class="text-sm py-3 px-3 tabular-nums">{repo.artifactCount}</TableCell>
 							<TableCell class="text-sm py-3 px-3 tabular-nums">{formatBytes(Number(repo.totalSize))}</TableCell>
 							<TableCell class="text-muted-foreground text-sm py-3 px-3">
@@ -257,7 +207,7 @@
 		</div>
 
 		<DataPagination
-			page={currentPage} {pageSize} totalCount={totalCount}
+			page={currentPage} {pageSize} {totalCount}
 			onPrev={() => { currentPage--; loadRepos(); }}
 			onNext={() => { currentPage++; loadRepos(); }}
 		/>
@@ -268,33 +218,19 @@
 	open={createPanelOpen}
 	onOpenChange={(v) => { if (!v) closeCreatePanel(); }}
 	title="New Artifact Repository"
-	description="Create a repository for storing build artifacts and packages."
+	description="Create a repository under {namespace} for build artifacts and packages."
 	icon={Archive}
 >
 	<div class="space-y-6">
 		<FormSection title="Repository Details">
 			<div class="space-y-3">
-				<FormField label="Namespace" id="repo-namespace" help="Your personal namespace or an organization you administer.">
-					<Select
-						type="single"
-						value={newNamespace || ownNamespace}
-						onValueChange={(v) => { if (v) newNamespace = v; }}
-					>
-						<SelectTrigger id="repo-namespace" class="w-full">{newNamespace || ownNamespace}</SelectTrigger>
-						<SelectContent>
-							{#each namespaceChoices as ns (ns)}
-								<SelectItem value={ns}>{ns}{ns === ownNamespace ? ' (you)' : ''}</SelectItem>
-							{/each}
-						</SelectContent>
-					</Select>
+				<FormField label="Name" id="org-repo-name" required help="Letters, digits, dots, dashes, and underscores.">
+					<Input id="org-repo-name" bind:value={newName} placeholder="e.g., build-artifacts" />
 				</FormField>
-				<FormField label="Name" id="repo-name" required help="Letters, digits, dots, dashes, and underscores.">
-					<Input id="repo-name" bind:value={newName} placeholder="e.g., build-artifacts" />
+				<FormField label="Description" id="org-repo-description">
+					<Input id="org-repo-description" bind:value={newDescription} placeholder="What is stored here?" />
 				</FormField>
-				<FormField label="Description" id="repo-description">
-					<Input id="repo-description" bind:value={newDescription} placeholder="What is stored here?" />
-				</FormField>
-				<FormField label="Private" help="Private repositories are only visible to you and admins.">
+				<FormField label="Private" help="Private repositories are only visible to members and admins.">
 					<Switch bind:checked={newPrivate} />
 				</FormField>
 			</div>

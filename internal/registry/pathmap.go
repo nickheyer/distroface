@@ -11,6 +11,12 @@ import (
 // Extracts repo name from OCI path, filters OCI keywords
 var apiRoutePattern = regexp.MustCompile(`^/v2/(.+)/((?:manifests|tags|referrers|blobs)/.*)$`)
 
+// Extracts the artifact repo name from the v1 data plane path
+var artifactRoutePattern = regexp.MustCompile(`^/api/v1/artifacts/([^/]+)/(.+)$`)
+
+// First segment control-plane keywords never namespace rewritten
+var artifactReservedRepo = map[string]bool{"repos": true, "search": true}
+
 // Rewrites a repository name
 type MappingRule struct {
 	Pattern string `json:"pattern"` // Regex, anchored to the full name

@@ -176,7 +176,7 @@
 		<div class="min-w-0 space-y-1">
 			<h2 class="section-title">Registry Portals</h2>
 			<p class="text-[13px] text-muted-foreground leading-snug max-w-2xl">
-				Extra hostnames and ports that serve this organization's images.
+				Extra hostnames and ports that serve this organization's images and artifacts.
 			</p>
 		</div>
 		<Button size="sm" class="shrink-0" onclick={openCreate}>
@@ -194,7 +194,7 @@
 		<EmptyState
 			icon={Globe}
 			message="No portals"
-			description="Add a hostname or port that serves {orgName}'s images. Example: docker pull registry.example.com/myimage."
+			description="Add a hostname or port that serves {orgName}'s images and artifacts. Example: docker pull registry.example.com/myimage."
 		>
 			{#snippet actions()}
 				<Button variant="outline" size="sm" onclick={openCreate}>
@@ -270,7 +270,7 @@
 <PortalFormPanel
 	bind:open={createOpen}
 	title="Add Portal"
-	description="Serve this organization's images from an extra hostname or port. New portals start immediately."
+	description="Serve this organization's images and artifacts from an extra hostname or port. New portals start immediately."
 	{orgName}
 	bind:name={newName}
 	bind:address={newAddress}

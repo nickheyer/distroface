@@ -3,12 +3,15 @@ package services
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
+	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
@@ -21,11 +24,12 @@ type OrganizationService struct {
 	store    *storage.Store
 	registry *registry.RegistryAccess
 	enforcer *rbac.Enforcer
+	config   *config.Config
 	log      *logger.Logger
 }
 
-func NewOrganizationService(store *storage.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, log *logger.Logger) *OrganizationService {
-	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, log: log}
+func NewOrganizationService(store *storage.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, cfg *config.Config, log *logger.Logger) *OrganizationService {
+	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, config: cfg, log: log}
 }
 
 func (s *OrganizationService) CreateOrganization(ctx context.Context, req *connect.Request[v1.CreateOrganizationRequest]) (*connect.Response[v1.CreateOrganizationResponse], error) {
@@ -414,6 +418,179 @@ func (s *OrganizationService) UpdateOrgMemberRole(ctx context.Context, req *conn
 	return connect.NewResponse(&v1.UpdateOrgMemberRoleResponse{
 		Member: orgMemberToProto(member),
 	}), nil
+}
+
+// ── Org settings ─────────────────────────────────────────────────────────
+
+// Known override keys and their value validators
+var orgSettingValidators = map[string]func(string) bool{
+	artifacts.SettingRetentionEnabled:       isBoolValue,
+	artifacts.SettingRetentionMaxVersions:   isIntValue,
+	artifacts.SettingRetentionMaxAgeDays:    isIntValue,
+	artifacts.SettingRetentionMaxTotalSize:  isIntValue,
+	artifacts.SettingRetentionExcludeLatest: isBoolValue,
+	artifacts.SettingMaxFileSizeMB:          isIntValue,
+	artifacts.SettingPrivateByDefault:       isBoolValue,
+}
+
+func isBoolValue(v string) bool {
+	_, err := strconv.ParseBool(v)
+	return err == nil
+}
+
+func isIntValue(v string) bool {
+	n, err := strconv.ParseInt(v, 10, 64)
+	return err == nil && n >= 0
+}
+
+// Instance level values every known key falls back to
+func (s *OrganizationService) orgSettingDefaults() map[string]string {
+	a := s.config.Artifacts
+	return map[string]string{
+		artifacts.SettingRetentionEnabled:       strconv.FormatBool(a.Retention.Enabled),
+		artifacts.SettingRetentionMaxVersions:   strconv.Itoa(a.Retention.MaxVersions),
+		artifacts.SettingRetentionMaxAgeDays:    strconv.Itoa(a.Retention.MaxAgeDays),
+		artifacts.SettingRetentionMaxTotalSize:  strconv.FormatInt(a.Retention.MaxTotalSize, 10),
+		artifacts.SettingRetentionExcludeLatest: strconv.FormatBool(a.Retention.ExcludeLatest),
+		artifacts.SettingMaxFileSizeMB:          strconv.FormatInt(a.MaxFileSizeMB, 10),
+		artifacts.SettingPrivateByDefault:       "false",
+	}
+}
+
+func (s *OrganizationService) GetOrgSettings(ctx context.Context, req *connect.Request[v1.GetOrgSettingsRequest]) (*connect.Response[v1.GetOrgSettingsResponse], error) {
+	user := auth.UserFromContext(ctx)
+	org, err := s.orgWithAccess(ctx, user, req.Msg.OrgName, false)
+	if err != nil {
+		return nil, err
+	}
+	overrides, err := s.store.ListOrgSettings(ctx, org.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&v1.GetOrgSettingsResponse{
+		Overrides: overrides,
+		Defaults:  s.orgSettingDefaults(),
+	}), nil
+}
+
+func (s *OrganizationService) UpdateOrgSettings(ctx context.Context, req *connect.Request[v1.UpdateOrgSettingsRequest]) (*connect.Response[v1.UpdateOrgSettingsResponse], error) {
+	user := auth.UserFromContext(ctx)
+	org, err := s.orgWithAccess(ctx, user, req.Msg.OrgName, true)
+	if err != nil {
+		return nil, err
+	}
+
+	for key, value := range req.Msg.Set {
+		valid, known := orgSettingValidators[key]
+		if !known {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown setting key %q", key))
+		}
+		if !valid(value) {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid value %q for setting %q", value, key))
+		}
+	}
+	for _, key := range req.Msg.Reset_ {
+		if _, known := orgSettingValidators[key]; !known {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown setting key %q", key))
+		}
+	}
+
+	for key, value := range req.Msg.Set {
+		if err := s.store.SetOrgSetting(ctx, org.ID, key, value); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+	}
+	for _, key := range req.Msg.Reset_ {
+		if err := s.store.DeleteOrgSetting(ctx, org.ID, key); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+	}
+
+	overrides, err := s.store.ListOrgSettings(ctx, org.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	return connect.NewResponse(&v1.UpdateOrgSettingsResponse{
+		Overrides: overrides,
+		Defaults:  s.orgSettingDefaults(),
+	}), nil
+}
+
+func (s *OrganizationService) TransferOrgOwnership(ctx context.Context, req *connect.Request[v1.TransferOrgOwnershipRequest]) (*connect.Response[v1.TransferOrgOwnershipResponse], error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+	if req.Msg.OrgName == "" || req.Msg.Username == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	}
+	org, err := s.store.GetOrganization(ctx, req.Msg.OrgName)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if org == nil {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
+	}
+
+	// Only owners hand off ownership, manage permission bypasses
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
+	requester, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
+	if !canManage && (requester == nil || requester.Role != storage.OrgRoleOwner) {
+		return nil, connect.NewError(connect.CodePermissionDenied, nil)
+	}
+
+	targetUser, _ := s.store.GetUserByUsername(ctx, req.Msg.Username)
+	if targetUser == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("user not found"))
+	}
+	if targetUser.ID == user.ID {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot transfer ownership to yourself"))
+	}
+	target, _ := s.store.GetOrgMember(ctx, org.ID, targetUser.ID)
+	if target == nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("new owner must be a member of the organization"))
+	}
+
+	target.Role = storage.OrgRoleOwner
+	if err := s.store.UpdateOrgMember(ctx, target); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if requester != nil && requester.Role == storage.OrgRoleOwner {
+		requester.Role = storage.OrgRoleAdmin
+		if err := s.store.UpdateOrgMember(ctx, requester); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+	}
+
+	return connect.NewResponse(&v1.TransferOrgOwnershipResponse{}), nil
+}
+
+// Manage bypass, otherwise membership, adminOnly wants owner or admin rank
+func (s *OrganizationService) orgWithAccess(ctx context.Context, user *auth.AuthenticatedUser, name string, adminOnly bool) (*storage.Organization, error) {
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+	if name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("org name is required"))
+	}
+	org, err := s.store.GetOrganization(ctx, name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if org == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("organization not found"))
+	}
+	if canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name); canManage {
+		return org, nil
+	}
+	member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
+	if member == nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
+	}
+	if adminOnly && member.Role != storage.OrgRoleOwner && member.Role != storage.OrgRoleAdmin {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
+	}
+	return org, nil
 }
 
 func orgToProto(o *storage.Organization, memberCount int32) *v1.Organization {

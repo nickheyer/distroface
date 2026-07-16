@@ -49,19 +49,29 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *con
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repository name"))
 	}
 
-	existing, err := s.store.GetArtifactRepository(ctx, msg.Name)
+	ns, name := repoRef(user, msg.Namespace, msg.Name)
+	if !s.canCreateInNamespace(ctx, user, ns) {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("cannot create repository in namespace %q", ns))
+	}
+
+	existing, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	if existing != nil {
-		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("repository %q already exists", msg.Name))
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("repository %q already exists", ns+"/"+name))
 	}
 
+	isPrivate := msg.IsPrivate
+	if !isPrivate && ns != user.Username {
+		isPrivate = s.manager.EffectivePrivateByDefault(ctx, ns)
+	}
 	repo := &storage.ArtifactRepository{
-		Name:        msg.Name,
+		Namespace:   ns,
+		Name:        name,
 		Description: msg.Description,
 		OwnerID:     user.ID,
-		IsPrivate:   msg.IsPrivate,
+		IsPrivate:   isPrivate,
 	}
 	if err := s.store.CreateArtifactRepository(ctx, repo); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -74,7 +84,7 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *con
 
 func (s *ArtifactService) GetArtifactRepository(ctx context.Context, req *connect.Request[v1.GetArtifactRepositoryRequest]) (*connect.Response[v1.GetArtifactRepositoryResponse], error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.visibleRepo(ctx, user, req.Msg.Name)
+	repo, err := s.visibleRepo(ctx, user, req.Msg.Namespace, req.Msg.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -95,13 +105,17 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *con
 	limit, offset := parsePagination(msg.PageSize, msg.PageToken)
 
 	opts := storage.ArtifactRepoListOptions{
-		Search: msg.Search,
-		Limit:  limit,
-		Offset: offset,
+		Namespace: msg.Namespace,
+		Search:    msg.Search,
+		Limit:     limit,
+		Offset:    offset,
 	}
 	if user != nil {
 		opts.ViewerID = user.ID
 		opts.IncludePrivate = s.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage)
+		if !opts.IncludePrivate {
+			opts.GrantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
+		}
 	}
 
 	repos, total, err := s.store.ListArtifactRepositories(ctx, opts)
@@ -132,7 +146,7 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *con
 
 func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *connect.Request[v1.UpdateArtifactRepositoryRequest]) (*connect.Response[v1.UpdateArtifactRepositoryResponse], error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.mutableRepo(ctx, user, req.Msg.Name, rbac.ActionUpdate)
+	repo, err := s.mutableRepo(ctx, user, req.Msg.Namespace, req.Msg.Name, rbac.ActionUpdate)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +168,7 @@ func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *con
 
 func (s *ArtifactService) DeleteArtifactRepository(ctx context.Context, req *connect.Request[v1.DeleteArtifactRepositoryRequest]) (*connect.Response[v1.DeleteArtifactRepositoryResponse], error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.mutableRepo(ctx, user, req.Msg.Name, rbac.ActionDelete)
+	repo, err := s.mutableRepo(ctx, user, req.Msg.Namespace, req.Msg.Name, rbac.ActionDelete)
 	if err != nil {
 		return nil, err
 	}
@@ -169,7 +183,7 @@ func (s *ArtifactService) DeleteArtifactRepository(ctx context.Context, req *con
 
 func (s *ArtifactService) InitiateArtifactUpload(ctx context.Context, req *connect.Request[v1.InitiateArtifactUploadRequest]) (*connect.Response[v1.InitiateArtifactUploadResponse], error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.pushableRepo(ctx, user, req.Msg.RepoName)
+	repo, err := s.pushableRepo(ctx, user, req.Msg.Namespace, req.Msg.RepoName)
 	if err != nil {
 		return nil, err
 	}
@@ -181,14 +195,14 @@ func (s *ArtifactService) InitiateArtifactUpload(ctx context.Context, req *conne
 
 	return connect.NewResponse(&v1.InitiateArtifactUploadResponse{
 		UploadId:  uploadID,
-		UploadUrl: fmt.Sprintf("/api/v1/artifacts/%s/upload/%s", repo.Name, uploadID),
+		UploadUrl: artifactUploadURL(user, repo.Namespace, repo.Name, uploadID),
 	}), nil
 }
 
 func (s *ArtifactService) CompleteArtifactUpload(ctx context.Context, req *connect.Request[v1.CompleteArtifactUploadRequest]) (*connect.Response[v1.CompleteArtifactUploadResponse], error) {
 	user := auth.UserFromContext(ctx)
 	msg := req.Msg
-	repo, err := s.pushableRepo(ctx, user, msg.RepoName)
+	repo, err := s.pushableRepo(ctx, user, msg.Namespace, msg.RepoName)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +221,7 @@ func (s *ArtifactService) CompleteArtifactUpload(ctx context.Context, req *conne
 
 func (s *ArtifactService) GetArtifact(ctx context.Context, req *connect.Request[v1.GetArtifactRequest]) (*connect.Response[v1.GetArtifactResponse], error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.visibleRepo(ctx, user, req.Msg.RepoName)
+	repo, err := s.visibleRepo(ctx, user, req.Msg.Namespace, req.Msg.RepoName)
 	if err != nil {
 		return nil, err
 	}
@@ -225,7 +239,7 @@ func (s *ArtifactService) GetArtifact(ctx context.Context, req *connect.Request[
 func (s *ArtifactService) ListArtifacts(ctx context.Context, req *connect.Request[v1.ListArtifactsRequest]) (*connect.Response[v1.ListArtifactsResponse], error) {
 	user := auth.UserFromContext(ctx)
 	msg := req.Msg
-	repo, err := s.visibleRepo(ctx, user, msg.RepoName)
+	repo, err := s.visibleRepo(ctx, user, msg.Namespace, msg.RepoName)
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +259,7 @@ func (s *ArtifactService) ListArtifacts(ctx context.Context, req *connect.Reques
 
 func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *connect.Request[v1.ListArtifactVersionsRequest]) (*connect.Response[v1.ListArtifactVersionsResponse], error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.visibleRepo(ctx, user, req.Msg.RepoName)
+	repo, err := s.visibleRepo(ctx, user, req.Msg.Namespace, req.Msg.RepoName)
 	if err != nil {
 		return nil, err
 	}
@@ -292,13 +306,13 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Requ
 	}
 
 	if msg.RepoName != "" {
-		repo, err := s.visibleRepo(ctx, user, msg.RepoName)
+		repo, err := s.visibleRepo(ctx, user, msg.Namespace, msg.RepoName)
 		if err != nil {
 			return nil, err
 		}
 		criteria.RepoID = &repo.ID
 	} else {
-		repoIDs, err := s.visibleRepoIDs(ctx, user)
+		repoIDs, err := s.visibleRepoIDs(ctx, user, msg.Namespace)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
@@ -325,7 +339,7 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Requ
 func (s *ArtifactService) UpdateArtifact(ctx context.Context, req *connect.Request[v1.UpdateArtifactRequest]) (*connect.Response[v1.UpdateArtifactResponse], error) {
 	user := auth.UserFromContext(ctx)
 	msg := req.Msg
-	repo, err := s.mutableRepo(ctx, user, msg.RepoName, rbac.ActionUpdate)
+	repo, err := s.mutableRepo(ctx, user, msg.Namespace, msg.RepoName, rbac.ActionUpdate)
 	if err != nil {
 		return nil, err
 	}
@@ -380,7 +394,7 @@ func (s *ArtifactService) UpdateArtifact(ctx context.Context, req *connect.Reque
 func (s *ArtifactService) SetArtifactProperties(ctx context.Context, req *connect.Request[v1.SetArtifactPropertiesRequest]) (*connect.Response[v1.SetArtifactPropertiesResponse], error) {
 	user := auth.UserFromContext(ctx)
 	msg := req.Msg
-	repo, err := s.mutableRepo(ctx, user, msg.RepoName, rbac.ActionUpdate)
+	repo, err := s.mutableRepo(ctx, user, msg.Namespace, msg.RepoName, rbac.ActionUpdate)
 	if err != nil {
 		return nil, err
 	}
@@ -406,7 +420,7 @@ func (s *ArtifactService) SetArtifactProperties(ctx context.Context, req *connec
 func (s *ArtifactService) DeleteArtifact(ctx context.Context, req *connect.Request[v1.DeleteArtifactRequest]) (*connect.Response[v1.DeleteArtifactResponse], error) {
 	user := auth.UserFromContext(ctx)
 	msg := req.Msg
-	repo, err := s.mutableRepo(ctx, user, msg.RepoName, rbac.ActionDelete)
+	repo, err := s.mutableRepo(ctx, user, msg.Namespace, msg.RepoName, rbac.ActionDelete)
 	if err != nil {
 		return nil, err
 	}
@@ -438,56 +452,66 @@ func (s *ArtifactService) DeleteArtifact(ctx context.Context, req *connect.Reque
 
 // ── Access helpers ───────────────────────────────────────────────────────
 
+// Empty namespace defaults to the caller username
+func repoRef(user *auth.AuthenticatedUser, namespace, name string) (string, string) {
+	if namespace == "" && user != nil {
+		namespace = user.Username
+	}
+	return namespace, name
+}
+
 // Fetches repo and enforces read visibility
-func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.AuthenticatedUser, name string) (*storage.ArtifactRepository, error) {
+func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.AuthenticatedUser, namespace, name string) (*storage.ArtifactRepository, error) {
 	if name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repository name is required"))
 	}
-	repo, err := s.store.GetArtifactRepository(ctx, name)
+	ns, name := repoRef(user, namespace, name)
+	repo, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	if repo == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
 	}
-	if repo.IsPrivate && !s.hasRepoAccess(user, repo, rbac.ActionRead) {
+	if repo.IsPrivate && !s.hasRepoAccess(ctx, user, repo, rbac.ActionRead) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
 	}
 	return repo, nil
 }
 
 // Upload access, private repos need owner or grant
-func (s *ArtifactService) pushableRepo(ctx context.Context, user *auth.AuthenticatedUser, name string) (*storage.ArtifactRepository, error) {
-	repo, cerr := s.visibleRepo(ctx, user, name)
+func (s *ArtifactService) pushableRepo(ctx context.Context, user *auth.AuthenticatedUser, namespace, name string) (*storage.ArtifactRepository, error) {
+	repo, cerr := s.visibleRepo(ctx, user, namespace, name)
 	if cerr != nil {
 		return nil, cerr
 	}
-	if repo.IsPrivate && !s.hasRepoAccess(user, repo, rbac.ActionPush) {
+	if repo.IsPrivate && !s.hasRepoAccess(ctx, user, repo, rbac.ActionPush) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
 	}
 	return repo, nil
 }
 
 // Owner level access for destructive operations like v1
-func (s *ArtifactService) mutableRepo(ctx context.Context, user *auth.AuthenticatedUser, name, action string) (*storage.ArtifactRepository, error) {
+func (s *ArtifactService) mutableRepo(ctx context.Context, user *auth.AuthenticatedUser, namespace, name, action string) (*storage.ArtifactRepository, error) {
 	if name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repository name is required"))
 	}
-	repo, err := s.store.GetArtifactRepository(ctx, name)
+	ns, name := repoRef(user, namespace, name)
+	repo, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	if repo == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
 	}
-	if !s.hasRepoAccess(user, repo, action) {
+	if !s.hasRepoAccess(ctx, user, repo, action) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
 	}
 	return repo, nil
 }
 
-// Owner, manage permission, or scoped grant
-func (s *ArtifactService) hasRepoAccess(user *auth.AuthenticatedUser, repo *storage.ArtifactRepository, action string) bool {
+// Owner, manage permission, org membership, or scoped grant
+func (s *ArtifactService) hasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.ArtifactRepository, action string) bool {
 	if user == nil {
 		return false
 	}
@@ -497,45 +521,69 @@ func (s *ArtifactService) hasRepoAccess(user *auth.AuthenticatedUser, repo *stor
 	if s.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
 		return true
 	}
-	return slices.Contains(s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, action), repo.Name)
+	if repo.Namespace == user.Username {
+		return true
+	}
+	if isMember, role, _ := s.store.IsOrgMember(ctx, repo.Namespace, user.ID); isMember {
+		switch action {
+		case rbac.ActionRead, rbac.ActionPull:
+			return true
+		default:
+			return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
+		}
+	}
+	return slices.Contains(s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, action), repo.Namespace+"/"+repo.Name)
 }
 
-// Repo ids readable by the user
-func (s *ArtifactService) visibleRepoIDs(ctx context.Context, user *auth.AuthenticatedUser) ([]int64, error) {
-	opts := storage.ArtifactRepoListOptions{}
+// Owner username, org owner/admin, or manage into an existing namespace
+func (s *ArtifactService) canCreateInNamespace(ctx context.Context, user *auth.AuthenticatedUser, namespace string) bool {
+	if user == nil {
+		return false
+	}
+	if namespace == user.Username {
+		return true
+	}
+	if isMember, role, _ := s.store.IsOrgMember(ctx, namespace, user.ID); isMember {
+		return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
+	}
+	if !s.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
+		return false
+	}
+	if u, _ := s.store.GetUserByUsername(ctx, namespace); u != nil {
+		return true
+	}
+	org, _ := s.store.GetOrganization(ctx, namespace)
+	return org != nil
+}
+
+// Repo ids readable by the user, optionally scoped to a namespace
+func (s *ArtifactService) visibleRepoIDs(ctx context.Context, user *auth.AuthenticatedUser, namespace string) ([]int64, error) {
+	opts := storage.ArtifactRepoListOptions{Namespace: namespace}
 	if user != nil {
 		opts.ViewerID = user.ID
 		opts.IncludePrivate = s.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage)
+		if !opts.IncludePrivate {
+			opts.GrantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
+		}
 	}
 	repos, _, err := s.store.ListArtifactRepositories(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
-	granted := []string{}
-	if user != nil && !opts.IncludePrivate {
-		granted = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
-	}
-	if len(granted) > 0 {
-		extra, _, err := s.store.ListArtifactRepositories(ctx, storage.ArtifactRepoListOptions{IncludePrivate: true})
-		if err != nil {
-			return nil, err
-		}
-		for _, r := range extra {
-			if r.IsPrivate && slices.Contains(granted, r.Name) {
-				repos = append(repos, r)
-			}
-		}
-	}
 	ids := make([]int64, 0, len(repos))
-	seen := make(map[int64]bool, len(repos))
 	for _, r := range repos {
-		if !seen[r.ID] {
-			seen[r.ID] = true
-			ids = append(ids, r.ID)
-		}
+		ids = append(ids, r.ID)
 	}
 	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
 	return ids, nil
+}
+
+// Upload URL, org repos carry a namespace marker the v1 facade strips
+func artifactUploadURL(user *auth.AuthenticatedUser, namespace, name, uploadID string) string {
+	if user != nil && namespace == user.Username {
+		return fmt.Sprintf("/api/v1/artifacts/%s/upload/%s", name, uploadID)
+	}
+	return fmt.Sprintf("/api/v1/artifacts/_ns/%s/%s/upload/%s", namespace, name, uploadID)
 }
 
 // Fetches artifact and checks repo membership
@@ -576,6 +624,8 @@ func (s *ArtifactService) repoToProto(ctx context.Context, repo *storage.Artifac
 	out := &v1.ArtifactRepository{
 		Id:          repo.ID,
 		Name:        repo.Name,
+		Namespace:   repo.Namespace,
+		FullName:    repo.Namespace + "/" + repo.Name,
 		Description: repo.Description,
 		Owner:       owner,
 		IsPrivate:   repo.IsPrivate,
