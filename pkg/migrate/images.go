@@ -163,10 +163,7 @@ func (r *Replayer) ensureTree(ctx context.Context, repo name.Repository, v1Name,
 			if err != nil {
 				return rawManifest{}, fmt.Errorf("index child %s: %w", child.Digest, err)
 			}
-			childDigest, err := name.NewDigest(repo.String() + "@" + child.Digest)
-			if err != nil {
-				return rawManifest{}, err
-			}
+			childDigest := repo.Digest(child.Digest)
 			if err := remote.Put(childDigest, childManifest, r.opts...); err != nil {
 				return rawManifest{}, fmt.Errorf("put index child %s: %w", child.Digest, err)
 			}

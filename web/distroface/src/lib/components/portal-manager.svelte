@@ -186,7 +186,7 @@
 
 	{#if loading}
 		<div class="space-y-2">
-			{#each Array(2) as _}
+			{#each { length: 2 }, i (i)}
 				<Skeleton class="h-16 w-full rounded-xl" />
 			{/each}
 		</div>

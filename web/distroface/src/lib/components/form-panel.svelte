@@ -3,12 +3,9 @@
 	import {
 		Sheet,
 		SheetContent,
-		SheetHeader,
 		SheetTitle,
 		SheetDescription
 	} from '$lib/components/ui/sheet';
-	import { Button } from '$lib/components/ui/button';
-	import { X } from '@lucide/svelte';
 	import { cn } from '$lib/utils';
 
 	let {

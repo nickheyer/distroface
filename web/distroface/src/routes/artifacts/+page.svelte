@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -192,7 +193,7 @@
 				</TableHeader>
 				<TableBody>
 					{#each repos as repo (repo.id)}
-						<TableRow class="cursor-pointer" onclick={() => goto(`/artifacts/${repo.name}`)}>
+						<TableRow class="cursor-pointer" onclick={() => goto(resolve('/artifacts/[repo]', { repo: repo.name }))}>
 							<TableCell class="py-3 px-3">
 								<div class="flex items-center gap-2">
 									<span class="font-medium">{repo.name}</span>

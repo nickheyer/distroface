@@ -2,6 +2,7 @@
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -422,7 +423,7 @@
 	{:else if notFound || !repo}
 		<EmptyState icon={Archive} message="Repository not found" description="It may be private or deleted.">
 			{#snippet actions()}
-				<Button variant="outline" size="sm" onclick={() => goto('/artifacts')}>
+				<Button variant="outline" size="sm" onclick={() => goto(resolve('/artifacts'))}>
 					<ArrowLeft class="h-4 w-4 mr-1.5" />
 					Back to Artifacts
 				</Button>
@@ -430,7 +431,7 @@
 		</EmptyState>
 	{:else}
 		<div class="flex items-center gap-4">
-			<Button variant="ghost" size="icon" class="shrink-0" onclick={() => goto('/artifacts')}>
+			<Button variant="ghost" size="icon" class="shrink-0" onclick={() => goto(resolve('/artifacts'))}>
 				<ArrowLeft class="h-4 w-4" />
 			</Button>
 			<div class="h-12 w-12 rounded-xl bg-linear-to-br from-primary/15 to-primary/5 flex items-center justify-center shrink-0 border border-primary/10">

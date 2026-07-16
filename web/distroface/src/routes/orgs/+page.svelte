@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -115,7 +116,7 @@
 
 {#if loading}
 	<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-		{#each Array(3) as _}
+		{#each { length: 3 }, i (i)}
 			<Skeleton class="h-36 rounded-xl" />
 		{/each}
 	</div>
@@ -136,8 +137,8 @@
 	</EmptyState>
 {:else}
 	<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-		{#each orgs as org}
-			<a href="/orgs/{org.name}" class="block group">
+		{#each orgs as org (org.id)}
+			<a href={resolve('/orgs/[name]', { name: org.name })} class="block group">
 				<Card class="border-border/60 hover:border-primary/20 transition-all hover:shadow-sm h-full">
 					<CardHeader class="pb-2">
 						<div class="flex items-center gap-3">

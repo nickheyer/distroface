@@ -211,10 +211,10 @@ func New() (*App, error) {
 	})
 
 	srv := &http.Server{
-		Addr:        fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port),
-		Handler:     rpcServer.Handler(),
-		ReadTimeout: time.Duration(cfg.Server.ReadTimeout) * time.Second,
-		IdleTimeout: time.Duration(cfg.Server.IdleTimeout) * time.Second,
+		Addr:              fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port),
+		Handler:           rpcServer.Handler(),
+		ReadHeaderTimeout: time.Duration(cfg.Server.ReadTimeout) * time.Second,
+		IdleTimeout:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
 	}
 
 	return &App{

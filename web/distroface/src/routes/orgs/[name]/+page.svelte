@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -27,7 +28,7 @@
 	import RepoList from '$lib/components/repo-list.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import {
-		Building2, Users, Package, Plus, Pencil, Trash2, MoreHorizontal, UserPlus
+		Building2, Users, Plus, Pencil, Trash2, MoreHorizontal, UserPlus
 	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -47,6 +48,8 @@
 	const membersPageSize = 20;
 	let repos = $state<Repository[]>([]);
 	let reposTotalCount = $state(0);
+	let reposPage = $state(1);
+	const reposPageSize = 20;
 	let loading = $state(true);
 	let membersLoading = $state(true);
 	let reposLoading = $state(true);
@@ -111,7 +114,9 @@
 		reposLoading = true;
 		try {
 			const resp = await rpcClient.repository.listRepositories({
-				namespace: orgName, pageSize: 50, pageToken: ''
+				namespace: orgName,
+				pageSize: reposPageSize,
+				pageToken: pageToToken(reposPage, reposPageSize)
 			});
 			repos = resp.repositories;
 			reposTotalCount = resp.totalCount;
@@ -204,7 +209,7 @@
 		try {
 			await rpcClient.organization.deleteOrganization({ name: orgName });
 			toast.success('Organization deleted');
-			goto('/orgs');
+			goto(resolve('/orgs'));
 		} catch {
 			// error interceptor
 		} finally {
@@ -221,7 +226,7 @@
 
 <div class="space-y-6">
 	<nav class="flex items-center gap-1.5 text-sm text-muted-foreground">
-		<a href="/orgs" class="hover:text-foreground transition-colors">Organizations</a>
+		<a href={resolve('/orgs')} class="hover:text-foreground transition-colors">Organizations</a>
 		<span>/</span>
 		<span class="text-foreground font-medium">{orgName}</span>
 	</nav>
@@ -304,7 +309,7 @@
 
 				{#if membersLoading}
 					<div class="space-y-2">
-						{#each Array(3) as _}
+						{#each { length: 3 }, i (i)}
 							<Skeleton class="h-14 w-full rounded-lg" />
 						{/each}
 					</div>
@@ -322,10 +327,10 @@
 								</TableRow>
 							</TableHeader>
 							<TableBody>
-								{#each members as member}
+								{#each members as member (member.userId)}
 									<TableRow>
 										<TableCell class="font-medium py-3 px-3">
-											<a href="/{member.username}" class="hover:text-primary transition-colors">{member.username}</a>
+											<a href={resolve('/[username]', { username: member.username })} class="hover:text-primary transition-colors">{member.username}</a>
 										</TableCell>
 										<TableCell class="py-3 px-3">
 											{#if canUpdateOrg && member.role !== OrgRole.OWNER}
@@ -384,9 +389,9 @@
 					{repos}
 					totalCount={reposTotalCount}
 					loading={reposLoading}
-					page={1}
-					pageSize={50}
-					onPageChange={() => {}}
+					page={reposPage}
+					pageSize={reposPageSize}
+					onPageChange={(newPage) => { reposPage = newPage; loadRepos(); }}
 					emptyMessage="No repositories yet"
 					emptyDescription="Push images to this organization's namespace to create repositories."
 				/>
@@ -418,7 +423,7 @@
 			<p class="text-[13px] text-muted-foreground mt-1">
 				{orgName} does not exist or you don't have access.
 			</p>
-			<Button variant="outline" class="mt-4" onclick={() => goto('/orgs')}>
+			<Button variant="outline" class="mt-4" onclick={() => goto(resolve('/orgs'))}>
 				Back to Organizations
 			</Button>
 		</div>

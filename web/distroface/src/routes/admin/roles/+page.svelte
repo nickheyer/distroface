@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { Card, CardContent } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
@@ -319,7 +319,7 @@
 	}
 
 	onMount(() => {
-		if (!authStore.hasPermission('roles', 'read')) { goto('/admin'); return; }
+		if (!authStore.hasPermission('roles', 'read')) { goto(resolve('/admin')); return; }
 		loadRoles();
 	});
 </script>
@@ -340,13 +340,13 @@
 
 	{#if loading}
 		<div class="space-y-3">
-			{#each Array(3) as _}
+			{#each { length: 3 }, i (i)}
 				<Skeleton class="h-20 w-full rounded-xl" />
 			{/each}
 		</div>
 	{:else}
 		<div class="space-y-2">
-			{#each roles as role}
+			{#each roles as role (role.name)}
 				<div class="rounded-xl border border-border/60 bg-card p-4">
 					<div class="flex items-center gap-4">
 						<div class="h-10 w-10 rounded-lg shrink-0 flex items-center justify-center {role.isSystem ? 'bg-primary/10' : 'bg-muted'}">
@@ -483,7 +483,7 @@
 				<TableHeader>
 					<TableRow class="bg-muted/50">
 						<TableHead class="th sticky left-0 bg-muted/50 z-10 w-50 border-r">Resource</TableHead>
-						{#each allActions as action}
+						{#each allActions as action (action)}
 							<TableHead class="th text-center">
 								<span class="capitalize">{action}</span>
 							</TableHead>
@@ -491,7 +491,7 @@
 					</TableRow>
 				</TableHeader>
 				<TableBody>
-					{#each resourceActions as ra}
+					{#each resourceActions as ra (ra.resource)}
 						{@const count = getResourcePermCount(ra.resource)}
 						{@const total = ra.actions.length}
 						<TableRow class="hover:bg-muted/30">
@@ -508,7 +508,7 @@
 									{/if}
 								</div>
 							</TableCell>
-							{#each allActions as action}
+							{#each allActions as action (action)}
 								{@const key = `${ra.resource}:${action}`}
 								{@const hasAction = ra.actions.includes(action)}
 								{@const checked = hasAction && (editingPermissions[key] || false)}
@@ -583,7 +583,7 @@
 						<TableHeader>
 							<TableRow class="bg-muted/50">
 								<TableHead class="th sticky left-0 bg-muted/50 z-10 w-60 border-r">Object</TableHead>
-								{#each scopedResourceActions() as action}
+								{#each scopedResourceActions() as action (action)}
 									<TableHead class="th text-center">
 										<span class="capitalize">{action}</span>
 									</TableHead>
@@ -591,7 +591,7 @@
 							</TableRow>
 						</TableHeader>
 						<TableBody>
-							{#each filteredObjects as obj}
+							{#each filteredObjects as obj (obj.id)}
 								{@const objScopedCount = getScopedCountForObject(obj.id)}
 								<TableRow class="hover:bg-muted/30">
 									<TableCell class="sticky left-0 bg-background z-10 font-medium border-r px-3">
@@ -607,7 +607,7 @@
 											{/if}
 										</div>
 									</TableCell>
-									{#each scopedResourceActions() as action}
+									{#each scopedResourceActions() as action (action)}
 										{@const globalCovered = isGlobalCovered(scopedResource, action)}
 										{@const scopedKey = `${scopedResource}:${action}:${obj.id}`}
 										{@const checked = globalCovered || (scopedPermissions[scopedKey] || false)}

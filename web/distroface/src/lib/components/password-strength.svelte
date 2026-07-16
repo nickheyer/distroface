@@ -16,7 +16,7 @@
 {#if password.length > 0}
 	<div class="space-y-2 pt-1">
 		<div class="flex gap-1">
-			{#each [1, 2, 3, 4] as level}
+			{#each [1, 2, 3, 4] as level (level)}
 				<div
 					class="h-1 flex-1 rounded-full transition-colors {strength >= level
 						? strength <= 2
@@ -34,7 +34,7 @@
 				{ passed: checks.upper, label: 'Uppercase' },
 				{ passed: checks.lower, label: 'Lowercase' },
 				{ passed: checks.number, label: 'Number' }
-			] as { passed, label }}
+			] as { passed, label } (label)}
 				<span class="flex items-center gap-1.5 text-[11px] {passed ? 'text-success' : 'text-muted-foreground/70'}">
 					{#if passed}
 						<Check class="h-3 w-3" />

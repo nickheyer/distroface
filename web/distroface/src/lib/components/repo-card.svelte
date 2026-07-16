@@ -6,6 +6,7 @@
 	import { relativeTime, formatBytes } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import type { Repository } from '$lib/proto/distroface/v1/types_pb';
+	import { resolve } from '$app/paths';
 
 	let { repo }: { repo: Repository } = $props();
 
@@ -20,7 +21,7 @@
 	);
 </script>
 
-<a href="/{repo.namespace}/{repo.name}" class="block group">
+<a href={resolve('/[namespace]/[name]', { namespace: repo.namespace, name: repo.name })} class="block group">
 	<div class="rounded-xl border border-border/60 bg-card px-4 py-3.5 transition-all hover:border-primary/20 hover:shadow-[0_2px_12px_-4px] hover:shadow-primary/8">
 		<div class="flex items-start gap-3.5">
 			<div class="h-10 w-10 rounded-lg bg-linear-to-br from-primary/12 to-primary/4 flex items-center justify-center shrink-0 border border-primary/8 mt-0.5">

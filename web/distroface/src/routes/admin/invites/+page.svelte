@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -125,7 +126,7 @@
 	}
 
 	onMount(() => {
-		if (!authStore.hasPermission('settings', 'read')) { goto('/admin'); return; }
+		if (!authStore.hasPermission('settings', 'read')) { goto(resolve('/admin')); return; }
 		loadInvites(); loadRoles();
 	});
 </script>
@@ -146,7 +147,7 @@
 
 	{#if loading}
 		<div class="space-y-2">
-			{#each Array(3) as _}
+			{#each { length: 3 }, i (i)}
 				<Skeleton class="h-12 w-full rounded-lg" />
 			{/each}
 		</div>
@@ -182,7 +183,7 @@
 					</TableRow>
 				</TableHeader>
 				<TableBody>
-					{#each invites as invite}
+					{#each invites as invite (invite.id)}
 						<TableRow>
 							<TableCell class="font-medium py-3 px-3">{invite.description}</TableCell>
 							<TableCell class="py-3 px-3">
@@ -193,7 +194,7 @@
 							</TableCell>
 							<TableCell class="py-3 px-3">
 								<div class="flex gap-1 flex-wrap">
-									{#each invite.roles as role}
+									{#each invite.roles as role (role)}
 										<Badge variant="outline" class="text-xs">{role}</Badge>
 									{/each}
 								</div>

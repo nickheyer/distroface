@@ -38,7 +38,7 @@
 	<p class="text-xs text-muted-foreground py-2">No options available</p>
 {:else}
 	<div class={cn('grid gap-2', gridClass, className)}>
-		{#each items as item}
+		{#each items as item (item.value)}
 			{@const isChecked = selected.includes(item.value)}
 			<button
 				type="button"

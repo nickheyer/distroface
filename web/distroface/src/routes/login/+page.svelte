@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import { Card, CardContent } from '$lib/components/ui/card';
@@ -84,7 +85,7 @@
 				await authStore.validateSession();
 				if (authStore.isAuthenticated) {
 					toast.success('Signed in successfully');
-					goto('/');
+					goto(resolve('/'));
 					return;
 				}
 			} catch {
@@ -166,8 +167,7 @@
 		try {
 			await authStore.login(identifier, password);
 			toast.success('Signed in successfully');
-			// eslint-disable-next-line svelte/no-navigation-without-resolve
-			goto('/');
+			goto(resolve('/'));
 		} catch {
 			// Error interceptor handles the toast
 		} finally {
@@ -194,7 +194,7 @@
 					? 'Admin account created'
 					: 'Account created successfully'
 			);
-			goto('/');
+			goto(resolve('/'));
 		} catch {
 			// Error interceptor handles the toast
 		} finally {
@@ -370,7 +370,7 @@
 					<p class="text-center text-sm">
 						<button
 							class="text-muted-foreground hover:text-foreground transition-colors"
-							onclick={() => goto('/')}
+							onclick={() => goto(resolve('/'))}
 						>
 							Continue as guest
 						</button>

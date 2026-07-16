@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Badge } from '$lib/components/ui/badge';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import StatCard from '$lib/components/stat-card.svelte';
 	import { Users, Package, Building2, Key, Shield, Globe, HardDrive, Archive } from '@lucide/svelte';
@@ -88,7 +88,7 @@
 {#if loading}
 	<div class="space-y-6">
 		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-			{#each Array(4) as _}
+			{#each { length: 4 }, i (i)}
 				<Skeleton class="h-[72px] rounded-xl" />
 			{/each}
 		</div>
@@ -117,9 +117,9 @@
 					</div>
 				{:else}
 					<div class="divide-y divide-border/40">
-						{#each recentUsers as user}
+						{#each recentUsers as user (user.id)}
 							<a
-								href="/{user.username}"
+								href={resolve(`/${user.username}`)}
 								class="flex items-center gap-3 px-4 py-3 hover:bg-muted/20 transition-colors"
 							>
 								<Avatar class="h-8 w-8">
@@ -151,7 +151,7 @@
 							<h3 class="text-sm font-semibold">Authentication</h3>
 						</div>
 						<div class="divide-y divide-border/40">
-							{#each authStatusItems as item}
+							{#each authStatusItems as item (item.label)}
 								<div class="flex items-center gap-3 px-4 py-2.5">
 									<item.icon class="h-4 w-4 text-muted-foreground" />
 									<span class="text-sm flex-1">{item.label}</span>
@@ -175,9 +175,9 @@
 						</div>
 					{:else}
 						<div class="divide-y divide-border/40">
-							{#each recentRepos as repo}
+							{#each recentRepos as repo (repo.id)}
 								<a
-									href="/{repo.namespace}/{repo.name}"
+									href={resolve(`/${repo.namespace}/${repo.name}`)}
 									class="flex items-center gap-3 px-4 py-3 hover:bg-muted/20 transition-colors"
 								>
 									<Package class="h-4 w-4 text-muted-foreground shrink-0" />
@@ -211,7 +211,7 @@
 							<div class="px-4 py-6 text-center text-sm text-muted-foreground">No image data</div>
 						{:else}
 							<div class="divide-y divide-border/40">
-								{#each storageUsage.registryNamespaces as ns}
+								{#each storageUsage.registryNamespaces as ns (ns.name)}
 									<div class="flex items-center gap-3 px-4 py-2.5">
 										<span class="text-sm truncate flex-1">{ns.name}</span>
 										<span class="text-xs text-muted-foreground shrink-0">
@@ -233,7 +233,7 @@
 							<div class="px-4 py-6 text-center text-sm text-muted-foreground">No artifact data</div>
 						{:else}
 							<div class="divide-y divide-border/40">
-								{#each storageUsage.artifactRepos as repo}
+								{#each storageUsage.artifactRepos as repo (repo.name)}
 									<div class="flex items-center gap-3 px-4 py-2.5">
 										<span class="text-sm truncate flex-1">{repo.name}</span>
 										<span class="text-xs text-muted-foreground shrink-0">

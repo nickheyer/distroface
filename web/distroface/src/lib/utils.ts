@@ -25,7 +25,7 @@ export function formatBytes(bytes: number, decimals = 2): string {
 	return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
 }
 
-export function getStringForEnum(map: any, val: unknown) {
+export function getStringForEnum(map: Record<string, string | number>, val: unknown) {
 	return Object.keys(map).find((key) => map[key] === val);
 }
 
@@ -34,7 +34,7 @@ export function pageToToken(page: number, pageSize: number): string {
 	return btoa(String((page - 1) * pageSize));
 }
 
-export function enumToString(map: any, val: unknown): string {
+export function enumToString(map: Record<string, string | number>, val: unknown): string {
 	const enumKey = getStringForEnum(map, val);
 	if (!enumKey) return '';
 	const parts = enumKey.split('_');

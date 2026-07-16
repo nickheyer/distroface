@@ -99,7 +99,7 @@
 						<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Annotations</span>
 					</div>
 					<div class="divide-y divide-border/20 overflow-x-auto">
-						{#each Object.entries(descriptor.annotations) as [key, value]}
+						{#each Object.entries(descriptor.annotations) as [key, value] (key)}
 							<div class="px-4 py-2 flex gap-3 text-sm">
 								<code class="font-mono text-muted-foreground/60 shrink-0">{key}</code>
 								<code class="font-mono whitespace-nowrap">{value}</code>
@@ -129,7 +129,7 @@
 					<Badge variant="secondary" class="text-xs">{cfg.history.length}</Badge>
 				</div>
 				<div class="divide-y divide-border/20">
-					{#each cfg.history as entry, i}
+					{#each cfg.history as entry, i (i)}
 						<div class="px-6 py-2.5 flex items-start gap-3 {entry.emptyLayer ? 'opacity-50' : ''}">
 							<span class="text-sm tabular-nums text-muted-foreground/60 w-6 shrink-0 text-right pt-0.5">{i}</span>
 							<code class="text-sm font-mono flex-1 min-w-0 break-all leading-relaxed">{entry.createdBy}</code>
@@ -169,7 +169,7 @@
 						<div class="detail-row items-start">
 							<span class="detail-label pt-0.5">Env</span>
 							<div class="detail-value space-y-0.5">
-								{#each cfg.env as e}
+								{#each cfg.env as e (e)}
 									<code class="font-mono text-sm block truncate">{e}</code>
 								{/each}
 							</div>
@@ -194,7 +194,7 @@
 							<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Labels</span>
 						</div>
 						<div class="divide-y divide-border/20">
-							{#each Object.entries(cfg.labels) as [key, value]}
+							{#each Object.entries(cfg.labels) as [key, value] (key)}
 								<div class="px-4 py-2 flex gap-3 text-sm">
 									<code class="font-mono text-muted-foreground/60 truncate shrink-0 max-w-[40%]">{key}</code>
 									<code class="font-mono truncate flex-1">{value}</code>
@@ -214,7 +214,7 @@
 					<Badge variant="secondary" class="text-xs">{descriptor.children.length}</Badge>
 				</div>
 				<div>
-					{#each descriptor.children as child}
+					{#each descriptor.children as child (child.digest)}
 						{@const ck = descriptorKind(child.mediaType)}
 						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
 						<div

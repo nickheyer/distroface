@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { UserRound, Calendar, Building2, Settings } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
@@ -117,7 +118,7 @@
 			<div class="space-y-1 flex-1 min-w-0">
 				<div class="flex items-center gap-2.5">
 					<h1 class="text-2xl font-bold tracking-tight">{user.username}</h1>
-					{#each user.roles as role}
+					{#each user.roles as role (role)}
 						<Badge variant="outline" class="text-xs">{role}</Badge>
 					{/each}
 				</div>
@@ -135,12 +136,12 @@
 			</div>
 			{#if isOwnProfile}
 				<div class="flex gap-2 shrink-0">
-					<a href="/orgs">
+					<a href={resolve('/orgs')}>
 						<Button variant="outline" size="sm">
 							<Building2 class="h-4 w-4 mr-1.5" />Organizations
 						</Button>
 					</a>
-					<a href="/settings/profile">
+					<a href={resolve('/settings/profile')}>
 						<Button variant="outline" size="sm">
 							<Settings class="h-4 w-4 mr-1.5" />Edit Profile
 						</Button>

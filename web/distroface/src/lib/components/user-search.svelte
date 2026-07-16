@@ -60,7 +60,7 @@
 	/>
 	{#if showDropdown}
 		<div class="absolute z-50 top-full left-0 right-0 mt-1 bg-popover border border-border rounded-lg shadow-md max-h-60 overflow-y-auto">
-			{#each results as user}
+			{#each results as user (user.username)}
 				<button
 					type="button"
 					class="w-full flex items-center gap-3 px-3 py-2 hover:bg-accent text-left transition-colors"

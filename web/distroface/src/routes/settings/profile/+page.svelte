@@ -95,7 +95,7 @@
 							? 'Local account'
 							: authStore.user?.authProvider}
 					</Badge>
-					{#each authStore.user?.roles ?? [] as role}
+					{#each authStore.user?.roles ?? [] as role (role)}
 						<Badge
 							variant="secondary"
 							class="text-xs"

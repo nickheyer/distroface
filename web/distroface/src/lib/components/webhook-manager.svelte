@@ -210,7 +210,7 @@
 
 	{#if loading}
 		<div class="space-y-2">
-			{#each Array(2) as _}
+			{#each { length: 2 }, i (i)}
 				<Skeleton class="h-14 w-full rounded-xl" />
 			{/each}
 		</div>
@@ -235,7 +235,7 @@
 					</TableRow>
 				</TableHeader>
 				<TableBody>
-					{#each webhooks as wh}
+					{#each webhooks as wh (wh.id)}
 						<TableRow class="cursor-pointer group/row" onclick={() => toggleExpand(wh.id)}>
 							<TableCell class="py-3 px-3">
 								<ChevronDown class="h-3.5 w-3.5 text-muted-foreground/50 transition-transform {expandedId === wh.id ? 'rotate-180' : ''}" />
@@ -245,7 +245,7 @@
 							</TableCell>
 							<TableCell class="py-3 px-3">
 								<div class="flex flex-wrap gap-1">
-									{#each wh.events as ev}
+									{#each wh.events as ev (ev)}
 										<Badge variant="outline" class="text-[10px] py-0 h-4.5">{webhookEventLabels[ev] ?? 'unknown'}</Badge>
 									{/each}
 								</div>
@@ -283,7 +283,7 @@
 											<p class="text-xs text-muted-foreground/60 py-2">No deliveries yet</p>
 										{:else}
 											<div class="space-y-1.5">
-												{#each deliveries as d}
+												{#each deliveries as d (d.id)}
 													<div class="flex items-center gap-3 text-xs rounded-lg bg-background border border-border/40 px-3 py-2">
 														{#if d.success}
 															<CircleCheck class="h-3.5 w-3.5 text-green-500 shrink-0" />

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -131,7 +132,7 @@
 	}
 
 	onMount(() => {
-		if (!authStore.hasPermission('users', 'read')) { goto('/admin'); return; }
+		if (!authStore.hasPermission('users', 'read')) { goto(resolve('/admin')); return; }
 		loadUsers(); loadRoles();
 	});
 </script>
@@ -152,7 +153,7 @@
 
 	{#if loading}
 		<div class="space-y-2">
-			{#each Array(4) as _}
+			{#each { length: 4 }, i (i)}
 				<Skeleton class="h-12 w-full rounded-lg" />
 			{/each}
 		</div>
@@ -173,7 +174,7 @@
 					</TableRow>
 				</TableHeader>
 				<TableBody>
-					{#each users as user}
+					{#each users as user (user.id)}
 						<TableRow>
 							<TableCell class="py-3 px-3">
 								<div class="flex items-center gap-2.5">
@@ -182,7 +183,7 @@
 											{getInitials(user)}
 										</AvatarFallback>
 									</Avatar>
-									<a href="/{user.username}" class="font-medium text-sm hover:text-primary transition-colors">
+									<a href={resolve(`/${user.username}`)} class="font-medium text-sm hover:text-primary transition-colors">
 										{user.username}
 									</a>
 								</div>
@@ -197,7 +198,7 @@
 							</TableCell>
 							<TableCell class="py-3 px-3">
 								<div class="flex gap-1 flex-wrap">
-									{#each user.roles as role}
+									{#each user.roles as role (role)}
 										<Badge variant="outline" class="text-xs">{role}</Badge>
 									{/each}
 								</div>

@@ -61,7 +61,7 @@
 
 	{#if loading}
 		<div class="space-y-2">
-			{#each Array(4) as _}
+			{#each { length: 4 }, i (i)}
 				<div class="rounded-xl border border-border/40 p-4">
 					<div class="flex items-start gap-3.5">
 						<Skeleton class="h-10 w-10 rounded-lg shrink-0" />
@@ -86,7 +86,7 @@
 		{/if}
 
 		<div class="space-y-2">
-			{#each repos as repo}
+			{#each repos as repo (repo.id)}
 				<RepoCard {repo} />
 			{/each}
 		</div>

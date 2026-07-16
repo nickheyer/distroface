@@ -3,6 +3,8 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import type { Pathname } from '$app/types';
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Toaster } from '$lib/components/ui/sonner';
@@ -67,7 +69,7 @@
 		initialized = true;
 
 		if (!isLoginPage && authStore.firstUserSetup) {
-			goto('/login');
+			goto(resolve('/login'));
 			return;
 		}
 
@@ -77,23 +79,25 @@
 			!authStore.anonymousAccessEnabled &&
 			authStore.authStatusLoaded
 		) {
-			goto('/login');
+			goto(resolve('/login'));
 		}
 	});
 
 	async function handleLogout() {
 		await authStore.logout();
-		goto('/login');
+		goto(resolve('/login'));
 	}
 
-	const navLinks = $derived([
+	type NavLink = { href: Pathname; label: string; icon: typeof Package };
+
+	const navLinks: NavLink[] = $derived([
 		{ href: '/', label: 'Explore', icon: Package },
 		{ href: '/artifacts', label: 'Artifacts', icon: Archive },
 		...(authStore.isAuthenticated
-			? [{ href: '/orgs', label: 'Organizations', icon: Building2 }]
+			? [{ href: '/orgs', label: 'Organizations', icon: Building2 } satisfies NavLink]
 			: []),
 		...(authStore.canAccessAdmin
-			? [{ href: '/admin', label: 'Admin', icon: Shield }]
+			? [{ href: '/admin', label: 'Admin', icon: Shield } satisfies NavLink]
 			: [])
 	]);
 </script>
@@ -116,15 +120,15 @@
 	<div class="min-h-screen flex flex-col">
 		<header class="sticky top-0 z-50 border-b border-border/50 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80">
 			<div class="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4 sm:px-6">
-				<a href="/" class="flex items-center gap-2.5 shrink-0">
+				<a href={resolve('/')} class="flex items-center gap-2.5 shrink-0">
 					<img src="/adaptive-icon.png" alt="Distroface" class="h-7 w-7 rounded-lg" />
 					<span class="font-bold text-lg tracking-tight hidden sm:inline">Distroface</span>
 				</a>
 
 				<nav class="hidden md:flex items-center gap-0.5">
-					{#each navLinks as link}
+					{#each navLinks as link (link.href)}
 						<a
-							href={link.href}
+							href={resolve(link.href)}
 							class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors {isActive(link.href)
 								? 'bg-accent text-accent-foreground'
 								: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
@@ -174,11 +178,11 @@
 									</div>
 								</DropdownMenuLabel>
 								<DropdownMenuSeparator />
-								<DropdownMenuItem onclick={() => goto(`/${authStore.user?.username}`)}>
+								<DropdownMenuItem onclick={() => goto(resolve(`/${authStore.user?.username}`))}>
 									<User class="h-4 w-4 mr-2" />
 									Profile
 								</DropdownMenuItem>
-								<DropdownMenuItem onclick={() => goto('/settings')}>
+								<DropdownMenuItem onclick={() => goto(resolve('/settings'))}>
 									<Settings class="h-4 w-4 mr-2" />
 									Settings
 								</DropdownMenuItem>
@@ -190,7 +194,7 @@
 							</DropdownMenuContent>
 						</DropdownMenu>
 					{:else if !authStore.loading}
-						<Button variant="outline" size="sm" class="ml-1" onclick={() => goto('/login')}>
+						<Button variant="outline" size="sm" class="ml-1" onclick={() => goto(resolve('/login'))}>
 							<LogIn class="h-4 w-4 mr-1.5" />
 							Sign in
 						</Button>
@@ -224,9 +228,9 @@
 				<SheetDescription class="sr-only">Navigation menu</SheetDescription>
 			</SheetHeader>
 			<nav class="flex flex-col gap-1 mt-4">
-				{#each navLinks as link}
+				{#each navLinks as link (link.href)}
 					<a
-						href={link.href}
+						href={resolve(link.href)}
 						class="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors {isActive(link.href)
 							? 'bg-accent text-accent-foreground'
 							: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"

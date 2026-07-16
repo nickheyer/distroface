@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { onMount, onDestroy } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -126,7 +127,7 @@
 	}
 
 	onMount(() => {
-		if (!authStore.hasPermission('settings', 'read')) { goto('/admin'); return; }
+		if (!authStore.hasPermission('settings', 'read')) { goto(resolve('/admin')); return; }
 		loadConfig();
 		loadGCStatus();
 	});
@@ -191,7 +192,7 @@
 					<div class="rounded-xl border border-border/60 overflow-hidden">
 						<table class="w-full text-sm">
 							<tbody>
-								{#each oidcFields as field, i}
+								{#each oidcFields as field, i (field.label)}
 									<tr class={i < oidcFields.length - 1 || config.oidcScopes.length > 0 ? 'border-b border-border/40' : ''}>
 										<td class="th text-left w-36">{field.label}</td>
 										<td class="px-3 py-2.5">
@@ -204,7 +205,7 @@
 										<td class="th text-left w-36">Scopes</td>
 										<td class="px-3 py-2.5">
 											<div class="flex gap-1 flex-wrap">
-												{#each config.oidcScopes as scope}
+												{#each config.oidcScopes as scope (scope)}
 													<Badge variant="outline" class="text-xs">{scope}</Badge>
 												{/each}
 											</div>

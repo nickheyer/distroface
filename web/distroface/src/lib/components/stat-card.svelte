@@ -30,6 +30,7 @@
 {/snippet}
 
 {#if href}
+	<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 	<a {href} class="block group">
 		<div class="rounded-xl border border-border/60 bg-card p-4 transition-all hover:border-primary/20 hover:shadow-sm">
 			{@render inner()}

@@ -107,7 +107,7 @@
 		</div>
 		<CardContent class="p-0">
 			<div class="divide-y divide-border/40">
-				{#each connectedAccounts.filter((a) => a.show) as account}
+				{#each connectedAccounts.filter((a) => a.show) as account (account.label)}
 					<div class="flex items-center gap-3 px-6 py-4">
 						<account.icon class="h-4 w-4 text-muted-foreground shrink-0" />
 						<div class="flex-1 min-w-0">
