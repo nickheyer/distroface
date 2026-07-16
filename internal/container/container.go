@@ -12,6 +12,7 @@ import (
 	"github.com/distribution/distribution/v3/registry/handlers"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
+	"github.com/nickheyer/distroface/internal/bootstrap"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/gc"
 	"github.com/nickheyer/distroface/internal/ratelimit"
@@ -98,6 +99,12 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("initializing auth manager: %w", err)
 	}
 	log.Info("Auth manager initialized")
+
+	if err := bootstrap.Run(context.Background(), cfg.Bootstrap, store, authManager, log); err != nil {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("bootstrap seeding: %w", err)
+	}
 
 	// Initialize Token Service (ECDSA keys for Docker registry JWTs - separate from HS256 sessions)
 	tokenExpiry := time.Duration(cfg.Auth.TokenExpiry) * time.Second

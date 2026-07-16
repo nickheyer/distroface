@@ -45,6 +45,24 @@ auth:
   #   group_org_mapping:         # Idp group -> org membership
   #     platform-team: platform
 
+# Startup seeding, entries are created once and never updated
+# bootstrap:
+#   users:
+#     - username: "admin"
+#       password: "changeme"        # Required
+#       email: "admin@example.com"  # Optional
+#       roles: ["admin"]            # System roles, default roles when omitted
+#     - username: "dev"
+#       password: "changeme"
+#   orgs:
+#     - name: "platform"
+#       display_name: "Platform Team"  # Defaults to name
+#       description: ""
+#       members:
+#         - username: "admin"
+#           role: "owner"           # owner, admin, or member (default)
+#         - username: "dev"
+
 # Artifact repositories
 artifacts:
   # storage_path: "./data/artifacts"  # Derived from storage.data_dir when unset

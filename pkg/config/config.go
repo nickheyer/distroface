@@ -19,6 +19,34 @@ type Config struct {
 	RateLimit RateLimitConfig `mapstructure:"rate_limit" json:"rate_limit"`
 	Artifacts ArtifactsConfig `mapstructure:"artifacts" json:"artifacts"`
 	GC        GCConfig        `mapstructure:"gc" json:"gc"`
+	Bootstrap BootstrapConfig `mapstructure:"bootstrap" json:"bootstrap"`
+}
+
+// Seeds entities at startup skipping ones that exist
+type BootstrapConfig struct {
+	Users []BootstrapUser `mapstructure:"users" json:"users"`
+	Orgs  []BootstrapOrg  `mapstructure:"orgs" json:"orgs"`
+}
+
+type BootstrapUser struct {
+	Username string `mapstructure:"username" json:"username"`
+	Password string `mapstructure:"password" json:"-"`
+	Email    string `mapstructure:"email" json:"email"`
+	// System roles granted default roles when empty
+	Roles []string `mapstructure:"roles" json:"roles"`
+}
+
+type BootstrapOrg struct {
+	Name        string               `mapstructure:"name" json:"name"`
+	DisplayName string               `mapstructure:"display_name" json:"display_name"`
+	Description string               `mapstructure:"description" json:"description"`
+	Members     []BootstrapOrgMember `mapstructure:"members" json:"members"`
+}
+
+type BootstrapOrgMember struct {
+	Username string `mapstructure:"username" json:"username"`
+	// Owner admin or member defaults to member
+	Role string `mapstructure:"role" json:"role"`
 }
 
 type GCConfig struct {
