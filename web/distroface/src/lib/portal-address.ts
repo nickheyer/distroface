@@ -1,27 +1,25 @@
-export type ParsedAddress = { hostname: string; port: number; error: string };
+// Lowercase host, no port
+export const hostnamePattern = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 
-const hostnamePattern = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
-
-export function parseAddress(raw: string): ParsedAddress {
-	const text = raw.trim().toLowerCase();
-	if (text === '') return { hostname: '', port: 0, error: 'Enter a hostname or port' };
-
-	const idx = text.lastIndexOf(':');
-	const hostname = idx === -1 ? text : text.slice(0, idx);
-	let port = 0;
-	if (idx !== -1) {
-		const portPart = text.slice(idx + 1);
-		if (!/^\d+$/.test(portPart)) return { hostname, port: 0, error: 'Invalid port' };
-		port = Number(portPart);
-		if (port < 1 || port > 65535) return { hostname, port: 0, error: 'Port must be 1-65535' };
-	}
-	if (hostname !== '' && !hostnamePattern.test(hostname)) {
-		return { hostname, port, error: 'Invalid hostname' };
-	}
-	return { hostname, port, error: '' };
+// Address clients actually dial, inheriting the app's host and port when unset
+export function effectiveAddress(hostname: string, port: number): string {
+	const host = hostname || window.location.hostname;
+	const portPart = port > 0 ? `:${port}` : window.location.port ? `:${window.location.port}` : '';
+	return host + portPart;
 }
 
-export function formatAddress(hostname: string, port: number): string {
-	if (hostname === '') return `:${port}`;
-	return port > 0 ? `${hostname}:${port}` : hostname;
+// Validation message for a hostname/port pair, empty when valid
+export function placementError(hostname: string, port: string): string {
+	const h = hostname.trim().toLowerCase();
+	const p = port.trim();
+	if (h === '' && p === '') return 'Set a hostname, a port, or both';
+	if (p !== '') {
+		if (!/^\d+$/.test(p)) return 'Port must be a number';
+		const n = Number(p);
+		if (n < 1 || n > 65535) return 'Port must be 1-65535';
+	}
+	if (h !== '' && !hostnamePattern.test(h)) {
+		return 'Hostname may contain lowercase letters, digits, dots, and hyphens';
+	}
+	return '';
 }

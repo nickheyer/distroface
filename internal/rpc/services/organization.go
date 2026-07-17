@@ -86,7 +86,7 @@ func (s *OrganizationService) CreateOrganization(ctx context.Context, req *conne
 	}
 
 	return connect.NewResponse(&v1.CreateOrganizationResponse{
-		Organization: orgToProto(org, 1),
+		Organization: orgToProto(org, 1, storage.OrgRoleOwner),
 	}), nil
 }
 
@@ -106,7 +106,7 @@ func (s *OrganizationService) GetOrganization(ctx context.Context, req *connect.
 	memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
 
 	return connect.NewResponse(&v1.GetOrganizationResponse{
-		Organization: orgToProto(org, int32(memberCount)),
+		Organization: orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID)),
 	}), nil
 }
 
@@ -120,7 +120,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connec
 		resp := &v1.ListOrganizationsResponse{}
 		if org != nil {
 			memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
-			resp.Organizations = []*v1.Organization{orgToProto(org, int32(memberCount))}
+			resp.Organizations = []*v1.Organization{orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID))}
 			resp.TotalCount = 1
 		}
 		return connect.NewResponse(resp), nil
@@ -131,12 +131,14 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connec
 	user := auth.UserFromContext(ctx)
 	var userID string
 	var canManage bool
+	roles := map[string]string{}
 	if user != nil {
 		userID = user.ID
 		canManage, _ = s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, "*")
+		roles, _ = s.store.ListUserOrgRoles(ctx, user.ID)
 	}
 
-	orgs, total, err := s.store.ListOrganizations(ctx, userID, canManage, limit, offset)
+	orgs, total, err := s.store.ListOrganizations(ctx, userID, canManage, req.Msg.Search, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -144,7 +146,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connec
 	protoOrgs := make([]*v1.Organization, len(orgs))
 	for i, o := range orgs {
 		memberCount, _ := s.store.GetOrgMemberCount(ctx, o.ID)
-		protoOrgs[i] = orgToProto(o, int32(memberCount))
+		protoOrgs[i] = orgToProto(o, int32(memberCount), roles[o.ID])
 	}
 
 	return connect.NewResponse(&v1.ListOrganizationsResponse{
@@ -195,7 +197,7 @@ func (s *OrganizationService) UpdateOrganization(ctx context.Context, req *conne
 	memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
 
 	return connect.NewResponse(&v1.UpdateOrganizationResponse{
-		Organization: orgToProto(org, int32(memberCount)),
+		Organization: orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID)),
 	}), nil
 }
 
@@ -254,7 +256,7 @@ func (s *OrganizationService) ListOrgMembers(ctx context.Context, req *connect.R
 
 	limit, offset := parsePagination(req.Msg.PageSize, req.Msg.PageToken)
 
-	members, total, err := s.store.ListOrgMembers(ctx, org.ID, limit, offset)
+	members, total, err := s.store.ListOrgMembers(ctx, org.ID, req.Msg.Search, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -609,8 +611,8 @@ func (s *OrganizationService) orgWithAccess(ctx context.Context, user *auth.Auth
 	return org, nil
 }
 
-func orgToProto(o *storage.Organization, memberCount int32) *v1.Organization {
-	return &v1.Organization{
+func orgToProto(o *storage.Organization, memberCount int32, currentRole string) *v1.Organization {
+	proto := &v1.Organization{
 		Id:          o.ID,
 		Name:        o.Name,
 		DisplayName: o.DisplayName,
@@ -619,6 +621,23 @@ func orgToProto(o *storage.Organization, memberCount int32) *v1.Organization {
 		CreatedAt:   timestamppb.New(o.CreatedAt),
 		UpdatedAt:   timestamppb.New(o.UpdatedAt),
 	}
+	if currentRole != "" {
+		proto.CurrentUserRole = stringToOrgRole(currentRole)
+	}
+	return proto
+}
+
+// Caller's membership role in an org, empty when anonymous or not a member
+func (s *OrganizationService) currentRole(ctx context.Context, orgID string) string {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return ""
+	}
+	member, _ := s.store.GetOrgMember(ctx, orgID, user.ID)
+	if member == nil {
+		return ""
+	}
+	return member.Role
 }
 
 func orgMemberToProto(m *storage.OrgMember) *v1.OrgMember {

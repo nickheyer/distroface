@@ -3,6 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -12,22 +13,23 @@
 	import PageHeader from '$lib/components/page-header.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
-	import { Building2, Plus, Users, ShieldCheck } from '@lucide/svelte';
+	import { Building2, Plus, Users, ShieldCheck, Search } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime } from '$lib/utils';
+	import { relativeTime, pageToToken, orgRoleLabel } from '$lib/utils';
+	import { OrgRole } from '$lib/proto/distroface/v1/types_pb';
 	import type { Organization } from '$lib/proto/distroface/v1/types_pb';
 
 	let orgs = $state<Organization[]>([]);
 	let loading = $state(true);
 	let totalCount = $state(0);
 	let page = $state(1);
-	let pageSize = 20;
-	let pageTokens = $state<Record<number, string>>({});
-	let memberOrgIds = $state<Set<string>>(new Set());
+	const pageSize = 20;
+	let searchQuery = $state('');
+	let searchTimeout: ReturnType<typeof setTimeout> | undefined;
 
 	let createPanelOpen = $state(false);
 	let orgName = $state('');
@@ -39,39 +41,25 @@
 		loading = true;
 		try {
 			const resp = await rpcClient.organization.listOrganizations({
+				search: searchQuery.trim(),
 				pageSize,
-				pageToken: pageTokens[page] ?? ''
+				pageToken: pageToToken(page, pageSize)
 			});
 			orgs = resp.organizations;
 			totalCount = resp.totalCount;
-			if (resp.nextPageToken) {
-				pageTokens[page + 1] = resp.nextPageToken;
-			}
-
-			// Check membership for each org in parallel
-			if (authStore.user) {
-				const username = authStore.user.username;
-				const checks = await Promise.all(
-					resp.organizations.map(async (org) => {
-						try {
-							const membersResp = await rpcClient.organization.listOrgMembers({
-								orgName: org.name,
-								pageSize: 100
-							});
-							const isMember = membersResp.members.some((m) => m.username === username);
-							return { id: org.id, isMember };
-						} catch {
-							return { id: org.id, isMember: false };
-						}
-					})
-				);
-				memberOrgIds = new Set(checks.filter((c) => c.isMember).map((c) => c.id));
-			}
 		} catch {
 			// error interceptor
 		} finally {
 			loading = false;
 		}
+	}
+
+	function handleSearchInput() {
+		clearTimeout(searchTimeout);
+		searchTimeout = setTimeout(() => {
+			page = 1;
+			loadOrgs();
+		}, 300);
 	}
 
 	function resetForm() {
@@ -106,13 +94,23 @@
 <PageHeader title="Organizations" subtitle="Manage your team namespaces" icon={Building2}>
 	{#snippet actions()}
 		<PermissionGate resource="organizations" action="create">
-			<Button onclick={() => (createPanelOpen = true)}>
+			<Button size="sm" onclick={() => (createPanelOpen = true)}>
 				<Plus class="h-4 w-4 mr-1.5" />
 				New Organization
 			</Button>
 		</PermissionGate>
 	{/snippet}
 </PageHeader>
+
+<div class="relative max-w-md mb-4">
+	<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/50" />
+	<Input
+		placeholder="Search organizations..."
+		class="pl-9 h-9 bg-muted/30 border-border/50 focus-visible:bg-background"
+		bind:value={searchQuery}
+		oninput={handleSearchInput}
+	/>
+</div>
 
 {#if loading}
 	<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -123,8 +121,10 @@
 {:else if orgs.length === 0}
 	<EmptyState
 		icon={Building2}
-		message="No organizations yet"
-		description="Create an organization to collaborate with your team."
+		message={searchQuery ? 'No matching organizations' : 'No organizations yet'}
+		description={searchQuery
+			? 'Try a different search.'
+			: 'Create an organization to collaborate with your team.'}
 	>
 		{#snippet actions()}
 			<PermissionGate resource="organizations" action="create">
@@ -153,6 +153,14 @@
 									<p class="text-xs text-muted-foreground truncate">{org.name}</p>
 								{/if}
 							</div>
+							{#if org.currentUserRole !== OrgRole.UNSPECIFIED}
+								<Badge
+									variant={org.currentUserRole === OrgRole.OWNER ? 'default' : 'outline'}
+									class="text-xs shrink-0"
+								>
+									{orgRoleLabel(org.currentUserRole)}
+								</Badge>
+							{/if}
 						</div>
 					</CardHeader>
 					<CardContent>
@@ -167,7 +175,7 @@
 							{#if org.createdAt}
 								<span>Created {relativeTime(timestampDate(org.createdAt))}</span>
 							{/if}
-							{#if authStore.user && !memberOrgIds.has(org.id)}
+							{#if authStore.user && org.currentUserRole === OrgRole.UNSPECIFIED}
 								<span class="flex items-center gap-1 text-muted-foreground/60">
 									<ShieldCheck class="h-3 w-3" />Managed
 								</span>

@@ -593,7 +593,7 @@ func (s *Store) GetOrganizationByID(ctx context.Context, id string) (*Organizati
 // ListOrganizations returns organizations with visibility filtering.
 // If canManage is true, all organizations are returned.
 // Otherwise, only organizations the user is a member of are returned.
-func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, limit, offset int) ([]*Organization, int64, error) {
+func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, search string, limit, offset int) ([]*Organization, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&Organization{})
 
 	if !canManage && userID != "" {
@@ -601,6 +601,10 @@ func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage 
 	} else if !canManage {
 		// Anonymous or no user - return nothing
 		return nil, 0, nil
+	}
+
+	if search != "" {
+		tx = tx.Where("name LIKE ? OR display_name LIKE ?", "%"+search+"%", "%"+search+"%")
 	}
 
 	var total int64
@@ -664,17 +668,37 @@ func (s *Store) GetOrgMember(ctx context.Context, orgID, userID string) (*OrgMem
 	return &member, nil
 }
 
-func (s *Store) ListOrgMembers(ctx context.Context, orgID string, limit, offset int) ([]*OrgMember, int64, error) {
-	tx := s.db.WithContext(ctx).Model(&OrgMember{}).Where("org_id = ?", orgID)
+func (s *Store) ListOrgMembers(ctx context.Context, orgID, search string, limit, offset int) ([]*OrgMember, int64, error) {
+	base := func() *gorm.DB {
+		tx := s.db.WithContext(ctx).Model(&OrgMember{}).Where("org_members.org_id = ?", orgID)
+		if search != "" {
+			tx = tx.Joins("JOIN users ON users.id = org_members.user_id").
+				Where("users.username LIKE ?", "%"+search+"%")
+		}
+		return tx
+	}
 
 	var total int64
-	if err := tx.Count(&total).Error; err != nil {
+	if err := base().Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
 	var members []*OrgMember
-	err := s.db.WithContext(ctx).Preload("User").Where("org_id = ?", orgID).Limit(limit).Offset(offset).Find(&members).Error
+	err := base().Preload("User").Limit(limit).Offset(offset).Find(&members).Error
 	return members, total, err
+}
+
+// Caller's role per org id, single query
+func (s *Store) ListUserOrgRoles(ctx context.Context, userID string) (map[string]string, error) {
+	var members []OrgMember
+	if err := s.db.WithContext(ctx).Where("user_id = ?", userID).Find(&members).Error; err != nil {
+		return nil, err
+	}
+	roles := make(map[string]string, len(members))
+	for _, m := range members {
+		roles[m.OrgID] = m.Role
+	}
+	return roles, nil
 }
 
 func (s *Store) CountOrgMembersByRole(ctx context.Context, orgID, role string) (int64, error) {

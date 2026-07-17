@@ -79,53 +79,63 @@ func (s *Service) getOrgPortal(ctx context.Context, org *storage.Organization, i
 	return portal, nil
 }
 
-// Normalizes and validates hostname/port, rejects primary hostname and hosts claimed by another portal
-func (s *Service) validatePlacement(ctx context.Context, hostname string, port int, excludePortalID string) (string, error) {
+// The app's own port, 0 when unparsable
+func (s *Service) mainPort() int {
+	port, _ := strconv.Atoi(s.config.Server.Port)
+	return port
+}
+
+// Normalizes and validates hostname/port, rejects primary hostname and hosts
+// claimed by another portal, the main port is stored as 0 (serve on app port)
+func (s *Service) validatePlacement(ctx context.Context, hostname string, port int, excludePortalID string) (string, int, error) {
 	hostname = strings.ToLower(strings.TrimSpace(hostname))
 	if hostname == "" && port == 0 {
-		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname or port is required"))
+		return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname or port is required"))
 	}
 	if port < 0 || port > 65535 {
-		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid port"))
+		return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid port"))
 	}
-	if mainPort, _ := strconv.Atoi(s.config.Server.Port); port != 0 && port == mainPort {
-		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("port conflicts with the server's main port"))
+	if port != 0 && port == s.mainPort() {
+		if hostname == "" {
+			return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("a catch-all portal on the app's own port would shadow the primary UI"))
+		}
+		port = 0
 	}
 
 	if hostname != "" {
 		if !hostnameRegex.MatchString(hostname) {
-			return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid hostname"))
+			return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid hostname"))
 		}
 		primary := strings.ToLower(s.config.Server.Hostname)
 		if hostname == primary || hostname == strings.SplitN(primary, ":", 2)[0] {
-			return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname conflicts with the server's primary hostname"))
+			return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname conflicts with the server's primary hostname"))
 		}
 		existing, err := s.store.GetRegistryPortalByHostname(ctx, hostname)
 		if err != nil {
-			return "", connect.NewError(connect.CodeInternal, err)
+			return "", 0, connect.NewError(connect.CodeInternal, err)
 		}
 		if existing != nil && existing.ID != excludePortalID {
-			return "", connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("hostname already in use"))
+			return "", 0, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("hostname already in use"))
 		}
 	} else {
 		// Port catch-all, only one per port
 		portals, err := s.store.ListRegistryPortals(ctx)
 		if err != nil {
-			return "", connect.NewError(connect.CodeInternal, err)
+			return "", 0, connect.NewError(connect.CodeInternal, err)
 		}
 		for _, p := range portals {
 			if p.ID != excludePortalID && p.Port == port && p.Hostname == "" {
-				return "", connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("port %d already has a catch-all portal", port))
+				return "", 0, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("port %d already has a catch-all portal", port))
 			}
 		}
 	}
 
 	if port > 0 {
 		if err := s.proxies.ProbePort(port); err != nil {
-			return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot bind port %d: %v", port, err))
+			return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot bind port %d: %v", port, err))
 		}
 	}
-	return hostname, nil
+	return hostname, port, nil
 }
 
 // Validates rules compile, returns their JSON form
@@ -157,7 +167,7 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("name is required"))
 	}
 
-	hostname, err := s.validatePlacement(ctx, msg.Hostname, int(msg.Port), "")
+	hostname, port, err := s.validatePlacement(ctx, msg.Hostname, int(msg.Port), "")
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +180,7 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 		OrgID:          org.ID,
 		Name:           msg.Name,
 		Hostname:       hostname,
-		Port:           int(msg.Port),
+		Port:           port,
 		MapUnqualified: msg.MapUnqualified,
 		Rules:          rulesJSON,
 		AllowPush:      msg.AllowPush,
@@ -195,7 +205,7 @@ func (s *Service) ListPortals(ctx context.Context, req *connect.Request[v1.ListP
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	resp := &v1.ListPortalsResponse{}
+	resp := &v1.ListPortalsResponse{MainPort: int32(s.mainPort())}
 	for _, p := range portals {
 		resp.Portals = append(resp.Portals, portalToProto(p, org.Name))
 	}
@@ -227,7 +237,7 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 		if msg.Port != nil {
 			port = int(*msg.Port)
 		}
-		hostname, err := s.validatePlacement(ctx, hostname, port, portal.ID)
+		hostname, port, err := s.validatePlacement(ctx, hostname, port, portal.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -294,6 +304,7 @@ func (s *Service) ResolvePortal(ctx context.Context, _ *connect.Request[v1.Resol
 		AllowPush:      p.AllowPush,
 		RequireAuth:    p.RequireAuth,
 		MapUnqualified: p.MapUnqualified,
+		PrimaryHost:    s.config.Server.Hostname,
 	}), nil
 }
 

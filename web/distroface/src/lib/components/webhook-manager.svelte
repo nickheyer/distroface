@@ -252,7 +252,7 @@
 							</TableCell>
 							<TableCell class="py-3 px-3 text-center">
 								{#if wh.active}
-									<Badge variant="secondary" class="text-[10px] py-0 h-4.5 text-green-600 dark:text-green-400">Active</Badge>
+									<Badge variant="secondary" class="text-[10px] py-0 h-4.5 text-success">Active</Badge>
 								{:else}
 									<Badge variant="secondary" class="text-[10px] py-0 h-4.5 text-muted-foreground">Inactive</Badge>
 								{/if}
@@ -286,7 +286,7 @@
 												{#each deliveries as d (d.id)}
 													<div class="flex items-center gap-3 text-xs rounded-lg bg-background border border-border/40 px-3 py-2">
 														{#if d.success}
-															<CircleCheck class="h-3.5 w-3.5 text-green-500 shrink-0" />
+															<CircleCheck class="h-3.5 w-3.5 text-success shrink-0" />
 														{:else}
 															<CircleX class="h-3.5 w-3.5 text-destructive shrink-0" />
 														{/if}

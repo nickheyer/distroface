@@ -8,6 +8,7 @@ class PortalStore {
 	portalName = $state('');
 	allowPush = $state(true);
 	mapUnqualified = $state(false);
+	primaryHost = $state('');
 
 	async init() {
 		try {
@@ -18,12 +19,19 @@ class PortalStore {
 			this.portalName = resp.portalName;
 			this.allowPush = resp.allowPush;
 			this.mapUnqualified = resp.mapUnqualified;
+			this.primaryHost = resp.primaryHost;
 		} catch {
 			// Treated as the primary host on failure
 		}
 	}
 
 	displayName = $derived(this.orgDisplayName || this.orgName);
+
+	// Absolute URL of the primary UI, empty when unknown
+	get primaryOrigin(): string {
+		if (!this.primaryHost || typeof window === 'undefined') return '';
+		return `${window.location.protocol}//${this.primaryHost}`;
+	}
 
 	// Registry host for docker/api examples, portals answer on their own host
 	host(fallback: string): string {

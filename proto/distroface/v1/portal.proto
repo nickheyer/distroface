@@ -71,6 +71,7 @@ message ResolvePortalResponse {
   bool allow_push = 5;
   bool require_auth = 6;
   bool map_unqualified = 7;
+  string primary_host = 8;
 }
 
 // Identifies the organization to list portals for
@@ -81,6 +82,7 @@ message ListPortalsRequest {
 // The organization's portals
 message ListPortalsResponse {
   repeated RegistryPortal portals = 1;
+  int32 main_port = 2;
 }
 
 // Updates portal fields, unset fields are unchanged

@@ -19,7 +19,7 @@
 	{#if icon}
 		{@const Icon = icon}
 		<div
-			class="h-12 w-12 rounded-xl bg-primary/10 flex items-center justify-center"
+			class="h-12 w-12 rounded-xl bg-linear-to-br from-primary/15 to-primary/5 border border-primary/10 flex items-center justify-center shrink-0"
 		>
 			<Icon class="h-6 w-6 text-primary" />
 		</div>

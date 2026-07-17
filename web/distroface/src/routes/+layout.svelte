@@ -35,7 +35,8 @@
 		User,
 		Menu,
 		Shield,
-		Archive
+		Archive,
+		ExternalLink
 	} from '@lucide/svelte';
 	import { toggleMode, mode } from 'mode-watcher';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -95,16 +96,8 @@
 	const navLinks: NavLink[] = $derived([
 		{ href: '/', label: 'Explore', icon: Package },
 		{ href: '/artifacts', label: 'Artifacts', icon: Archive },
-		...(authStore.isAuthenticated
-			? [
-					portalStore.isPortal
-						? ({
-								href: `/orgs/${portalStore.orgName}` as Pathname,
-								label: portalStore.displayName,
-								icon: Building2
-							} satisfies NavLink)
-						: ({ href: '/orgs', label: 'Organizations', icon: Building2 } satisfies NavLink)
-				]
+		...(authStore.isAuthenticated && !portalStore.isPortal
+			? [{ href: '/orgs', label: 'Organizations', icon: Building2 } satisfies NavLink]
 			: []),
 		...(authStore.canAccessAdmin && !portalStore.isPortal
 			? [{ href: '/admin', label: 'Admin', icon: Shield } satisfies NavLink]
@@ -112,6 +105,18 @@
 	]);
 
 	const brandName = $derived(portalStore.isPortal ? portalStore.displayName : 'Distroface');
+
+	// Org and instance management live on the primary UI only
+	$effect(() => {
+		const path = page.url.pathname;
+		if (
+			initialized &&
+			portalStore.isPortal &&
+			(path.startsWith('/orgs') || path.startsWith('/admin'))
+		) {
+			goto(resolve('/'));
+		}
+	});
 </script>
 
 <svelte:head>
@@ -158,6 +163,19 @@
 
 				<div class="flex items-center gap-1.5">
 					<span class="text-muted-foreground/60 text-[11px] hidden lg:inline mr-2">{__APP_VERSION__}</span>
+
+					{#if portalStore.isPortal && portalStore.primaryOrigin}
+						<!-- eslint-disable svelte/no-navigation-without-resolve -->
+						<a
+							href={portalStore.primaryOrigin}
+							class="flex items-center gap-1.5 h-8 px-2.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
+							title="Open the primary Distroface UI"
+						>
+							<ExternalLink class="h-3.5 w-3.5" />
+							<span class="hidden sm:inline">Exit portal</span>
+						</a>
+						<!-- eslint-enable svelte/no-navigation-without-resolve -->
+					{/if}
 
 					<Button variant="ghost" size="icon" class="h-8 w-8" onclick={toggleMode}>
 						{#if mode.current === 'light'}

@@ -8,7 +8,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
-	import { Package, Save } from '@lucide/svelte';
+	import { Package, Save, Undo2 } from '@lucide/svelte';
 
 	let { orgName }: { orgName: string } = $props();
 
@@ -25,8 +25,11 @@
 
 	let loading = $state(true);
 	let saving = $state(false);
+	let resetting = $state(false);
 	let defaults = $state<Record<string, string>>({});
 	let overriddenKeys = $state<Set<string>>(new Set());
+
+	const customTag = (key: string) => (overriddenKeys.has(key) ? 'Custom' : undefined);
 
 	let retentionEnabled = $state(false);
 	let maxVersions = $state(0);
@@ -89,6 +92,19 @@
 		}
 	}
 
+	async function resetAll() {
+		resetting = true;
+		try {
+			await rpcClient.organization.updateOrgSettings({ orgName, reset: Object.values(KEYS) });
+			toast.success('Reset to instance defaults');
+			await load();
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			resetting = false;
+		}
+	}
+
 	onMount(load);
 </script>
 
@@ -100,34 +116,48 @@
 		description="Retention and upload limits for this organization's artifact repositories. Values differing from the instance defaults are stored as overrides."
 		icon={Package}
 	>
-		<div class="space-y-3">
-			<FormField label="Private by default" help="New artifact repositories created under this org start private." horizontal>
-				<Switch bind:checked={privateByDefault} />
-			</FormField>
-			<FormField label="Max upload size (MB)" id="art-max-file" help="Largest single artifact allowed; 0 means unlimited.">
-				<Input id="art-max-file" type="number" bind:value={maxFileSizeMb} min={0} class="w-36" />
-			</FormField>
+		<div class="space-y-5">
+			<div class="space-y-3">
+				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Uploads</p>
+				<FormField label="Private by default" tag={customTag(KEYS.privateByDefault)} help="New artifact repositories created under this org start private." horizontal>
+					<Switch bind:checked={privateByDefault} />
+				</FormField>
+				<FormField label="Max upload size (MB)" id="art-max-file" tag={customTag(KEYS.maxFileSizeMb)} help="Largest single artifact allowed; 0 means unlimited.">
+					<Input id="art-max-file" type="number" bind:value={maxFileSizeMb} min={0} class="w-36" />
+				</FormField>
+			</div>
 
-			<div class="pt-2 border-t border-border/40"></div>
-
-			<FormField label="Enable retention" help="Automatically prune old artifacts on upload and on the scheduled reaper." horizontal>
-				<Switch bind:checked={retentionEnabled} />
-			</FormField>
-			<FormField label="Max versions per path" id="art-max-versions" help="Newest versions kept per artifact path; 0 means unlimited.">
-				<Input id="art-max-versions" type="number" bind:value={maxVersions} min={0} class="w-36" disabled={!retentionEnabled} />
-			</FormField>
-			<FormField label="Max age (days)" id="art-max-age" help="Prune artifacts older than this; 0 disables age pruning.">
-				<Input id="art-max-age" type="number" bind:value={maxAgeDays} min={0} class="w-36" disabled={!retentionEnabled} />
-			</FormField>
-			<FormField label="Max total size (MB)" id="art-max-total" help="Cap on summed artifact size per repo; 0 means unlimited.">
-				<Input id="art-max-total" type="number" bind:value={maxTotalSizeMb} min={0} class="w-36" disabled={!retentionEnabled} />
-			</FormField>
-			<FormField label="Keep latest" help="Never prune the newest artifact of a path, even over limits." horizontal>
-				<Switch bind:checked={excludeLatest} disabled={!retentionEnabled} />
-			</FormField>
+			<div class="space-y-3 pt-4 border-t border-border/40">
+				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Retention</p>
+				<FormField label="Enable retention" tag={customTag(KEYS.retentionEnabled)} help="Automatically prune old artifacts on upload and on the scheduled reaper." horizontal>
+					<Switch bind:checked={retentionEnabled} />
+				</FormField>
+				{#if retentionEnabled}
+					<div class="space-y-3 pl-3 border-l-2 border-border/40">
+						<FormField label="Max versions per path" id="art-max-versions" tag={customTag(KEYS.maxVersions)} help="Newest versions kept per artifact path; 0 means unlimited.">
+							<Input id="art-max-versions" type="number" bind:value={maxVersions} min={0} class="w-36" />
+						</FormField>
+						<FormField label="Max age (days)" id="art-max-age" tag={customTag(KEYS.maxAgeDays)} help="Prune artifacts older than this; 0 disables age pruning.">
+							<Input id="art-max-age" type="number" bind:value={maxAgeDays} min={0} class="w-36" />
+						</FormField>
+						<FormField label="Max total size (MB)" id="art-max-total" tag={customTag(KEYS.maxTotalSize)} help="Cap on summed artifact size per repo; 0 means unlimited.">
+							<Input id="art-max-total" type="number" bind:value={maxTotalSizeMb} min={0} class="w-36" />
+						</FormField>
+						<FormField label="Keep latest" tag={customTag(KEYS.excludeLatest)} help="Never prune the newest artifact of a path, even over limits." horizontal>
+							<Switch bind:checked={excludeLatest} />
+						</FormField>
+					</div>
+				{/if}
+			</div>
 		</div>
 		{#snippet footer()}
-			<Button onclick={save} disabled={saving} class="gap-2">
+			{#if overriddenKeys.size > 0}
+				<Button variant="ghost" onclick={resetAll} disabled={resetting || saving} class="gap-2 mr-auto text-muted-foreground">
+					<Undo2 class="h-4 w-4" />
+					{resetting ? 'Resetting...' : 'Reset to defaults'}
+				</Button>
+			{/if}
+			<Button onclick={save} disabled={saving || resetting} class="gap-2">
 				<Save class="h-4 w-4" />
 				{saving ? 'Saving...' : 'Save Changes'}
 			</Button>

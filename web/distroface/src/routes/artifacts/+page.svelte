@@ -20,6 +20,7 @@
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
+	import PageHeader from '$lib/components/page-header.svelte';
 	import { Archive, Plus, Search, Trash2, Lock, Globe } from '@lucide/svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -148,25 +149,22 @@
 	<title>Artifacts - Distroface</title>
 </svelte:head>
 
-<div class="space-y-6">
-	<div class="flex items-center gap-4">
-		<div class="h-12 w-12 rounded-xl bg-linear-to-br from-primary/15 to-primary/5 flex items-center justify-center shrink-0 border border-primary/10">
-			<Archive class="h-6 w-6 text-primary" />
-		</div>
-		<div>
-			<h1 class="text-2xl font-bold tracking-tight">Artifacts</h1>
-			<p class="text-[13px] text-muted-foreground mt-0.5">Generic artifact repositories for build outputs and packages</p>
-		</div>
-		<div class="ml-auto">
-			<PermissionGate resource="artifacts" action="create">
-				<Button size="sm" onclick={() => (createPanelOpen = true)}>
-					<Plus class="h-4 w-4 mr-1.5" />
-					New Repository
-				</Button>
-			</PermissionGate>
-		</div>
-	</div>
+<PageHeader
+	title="Artifacts"
+	subtitle="Generic artifact repositories for build outputs and packages"
+	icon={Archive}
+>
+	{#snippet actions()}
+		<PermissionGate resource="artifacts" action="create">
+			<Button size="sm" onclick={() => (createPanelOpen = true)}>
+				<Plus class="h-4 w-4 mr-1.5" />
+				New Repository
+			</Button>
+		</PermissionGate>
+	{/snippet}
+</PageHeader>
 
+<div class="space-y-6">
 	<form
 		class="relative max-w-sm"
 		onsubmit={(e) => { e.preventDefault(); handleSearch(); }}
@@ -221,7 +219,10 @@
 									<span class="font-medium">
 										{#if repo.namespace}<span class="text-muted-foreground font-normal">{repo.namespace}/</span>{/if}{repo.name}
 									</span>
-									<Badge variant="outline" class="text-xs gap-1">
+									<Badge
+										variant="outline"
+										class="text-xs gap-1 {repo.isPrivate ? 'border-amber-500/30 text-amber-600 dark:text-amber-400' : ''}"
+									>
 										{#if repo.isPrivate}
 											<Lock class="h-2.5 w-2.5" />Private
 										{:else}

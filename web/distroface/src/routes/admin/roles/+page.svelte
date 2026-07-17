@@ -635,10 +635,10 @@
 	{/if}
 
 	{#snippet footer()}
-		<Button variant="outline" onclick={() => (showPermissionsDialog = false)} class="h-11 px-6">
+		<Button variant="outline" onclick={() => (showPermissionsDialog = false)}>
 			Cancel
 		</Button>
-		<Button onclick={savePermissions} disabled={savingPermissions} class="h-11 px-8 gap-2">
+		<Button onclick={savePermissions} disabled={savingPermissions} class="gap-2">
 			{#if savingPermissions}
 				<Loader2 class="h-4 w-4 animate-spin" />
 				Saving...

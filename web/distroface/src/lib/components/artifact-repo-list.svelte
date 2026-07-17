@@ -16,7 +16,7 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
-	import { Archive, Plus, Trash2, Lock, Globe } from '@lucide/svelte';
+	import { Archive, Plus, Trash2, Lock, Globe, Search } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -31,6 +31,8 @@
 	let totalCount = $state(0);
 	let currentPage = $state(1);
 	const pageSize = 20;
+	let searchQuery = $state('');
+	let searchTimeout: ReturnType<typeof setTimeout> | undefined;
 
 	let createPanelOpen = $state(false);
 	let newName = $state('');
@@ -47,6 +49,7 @@
 		try {
 			const resp = await rpcClient.artifact.listArtifactRepositories({
 				namespace,
+				search: searchQuery.trim(),
 				pageSize,
 				pageToken: pageToToken(currentPage, pageSize)
 			});
@@ -58,6 +61,14 @@
 		} finally {
 			loading = false;
 		}
+	}
+
+	function handleSearchInput() {
+		clearTimeout(searchTimeout);
+		searchTimeout = setTimeout(() => {
+			currentPage = 1;
+			loadRepos();
+		}, 300);
 	}
 
 	async function createRepo() {
@@ -133,6 +144,16 @@
 		{/if}
 	</div>
 
+	<div class="relative max-w-md">
+		<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/50" />
+		<Input
+			placeholder="Search repositories..."
+			class="pl-9 h-9 bg-muted/30 border-border/50 focus-visible:bg-background"
+			bind:value={searchQuery}
+			oninput={handleSearchInput}
+		/>
+	</div>
+
 	{#if loading}
 		<div class="space-y-2">
 			{#each Array(3)}
@@ -142,8 +163,10 @@
 	{:else if repos.length === 0}
 		<EmptyState
 			icon={Archive}
-			message="No artifact repositories yet"
-			description="Repositories under {namespace} hold build artifacts, packages, and other files."
+			message={searchQuery ? 'No matching repositories' : 'No artifact repositories yet'}
+			description={searchQuery
+				? 'Try a different search.'
+				: `Repositories under ${namespace} hold build artifacts, packages, and other files.`}
 		>
 			{#snippet actions()}
 				{#if canCreate}
@@ -172,7 +195,10 @@
 							<TableCell class="py-3 px-3">
 								<div class="flex items-center gap-2">
 									<span class="font-medium">{repo.name}</span>
-									<Badge variant="outline" class="text-xs gap-1">
+									<Badge
+										variant="outline"
+										class="text-xs gap-1 {repo.isPrivate ? 'border-amber-500/30 text-amber-600 dark:text-amber-400' : ''}"
+									>
 										{#if repo.isPrivate}
 											<Lock class="h-2.5 w-2.5" />Private
 										{:else}

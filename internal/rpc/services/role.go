@@ -252,7 +252,7 @@ func (s *RoleService) GetPermissionMatrix(ctx context.Context, req *connect.Requ
 		}
 
 		for offset := 0; ; offset += batchSize {
-			orgs, total, err := s.store.ListOrganizations(ctx, "", true, batchSize, offset)
+			orgs, total, err := s.store.ListOrganizations(ctx, "", true, "", batchSize, offset)
 			if err != nil {
 				return nil, connect.NewError(connect.CodeInternal, err)
 			}

@@ -7,6 +7,7 @@
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import { pageToToken } from '$lib/utils';
 	import RepoList from '$lib/components/repo-list.svelte';
+	import PageHeader from '$lib/components/page-header.svelte';
 	import type { Repository } from '$lib/proto/distroface/v1/types_pb';
   import { resolve } from '$app/paths';
 
@@ -53,28 +54,21 @@
 	onMount(loadRepos);
 </script>
 
-<div class="space-y-6">
-	<div class="flex items-center gap-4">
-		<div class="h-12 w-12 rounded-xl bg-linear-to-br from-primary/15 to-primary/5 flex items-center justify-center shrink-0 border border-primary/10">
-			<Package class="h-6 w-6 text-primary" />
-		</div>
-		<div>
-			<h1 class="text-2xl font-bold tracking-tight">Explore</h1>
-			<p class="text-[13px] text-muted-foreground mt-0.5">
-				{#if authStore.isAuthenticated}
-					Welcome back, {authStore.user?.displayName || authStore.user?.username}
-				{:else}
-					Browse container images
-				{/if}
-			</p>
-		</div>
+<PageHeader
+	title="Explore"
+	subtitle={authStore.isAuthenticated
+		? `Welcome back, ${authStore.user?.displayName || authStore.user?.username}`
+		: 'Browse container images'}
+	icon={Package}
+>
+	{#snippet actions()}
 		{#if !repoLoading && repoTotalCount > 0}
-			<div class="ml-auto">
-				<span class="text-[12px] text-muted-foreground/60 tabular-nums">{repoTotalCount} repositor{repoTotalCount === 1 ? 'y' : 'ies'}</span>
-			</div>
+			<span class="text-[12px] text-muted-foreground/60 tabular-nums">{repoTotalCount} repositor{repoTotalCount === 1 ? 'y' : 'ies'}</span>
 		{/if}
-	</div>
+	{/snippet}
+</PageHeader>
 
+<div class="space-y-6">
 	<RepoList
 		{repos}
 		totalCount={repoTotalCount}

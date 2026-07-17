@@ -64,6 +64,7 @@ message Organization {
   int32 member_count = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
+  OrgRole current_user_role = 8;
 }
 
 // OrgMember represents a user's membership in an organization.

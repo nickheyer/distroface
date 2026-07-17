@@ -20,7 +20,7 @@
 
 <Button variant="ghost" size="icon" class="h-7 w-7 shrink-0" onclick={copy}>
 	{#if copied}
-		<Check class="h-3.5 w-3.5 text-green-500" />
+		<Check class="h-3.5 w-3.5 text-success" />
 	{:else}
 		<Copy class="h-3.5 w-3.5 text-muted-foreground" />
 	{/if}
