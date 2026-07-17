@@ -51,6 +51,9 @@ var AuthenticatedOnlyProcedures = map[string]bool{
 	distrofacev1connect.RepositoryServiceStarRepositoryProcedure:          true,
 	distrofacev1connect.RepositoryServiceUnstarRepositoryProcedure:        true,
 	distrofacev1connect.RepositoryServiceListStarredRepositoriesProcedure: true,
+
+	// Org slug resolution, object scoped read enforced in-service
+	distrofacev1connect.OrganizationServiceGetOrganizationProcedure: true,
 }
 
 // ProcedurePermissions maps each RPC procedure path to the resource and action
@@ -61,21 +64,25 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.RepositoryServiceUpdateRepositoryProcedure: {Resource: ResourceRepositories, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 
 	// ── UserService (admin) ───────────────────────────────────────────
-	distrofacev1connect.UserServiceListUsersProcedure:       {Resource: ResourceUsers, Action: ActionRead},
-	distrofacev1connect.UserServiceAdminUpdateUserProcedure: {Resource: ResourceUsers, Action: ActionUpdate},
-	distrofacev1connect.UserServiceAdminDeleteUserProcedure: {Resource: ResourceUsers, Action: ActionDelete},
+	distrofacev1connect.UserServiceListUsersProcedure:            {Resource: ResourceUsers, Action: ActionRead},
+	distrofacev1connect.UserServiceAdminUpdateUserProcedure:      {Resource: ResourceUsers, Action: ActionUpdate},
+	distrofacev1connect.UserServiceAdminDeleteUserProcedure:      {Resource: ResourceUsers, Action: ActionDelete},
+	distrofacev1connect.UserServiceAdminCreateUserProcedure:      {Resource: ResourceUsers, Action: ActionCreate},
+	distrofacev1connect.UserServiceAdminBulkUpdateUsersProcedure: {Resource: ResourceUsers, Action: ActionUpdate},
+	distrofacev1connect.UserServiceAdminBulkDeleteUsersProcedure: {Resource: ResourceUsers, Action: ActionDelete},
 
 	// ── RoleService ───────────────────────────────────────────────────
-	distrofacev1connect.RoleServiceListRolesProcedure:           {Resource: ResourceRoles, Action: ActionRead},
-	distrofacev1connect.RoleServiceGetRoleProcedure:             {Resource: ResourceRoles, Action: ActionRead},
-	distrofacev1connect.RoleServiceCreateRoleProcedure:          {Resource: ResourceRoles, Action: ActionCreate},
-	distrofacev1connect.RoleServiceUpdateRoleProcedure:          {Resource: ResourceRoles, Action: ActionUpdate},
-	distrofacev1connect.RoleServiceDeleteRoleProcedure:          {Resource: ResourceRoles, Action: ActionDelete},
-	distrofacev1connect.RoleServiceGetPermissionMatrixProcedure: {Resource: ResourceRoles, Action: ActionRead},
-	distrofacev1connect.RoleServiceUpdatePermissionsProcedure:   {Resource: ResourceRoles, Action: ActionUpdate},
-	distrofacev1connect.RoleServiceAssignRoleProcedure:          {Resource: ResourceRoles, Action: ActionCreate},
-	distrofacev1connect.RoleServiceUnassignRoleProcedure:        {Resource: ResourceRoles, Action: ActionDelete},
-	distrofacev1connect.RoleServiceGetUserRolesProcedure:        {Resource: ResourceRoles, Action: ActionRead},
+	distrofacev1connect.RoleServiceListRolesProcedure:            {Resource: ResourceRoles, Action: ActionRead},
+	distrofacev1connect.RoleServiceGetRoleProcedure:              {Resource: ResourceRoles, Action: ActionRead},
+	distrofacev1connect.RoleServiceCreateRoleProcedure:           {Resource: ResourceRoles, Action: ActionCreate},
+	distrofacev1connect.RoleServiceUpdateRoleProcedure:           {Resource: ResourceRoles, Action: ActionUpdate},
+	distrofacev1connect.RoleServiceDeleteRoleProcedure:           {Resource: ResourceRoles, Action: ActionDelete},
+	distrofacev1connect.RoleServiceGetPermissionMatrixProcedure:  {Resource: ResourceRoles, Action: ActionRead},
+	distrofacev1connect.RoleServiceListScopeableObjectsProcedure: {Resource: ResourceRoles, Action: ActionRead},
+	distrofacev1connect.RoleServiceUpdatePermissionsProcedure:    {Resource: ResourceRoles, Action: ActionUpdate},
+	distrofacev1connect.RoleServiceAssignRoleProcedure:           {Resource: ResourceRoles, Action: ActionCreate},
+	distrofacev1connect.RoleServiceUnassignRoleProcedure:         {Resource: ResourceRoles, Action: ActionDelete},
+	distrofacev1connect.RoleServiceGetUserRolesProcedure:         {Resource: ResourceRoles, Action: ActionRead},
 
 	// ── ConfigurationService (admin) ──────────────────────────────────
 	distrofacev1connect.ConfigurationServiceGetStorageUsageProcedure: {Resource: ResourceSettings, Action: ActionRead},
@@ -91,6 +98,7 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.AuthServiceListInvitesProcedure:        {Resource: ResourceSettings, Action: ActionRead},
 	distrofacev1connect.AuthServiceGetInviteProcedure:          {Resource: ResourceSettings, Action: ActionRead},
 	distrofacev1connect.AuthServiceDeleteInviteProcedure:       {Resource: ResourceSettings, Action: ActionDelete},
+	distrofacev1connect.AuthServiceBulkDeleteInvitesProcedure:  {Resource: ResourceSettings, Action: ActionDelete},
 
 	// ── TokenService ────────────────────────────────────────────────
 	distrofacev1connect.TokenServiceCreateAPITokenProcedure: {Resource: ResourceTokens, Action: ActionCreate},
@@ -99,31 +107,33 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 
 	// ── OrganizationService ───────────────────────────────────────────
 	distrofacev1connect.OrganizationServiceCreateOrganizationProcedure:   {Resource: ResourceOrganizations, Action: ActionCreate},
-	distrofacev1connect.OrganizationServiceGetOrganizationProcedure:      {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "name"},
 	distrofacev1connect.OrganizationServiceListOrganizationsProcedure:    {Resource: ResourceOrganizations, Action: ActionRead},
-	distrofacev1connect.OrganizationServiceUpdateOrganizationProcedure:   {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "name"},
-	distrofacev1connect.OrganizationServiceDeleteOrganizationProcedure:   {Resource: ResourceOrganizations, Action: ActionDelete, ObjectIDField: "name"},
-	distrofacev1connect.OrganizationServiceListOrgMembersProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
-	distrofacev1connect.OrganizationServiceAddOrgMemberProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.OrganizationServiceRemoveOrgMemberProcedure:      {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.OrganizationServiceUpdateOrgMemberRoleProcedure:  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.OrganizationServiceGetOrgSettingsProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
-	distrofacev1connect.OrganizationServiceUpdateOrgSettingsProcedure:    {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.OrganizationServiceTransferOrgOwnershipProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.OrganizationServiceUpdateOrganizationProcedure:   {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "id"},
+	distrofacev1connect.OrganizationServiceDeleteOrganizationProcedure:   {Resource: ResourceOrganizations, Action: ActionDelete, ObjectIDField: "id"},
+	distrofacev1connect.OrganizationServiceListOrgMembersProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.OrganizationServiceAddOrgMemberProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.OrganizationServiceRemoveOrgMemberProcedure:      {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.OrganizationServiceUpdateOrgMemberRoleProcedure:  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.OrganizationServiceGetOrgSettingsProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.OrganizationServiceUpdateOrgSettingsProcedure:    {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.OrganizationServiceTransferOrgOwnershipProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 
 	// ── PortalService (org-scoped; owner/admin checks in-service) ──────
-	distrofacev1connect.PortalServiceCreatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.PortalServiceListPortalsProcedure:  {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
-	distrofacev1connect.PortalServiceUpdatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.PortalServiceDeletePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.PortalServiceCreatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.PortalServiceGetPortalProcedure:    {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.PortalServiceListPortalsProcedure:  {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.PortalServiceUpdatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.PortalServiceDeletePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 
 	// ── CertificateService (system or org scope, checks in-service) ────
-	distrofacev1connect.CertificateServiceGetTLSStatusProcedure:             {Resource: ResourceSettings, Action: ActionRead},
-	distrofacev1connect.CertificateServiceListCertificateDomainsProcedure:   {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
-	distrofacev1connect.CertificateServiceAddCertificateDomainProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.CertificateServiceRemoveCertificateDomainProcedure:  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.CertificateServiceApproveCertificateDomainProcedure: {Resource: ResourceSettings, Action: ActionManage},
-	distrofacev1connect.CertificateServiceIssueCertificateProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.CertificateServiceGetTLSStatusProcedure:                 {Resource: ResourceSettings, Action: ActionRead},
+	distrofacev1connect.CertificateServiceListCertificateDomainsProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceListCertificateHostsProcedure:         {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceAddCertificateDomainProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceRemoveCertificateDomainProcedure:      {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceBulkRemoveCertificateDomainsProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceApproveCertificateDomainProcedure:     {Resource: ResourceSettings, Action: ActionManage},
+	distrofacev1connect.CertificateServiceIssueCertificateProcedure:             {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 
 	// ── AuditService (admin) ──────────────────────────────────────────
 	distrofacev1connect.AuditServiceListAuditEventsProcedure: {Resource: ResourceSettings, Action: ActionRead},

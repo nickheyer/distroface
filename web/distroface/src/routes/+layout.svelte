@@ -8,6 +8,7 @@
 	import { onMount } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Toaster } from '$lib/components/ui/sonner';
+	import LoadingBar from '$lib/components/loading-bar.svelte';
 	import {
 		DropdownMenu,
 		DropdownMenuContent,
@@ -49,6 +50,7 @@
 	let mobileMenuOpen = $state(false);
 
 	const isLoginPage = $derived(page.url.pathname === '/login');
+	const isChangePasswordPage = $derived(page.url.pathname === '/change-password');
 
 	function getUserInitials(user: typeof authStore.user): string {
 		if (!user) return '?';
@@ -119,6 +121,13 @@
 			goto(resolve('/'));
 		}
 	});
+
+	// Pending forced rotation traps the session on the change password page
+	$effect(() => {
+		if (initialized && authStore.user?.mustChangePassword && !isChangePasswordPage) {
+			goto(resolve('/change-password'));
+		}
+	});
 </script>
 
 <svelte:head>
@@ -126,9 +135,10 @@
 </svelte:head>
 
 <ModeWatcher />
+<LoadingBar />
 <Toaster position="bottom-center" expand={true} richColors />
 
-{#if isLoginPage}
+{#if isLoginPage || isChangePasswordPage}
 	{@render children?.()}
 {:else if !initialized}
 	<div class="flex h-screen flex-col items-center justify-center gap-3">

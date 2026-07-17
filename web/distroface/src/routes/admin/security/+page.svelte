@@ -2,11 +2,13 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import {
 		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 	} from '$lib/components/ui/table';
@@ -15,18 +17,34 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
+	import DataPagination from '$lib/components/data-pagination.svelte';
+	import BulkActionBar from '$lib/components/bulk-action-bar.svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import { Lock, ShieldCheck, BadgeCheck, Plus, RefreshCw, Trash2, Loader2 } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import { certHealth, certBadgeClass, certDate, isIssuableHostname } from '$lib/cert-utils';
 	import type { GetTLSStatusResponse, CertificateDomain } from '$lib/proto/distroface/v1/certificate_pb';
+	import type { BulkOperationError } from '$lib/proto/distroface/v1/types_pb';
 
 	let status = $state<GetTLSStatusResponse | null>(null);
 	let domains = $state<CertificateDomain[]>([]);
 	let loading = $state(true);
+	const pager = new Pager(20);
+	const filter = new QueryFilter([{ key: 'domain', label: 'Domain' }]);
+
+	const selected = new SvelteSet<string>();
+	const pageIds = $derived(domains.map((d) => d.id));
+	const allOnPageSelected = $derived(pageIds.length > 0 && pageIds.every((id) => selected.has(id)));
+	const someOnPageSelected = $derived(pageIds.some((id) => selected.has(id)));
+
+	let bulkRemoveDialogOpen = $state(false);
+	let bulkWorking = $state(false);
 
 	let addOpen = $state(false);
 	let addDomain = $state('');
@@ -54,10 +72,11 @@
 		try {
 			const [statusResp, domainsResp] = await Promise.all([
 				rpcClient.certificate.getTLSStatus({}),
-				rpcClient.certificate.listCertificateDomains({})
+				rpcClient.certificate.listCertificateDomains({ page: pager.request(filter.request()) })
 			]);
 			status = statusResp;
 			domains = domainsResp.domains;
+			pager.apply(domainsResp.page);
 		} catch {
 			// error interceptor
 		} finally {
@@ -67,11 +86,17 @@
 
 	async function refreshDomains() {
 		try {
-			const resp = await rpcClient.certificate.listCertificateDomains({});
+			const resp = await rpcClient.certificate.listCertificateDomains({ page: pager.request(filter.request()) });
 			domains = resp.domains;
+			pager.apply(resp.page);
 		} catch {
 			// error interceptor
 		}
+	}
+
+	function filterChanged() {
+		pager.reset();
+		refreshDomains();
 	}
 
 	function openAdd() {
@@ -88,6 +113,7 @@
 			await rpcClient.certificate.addCertificateDomain({ domain });
 			toast.success(`Domain ${domain} registered`);
 			addOpen = false;
+			pager.reset();
 			await refreshDomains();
 			if (addIssueNow) await issue(domain);
 		} catch {
@@ -140,11 +166,54 @@
 			await rpcClient.certificate.removeCertificateDomain({ id: removeTarget.id });
 			toast.success('Domain removed');
 			removeOpen = false;
+			pager.reset();
 			await refreshDomains();
 		} catch {
 			// error interceptor
 		} finally {
 			removing = false;
+		}
+	}
+
+	function toggleSelectPage() {
+		if (allOnPageSelected) {
+			for (const id of pageIds) selected.delete(id);
+		} else {
+			for (const id of pageIds) selected.add(id);
+		}
+	}
+
+	function toggleSelect(id: string) {
+		if (selected.has(id)) selected.delete(id);
+		else selected.add(id);
+	}
+
+	function reportBulkErrors(errors: BulkOperationError[]) {
+		if (errors.length === 0) return;
+		const lookup = new Map(domains.map((d) => [d.id, d.domain]));
+		const first = errors[0];
+		const who = lookup.get(first.id) ?? first.id;
+		toast.error(
+			errors.length === 1
+				? `${who}: ${first.error}`
+				: `${errors.length} failed (${who}: ${first.error}, ...)`
+		);
+	}
+
+	async function confirmBulkRemove() {
+		bulkWorking = true;
+		try {
+			const resp = await rpcClient.certificate.bulkRemoveCertificateDomains({ ids: [...selected] });
+			toast.success(`${resp.removedCount} domain${resp.removedCount !== 1 ? 's' : ''} removed`);
+			reportBulkErrors(resp.errors);
+			selected.clear();
+			bulkRemoveDialogOpen = false;
+			pager.reset();
+			await refreshDomains();
+		} catch {
+			// error interceptor
+		} finally {
+			bulkWorking = false;
 		}
 	}
 
@@ -266,15 +335,22 @@
 						organization portal domains.
 					</p>
 				</div>
-				<Button size="sm" class="shrink-0" onclick={openAdd}>
-					<Plus class="h-4 w-4 mr-1.5" />Add Domain
-				</Button>
+				<div class="flex items-center gap-2">
+					<div class="w-80">
+						<QueryFilterBar {filter} placeholder="Search domains..." onchange={filterChanged} />
+					</div>
+					<Button size="sm" class="shrink-0" onclick={openAdd}>
+						<Plus class="h-4 w-4 mr-1.5" />Add Domain
+					</Button>
+				</div>
 			</div>
 
 			{#if domains.length === 0}
 				<EmptyState
-					message="No certificate domains registered"
-					description="Register a hostname to allow ACME issuance for it. Organization admins can also register their portal hostnames from the org's Certificates page."
+					message={filter.active ? 'No domains match the current filter' : 'No certificate domains registered'}
+					description={filter.active
+						? 'Search matches the domain name.'
+						: "Register a hostname to allow ACME issuance for it. Organization admins can also register their portal hostnames from the org's Certificates page."}
 					icon={ShieldCheck}
 				/>
 			{:else}
@@ -282,6 +358,14 @@
 					<Table>
 						<TableHeader>
 							<TableRow class="bg-muted/30 hover:bg-muted/30">
+								<TableHead class="th w-10">
+									<Checkbox
+										checked={allOnPageSelected}
+										indeterminate={someOnPageSelected && !allOnPageSelected}
+										onCheckedChange={toggleSelectPage}
+										aria-label="Select all on page"
+									/>
+								</TableHead>
 								<TableHead class="th">Domain</TableHead>
 								<TableHead class="th">Scope</TableHead>
 								<TableHead class="th">Certificate</TableHead>
@@ -292,7 +376,14 @@
 						<TableBody>
 							{#each domains as domain (domain.id)}
 								{@const health = certHealth(domain.cert)}
-								<TableRow>
+								<TableRow class={selected.has(domain.id) ? 'bg-primary/5 hover:bg-primary/5' : ''}>
+									<TableCell class="py-3 px-3">
+										<Checkbox
+											checked={selected.has(domain.id)}
+											onCheckedChange={() => toggleSelect(domain.id)}
+											aria-label={`Select ${domain.domain}`}
+										/>
+									</TableCell>
 									<TableCell class="py-3 px-3">
 										<span class="font-medium text-sm font-mono">{domain.domain}</span>
 									</TableCell>
@@ -383,10 +474,30 @@
 						</TableBody>
 					</Table>
 				</div>
+
+				<DataPagination
+					page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
+					onPrev={() => { if (pager.prev()) refreshDomains(); }}
+					onNext={() => { if (pager.next()) refreshDomains(); }}
+				/>
 			{/if}
 		</div>
 	</div>
 {/if}
+
+<!-- Bulk Actions -->
+<BulkActionBar count={selected.size} onClear={() => selected.clear()}>
+	<Button
+		variant="ghost"
+		size="sm"
+		class="h-7 text-destructive hover:text-destructive"
+		disabled={bulkWorking}
+		onclick={() => (bulkRemoveDialogOpen = true)}
+	>
+		<Trash2 class="h-3.5 w-3.5 mr-1" />
+		Remove
+	</Button>
+</BulkActionBar>
 
 <!-- Add Domain Panel -->
 <FormPanel
@@ -442,5 +553,20 @@
 	{#snippet description()}
 		Are you sure you want to remove <strong class="font-mono">{removeTarget?.domain}</strong>?
 		It will no longer receive or renew certificates.
+	{/snippet}
+</ConfirmDialog>
+
+<!-- Bulk Remove Confirmation -->
+<ConfirmDialog
+	bind:open={bulkRemoveDialogOpen}
+	title="Remove Domains"
+	confirmLabel="Remove"
+	onConfirm={confirmBulkRemove}
+	loading={bulkWorking}
+	icon={Trash2}
+>
+	{#snippet description()}
+		Are you sure you want to remove <strong>{selected.size} domain{selected.size !== 1 ? 's' : ''}</strong>?
+		They will no longer receive or renew certificates.
 	{/snippet}
 </ConfirmDialog>

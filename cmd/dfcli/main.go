@@ -632,7 +632,7 @@ func newImageListCmd() *cobra.Command {
 			}
 			rpc := distrofacev1connect.NewRepositoryServiceClient(client.rpcHTTPClient(), client.BaseURL)
 			resp, err := rpc.ListRepositories(context.Background(), connect.NewRequest(&distrofacev1.ListRepositoriesRequest{
-				PageSize: 100,
+				Page: &distrofacev1.PageRequest{PageSize: 100},
 			}))
 			if err != nil {
 				return err
@@ -665,7 +665,7 @@ func newImageTagsCmd() *cobra.Command {
 			resp, err := rpc.ListTags(context.Background(), connect.NewRequest(&distrofacev1.ListTagsRequest{
 				Namespace: namespace,
 				Name:      name,
-				PageSize:  100,
+				Page:      &distrofacev1.PageRequest{PageSize: 100},
 			}))
 			if err != nil {
 				return err

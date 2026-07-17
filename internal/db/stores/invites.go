@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 )
 
@@ -42,8 +43,18 @@ func (s *Store) GetRegistrationInviteByCode(ctx context.Context, code string) (*
 	return &invite, nil
 }
 
-func (s *Store) ListRegistrationInvites(ctx context.Context, limit, offset int) ([]*db.RegistrationInvite, int64, error) {
-	tx := s.db.WithContext(ctx).Model(&db.RegistrationInvite{})
+// InvitesQuery allowlists registration invite list filters
+var InvitesQuery = pagination.Spec{
+	Fields: map[string]string{
+		"code":        "code",
+		"description": "description",
+		"created_by":  "created_by",
+	},
+	Text: []string{"code", "description"},
+}
+
+func (s *Store) ListRegistrationInvites(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.RegistrationInvite, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.RegistrationInvite{}).Scopes(InvitesQuery.Scope(q))
 
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -59,6 +70,32 @@ func (s *Store) IncrementInviteUseCount(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Model(&db.RegistrationInvite{}).
 		Where("id = ?", id).
 		UpdateColumn("use_count", gorm.Expr("use_count + 1")).Error
+}
+
+// Existing subset of the requested ids
+func (s *Store) FilterExistingInviteIDs(ctx context.Context, ids []string) (map[string]bool, error) {
+	if len(ids) == 0 {
+		return map[string]bool{}, nil
+	}
+	var found []string
+	err := s.db.WithContext(ctx).Model(&db.RegistrationInvite{}).Where("id IN ?", ids).Pluck("id", &found).Error
+	if err != nil {
+		return nil, err
+	}
+	existing := make(map[string]bool, len(found))
+	for _, id := range found {
+		existing[id] = true
+	}
+	return existing, nil
+}
+
+// Returns how many of the requested invites were removed
+func (s *Store) BulkDeleteRegistrationInvites(ctx context.Context, ids []string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	result := s.db.WithContext(ctx).Delete(&db.RegistrationInvite{}, "id IN ?", ids)
+	return result.RowsAffected, result.Error
 }
 
 func (s *Store) DeleteRegistrationInvite(ctx context.Context, id string) error {

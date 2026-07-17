@@ -5,50 +5,49 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
-	import { pageToToken } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import RepoList from '$lib/components/repo-list.svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
 	import type { Repository } from '$lib/proto/distroface/v1/types_pb';
   import { resolve } from '$app/paths';
 
 	let repos = $state<Repository[]>([]);
 	let repoLoading = $state(true);
-	let repoTotalCount = $state(0);
-	let repoPage = $state(1);
-	const repoPageSize = 20;
-	let searchQuery = $state('');
+	let repoLoaded = $state(false);
+	const repoPager = new Pager(20);
+	const filter = new QueryFilter([
+		{ key: 'name', label: 'Name' },
+		{ key: 'namespace', label: 'Namespace' },
+		{ key: 'description', label: 'Description' }
+	]);
 
 	async function loadRepos() {
 		repoLoading = true;
 		try {
 			const response = await rpcClient.repository.listRepositories({
-				pageSize: repoPageSize,
-				pageToken: pageToToken(repoPage, repoPageSize),
-				query: searchQuery
+				page: repoPager.request(filter.request())
 			});
 			repos = response.repositories;
-			repoTotalCount = response.totalCount;
+			repoPager.apply(response.page);
 		} catch {
 			repos = [];
-			repoTotalCount = 0;
+			repoPager.apply();
 		} finally {
 			repoLoading = false;
+			repoLoaded = true;
 		}
 	}
 
-	function handleSearch() {
-		repoPage = 1;
+	function filterChanged() {
+		repoPager.reset();
 		loadRepos();
 	}
 
-	function handlePageChange(newPage: number) {
-		repoPage = newPage;
-		loadRepos();
-	}
-
-	const emptyMessage = $derived(searchQuery ? 'No repositories found' : 'No repositories yet');
+	const emptyMessage = $derived(filter.active ? 'No repositories found' : 'No repositories yet');
 	const emptyDescription = $derived(
-		searchQuery ? `No results for "${searchQuery}"` : undefined
+		filter.active ? 'No results match the current filter' : undefined
 	);
 
 	onMount(loadRepos);
@@ -62,28 +61,32 @@
 	icon={Package}
 >
 	{#snippet actions()}
-		{#if !repoLoading && repoTotalCount > 0}
-			<span class="text-[12px] text-muted-foreground/60 tabular-nums">{repoTotalCount} repositor{repoTotalCount === 1 ? 'y' : 'ies'}</span>
+		{#if !repoLoading && repoPager.totalCount > 0}
+			<span class="text-[12px] text-muted-foreground/60 tabular-nums">{repoPager.totalCount} repositor{repoPager.totalCount === 1 ? 'y' : 'ies'}</span>
 		{/if}
 	{/snippet}
 </PageHeader>
 
 <div class="space-y-6">
+	<div class="max-w-md">
+		<QueryFilterBar {filter} placeholder="Search repositories..." onchange={filterChanged} />
+	</div>
+
 	<RepoList
 		{repos}
-		totalCount={repoTotalCount}
+		totalCount={repoPager.totalCount}
 		loading={repoLoading}
-		page={repoPage}
-		pageSize={repoPageSize}
-		showSearch={true}
-		bind:searchQuery
-		onSearch={handleSearch}
-		onPageChange={handlePageChange}
+		loaded={repoLoaded}
+		showCount={false}
+		page={repoPager.page}
+		pageSize={repoPager.pageSize}
+		onPrev={() => { if (repoPager.prev()) loadRepos(); }}
+		onNext={() => { if (repoPager.next()) loadRepos(); }}
 		{emptyMessage}
 		{emptyDescription}
 	>
 		{#snippet emptyActions()}
-			{#if !searchQuery}
+			{#if !filter.active}
 				{#if authStore.isAuthenticated}
 					<div class="text-center space-y-2">
 						<p class="text-[13px] text-muted-foreground">Push your first image:</p>

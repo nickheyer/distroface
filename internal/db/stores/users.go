@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 )
 
@@ -89,12 +90,19 @@ func (s *Store) GetUserByOIDCSubject(ctx context.Context, subject string) (*db.U
 	return &user, nil
 }
 
-func (s *Store) ListUsers(ctx context.Context, query string, limit, offset int) ([]*db.User, int64, error) {
-	tx := s.db.WithContext(ctx).Model(&db.User{})
+// UsersQuery allowlists user list filters
+var UsersQuery = pagination.Spec{
+	Fields: map[string]string{
+		"username":      "username",
+		"email":         "email",
+		"display_name":  "display_name",
+		"auth_provider": "auth_provider",
+	},
+	Text: []string{"username", "email", "display_name"},
+}
 
-	if query != "" {
-		tx = tx.Where("username LIKE ?", query+"%")
-	}
+func (s *Store) ListUsers(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.User, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.User{}).Scopes(UsersQuery.Scope(q))
 
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -126,6 +134,45 @@ func (s *Store) DeleteUser(ctx context.Context, id string) error {
 		}
 		return tx.Delete(&db.User{}, "id = ?", id).Error
 	})
+}
+
+// Removes users and their dependent rows in one transaction
+func (s *Store) BulkDeleteUsers(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, model := range []any{&db.Session{}, &db.APIToken{}, &db.UserRole{}, &db.OrgMember{}} {
+			if err := tx.Where("user_id IN ?", ids).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Delete(&db.User{}, "id IN ?", ids).Error
+	})
+}
+
+func (s *Store) BulkSetUsersActive(ctx context.Context, ids []string, active bool) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Model(&db.User{}).Where("id IN ?", ids).Update("is_active", active).Error
+}
+
+// Existing subset of the requested ids
+func (s *Store) FilterExistingUserIDs(ctx context.Context, ids []string) (map[string]bool, error) {
+	if len(ids) == 0 {
+		return map[string]bool{}, nil
+	}
+	var found []string
+	err := s.db.WithContext(ctx).Model(&db.User{}).Where("id IN ?", ids).Pluck("id", &found).Error
+	if err != nil {
+		return nil, err
+	}
+	existing := make(map[string]bool, len(found))
+	for _, id := range found {
+		existing[id] = true
+	}
+	return existing, nil
 }
 
 func (s *Store) CountUsers(ctx context.Context) (int64, error) {

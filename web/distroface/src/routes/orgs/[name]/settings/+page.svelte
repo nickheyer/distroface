@@ -7,9 +7,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import {
-		Select, SelectContent, SelectItem, SelectTrigger
-	} from '$lib/components/ui/select';
+	import AsyncSelect from '$lib/components/async-select.svelte';
 	import FormPanel from '$lib/components/form-panel.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
@@ -21,20 +19,19 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
 	import { orgRoleLabel } from '$lib/utils';
-	import type { OrgMember } from '$lib/proto/distroface/v1/types_pb';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
 
 	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
 	const orgName = $derived(page.params.name ?? '');
+	const orgId = $derived(ctx.org?.id ?? '');
 
 	let editDisplayName = $state('');
 	let editDescription = $state('');
 	let savingOrg = $state(false);
 
 	let transferOpen = $state(false);
-	let transferUsername = $state('');
+	let transferUserId = $state('');
 	let transferring = $state(false);
-	let transferCandidates = $state<OrgMember[]>([]);
 
 	let deleteOrgOpen = $state(false);
 	let deletingOrg = $state(false);
@@ -56,7 +53,7 @@
 		savingOrg = true;
 		try {
 			await rpcClient.organization.updateOrganization({
-				name: orgName,
+				id: orgId,
 				displayName: editDisplayName,
 				description: editDescription
 			});
@@ -69,23 +66,17 @@
 		}
 	}
 
-	async function openTransfer() {
-		transferUsername = '';
+	function openTransfer() {
+		transferUserId = '';
 		transferOpen = true;
-		try {
-			const resp = await rpcClient.organization.listOrgMembers({ orgName, pageSize: 100 });
-			transferCandidates = resp.members.filter((m) => m.username !== authStore.user?.username);
-		} catch {
-			transferCandidates = [];
-		}
 	}
 
 	async function confirmTransfer() {
-		if (!transferUsername) return;
+		if (!transferUserId) return;
 		transferring = true;
 		try {
-			await rpcClient.organization.transferOrgOwnership({ orgName, username: transferUsername });
-			toast.success(`Ownership transferred to ${transferUsername}`);
+			await rpcClient.organization.transferOrgOwnership({ orgId, userId: transferUserId });
+			toast.success('Ownership transferred');
 			transferOpen = false;
 			await ctx.refresh();
 		} catch {
@@ -98,7 +89,7 @@
 	async function confirmDeleteOrg() {
 		deletingOrg = true;
 		try {
-			await rpcClient.organization.deleteOrganization({ name: orgName });
+			await rpcClient.organization.deleteOrganization({ id: orgId });
 			toast.success('Organization deleted');
 			goto(resolve('/orgs'));
 		} catch {
@@ -132,7 +123,7 @@
 			{/snippet}
 		</FormCard>
 
-		<OrgSettingsManager {orgName} />
+		<OrgSettingsManager {orgId} />
 
 		<div class="rounded-xl border border-destructive/40 overflow-hidden">
 			<div class="px-6 py-4 border-b border-destructive/30 bg-destructive/5">
@@ -187,27 +178,30 @@
 	<div class="space-y-6">
 		<FormSection title="New Owner">
 			<FormField label="Member" id="transfer-member" required help="Only current members can receive ownership.">
-				<Select
-					type="single"
-					value={transferUsername}
-					onValueChange={(v) => { if (v) transferUsername = v; }}
-				>
-					<SelectTrigger id="transfer-member" class="w-full">
-						{transferUsername || 'Select a member...'}
-					</SelectTrigger>
-					<SelectContent>
-						{#each transferCandidates as m (m.userId)}
-							<SelectItem value={m.username}>{m.username} ({orgRoleLabel(m.role)})</SelectItem>
-						{/each}
-					</SelectContent>
-				</Select>
+				<AsyncSelect
+					bind:selected={transferUserId}
+					placeholder="Select a member..."
+					searchPlaceholder="Search members..."
+					fetchPage={async (query, pageToken) => {
+						const resp = await rpcClient.organization.listOrgMembers({
+							page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 },
+							orgId
+						});
+						return {
+							items: resp.members
+								.filter((m) => m.userId !== authStore.user?.id)
+								.map((m) => ({ value: m.userId, label: `${m.username} (${orgRoleLabel(m.role)})` })),
+							nextPageToken: resp.page?.nextPageToken ?? ''
+						};
+					}}
+				/>
 			</FormField>
 		</FormSection>
 	</div>
 
 	{#snippet footer()}
 		<Button variant="outline" onclick={() => (transferOpen = false)}>Cancel</Button>
-		<Button variant="destructive" onclick={confirmTransfer} disabled={transferring || !transferUsername}>
+		<Button variant="destructive" onclick={confirmTransfer} disabled={transferring || !transferUserId}>
 			{transferring ? 'Transferring...' : 'Transfer Ownership'}
 		</Button>
 	{/snippet}

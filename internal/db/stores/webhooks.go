@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 )
 
@@ -29,8 +30,20 @@ func (s *Store) GetWebhook(ctx context.Context, id string) (*db.Webhook, error) 
 	return &webhook, nil
 }
 
-func (s *Store) ListWebhooksByRepo(ctx context.Context, repoID string, limit, offset int) ([]*db.Webhook, int64, error) {
-	tx := s.db.WithContext(ctx).Model(&db.Webhook{}).Where("repo_id = ? AND scope = ?", repoID, db.WebhookScopeRepository)
+// WebhooksQuery allowlists webhook list filters
+var WebhooksQuery = pagination.Spec{
+	Fields: map[string]string{
+		"url":        "url",
+		"events":     "events",
+		"created_by": "created_by",
+	},
+	Text: []string{"url"},
+}
+
+func (s *Store) ListWebhooksByRepo(ctx context.Context, repoID string, q pagination.Query, limit, offset int) ([]*db.Webhook, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.Webhook{}).
+		Where("repo_id = ? AND scope = ?", repoID, db.WebhookScopeRepository).
+		Scopes(WebhooksQuery.Scope(q))
 
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -38,13 +51,14 @@ func (s *Store) ListWebhooksByRepo(ctx context.Context, repoID string, limit, of
 	}
 
 	var webhooks []*db.Webhook
-	err := s.db.WithContext(ctx).Where("repo_id = ? AND scope = ?", repoID, db.WebhookScopeRepository).
-		Order("created_at DESC").Limit(limit).Offset(offset).Find(&webhooks).Error
+	err := tx.Order("created_at DESC").Limit(limit).Offset(offset).Find(&webhooks).Error
 	return webhooks, total, err
 }
 
-func (s *Store) ListWebhooksByOrg(ctx context.Context, orgID string, limit, offset int) ([]*db.Webhook, int64, error) {
-	tx := s.db.WithContext(ctx).Model(&db.Webhook{}).Where("org_id = ? AND scope = ?", orgID, db.WebhookScopeOrganization)
+func (s *Store) ListWebhooksByOrg(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]*db.Webhook, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.Webhook{}).
+		Where("org_id = ? AND scope = ?", orgID, db.WebhookScopeOrganization).
+		Scopes(WebhooksQuery.Scope(q))
 
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -52,8 +66,7 @@ func (s *Store) ListWebhooksByOrg(ctx context.Context, orgID string, limit, offs
 	}
 
 	var webhooks []*db.Webhook
-	err := s.db.WithContext(ctx).Where("org_id = ? AND scope = ?", orgID, db.WebhookScopeOrganization).
-		Order("created_at DESC").Limit(limit).Offset(offset).Find(&webhooks).Error
+	err := tx.Order("created_at DESC").Limit(limit).Offset(offset).Find(&webhooks).Error
 	return webhooks, total, err
 }
 
@@ -107,8 +120,16 @@ func (s *Store) CreateWebhookDelivery(ctx context.Context, delivery *db.WebhookD
 	return s.db.WithContext(ctx).Create(delivery).Error
 }
 
-func (s *Store) ListWebhookDeliveries(ctx context.Context, webhookID string, limit, offset int) ([]*db.WebhookDelivery, int64, error) {
-	tx := s.db.WithContext(ctx).Model(&db.WebhookDelivery{}).Where("webhook_id = ?", webhookID)
+// WebhookDeliveriesQuery allowlists delivery list filters
+var WebhookDeliveriesQuery = pagination.Spec{
+	Fields: map[string]string{"event": "event"},
+	Text:   []string{"event"},
+}
+
+func (s *Store) ListWebhookDeliveries(ctx context.Context, webhookID string, q pagination.Query, limit, offset int) ([]*db.WebhookDelivery, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.WebhookDelivery{}).
+		Where("webhook_id = ?", webhookID).
+		Scopes(WebhookDeliveriesQuery.Scope(q))
 
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -116,8 +137,7 @@ func (s *Store) ListWebhookDeliveries(ctx context.Context, webhookID string, lim
 	}
 
 	var deliveries []*db.WebhookDelivery
-	err := s.db.WithContext(ctx).Where("webhook_id = ?", webhookID).
-		Order("delivered_at DESC").Limit(limit).Offset(offset).Find(&deliveries).Error
+	err := tx.Order("delivered_at DESC").Limit(limit).Offset(offset).Find(&deliveries).Error
 	return deliveries, total, err
 }
 

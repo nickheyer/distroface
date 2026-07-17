@@ -10,13 +10,15 @@
 	import PortalForm from '../portal-form.svelte';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
 
 	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
 	const orgName = $derived(page.params.name ?? '');
+	const orgId = $derived(ctx.org?.id ?? '');
 	const portalId = $derived(page.params.id ?? '');
+	const mainPort = $derived(Number(configStore.get('server.port', 0)) || 0);
 
 	let portal = $state<RegistryPortal | null>(null);
-	let mainPort = $state(0);
 	let loading = $state(true);
 
 	$effect(() => {
@@ -28,9 +30,8 @@
 	async function load(id: string) {
 		loading = true;
 		try {
-			const resp = await rpcClient.portal.listPortals({ orgName });
-			portal = resp.portals.find((p) => p.id === id) ?? null;
-			mainPort = resp.mainPort;
+			const resp = await rpcClient.portal.getPortal({ orgId, id });
+			portal = resp.portal ?? null;
 		} catch { portal = null; }
 		finally { loading = false; }
 	}
@@ -56,7 +57,7 @@
 		</div>
 
 		{#key portal.id}
-			<PortalForm {orgName} {mainPort} {portal} />
+			<PortalForm {orgName} {orgId} {mainPort} {portal} />
 		{/key}
 	</div>
 {:else}

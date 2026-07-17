@@ -12,7 +12,8 @@
 	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import { formatBytes, pageToToken, truncateDigest, relativeTime } from '$lib/utils';
+	import { formatBytes, truncateDigest, relativeTime } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
 	import { toast } from 'svelte-sonner';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -46,9 +47,7 @@
 	let loading = $state(true);
 	let tags = $state<Tag[]>([]);
 	let tagsLoading = $state(true);
-	let tagsTotalCount = $state(0);
-	let tagsPage = $state(1);
-	const tagsPageSize = 20;
+	const tagsPager = new Pager(20);
 
 	let editingDescription = $state(false);
 	let descriptionDraft = $state('');
@@ -113,12 +112,11 @@
 		tagsLoading = true;
 		try {
 			const resp = await rpcClient.repository.listTags({
-				namespace, name,
-				pageSize: tagsPageSize,
-				pageToken: pageToToken(tagsPage, tagsPageSize)
+				page: tagsPager.request(),
+				namespace, name
 			});
 			tags = resp.tags;
-			tagsTotalCount = resp.totalCount;
+			tagsPager.apply(resp.page);
 		} catch {
 			tags = [];
 		} finally {
@@ -408,8 +406,8 @@
 		<div class="space-y-4">
 			<div class="section-header">
 				<h2 class="section-title">Tags</h2>
-				{#if tagsTotalCount > 0}
-					<span class="text-[12px] text-muted-foreground/60 tabular-nums">{tagsTotalCount} tag{tagsTotalCount !== 1 ? 's' : ''}</span>
+				{#if tagsPager.totalCount > 0}
+					<span class="text-[12px] text-muted-foreground/60 tabular-nums">{tagsPager.totalCount} tag{tagsPager.totalCount !== 1 ? 's' : ''}</span>
 				{/if}
 			</div>
 
@@ -472,9 +470,9 @@
 				</div>
 
 				<DataPagination
-					page={tagsPage} pageSize={tagsPageSize} totalCount={tagsTotalCount}
-					onPrev={() => { if (tagsPage > 1) { tagsPage--; loadTags(); } }}
-					onNext={() => { if (tagsPage * tagsPageSize < tagsTotalCount) { tagsPage++; loadTags(); } }}
+					page={tagsPager.page} pageSize={tagsPager.pageSize} totalCount={tagsPager.totalCount}
+					onPrev={() => { if (tagsPager.prev()) loadTags(); }}
+					onNext={() => { if (tagsPager.next()) loadTags(); }}
 				/>
 			{/if}
 		</div>

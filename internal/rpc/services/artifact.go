@@ -14,6 +14,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -103,10 +104,15 @@ func (s *ArtifactService) GetArtifactRepository(ctx context.Context, req *connec
 func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *connect.Request[v1.ListArtifactRepositoriesRequest]) (*connect.Response[v1.ListArtifactRepositoriesResponse], error) {
 	user := auth.UserFromContext(ctx)
 	msg := req.Msg
-	limit, offset := parsePagination(msg.PageSize, msg.PageToken)
+	limit, offset := pagination.Parse(msg.Page)
+
+	q := pagination.ParseQuery(msg.Page)
+	if err := stores.ArtifactReposQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 
 	opts := s.access.ListOptions(user, portal.ScopeNamespace(ctx, msg.Namespace))
-	opts.Search = msg.Search
+	opts.Query = q
 	opts.Limit = limit
 	opts.Offset = offset
 
@@ -130,9 +136,8 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *con
 	}
 
 	return connect.NewResponse(&v1.ListArtifactRepositoriesResponse{
-		Repositories:  protoRepos,
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    total,
+		Repositories: protoRepos,
+		Page:         pagination.Info(offset, limit, total),
 	}), nil
 }
 
@@ -236,16 +241,15 @@ func (s *ArtifactService) ListArtifacts(ctx context.Context, req *connect.Reques
 		return nil, err
 	}
 
-	limit, offset := parsePagination(msg.PageSize, msg.PageToken)
+	limit, offset := pagination.Parse(msg.Page)
 	list, total, err := s.store.ListArtifacts(ctx, repo.ID, msg.Version, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	return connect.NewResponse(&v1.ListArtifactsResponse{
-		Artifacts:     artifactsToProto(list),
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    total,
+		Artifacts: artifactsToProto(list),
+		Page:      pagination.Info(offset, limit, total),
 	}), nil
 }
 
@@ -256,17 +260,19 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *connect
 		return nil, err
 	}
 
-	list, _, err := s.store.ListArtifacts(ctx, repo.ID, "", 0, 0)
+	limit, offset := pagination.Parse(req.Msg.Page)
+	order, total, err := s.store.ListArtifactVersionPage(ctx, repo.ID, limit, offset)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	list, err := s.store.ListArtifactsByVersions(ctx, repo.ID, order)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	grouped := make(map[string][]*storage.Artifact)
-	order := []string{}
 	for _, a := range list { // Already newest first
-		if _, ok := grouped[a.Version]; !ok {
-			order = append(order, a.Version)
-		}
 		grouped[a.Version] = append(grouped[a.Version], a)
 	}
 
@@ -278,21 +284,26 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *connect
 		}
 	}
 
-	return connect.NewResponse(&v1.ListArtifactVersionsResponse{Versions: versions}), nil
+	return connect.NewResponse(&v1.ListArtifactVersionsResponse{
+		Versions: versions,
+		Page:     pagination.Info(offset, limit, total),
+	}), nil
 }
 
 func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Request[v1.SearchArtifactsRequest]) (*connect.Response[v1.SearchArtifactsResponse], error) {
 	user := auth.UserFromContext(ctx)
 	msg := req.Msg
-	limit, offset := parsePagination(msg.PageSize, msg.PageToken)
+	limit, offset := pagination.Parse(msg.Page)
+
+	q := pagination.ParseQuery(msg.Page)
+	if err := stores.ArtifactsQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 
 	criteria := stores.ArtifactSearchCriteria{
-		Name:       msg.Name,
-		Version:    msg.Version,
-		Path:       msg.Path,
+		Query:      q,
 		Properties: msg.Properties,
-		Sort:       msg.Sort,
-		Order:      strings.ToUpper(msg.Order),
+		OrderBy:    pagination.OrderBy(msg.Page, stores.ArtifactSortColumns, "created_at DESC"),
 		Limit:      limit,
 		Offset:     offset,
 	}
@@ -309,7 +320,7 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Requ
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 		if len(repoIDs) == 0 {
-			return connect.NewResponse(&v1.SearchArtifactsResponse{Artifacts: []*v1.Artifact{}}), nil
+			return connect.NewResponse(&v1.SearchArtifactsResponse{Artifacts: []*v1.Artifact{}, Page: &v1.PageInfo{}}), nil
 		}
 		criteria.RepoIDs = repoIDs
 	}
@@ -320,9 +331,8 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Requ
 	}
 
 	return connect.NewResponse(&v1.SearchArtifactsResponse{
-		Artifacts:     artifactsToProto(list),
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    total,
+		Artifacts: artifactsToProto(list),
+		Page:      pagination.Info(offset, limit, total),
 	}), nil
 }
 

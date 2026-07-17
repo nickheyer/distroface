@@ -10,9 +10,7 @@
 	import {
 		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 	} from '$lib/components/ui/table';
-	import {
-		Select, SelectContent, SelectItem, SelectTrigger
-	} from '$lib/components/ui/select';
+	import AsyncSelect from '$lib/components/async-select.svelte';
 	import FormPanel from '$lib/components/form-panel.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import FormField from '$lib/components/form-field.svelte';
@@ -21,20 +19,26 @@
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
-	import { Archive, Plus, Search, Trash2, Lock, Globe } from '@lucide/svelte';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
+	import { Archive, Plus, Trash2, Lock, Globe } from '@lucide/svelte';
+	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime, pageToToken, formatBytes } from '$lib/utils';
+	import { relativeTime, formatBytes } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import type { ArtifactRepository } from '$lib/proto/distroface/v1/types_pb';
 
 	let repos = $state<ArtifactRepository[]>([]);
 	let loading = $state(true);
-	let totalCount = $state(0);
-	let currentPage = $state(1);
-	let searchQuery = $state('');
-	const pageSize = 20;
+	let loaded = $state(false);
+	const pager = new Pager(20);
+	const filter = new QueryFilter([
+		{ key: 'name', label: 'Name' },
+		{ key: 'namespace', label: 'Namespace' },
+		{ key: 'description', label: 'Description' }
+	]);
 
 	let createPanelOpen = $state(false);
 	let newName = $state('');
@@ -42,19 +46,8 @@
 	let newDescription = $state('');
 	let newPrivate = $state(false);
 	let creating = $state(false);
-	let orgNames = $state<string[]>([]);
 
 	const ownNamespace = $derived(authStore.user?.username ?? '');
-	const namespaceChoices = $derived([ownNamespace, ...orgNames].filter(Boolean));
-
-	async function loadNamespaces() {
-		try {
-			const resp = await rpcClient.organization.listOrganizations({ pageSize: 100 }, silentCallOptions);
-			orgNames = resp.organizations.map((o) => o.name).sort();
-		} catch {
-			orgNames = [];
-		}
-	}
 
 	let deleteDialogOpen = $state(false);
 	let deleteTarget = $state<ArtifactRepository | null>(null);
@@ -64,22 +57,21 @@
 		loading = true;
 		try {
 			const resp = await rpcClient.artifact.listArtifactRepositories({
-				pageSize,
-				pageToken: pageToToken(currentPage, pageSize),
-				search: searchQuery
+				page: pager.request(filter.request())
 			});
 			repos = resp.repositories;
-			totalCount = Number(resp.totalCount);
+			pager.apply(resp.page);
 		} catch {
 			repos = [];
-			totalCount = 0;
+			pager.apply();
 		} finally {
 			loading = false;
+			loaded = true;
 		}
 	}
 
-	function handleSearch() {
-		currentPage = 1;
+	function filterChanged() {
+		pager.reset();
 		loadRepos();
 	}
 
@@ -141,7 +133,6 @@
 
 	onMount(() => {
 		loadRepos();
-		loadNamespaces();
 	});
 </script>
 
@@ -165,15 +156,11 @@
 </PageHeader>
 
 <div class="space-y-6">
-	<form
-		class="relative max-w-sm"
-		onsubmit={(e) => { e.preventDefault(); handleSearch(); }}
-	>
-		<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-		<Input bind:value={searchQuery} placeholder="Search repositories..." class="pl-9" oninput={handleSearch} />
-	</form>
+	<div class="max-w-md">
+		<QueryFilterBar {filter} placeholder="Search repositories..." onchange={filterChanged} />
+	</div>
 
-	{#if loading}
+	{#if !loaded}
 		<div class="space-y-2">
 			{#each Array(3)}
 				<Skeleton class="h-14 w-full rounded-xl" />
@@ -182,13 +169,13 @@
 	{:else if repos.length === 0}
 		<EmptyState
 			icon={Archive}
-			message={searchQuery ? 'No repositories found' : 'No artifact repositories yet'}
-			description={searchQuery
-				? `No results for "${searchQuery}"`
+			message={filter.active ? 'No repositories found' : 'No artifact repositories yet'}
+			description={filter.active
+				? 'No results match the current filter'
 				: 'Create a repository to store build artifacts, packages, and other files.'}
 		>
 			{#snippet actions()}
-				{#if !searchQuery}
+				{#if !filter.active}
 					<PermissionGate resource="artifacts" action="create">
 						<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>
 							<Plus class="h-4 w-4 mr-1.5" />
@@ -199,7 +186,7 @@
 			{/snippet}
 		</EmptyState>
 	{:else}
-		<div class="data-table">
+		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			<Table>
 				<TableHeader>
 					<TableRow class="bg-muted/30 hover:bg-muted/30">
@@ -258,9 +245,9 @@
 		</div>
 
 		<DataPagination
-			page={currentPage} {pageSize} totalCount={totalCount}
-			onPrev={() => { currentPage--; loadRepos(); }}
-			onNext={() => { currentPage++; loadRepos(); }}
+			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
+			onPrev={() => { if (pager.prev()) loadRepos(); }}
+			onNext={() => { if (pager.next()) loadRepos(); }}
 		/>
 	{/if}
 </div>
@@ -276,18 +263,21 @@
 		<FormSection title="Repository Details">
 			<div class="space-y-3">
 				<FormField label="Namespace" id="repo-namespace" help="Your personal namespace or an organization you administer.">
-					<Select
-						type="single"
-						value={newNamespace || ownNamespace}
-						onValueChange={(v) => { if (v) newNamespace = v; }}
-					>
-						<SelectTrigger id="repo-namespace" class="w-full">{newNamespace || ownNamespace}</SelectTrigger>
-						<SelectContent>
-							{#each namespaceChoices as ns (ns)}
-								<SelectItem value={ns}>{ns}{ns === ownNamespace ? ' (you)' : ''}</SelectItem>
-							{/each}
-						</SelectContent>
-					</Select>
+					<AsyncSelect
+						bind:selected={newNamespace}
+						placeholder={ownNamespace}
+						searchPlaceholder="Search organizations..."
+						fetchPage={async (query, pageToken) => {
+							const resp = await rpcClient.organization.listOrganizations({
+								page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 }
+							});
+							const items = resp.organizations.map((o) => ({ value: o.name, label: o.displayName || o.name }));
+							if (!pageToken && ownNamespace && ownNamespace.toLowerCase().includes(query.toLowerCase())) {
+								items.unshift({ value: ownNamespace, label: `${ownNamespace} (you)` });
+							}
+							return { items, nextPageToken: resp.page?.nextPageToken ?? '' };
+						}}
+					/>
 				</FormField>
 				<FormField label="Name" id="repo-name" required help="Letters, digits, dots, dashes, and underscores.">
 					<Input id="repo-name" bind:value={newName} placeholder="e.g., build-artifacts" />

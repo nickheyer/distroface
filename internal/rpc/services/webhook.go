@@ -10,6 +10,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -124,7 +125,11 @@ func (s *WebhookService) ListWebhooks(ctx context.Context, req *connect.Request[
 	}
 
 	msg := req.Msg
-	limit, offset := parsePagination(msg.PageSize, msg.PageToken)
+	limit, offset := pagination.Parse(msg.Page)
+	q := pagination.ParseQuery(msg.Page)
+	if err := stores.WebhooksQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 
 	var webhooks []*storage.Webhook
 	var total int64
@@ -134,12 +139,12 @@ func (s *WebhookService) ListWebhooks(ctx context.Context, req *connect.Request[
 		if err := s.checkRepoPermission(ctx, user, msg.RepoId, rbac.ActionRead); err != nil {
 			return nil, err
 		}
-		webhooks, total, err = s.store.ListWebhooksByRepo(ctx, msg.RepoId, limit, offset)
+		webhooks, total, err = s.store.ListWebhooksByRepo(ctx, msg.RepoId, q, limit, offset)
 	} else if msg.OrgId != "" {
 		if err := s.checkOrgPermission(ctx, user, msg.OrgId, rbac.ActionRead); err != nil {
 			return nil, err
 		}
-		webhooks, total, err = s.store.ListWebhooksByOrg(ctx, msg.OrgId, limit, offset)
+		webhooks, total, err = s.store.ListWebhooksByOrg(ctx, msg.OrgId, q, limit, offset)
 	} else {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_id or org_id is required"))
 	}
@@ -154,9 +159,8 @@ func (s *WebhookService) ListWebhooks(ctx context.Context, req *connect.Request[
 	}
 
 	return connect.NewResponse(&v1.ListWebhooksResponse{
-		Webhooks:      protoWebhooks,
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    total,
+		Webhooks: protoWebhooks,
+		Page:     pagination.Info(offset, limit, total),
 	}), nil
 }
 
@@ -288,8 +292,12 @@ func (s *WebhookService) ListWebhookDeliveries(ctx context.Context, req *connect
 		return nil, err
 	}
 
-	limit, offset := parsePagination(msg.PageSize, msg.PageToken)
-	deliveries, total, err := s.store.ListWebhookDeliveries(ctx, msg.WebhookId, limit, offset)
+	limit, offset := pagination.Parse(msg.Page)
+	q := pagination.ParseQuery(msg.Page)
+	if err := stores.WebhookDeliveriesQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	deliveries, total, err := s.store.ListWebhookDeliveries(ctx, msg.WebhookId, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -300,9 +308,8 @@ func (s *WebhookService) ListWebhookDeliveries(ctx context.Context, req *connect
 	}
 
 	return connect.NewResponse(&v1.ListWebhookDeliveriesResponse{
-		Deliveries:    protoDeliveries,
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    total,
+		Deliveries: protoDeliveries,
+		Page:       pagination.Info(offset, limit, total),
 	}), nil
 }
 
@@ -422,7 +429,7 @@ func (s *WebhookService) webhookToProto(ctx context.Context, wh *storage.Webhook
 	}
 
 	var events []string
-	json.Unmarshal([]byte(wh.Events), &events)
+	_ = json.Unmarshal([]byte(wh.Events), &events)
 
 	protoEvents := stringsToEvents(events)
 

@@ -16,10 +16,12 @@
 
 	let {
 		orgName,
+		orgId,
 		mainPort = 0,
 		portal = null
 	}: {
 		orgName: string;
+		orgId: string;
 		mainPort?: number;
 		portal?: RegistryPortal | null;
 	} = $props();
@@ -76,7 +78,7 @@
 			.map((r) => ({ pattern: r.pattern.trim(), replace: r.replace.trim() }))
 			.filter((r) => r.pattern !== '' || r.replace !== '');
 		const common = {
-			orgName,
+			orgId,
 			name: name.trim(),
 			hostname: hostname.trim().toLowerCase(),
 			port: Number(portText.trim()) || 0,

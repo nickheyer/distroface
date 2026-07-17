@@ -15,20 +15,32 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
+	import DataPagination from '$lib/components/data-pagination.svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import { Globe, Plus, Pencil, Trash2 } from '@lucide/svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import { effectiveAddress } from '$lib/portal-address';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
 
 	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
 	const orgName = $derived(page.params.name ?? '');
+	const orgId = $derived(ctx.org?.id ?? '');
+	const mainPort = $derived(Number(configStore.get('server.port', 0)) || 0);
 
 	let portals = $state<RegistryPortal[]>([]);
-	let mainPort = $state(0);
 	let loading = $state(true);
+	let loaded = $state(false);
 	let toggling = $state<string | null>(null);
+	const pager = new Pager(20);
+	const filter = new QueryFilter([
+		{ key: 'name', label: 'Name' },
+		{ key: 'hostname', label: 'Hostname' }
+	]);
 
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<RegistryPortal | null>(null);
@@ -43,11 +55,14 @@
 	async function load() {
 		loading = true;
 		try {
-			const resp = await rpcClient.portal.listPortals({ orgName });
+			const resp = await rpcClient.portal.listPortals({
+				page: pager.request(filter.request()),
+				orgId
+			});
 			portals = resp.portals;
-			mainPort = resp.mainPort;
+			pager.apply(resp.page);
 		} catch { portals = []; }
-		finally { loading = false; }
+		finally { loading = false; loaded = true; }
 	}
 
 	function accessBadges(portal: RegistryPortal): string[] {
@@ -64,7 +79,7 @@
 	async function setRunning(portal: RegistryPortal, enabled: boolean) {
 		toggling = portal.id;
 		try {
-			const resp = await rpcClient.portal.updatePortal({ orgName, id: portal.id, enabled });
+			const resp = await rpcClient.portal.updatePortal({ orgId, id: portal.id, enabled });
 			const updated = resp.portal;
 			if (updated) portals = portals.map((p) => (p.id === updated.id ? updated : p));
 			toast.success(enabled ? 'Portal started' : 'Portal stopped');
@@ -85,12 +100,20 @@
 		if (!deleteTarget) return;
 		deleting = true;
 		try {
-			await rpcClient.portal.deletePortal({ orgName, id: deleteTarget.id });
+			await rpcClient.portal.deletePortal({ orgId, id: deleteTarget.id });
 			deleteOpen = false;
 			toast.success('Portal deleted');
-			load();
+			await load();
+			if (portals.length === 0 && pager.prev()) {
+				await load();
+			}
 		} catch { /* error interceptor */ }
 		finally { deleting = false; }
+	}
+
+	function filterChanged() {
+		pager.reset();
+		load();
 	}
 
 	onMount(load);
@@ -106,7 +129,11 @@
 		</Button>
 	</div>
 
-	{#if loading}
+	<div class="max-w-md">
+		<QueryFilterBar {filter} placeholder="Search portals..." onchange={filterChanged} />
+	</div>
+
+	{#if !loaded}
 		<div class="space-y-2">
 			{#each { length: 2 }, i (i)}
 				<Skeleton class="h-14 w-full rounded-xl" />
@@ -115,21 +142,25 @@
 	{:else if portals.length === 0}
 		<EmptyState
 			icon={Globe}
-			message="No portals yet"
-			description="Give {orgName} its own address, like registry.example.com - clients that use it only ever see this organization."
+			message={filter.active ? 'No matching portals' : 'No portals yet'}
+			description={filter.active
+				? 'Try a different search.'
+				: `Give ${orgName} its own address, like registry.example.com - clients that use it only ever see this organization.`}
 		>
 			{#snippet actions()}
-				<Button
-					variant="outline"
-					size="sm"
-					onclick={() => goto(resolve('/orgs/[name]/portals/new', { name: orgName }))}
-				>
-					<Plus class="h-3.5 w-3.5 mr-1.5" />New Portal
-				</Button>
+				{#if !filter.active}
+					<Button
+						variant="outline"
+						size="sm"
+						onclick={() => goto(resolve('/orgs/[name]/portals/new', { name: orgName }))}
+					>
+						<Plus class="h-3.5 w-3.5 mr-1.5" />New Portal
+					</Button>
+				{/if}
 			{/snippet}
 		</EmptyState>
 	{:else}
-		<div class="data-table">
+		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			<Table>
 				<TableHeader>
 					<TableRow class="bg-muted/30 hover:bg-muted/30">
@@ -204,6 +235,12 @@
 				</TableBody>
 			</Table>
 		</div>
+
+		<DataPagination
+			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
+			onPrev={() => { if (pager.prev()) load(); }}
+			onNext={() => { if (pager.next()) load(); }}
+		/>
 	{/if}
 </div>
 

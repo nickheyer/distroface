@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
-	import { pageToToken, relativeTime, webhookEventLabels } from '$lib/utils';
+	import { relativeTime, webhookEventLabels } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
 	import { toast } from 'svelte-sonner';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -12,6 +13,8 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import WebhookFormPanel from '$lib/components/webhook-form-panel.svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import type { Webhook as WebhookType, WebhookDelivery } from '$lib/proto/distroface/v1/types_pb';
@@ -36,9 +39,13 @@
 	// ── List state ──────────────────────────────────────────────────────
 	let webhooks = $state<WebhookType[]>([]);
 	let loading = $state(false);
-	let totalCount = $state(0);
-	let currentPage = $state(1);
-	const pageSize = 20;
+	let loaded = $state(false);
+	const pager = new Pager(20);
+	const filter = new QueryFilter([
+		{ key: 'url', label: 'URL' },
+		{ key: 'events', label: 'Events' },
+		{ key: 'created_by', label: 'Created By' }
+	]);
 
 	// ── Create state ────────────────────────────────────────────────────
 	let createOpen = $state(false);
@@ -78,17 +85,16 @@
 		loading = true;
 		try {
 			const listReq: Record<string, unknown> = {
-				pageSize,
-				pageToken: pageToToken(currentPage, pageSize)
+				page: pager.request(filter.request())
 			};
 			if (scope === WebhookScope.REPOSITORY) listReq.repoId = scopeId;
 			else listReq.orgId = scopeId;
 
 			const resp = await rpcClient.webhook.listWebhooks(listReq);
 			webhooks = resp.webhooks;
-			totalCount = Number(resp.totalCount);
+			pager.apply(resp.page);
 		} catch { webhooks = []; }
-		finally { loading = false; }
+		finally { loading = false; loaded = true; }
 	}
 
 	function openCreate() {
@@ -176,7 +182,7 @@
 		expandedId = whId;
 		deliveriesLoading = true;
 		try {
-			const resp = await rpcClient.webhook.listWebhookDeliveries({ webhookId: whId, pageSize: 10 });
+			const resp = await rpcClient.webhook.listWebhookDeliveries({ page: { pageSize: 10 }, webhookId: whId });
 			deliveries = resp.deliveries;
 		} catch { deliveries = []; }
 		finally { deliveriesLoading = false; }
@@ -188,11 +194,16 @@
 			await rpcClient.webhook.redeliverWebhook({ deliveryId });
 			toast.success('Redelivery triggered');
 			if (expandedId) {
-				const resp = await rpcClient.webhook.listWebhookDeliveries({ webhookId: expandedId, pageSize: 10 });
+				const resp = await rpcClient.webhook.listWebhookDeliveries({ page: { pageSize: 10 }, webhookId: expandedId });
 				deliveries = resp.deliveries;
 			}
 		} catch { /* error interceptor */ }
 		finally { redelivering = null; }
+	}
+
+	function filterChanged() {
+		pager.reset();
+		load();
 	}
 
 	onMount(() => { load(); });
@@ -208,14 +219,22 @@
 		</Button>
 	</div>
 
-	{#if loading}
+	<div class="max-w-md">
+		<QueryFilterBar {filter} placeholder="Search webhooks..." onchange={filterChanged} />
+	</div>
+
+	{#if !loaded}
 		<div class="space-y-2">
 			{#each { length: 2 }, i (i)}
 				<Skeleton class="h-14 w-full rounded-xl" />
 			{/each}
 		</div>
 	{:else if webhooks.length === 0}
-		<EmptyState icon={Webhook} message="No webhooks" description={emptyDescription}>
+		<EmptyState
+			icon={Webhook}
+			message={filter.active ? 'No matching webhooks' : 'No webhooks'}
+			description={filter.active ? 'No results match the current filter' : emptyDescription}
+		>
 			{#snippet actions()}
 				<Button variant="outline" size="sm" onclick={openCreate}>
 					<Plus class="h-3.5 w-3.5 mr-1.5" />Add Webhook
@@ -223,7 +242,7 @@
 			{/snippet}
 		</EmptyState>
 	{:else}
-		<div class="data-table">
+		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			<Table class="table-fixed">
 				<TableHeader>
 					<TableRow>
@@ -317,9 +336,9 @@
 		</div>
 
 		<DataPagination
-			page={currentPage} pageSize={pageSize} totalCount={totalCount}
-			onPrev={() => { if (currentPage > 1) { currentPage--; load(); } }}
-			onNext={() => { if (currentPage * pageSize < totalCount) { currentPage++; load(); } }}
+			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
+			onPrev={() => { if (pager.prev()) load(); }}
+			onNext={() => { if (pager.next()) load(); }}
 		/>
 	{/if}
 </div>

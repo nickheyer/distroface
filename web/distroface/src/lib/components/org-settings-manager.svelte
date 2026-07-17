@@ -10,7 +10,7 @@
 	import FormCard from '$lib/components/form-card.svelte';
 	import { Package, Save, Undo2 } from '@lucide/svelte';
 
-	let { orgName }: { orgName: string } = $props();
+	let { orgId }: { orgId: string } = $props();
 
 	// Override keys mirrored in internal/artifacts/manager.go
 	const KEYS = {
@@ -42,7 +42,7 @@
 	async function load() {
 		loading = true;
 		try {
-			const resp = await rpcClient.organization.getOrgSettings({ orgName });
+			const resp = await rpcClient.organization.getOrgSettings({ orgId });
 			defaults = resp.defaults;
 			overriddenKeys = new Set(Object.keys(resp.overrides));
 			const val = (key: string) => resp.overrides[key] ?? resp.defaults[key] ?? '';
@@ -82,7 +82,7 @@
 					reset.push(key);
 				}
 			}
-			await rpcClient.organization.updateOrgSettings({ orgName, set, reset });
+			await rpcClient.organization.updateOrgSettings({ orgId, set, reset });
 			toast.success('Settings saved');
 			await load();
 		} catch {
@@ -95,7 +95,7 @@
 	async function resetAll() {
 		resetting = true;
 		try {
-			await rpcClient.organization.updateOrgSettings({ orgName, reset: Object.values(KEYS) });
+			await rpcClient.organization.updateOrgSettings({ orgId, reset: Object.values(KEYS) });
 			toast.success('Reset to instance defaults');
 			await load();
 		} catch {

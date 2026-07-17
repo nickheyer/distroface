@@ -50,19 +50,19 @@
 		loading = true;
 		try {
 			const [usersResp, reposResp, orgsResp, rolesResp, configResp] = await Promise.all([
-				rpcClient.user.listUsers({ pageSize: 5 }, silentCallOptions),
-				rpcClient.repository.listRepositories({ pageSize: 5 }, silentCallOptions),
-				rpcClient.organization.listOrganizations({ pageSize: 1 }, silentCallOptions),
-				rpcClient.role.listRoles({}, silentCallOptions),
+				rpcClient.user.listUsers({ page: { pageSize: 5 } }, silentCallOptions),
+				rpcClient.repository.listRepositories({ page: { pageSize: 5 } }, silentCallOptions),
+				rpcClient.organization.listOrganizations({ page: { pageSize: 1 } }, silentCallOptions),
+				rpcClient.role.listRoles({ page: { pageSize: 1 } }, silentCallOptions),
 				rpcClient.auth.getAuthConfig({}, silentCallOptions)
 			]);
 
-			userCount = usersResp.totalCount;
+			userCount = Number(usersResp.page?.totalCount ?? 0n);
 			recentUsers = usersResp.users;
-			repoCount = reposResp.totalCount;
+			repoCount = Number(reposResp.page?.totalCount ?? 0n);
 			recentRepos = reposResp.repositories;
-			orgCount = orgsResp.totalCount;
-			roleCount = rolesResp.roles.length;
+			orgCount = Number(orgsResp.page?.totalCount ?? 0n);
+			roleCount = Number(rolesResp.page?.totalCount ?? 0n);
 			authConfig = {
 				localEnabled: configResp.localEnabled,
 				oidcEnabled: configResp.oidcEnabled,
@@ -89,7 +89,7 @@
 	<div class="space-y-6">
 		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			{#each { length: 4 }, i (i)}
-				<Skeleton class="h-[72px] rounded-xl" />
+				<Skeleton class="h-18 rounded-xl" />
 			{/each}
 		</div>
 		<div class="grid gap-6 lg:grid-cols-2">
@@ -130,7 +130,7 @@
 								<div class="flex-1 min-w-0">
 									<span class="text-sm font-medium block truncate">{user.username}</span>
 									<span class="text-xs text-muted-foreground">
-										{user.roles.join(', ')}
+										{user.roles.map((r) => r.name).join(', ')}
 									</span>
 								</div>
 								<span class="text-xs text-muted-foreground shrink-0">

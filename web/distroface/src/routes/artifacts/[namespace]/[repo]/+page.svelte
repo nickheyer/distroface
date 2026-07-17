@@ -21,6 +21,8 @@
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
+	import DataPagination from '$lib/components/data-pagination.svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import {
 		Archive, ArrowLeft, ChevronDown, Download, Lock, Globe, Pencil,
 		Plus, Search, Settings, Tag, Tags, Trash2, Upload, X
@@ -30,6 +32,8 @@
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime, formatBytes, truncateDigest } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import type { Artifact, ArtifactRepository } from '$lib/proto/distroface/v1/types_pb';
 	import type { ArtifactVersionGroup } from '$lib/proto/distroface/v1/artifact_pb';
 
@@ -42,11 +46,18 @@
 	let loading = $state(true);
 	let notFound = $state(false);
 	let expandedVersions = $state<Record<string, boolean>>({});
+	const versionPager = new Pager(10);
 
 	// Search mode
-	let filterQuery = $state('');
+	const filter = new QueryFilter([
+		{ key: 'name', label: 'Name' },
+		{ key: 'version', label: 'Version' },
+		{ key: 'path', label: 'Path' }
+	]);
 	let searchResults = $state<Artifact[] | null>(null);
 	let searching = $state(false);
+	let searchLoaded = $state(false);
+	const searchPager = new Pager(20);
 
 	// Upload
 	let uploadPanelOpen = $state(false);
@@ -103,38 +114,44 @@
 	}
 
 	async function loadVersions() {
-		const resp = await rpcClient.artifact.listArtifactVersions({ repoName, namespace });
+		const resp = await rpcClient.artifact.listArtifactVersions({
+			page: versionPager.request(),
+			repoName,
+			namespace
+		});
 		versions = resp.versions;
+		versionPager.apply(resp.page);
 		if (versions.length > 0 && Object.keys(expandedVersions).length === 0) {
 			expandedVersions = { [versions[0].version]: true };
 		}
 	}
 
-	let searchTimer: ReturnType<typeof setTimeout>;
-	function handleFilterInput() {
-		clearTimeout(searchTimer);
-		searchTimer = setTimeout(runSearch, 250);
+	async function runSearch() {
+		searchPager.reset();
+		await fetchSearch();
 	}
 
-	async function runSearch() {
-		const q = filterQuery.trim();
-		if (!q) {
+	async function fetchSearch() {
+		if (!filter.active) {
 			searchResults = null;
+			searchPager.reset();
 			return;
 		}
 		searching = true;
 		try {
 			const resp = await rpcClient.artifact.searchArtifacts({
+				page: searchPager.request(filter.request()),
 				repoName,
-				namespace,
-				name: q,
-				pageSize: 100
+				namespace
 			});
 			searchResults = resp.artifacts;
+			searchPager.apply(resp.page);
 		} catch {
 			searchResults = [];
+			searchPager.apply();
 		} finally {
 			searching = false;
+			searchLoaded = true;
 		}
 	}
 
@@ -487,20 +504,24 @@
 			</div>
 		</div>
 
-		<div class="relative max-w-sm">
-			<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-			<Input bind:value={filterQuery} placeholder="Filter artifacts by name..." class="pl-9" oninput={handleFilterInput} />
+		<div class="max-w-md">
+			<QueryFilterBar {filter} placeholder="Filter artifacts..." onchange={runSearch} />
 		</div>
 
 		{#if searchResults !== null}
-			{#if searching}
+			{#if !searchLoaded}
 				<Skeleton class="h-24 w-full rounded-xl" />
 			{:else if searchResults.length === 0}
-				<EmptyState icon={Search} message="No matching artifacts" description={`No results for "${filterQuery}"`} />
+				<EmptyState icon={Search} message="No matching artifacts" description="No results match the current filter" />
 			{:else}
-				<div class="data-table">
+				<div class="data-table transition-opacity duration-200 {searching ? 'opacity-60' : ''}">
 					{@render artifactTable(searchResults)}
 				</div>
+				<DataPagination
+					page={searchPager.page} pageSize={searchPager.pageSize} totalCount={searchPager.totalCount}
+					onPrev={() => { if (searchPager.prev()) fetchSearch(); }}
+					onNext={() => { if (searchPager.next()) fetchSearch(); }}
+				/>
 			{/if}
 		{:else if versions.length === 0}
 			<EmptyState
@@ -542,6 +563,12 @@
 					</Collapsible>
 				{/each}
 			</div>
+
+			<DataPagination
+				page={versionPager.page} pageSize={versionPager.pageSize} totalCount={versionPager.totalCount}
+				onPrev={() => { if (versionPager.prev()) loadVersions(); }}
+				onNext={() => { if (versionPager.next()) loadVersions(); }}
+			/>
 		{/if}
 	{/if}
 </div>

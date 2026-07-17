@@ -5,7 +5,8 @@
 	import { UserRound, Calendar, Building2, Settings } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
-	import { pageToToken, relativeTime } from '$lib/utils';
+	import { relativeTime } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -21,14 +22,11 @@
 	let loading = $state(true);
 	let repos = $state<Repository[]>([]);
 	let repoLoading = $state(true);
-	let repoTotalCount = $state(0);
-	let repoPage = $state(1);
-	const repoPageSize = 20;
+	const repoPager = new Pager(20);
 
 	let starred = $state<Repository[]>([]);
 	let starredLoading = $state(true);
-	let starredTotalCount = $state(0);
-	let starredPage = $state(1);
+	const starredPager = new Pager(20);
 
 	const isOwnProfile = $derived(authStore.user?.username === username);
 
@@ -53,12 +51,11 @@
 		repoLoading = true;
 		try {
 			const resp = await rpcClient.repository.listRepositories({
-				namespace: username,
-				pageSize: repoPageSize,
-				pageToken: pageToToken(repoPage, repoPageSize)
+				page: repoPager.request(),
+				namespace: username
 			});
 			repos = resp.repositories;
-			repoTotalCount = resp.totalCount;
+			repoPager.apply(resp.page);
 		} catch {
 			repos = [];
 		} finally {
@@ -66,30 +63,19 @@
 		}
 	}
 
-	function handlePageChange(newPage: number) {
-		repoPage = newPage;
-		loadRepos();
-	}
-
 	async function loadStarred() {
 		starredLoading = true;
 		try {
 			const resp = await rpcClient.repository.listStarredRepositories({
-				pageSize: repoPageSize,
-				pageToken: pageToToken(starredPage, repoPageSize)
+				page: starredPager.request()
 			});
 			starred = resp.repositories;
-			starredTotalCount = resp.totalCount;
+			starredPager.apply(resp.page);
 		} catch {
 			starred = [];
 		} finally {
 			starredLoading = false;
 		}
-	}
-
-	function handleStarredPageChange(newPage: number) {
-		starredPage = newPage;
-		loadStarred();
 	}
 
 	onMount(() => { loadUser(); loadRepos(); });
@@ -118,8 +104,8 @@
 			<div class="space-y-1 flex-1 min-w-0">
 				<div class="flex items-center gap-2.5">
 					<h1 class="text-2xl font-bold tracking-tight">{user.username}</h1>
-					{#each user.roles as role (role)}
-						<Badge variant="outline" class="text-xs">{role}</Badge>
+					{#each user.roles as role (role.id)}
+						<Badge variant="outline" class="text-xs">{role.name}</Badge>
 					{/each}
 				</div>
 				<div class="flex items-center gap-3 text-sm text-muted-foreground">
@@ -166,18 +152,19 @@
 	<div class="space-y-4">
 		<div class="section-header">
 			<h2 class="section-title">Repositories</h2>
-			{#if repoTotalCount > 0}
-				<span class="text-[12px] text-muted-foreground/60 tabular-nums">{repoTotalCount} total</span>
+			{#if repoPager.totalCount > 0}
+				<span class="text-[12px] text-muted-foreground/60 tabular-nums">{repoPager.totalCount} total</span>
 			{/if}
 		</div>
 
 		<RepoList
 			{repos}
-			totalCount={repoTotalCount}
+			totalCount={repoPager.totalCount}
 			loading={repoLoading}
-			page={repoPage}
-			pageSize={repoPageSize}
-			onPageChange={handlePageChange}
+			page={repoPager.page}
+			pageSize={repoPager.pageSize}
+			onPrev={() => { if (repoPager.prev()) loadRepos(); }}
+			onNext={() => { if (repoPager.next()) loadRepos(); }}
 			emptyMessage="No repositories yet"
 		/>
 	</div>
@@ -186,18 +173,19 @@
 		<div class="space-y-4">
 			<div class="section-header">
 				<h2 class="section-title">Starred</h2>
-				{#if starredTotalCount > 0}
-					<span class="text-[12px] text-muted-foreground/60 tabular-nums">{starredTotalCount} total</span>
+				{#if starredPager.totalCount > 0}
+					<span class="text-[12px] text-muted-foreground/60 tabular-nums">{starredPager.totalCount} total</span>
 				{/if}
 			</div>
 
 			<RepoList
 				repos={starred}
-				totalCount={starredTotalCount}
+				totalCount={starredPager.totalCount}
 				loading={starredLoading}
-				page={starredPage}
-				pageSize={repoPageSize}
-				onPageChange={handleStarredPageChange}
+				page={starredPager.page}
+				pageSize={starredPager.pageSize}
+				onPrev={() => { if (starredPager.prev()) loadStarred(); }}
+				onNext={() => { if (starredPager.next()) loadStarred(); }}
 				emptyMessage="No starred repositories"
 				emptyDescription="Star repositories to keep track of them here."
 			/>

@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 )
 
@@ -44,18 +45,24 @@ func (s *Store) GetOrganizationByID(ctx context.Context, id string) (*db.Organiz
 // ListOrganizations returns organizations with visibility filtering.
 // If canManage is true, all organizations are returned.
 // Otherwise, only organizations the user is a member of are returned.
-func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, search string, limit, offset int) ([]*db.Organization, int64, error) {
-	tx := s.db.WithContext(ctx).Model(&db.Organization{})
+// OrgsQuery allowlists organization list filters
+var OrgsQuery = pagination.Spec{
+	Fields: map[string]string{
+		"name":         "name",
+		"display_name": "display_name",
+		"description":  "description",
+	},
+	Text: []string{"name", "display_name"},
+}
+
+func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, q pagination.Query, limit, offset int) ([]*db.Organization, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.Organization{}).Scopes(OrgsQuery.Scope(q))
 
 	if !canManage && userID != "" {
 		tx = tx.Where("id IN (SELECT org_id FROM org_members WHERE user_id = ?)", userID)
 	} else if !canManage {
 		// Anonymous or no user - return nothing
 		return nil, 0, nil
-	}
-
-	if search != "" {
-		tx = tx.Where("name LIKE ? OR display_name LIKE ?", "%"+search+"%", "%"+search+"%")
 	}
 
 	var total int64
@@ -119,12 +126,21 @@ func (s *Store) GetOrgMember(ctx context.Context, orgID, userID string) (*db.Org
 	return &member, nil
 }
 
-func (s *Store) ListOrgMembers(ctx context.Context, orgID, search string, limit, offset int) ([]*db.OrgMember, int64, error) {
+// OrgMembersQuery allowlists org member list filters
+var OrgMembersQuery = pagination.Spec{
+	Fields: map[string]string{
+		"username": "users.username",
+		"role":     "org_members.role",
+	},
+	Text: []string{"users.username"},
+}
+
+func (s *Store) ListOrgMembers(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]*db.OrgMember, int64, error) {
 	base := func() *gorm.DB {
 		tx := s.db.WithContext(ctx).Model(&db.OrgMember{}).Where("org_members.org_id = ?", orgID)
-		if search != "" {
+		if !q.IsZero() {
 			tx = tx.Joins("JOIN users ON users.id = org_members.user_id").
-				Where("users.username LIKE ?", "%"+search+"%")
+				Scopes(OrgMembersQuery.Scope(q))
 		}
 		return tx
 	}

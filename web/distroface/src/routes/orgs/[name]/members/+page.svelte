@@ -1,10 +1,8 @@
 <script lang="ts">
-	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { onMount, getContext } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Input } from '$lib/components/ui/input';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import {
 		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
@@ -16,78 +14,77 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
-	import UserSearch from '$lib/components/user-search.svelte';
+	import AsyncSelect from '$lib/components/async-select.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import { Users, Plus, UserPlus, Search } from '@lucide/svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
+	import { Users, Plus, UserPlus } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { orgRoleLabel, relativeTime, pageToToken } from '$lib/utils';
+	import { orgRoleLabel, relativeTime } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import { OrgRole } from '$lib/proto/distroface/v1/types_pb';
 	import type { OrgMember } from '$lib/proto/distroface/v1/types_pb';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
 
 	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
-	const orgName = $derived(page.params.name ?? '');
+	const orgId = $derived(ctx.org?.id ?? '');
 
 	let members = $state<OrgMember[]>([]);
-	let totalCount = $state(0);
-	let currentPage = $state(1);
-	const pageSize = 20;
+	const pager = new Pager(20);
 	let loading = $state(true);
-	let searchQuery = $state('');
-	let searchTimeout: ReturnType<typeof setTimeout> | undefined;
+	let loaded = $state(false);
+	const filter = new QueryFilter([
+		{ key: 'username', label: 'Username' },
+		{ key: 'role', label: 'Role' }
+	]);
 
 	let addMemberOpen = $state(false);
-	let addUsername = $state('');
+	let addUserId = $state('');
 	let addRole = $state<OrgRole>(OrgRole.MEMBER);
 	let addingMember = $state(false);
 
 	let removeMemberOpen = $state(false);
+	let removeMemberId = $state('');
 	let removeMemberName = $state('');
 	let removingMember = $state(false);
-
-	const existingUsernames = $derived(members.map((m) => m.username));
 
 	async function loadMembers() {
 		loading = true;
 		try {
 			const resp = await rpcClient.organization.listOrgMembers({
-				orgName,
-				search: searchQuery.trim(),
-				pageSize,
-				pageToken: pageToToken(currentPage, pageSize)
+				page: pager.request(filter.request()),
+				orgId
 			});
 			members = resp.members;
-			totalCount = resp.totalCount;
+			pager.apply(resp.page);
 		} catch {
 			members = [];
 		} finally {
 			loading = false;
+			loaded = true;
 		}
 	}
 
-	function handleSearchInput() {
-		clearTimeout(searchTimeout);
-		searchTimeout = setTimeout(() => {
-			currentPage = 1;
-			loadMembers();
-		}, 300);
+	function filterChanged() {
+		pager.reset();
+		loadMembers();
 	}
 
 	async function addMember() {
-		if (!addUsername.trim()) return;
+		if (!addUserId) return;
 		addingMember = true;
 		try {
 			await rpcClient.organization.addOrgMember({
-				orgName,
-				username: addUsername.trim(),
+				orgId,
+				userId: addUserId,
 				role: addRole
 			});
 			toast.success('Member added');
 			addMemberOpen = false;
-			addUsername = '';
+			addUserId = '';
 			addRole = OrgRole.MEMBER;
 			await loadMembers();
 			await ctx.refresh();
@@ -98,9 +95,9 @@
 		}
 	}
 
-	async function changeMemberRole(username: string, role: OrgRole) {
+	async function changeMemberRole(userId: string, role: OrgRole) {
 		try {
-			await rpcClient.organization.updateOrgMemberRole({ orgName, username, role });
+			await rpcClient.organization.updateOrgMemberRole({ orgId, userId, role });
 			toast.success('Role updated');
 			await loadMembers();
 		} catch {
@@ -108,15 +105,16 @@
 		}
 	}
 
-	function openRemoveMember(username: string) {
-		removeMemberName = username;
+	function openRemoveMember(member: OrgMember) {
+		removeMemberId = member.userId;
+		removeMemberName = member.username;
 		removeMemberOpen = true;
 	}
 
 	async function confirmRemoveMember() {
 		removingMember = true;
 		try {
-			await rpcClient.organization.removeOrgMember({ orgName, username: removeMemberName });
+			await rpcClient.organization.removeOrgMember({ orgId, userId: removeMemberId });
 			toast.success('Member removed');
 			removeMemberOpen = false;
 			await loadMembers();
@@ -142,17 +140,11 @@
 		{/if}
 	</div>
 
-	<div class="relative max-w-md">
-		<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/50" />
-		<Input
-			placeholder="Search members..."
-			class="pl-9 h-9 bg-muted/30 border-border/50 focus-visible:bg-background"
-			bind:value={searchQuery}
-			oninput={handleSearchInput}
-		/>
+	<div class="max-w-md">
+		<QueryFilterBar {filter} placeholder="Search members..." onchange={filterChanged} />
 	</div>
 
-	{#if loading}
+	{#if !loaded}
 		<div class="space-y-2">
 			{#each { length: 3 }, i (i)}
 				<Skeleton class="h-14 w-full rounded-lg" />
@@ -161,11 +153,11 @@
 	{:else if members.length === 0}
 		<EmptyState
 			icon={Users}
-			message={searchQuery ? 'No matching members' : 'No members'}
-			description={searchQuery ? 'Try a different search.' : 'Add members to collaborate on this organization.'}
+			message={filter.active ? 'No matching members' : 'No members'}
+			description={filter.active ? 'Try a different search.' : 'Add members to collaborate on this organization.'}
 		/>
 	{:else}
-		<div class="data-table">
+		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			<Table>
 				<TableHeader>
 					<TableRow class="bg-muted/30 hover:bg-muted/30">
@@ -188,7 +180,7 @@
 									<Select
 										type="single"
 										value={String(member.role)}
-										onValueChange={(v) => { if (v) changeMemberRole(member.username, Number(v) as OrgRole); }}
+										onValueChange={(v) => { if (v) changeMemberRole(member.userId, Number(v) as OrgRole); }}
 									>
 										<SelectTrigger class="w-32 h-8">{orgRoleLabel(member.role)}</SelectTrigger>
 										<SelectContent>
@@ -212,7 +204,7 @@
 											variant="ghost"
 											size="sm"
 											class="text-destructive hover:text-destructive"
-											onclick={() => openRemoveMember(member.username)}
+											onclick={() => openRemoveMember(member)}
 										>
 											Remove
 										</Button>
@@ -226,9 +218,9 @@
 		</div>
 
 		<DataPagination
-			page={currentPage} {pageSize} {totalCount}
-			onPrev={() => { currentPage--; loadMembers(); }}
-			onNext={() => { currentPage++; loadMembers(); }}
+			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
+			onPrev={() => { if (pager.prev()) loadMembers(); }}
+			onNext={() => { if (pager.next()) loadMembers(); }}
 		/>
 	{/if}
 </div>
@@ -241,11 +233,20 @@
 >
 	<div class="space-y-6">
 		<FormSection title="User">
-			<FormField label="Username" id="add-username" required help="Search for an existing user to add.">
-				<UserSearch
-					bind:value={addUsername}
-					excludeUsernames={existingUsernames}
-					placeholder="Search for a user..."
+			<FormField label="User" id="add-user" required help="Search for an existing user to add.">
+				<AsyncSelect
+					bind:selected={addUserId}
+					placeholder="Select a user..."
+					searchPlaceholder="Search users..."
+					fetchPage={async (query, pageToken) => {
+						const resp = await rpcClient.user.listUsers({
+							page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 }
+						});
+						return {
+							items: resp.users.map((u) => ({ value: u.id, label: u.username })),
+							nextPageToken: resp.page?.nextPageToken ?? ''
+						};
+					}}
 				/>
 			</FormField>
 		</FormSection>
@@ -267,7 +268,7 @@
 
 	{#snippet footer()}
 		<Button variant="outline" onclick={() => (addMemberOpen = false)}>Cancel</Button>
-		<Button onclick={addMember} disabled={addingMember || !addUsername.trim()}>
+		<Button onclick={addMember} disabled={addingMember || !addUserId}>
 			{addingMember ? 'Adding...' : 'Add Member'}
 		</Button>
 	{/snippet}

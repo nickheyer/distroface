@@ -95,11 +95,11 @@
 							? 'Local account'
 							: authStore.user?.authProvider}
 					</Badge>
-					{#each authStore.user?.roles ?? [] as role (role)}
+					{#each authStore.user?.roles ?? [] as role (role.id)}
 						<Badge
 							variant="secondary"
 							class="text-xs"
-						>{role}</Badge>
+						>{role.name}</Badge>
 					{/each}
 				</div>
 			</div>

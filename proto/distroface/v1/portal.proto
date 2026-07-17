@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/pagination.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
@@ -12,6 +13,8 @@ service PortalService {
   rpc CreatePortal(CreatePortalRequest) returns (CreatePortalResponse) {}
   // Resolves the portal serving the requesting host, empty off portal hosts
   rpc ResolvePortal(ResolvePortalRequest) returns (ResolvePortalResponse) {}
+  // Returns a single portal by id
+  rpc GetPortal(GetPortalRequest) returns (GetPortalResponse) {}
   // Returns all portals belonging to an organization
   rpc ListPortals(ListPortalsRequest) returns (ListPortalsResponse) {}
   // Updates a portal's hostname, mapping rules, or access options
@@ -29,7 +32,7 @@ message PortalRule {
 // Alternate org owned registry endpoint, requests on its hostname are mapped to canon repo paths in org namespace
 message RegistryPortal {
   string id = 1;
-  string org_name = 2;
+  string org_id = 2;
   string name = 3;
   string hostname = 4; // Hostname this portal answers on, empty matches any host on its port
   bool map_unqualified = 5; // Map single-segment names into the org namespace
@@ -44,7 +47,7 @@ message RegistryPortal {
 
 // Fields to create a portal, hostname or port required
 message CreatePortalRequest {
-  string org_name = 1;
+  string org_id = 1;
   string name = 2;
   string hostname = 3;
   bool map_unqualified = 4;
@@ -74,20 +77,32 @@ message ResolvePortalResponse {
   string primary_host = 8;
 }
 
+// Identifies a single portal within an organization
+message GetPortalRequest {
+  string org_id = 1;
+  string id = 2;
+}
+
+// The requested portal
+message GetPortalResponse {
+  RegistryPortal portal = 1;
+}
+
 // Identifies the organization to list portals for
 message ListPortalsRequest {
-  string org_name = 1;
+  PageRequest page = 1;
+  string org_id = 2;
 }
 
 // The organization's portals
 message ListPortalsResponse {
   repeated RegistryPortal portals = 1;
-  int32 main_port = 2;
+  PageInfo page = 2;
 }
 
 // Updates portal fields, unset fields are unchanged
 message UpdatePortalRequest {
-  string org_name = 1;
+  string org_id = 1;
   string id = 2;
   optional string name = 3;
   optional string hostname = 4;
@@ -107,7 +122,7 @@ message UpdatePortalResponse {
 
 // Identifies the portal to delete
 message DeletePortalRequest {
-  string org_name = 1;
+  string org_id = 1;
   string id = 2;
 }
 

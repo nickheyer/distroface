@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/pagination.proto";
 import "distroface/v1/types.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
@@ -20,6 +21,12 @@ service UserService {
   rpc AdminUpdateUser(AdminUpdateUserRequest) returns (AdminUpdateUserResponse) {}
   // AdminDeleteUser deletes a user (admin).
   rpc AdminDeleteUser(AdminDeleteUserRequest) returns (AdminDeleteUserResponse) {}
+  // AdminCreateUser creates a local user with a password directly (admin).
+  rpc AdminCreateUser(AdminCreateUserRequest) returns (AdminCreateUserResponse) {}
+  // AdminBulkUpdateUsers updates status and roles on many users (admin).
+  rpc AdminBulkUpdateUsers(AdminBulkUpdateUsersRequest) returns (AdminBulkUpdateUsersResponse) {}
+  // AdminBulkDeleteUsers deletes many users (admin).
+  rpc AdminBulkDeleteUsers(AdminBulkDeleteUsersRequest) returns (AdminBulkDeleteUsersResponse) {}
 }
 
 // GetUserRequest identifies a user to retrieve.
@@ -54,16 +61,13 @@ message ChangePasswordResponse {}
 
 // ListUsersRequest for paginated user listing.
 message ListUsersRequest {
-  int32 page_size = 1;
-  string page_token = 2;
-  string query = 3;
+  PageRequest page = 1;
 }
 
 // ListUsersResponse contains a page of users.
 message ListUsersResponse {
   repeated User users = 1;
-  string next_page_token = 2;
-  int32 total_count = 3;
+  PageInfo page = 2;
 }
 
 // AdminUpdateUserRequest allows admins to update a user.
@@ -71,7 +75,7 @@ message AdminUpdateUserRequest {
   string user_id = 1;
   optional string email = 2;
   optional bool is_active = 3;
-  repeated string roles = 4;
+  repeated string role_ids = 4;
 }
 
 // AdminUpdateUserResponse contains the updated user.
@@ -86,3 +90,43 @@ message AdminDeleteUserRequest {
 
 // AdminDeleteUserResponse is empty on success.
 message AdminDeleteUserResponse {}
+
+// Contains the fields for a directly created local user
+message AdminCreateUserRequest {
+  string username = 1;
+  string password = 2;
+  string email = 3;
+  string display_name = 4;
+  repeated string role_ids = 5;
+  bool must_change_password = 6;
+}
+
+// Contains the created user.
+message AdminCreateUserResponse {
+  User user = 1;
+}
+
+// Applies the set fields to every listed user.
+message AdminBulkUpdateUsersRequest {
+  repeated string user_ids = 1;
+  optional bool is_active = 2;
+  repeated string add_role_ids = 3;
+  repeated string remove_role_ids = 4;
+}
+
+// Reports per-user failures.
+message AdminBulkUpdateUsersResponse {
+  int32 updated_count = 1;
+  repeated BulkOperationError errors = 2;
+}
+
+// Identifies the users to delete.
+message AdminBulkDeleteUsersRequest {
+  repeated string user_ids = 1;
+}
+
+// Reports per-user failures.
+message AdminBulkDeleteUsersResponse {
+  int32 deleted_count = 1;
+  repeated BulkOperationError errors = 2;
+}

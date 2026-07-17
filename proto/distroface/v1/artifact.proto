@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/pagination.proto";
 import "distroface/v1/types.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
@@ -69,19 +70,15 @@ message GetArtifactRepositoryResponse {
 
 // ListArtifactRepositoriesRequest is the request to list artifact repositories.
 message ListArtifactRepositoriesRequest {
-  int32 page_size = 1;
-  string page_token = 2;
-  // search filters repositories by name substring.
-  string search = 3;
+  PageRequest page = 1;
   // namespace limits the list to one namespace when set.
-  string namespace = 4;
+  string namespace = 2;
 }
 
 // ListArtifactRepositoriesResponse is the paginated list of repositories.
 message ListArtifactRepositoriesResponse {
   repeated ArtifactRepository repositories = 1;
-  string next_page_token = 2;
-  int64 total_count = 3;
+  PageInfo page = 2;
 }
 
 // UpdateArtifactRepositoryRequest is the request to update a repository.
@@ -151,25 +148,24 @@ message GetArtifactResponse {
 
 // ListArtifactsRequest is the request to list artifacts in a repository.
 message ListArtifactsRequest {
-  string repo_name = 1;
+  PageRequest page = 1;
+  string repo_name = 2;
   // version filters to a single version when set.
-  string version = 2;
-  int32 page_size = 3;
-  string page_token = 4;
-  string namespace = 5;
+  string version = 3;
+  string namespace = 4;
 }
 
 // ListArtifactsResponse is the paginated list of artifacts.
 message ListArtifactsResponse {
   repeated Artifact artifacts = 1;
-  string next_page_token = 2;
-  int64 total_count = 3;
+  PageInfo page = 2;
 }
 
 // ListArtifactVersionsRequest is the request to list artifacts grouped by version.
 message ListArtifactVersionsRequest {
-  string repo_name = 1;
-  string namespace = 2;
+  PageRequest page = 1;
+  string repo_name = 2;
+  string namespace = 3;
 }
 
 // ArtifactVersionGroup is a version string with its artifacts.
@@ -181,35 +177,26 @@ message ArtifactVersionGroup {
 // ListArtifactVersionsResponse groups a repository's artifacts by version.
 message ListArtifactVersionsResponse {
   repeated ArtifactVersionGroup versions = 1;
+  PageInfo page = 2;
 }
 
 // SearchArtifactsRequest is the request to search artifacts.
 message SearchArtifactsRequest {
+  // page.query filters on name, version, path.
+  // page.order_by accepts name, version, path, size, created_at, updated_at.
+  PageRequest page = 1;
   // repo_name limits the search to one repository when set.
-  string repo_name = 1;
-  // name filters by artifact name substring.
-  string name = 2;
-  // version filters by version substring.
-  string version = 3;
-  // path filters by path substring.
-  string path = 4;
+  string repo_name = 2;
   // properties must all match exactly (key=value).
-  map<string, string> properties = 5;
-  // sort is one of name, version, path, size, created_at, updated_at.
-  string sort = 6;
-  // order is ASC or DESC.
-  string order = 7;
-  int32 page_size = 8;
-  string page_token = 9;
+  map<string, string> properties = 3;
   // namespace limits the search to one namespace when set.
-  string namespace = 10;
+  string namespace = 4;
 }
 
 // SearchArtifactsResponse is the paginated search result.
 message SearchArtifactsResponse {
   repeated Artifact artifacts = 1;
-  string next_page_token = 2;
-  int64 total_count = 3;
+  PageInfo page = 2;
 }
 
 // UpdateArtifactRequest renames/moves an artifact or replaces its metadata.

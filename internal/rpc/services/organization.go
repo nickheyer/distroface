@@ -10,6 +10,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -104,6 +105,19 @@ func (s *OrganizationService) GetOrganization(ctx context.Context, req *connect.
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
+	// Object scoped read check happens here, slug resolution needs the id
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+	allowed, err := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionRead, org.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if !allowed {
+		return nil, connect.NewError(connect.CodePermissionDenied, nil)
+	}
+
 	memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
 
 	return connect.NewResponse(&v1.GetOrganizationResponse{
@@ -118,16 +132,16 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connec
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
-		resp := &v1.ListOrganizationsResponse{}
+		resp := &v1.ListOrganizationsResponse{Page: &v1.PageInfo{}}
 		if org != nil {
 			memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
 			resp.Organizations = []*v1.Organization{orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID))}
-			resp.TotalCount = 1
+			resp.Page.TotalCount = 1
 		}
 		return connect.NewResponse(resp), nil
 	}
 
-	limit, offset := parsePagination(req.Msg.PageSize, req.Msg.PageToken)
+	limit, offset := pagination.Parse(req.Msg.Page)
 
 	user := auth.UserFromContext(ctx)
 	var userID string
@@ -139,7 +153,12 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connec
 		roles, _ = s.store.ListUserOrgRoles(ctx, user.ID)
 	}
 
-	orgs, total, err := s.store.ListOrganizations(ctx, userID, canManage, req.Msg.Search, limit, offset)
+	q := pagination.ParseQuery(req.Msg.Page)
+	if err := stores.OrgsQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	orgs, total, err := s.store.ListOrganizations(ctx, userID, canManage, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -152,8 +171,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connec
 
 	return connect.NewResponse(&v1.ListOrganizationsResponse{
 		Organizations: protoOrgs,
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    int32(total),
+		Page:          pagination.Info(offset, limit, total),
 	}), nil
 }
 
@@ -163,11 +181,11 @@ func (s *OrganizationService) UpdateOrganization(ctx context.Context, req *conne
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 
-	if req.Msg.Name == "" {
+	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
 
-	org, err := s.store.GetOrganization(ctx, req.Msg.Name)
+	org, err := s.store.GetOrganizationByID(ctx, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -176,7 +194,7 @@ func (s *OrganizationService) UpdateOrganization(ctx context.Context, req *conne
 	}
 
 	// Users with manage permission on this org bypass membership checks
-	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
 		member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if member == nil || (member.Role != storage.OrgRoleOwner && member.Role != storage.OrgRoleAdmin) {
@@ -208,11 +226,11 @@ func (s *OrganizationService) DeleteOrganization(ctx context.Context, req *conne
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 
-	if req.Msg.Name == "" {
+	if req.Msg.Id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
 
-	org, err := s.store.GetOrganization(ctx, req.Msg.Name)
+	org, err := s.store.GetOrganizationByID(ctx, req.Msg.Id)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -221,7 +239,7 @@ func (s *OrganizationService) DeleteOrganization(ctx context.Context, req *conne
 	}
 
 	// Users with manage permission on this org bypass ownership check
-	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
 		member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if member == nil || member.Role != storage.OrgRoleOwner {
@@ -243,11 +261,11 @@ func (s *OrganizationService) DeleteOrganization(ctx context.Context, req *conne
 }
 
 func (s *OrganizationService) ListOrgMembers(ctx context.Context, req *connect.Request[v1.ListOrgMembersRequest]) (*connect.Response[v1.ListOrgMembersResponse], error) {
-	if req.Msg.OrgName == "" {
+	if req.Msg.OrgId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
 
-	org, err := s.store.GetOrganization(ctx, req.Msg.OrgName)
+	org, err := s.store.GetOrganizationByID(ctx, req.Msg.OrgId)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -255,9 +273,14 @@ func (s *OrganizationService) ListOrgMembers(ctx context.Context, req *connect.R
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	limit, offset := parsePagination(req.Msg.PageSize, req.Msg.PageToken)
+	limit, offset := pagination.Parse(req.Msg.Page)
 
-	members, total, err := s.store.ListOrgMembers(ctx, org.ID, req.Msg.Search, limit, offset)
+	q := pagination.ParseQuery(req.Msg.Page)
+	if err := stores.OrgMembersQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	members, total, err := s.store.ListOrgMembers(ctx, org.ID, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -268,9 +291,8 @@ func (s *OrganizationService) ListOrgMembers(ctx context.Context, req *connect.R
 	}
 
 	return connect.NewResponse(&v1.ListOrgMembersResponse{
-		Members:       protoMembers,
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    int32(total),
+		Members: protoMembers,
+		Page:    pagination.Info(offset, limit, total),
 	}), nil
 }
 
@@ -280,18 +302,18 @@ func (s *OrganizationService) AddOrgMember(ctx context.Context, req *connect.Req
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 
-	if req.Msg.OrgName == "" || req.Msg.Username == "" {
+	if req.Msg.OrgId == "" || req.Msg.UserId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
 
-	org, err := s.store.GetOrganization(ctx, req.Msg.OrgName)
+	org, err := s.store.GetOrganizationByID(ctx, req.Msg.OrgId)
 	if err != nil || org == nil {
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
 	role := orgRoleToString(req.Msg.Role)
 
-	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
 		requesterMember, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if requesterMember == nil || (requesterMember.Role != storage.OrgRoleOwner && requesterMember.Role != storage.OrgRoleAdmin) {
@@ -303,7 +325,7 @@ func (s *OrganizationService) AddOrgMember(ctx context.Context, req *connect.Req
 		}
 	}
 
-	targetUser, _ := s.store.GetUserByUsername(ctx, req.Msg.Username)
+	targetUser, _ := s.store.GetUserByID(ctx, req.Msg.UserId)
 	if targetUser == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("user not found"))
 	}
@@ -336,16 +358,16 @@ func (s *OrganizationService) RemoveOrgMember(ctx context.Context, req *connect.
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 
-	if req.Msg.OrgName == "" || req.Msg.Username == "" {
+	if req.Msg.OrgId == "" || req.Msg.UserId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
 
-	org, err := s.store.GetOrganization(ctx, req.Msg.OrgName)
+	org, err := s.store.GetOrganizationByID(ctx, req.Msg.OrgId)
 	if err != nil || org == nil {
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
 		requesterMember, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if requesterMember == nil || (requesterMember.Role != storage.OrgRoleOwner && requesterMember.Role != storage.OrgRoleAdmin) {
@@ -353,7 +375,7 @@ func (s *OrganizationService) RemoveOrgMember(ctx context.Context, req *connect.
 		}
 	}
 
-	targetUser, _ := s.store.GetUserByUsername(ctx, req.Msg.Username)
+	targetUser, _ := s.store.GetUserByID(ctx, req.Msg.UserId)
 	if targetUser == nil {
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
@@ -387,16 +409,16 @@ func (s *OrganizationService) UpdateOrgMemberRole(ctx context.Context, req *conn
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 
-	if req.Msg.OrgName == "" || req.Msg.Username == "" {
+	if req.Msg.OrgId == "" || req.Msg.UserId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
 
-	org, err := s.store.GetOrganization(ctx, req.Msg.OrgName)
+	org, err := s.store.GetOrganizationByID(ctx, req.Msg.OrgId)
 	if err != nil || org == nil {
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
 		requesterMember, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if requesterMember == nil || requesterMember.Role != storage.OrgRoleOwner {
@@ -404,7 +426,7 @@ func (s *OrganizationService) UpdateOrgMemberRole(ctx context.Context, req *conn
 		}
 	}
 
-	targetUser, _ := s.store.GetUserByUsername(ctx, req.Msg.Username)
+	targetUser, _ := s.store.GetUserByID(ctx, req.Msg.UserId)
 	if targetUser == nil {
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
@@ -478,7 +500,7 @@ func (s *OrganizationService) orgSettingDefaults() map[string]string {
 
 func (s *OrganizationService) GetOrgSettings(ctx context.Context, req *connect.Request[v1.GetOrgSettingsRequest]) (*connect.Response[v1.GetOrgSettingsResponse], error) {
 	user := auth.UserFromContext(ctx)
-	org, err := s.orgWithAccess(ctx, user, req.Msg.OrgName, false)
+	org, err := s.orgWithAccess(ctx, user, req.Msg.OrgId, false)
 	if err != nil {
 		return nil, err
 	}
@@ -494,7 +516,7 @@ func (s *OrganizationService) GetOrgSettings(ctx context.Context, req *connect.R
 
 func (s *OrganizationService) UpdateOrgSettings(ctx context.Context, req *connect.Request[v1.UpdateOrgSettingsRequest]) (*connect.Response[v1.UpdateOrgSettingsResponse], error) {
 	user := auth.UserFromContext(ctx)
-	org, err := s.orgWithAccess(ctx, user, req.Msg.OrgName, true)
+	org, err := s.orgWithAccess(ctx, user, req.Msg.OrgId, true)
 	if err != nil {
 		return nil, err
 	}
@@ -540,10 +562,10 @@ func (s *OrganizationService) TransferOrgOwnership(ctx context.Context, req *con
 	if user == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
-	if req.Msg.OrgName == "" || req.Msg.Username == "" {
+	if req.Msg.OrgId == "" || req.Msg.UserId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
-	org, err := s.store.GetOrganization(ctx, req.Msg.OrgName)
+	org, err := s.store.GetOrganizationByID(ctx, req.Msg.OrgId)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -552,13 +574,13 @@ func (s *OrganizationService) TransferOrgOwnership(ctx context.Context, req *con
 	}
 
 	// Only owners hand off ownership, manage permission bypasses
-	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	requester, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 	if !canManage && (requester == nil || requester.Role != storage.OrgRoleOwner) {
 		return nil, connect.NewError(connect.CodePermissionDenied, nil)
 	}
 
-	targetUser, _ := s.store.GetUserByUsername(ctx, req.Msg.Username)
+	targetUser, _ := s.store.GetUserByID(ctx, req.Msg.UserId)
 	if targetUser == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("user not found"))
 	}
@@ -585,21 +607,21 @@ func (s *OrganizationService) TransferOrgOwnership(ctx context.Context, req *con
 }
 
 // Manage bypass, otherwise membership, adminOnly wants owner or admin rank
-func (s *OrganizationService) orgWithAccess(ctx context.Context, user *auth.AuthenticatedUser, name string, adminOnly bool) (*storage.Organization, error) {
+func (s *OrganizationService) orgWithAccess(ctx context.Context, user *auth.AuthenticatedUser, orgID string, adminOnly bool) (*storage.Organization, error) {
 	if user == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
-	if name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("org name is required"))
+	if orgID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("org id is required"))
 	}
-	org, err := s.store.GetOrganization(ctx, name)
+	org, err := s.store.GetOrganizationByID(ctx, orgID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	if org == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("organization not found"))
 	}
-	if canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name); canManage {
+	if canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID); canManage {
 		return org, nil
 	}
 	member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)

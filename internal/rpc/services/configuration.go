@@ -23,6 +23,7 @@ var _ distrofacev1connect.ConfigurationServiceHandler = (*ConfigurationService)(
 // Only these config keys leave the public rpc
 var publicKeys = []string{
 	"server.hostname",
+	"server.port",
 }
 
 type ConfigurationService struct {

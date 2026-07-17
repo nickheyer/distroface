@@ -2,35 +2,43 @@
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import RepoList from '$lib/components/repo-list.svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
-	import { pageToToken } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import type { Repository } from '$lib/proto/distroface/v1/types_pb';
 
 	const orgName = $derived(page.params.name ?? '');
 
 	let repos = $state<Repository[]>([]);
-	let totalCount = $state(0);
-	let currentPage = $state(1);
-	const pageSize = 20;
+	const pager = new Pager(20);
+	const filter = new QueryFilter([
+		{ key: 'name', label: 'Name' },
+		{ key: 'description', label: 'Description' }
+	]);
 	let loading = $state(true);
-	let searchQuery = $state('');
+	let loaded = $state(false);
 
 	async function loadRepos() {
 		loading = true;
 		try {
 			const resp = await rpcClient.repository.listRepositories({
 				namespace: orgName,
-				query: searchQuery.trim(),
-				pageSize,
-				pageToken: pageToToken(currentPage, pageSize)
+				page: pager.request(filter.request())
 			});
 			repos = resp.repositories;
-			totalCount = resp.totalCount;
+			pager.apply(resp.page);
 		} catch {
 			repos = [];
 		} finally {
 			loading = false;
+			loaded = true;
 		}
+	}
+
+	function filterChanged() {
+		pager.reset();
+		loadRepos();
 	}
 
 	onMount(loadRepos);
@@ -39,20 +47,23 @@
 <div class="space-y-4">
 	<div class="section-header">
 		<h2 class="section-title">Repositories</h2>
+		<div class="w-96">
+			<QueryFilterBar {filter} placeholder="Search repositories..." onchange={filterChanged} />
+		</div>
 	</div>
 
 	<RepoList
 		{repos}
-		{totalCount}
+		totalCount={pager.totalCount}
 		{loading}
-		page={currentPage}
-		{pageSize}
-		showSearch
-		bind:searchQuery
-		onSearch={() => { currentPage = 1; loadRepos(); }}
-		onPageChange={(newPage) => { currentPage = newPage; loadRepos(); }}
-		emptyMessage={searchQuery ? 'No matching repositories' : 'No repositories yet'}
-		emptyDescription={searchQuery
+		{loaded}
+		showCount={false}
+		page={pager.page}
+		pageSize={pager.pageSize}
+		onPrev={() => { if (pager.prev()) loadRepos(); }}
+		onNext={() => { if (pager.next()) loadRepos(); }}
+		emptyMessage={filter.active ? 'No matching repositories' : 'No repositories yet'}
+		emptyDescription={filter.active
 			? 'Try a different search.'
 			: "Push images to this organization's namespace to create repositories."}
 	/>

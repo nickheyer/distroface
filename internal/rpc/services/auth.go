@@ -14,6 +14,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -137,14 +138,18 @@ func (s *AuthService) Register(ctx context.Context, req *connect.Request[v1.Regi
 	if count == 0 {
 		_ = s.store.AssignRole(ctx, user.ID, "admin", "local")
 	} else if invite != nil {
-		// Invite-specified roles
-		var inviteRoles []string
-		_ = json.Unmarshal([]byte(invite.Roles), &inviteRoles)
-		for _, roleName := range inviteRoles {
-			_ = s.store.AssignRole(ctx, user.ID, roleName, "invite")
+		// Invite-specified role ids, vanished roles are skipped
+		var inviteRoleIDs []string
+		_ = json.Unmarshal([]byte(invite.Roles), &inviteRoleIDs)
+		assigned := 0
+		for _, roleID := range inviteRoleIDs {
+			if role, _ := s.store.GetRole(ctx, roleID); role != nil {
+				_ = s.store.AssignRole(ctx, user.ID, role.Name, "invite")
+				assigned++
+			}
 		}
 		// If invite didn't specify roles, fall through to default
-		if len(inviteRoles) == 0 {
+		if assigned == 0 {
 			defaultRoles, _ := s.store.GetDefaultRoles(ctx)
 			for _, role := range defaultRoles {
 				_ = s.store.AssignRole(ctx, user.ID, role.Name, "local")
@@ -158,7 +163,7 @@ func (s *AuthService) Register(ctx context.Context, req *connect.Request[v1.Regi
 		}
 	}
 
-	roleNames, _ := s.store.GetUserRoleNames(ctx, user.ID)
+	roles, _ := s.store.GetUserRoles(ctx, user.ID)
 
 	// Login the newly registered user
 	_, _, token, _, err := s.authManager.Login(ctx, msg.Username, msg.Password)
@@ -166,12 +171,11 @@ func (s *AuthService) Register(ctx context.Context, req *connect.Request[v1.Regi
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	permissions := s.getPermissionsForRoles(roleNames)
+	permissions := s.getPermissionsForRoles(roleNamesOf(roles))
 
 	return connect.NewResponse(&v1.RegisterResponse{
-		User:         userToProto(user, roleNames),
+		User:         userToProto(user, roles),
 		SessionToken: token,
-		Roles:        roleNames,
 		Permissions:  permissions,
 	}), nil
 }
@@ -188,12 +192,12 @@ func (s *AuthService) Login(ctx context.Context, req *connect.Request[v1.LoginRe
 		return nil, connect.NewError(connect.CodeUnauthenticated, err)
 	}
 
+	roles, _ := s.store.GetUserRoles(ctx, user.ID)
 	permissions := s.getPermissionsForRoles(roleNames)
 
 	return connect.NewResponse(&v1.LoginResponse{
-		User:         userToProto(user, roleNames),
+		User:         userToProto(user, roles),
 		SessionToken: token,
-		Roles:        roleNames,
 		Permissions:  permissions,
 	}), nil
 }
@@ -218,11 +222,11 @@ func (s *AuthService) GetCurrentUser(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	roleNames, _ := s.store.GetUserRoleNames(ctx, user.ID)
-	permissions := s.getPermissionsForRoles(roleNames)
+	roles, _ := s.store.GetUserRoles(ctx, user.ID)
+	permissions := s.getPermissionsForRoles(roleNamesOf(roles))
 
 	return connect.NewResponse(&v1.GetCurrentUserResponse{
-		User:        userToProto(user, roleNames),
+		User:        userToProto(user, roles),
 		Permissions: permissions,
 	}), nil
 }
@@ -337,12 +341,10 @@ func (s *AuthService) CreateInvite(ctx context.Context, req *connect.Request[v1.
 	}
 
 	// Validate that all specified roles exist
-	if len(msg.Roles) > 0 {
-		for _, roleName := range msg.Roles {
-			role, _ := s.store.GetRoleByName(ctx, roleName)
-			if role == nil {
-				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("role %q does not exist", roleName))
-			}
+	for _, roleID := range msg.RoleIds {
+		role, _ := s.store.GetRole(ctx, roleID)
+		if role == nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("role %q does not exist", roleID))
 		}
 	}
 
@@ -363,7 +365,7 @@ func (s *AuthService) CreateInvite(ctx context.Context, req *connect.Request[v1.
 		pinHash = string(hash)
 	}
 
-	rolesJSON, _ := json.Marshal(msg.Roles)
+	rolesJSON, _ := json.Marshal(msg.RoleIds)
 
 	var maxUses int
 	if msg.MaxUses != nil {
@@ -391,27 +393,31 @@ func (s *AuthService) CreateInvite(ctx context.Context, req *connect.Request[v1.
 	}
 
 	return connect.NewResponse(&v1.CreateInviteResponse{
-		Invite: dbInviteToProto(invite),
+		Invite: s.inviteToProto(ctx, invite),
 	}), nil
 }
 
 func (s *AuthService) ListInvites(ctx context.Context, req *connect.Request[v1.ListInvitesRequest]) (*connect.Response[v1.ListInvitesResponse], error) {
-	limit, offset := parsePagination(req.Msg.PageSize, req.Msg.PageToken)
+	limit, offset := pagination.Parse(req.Msg.Page)
 
-	invites, total, err := s.store.ListRegistrationInvites(ctx, limit, offset)
+	q := pagination.ParseQuery(req.Msg.Page)
+	if err := stores.InvitesQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	invites, total, err := s.store.ListRegistrationInvites(ctx, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	protoInvites := make([]*v1.RegistrationInvite, len(invites))
 	for i, inv := range invites {
-		protoInvites[i] = dbInviteToProto(inv)
+		protoInvites[i] = s.inviteToProto(ctx, inv)
 	}
 
 	return connect.NewResponse(&v1.ListInvitesResponse{
-		Invites:       protoInvites,
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    int32(total),
+		Invites: protoInvites,
+		Page:    pagination.Info(offset, limit, total),
 	}), nil
 }
 
@@ -429,7 +435,7 @@ func (s *AuthService) GetInvite(ctx context.Context, req *connect.Request[v1.Get
 	}
 
 	return connect.NewResponse(&v1.GetInviteResponse{
-		Invite: dbInviteToProto(invite),
+		Invite: s.inviteToProto(ctx, invite),
 	}), nil
 }
 
@@ -443,6 +449,35 @@ func (s *AuthService) DeleteInvite(ctx context.Context, req *connect.Request[v1.
 	}
 
 	return connect.NewResponse(&v1.DeleteInviteResponse{}), nil
+}
+
+func (s *AuthService) BulkDeleteInvites(ctx context.Context, req *connect.Request[v1.BulkDeleteInvitesRequest]) (*connect.Response[v1.BulkDeleteInvitesResponse], error) {
+	if len(req.Msg.Ids) == 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no invite ids provided"))
+	}
+
+	existing, err := s.store.FilterExistingInviteIDs(ctx, req.Msg.Ids)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	resp := &v1.BulkDeleteInvitesResponse{}
+	var targets []string
+	for _, id := range req.Msg.Ids {
+		if !existing[id] {
+			resp.Errors = append(resp.Errors, &v1.BulkOperationError{Id: id, Error: "invite not found"})
+			continue
+		}
+		targets = append(targets, id)
+	}
+
+	deleted, err := s.store.BulkDeleteRegistrationInvites(ctx, targets)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	resp.DeletedCount = int32(deleted)
+	return connect.NewResponse(resp), nil
 }
 
 func (s *AuthService) ValidateInvite(ctx context.Context, req *connect.Request[v1.ValidateInviteRequest]) (*connect.Response[v1.ValidateInviteResponse], error) {
@@ -469,15 +504,16 @@ func (s *AuthService) ValidateInvite(ctx context.Context, req *connect.Request[v
 	}), nil
 }
 
-func dbInviteToProto(inv *storage.RegistrationInvite) *v1.RegistrationInvite {
-	var roles []string
-	_ = json.Unmarshal([]byte(inv.Roles), &roles)
+func (s *AuthService) inviteToProto(ctx context.Context, inv *storage.RegistrationInvite) *v1.RegistrationInvite {
+	var roleIDs []string
+	_ = json.Unmarshal([]byte(inv.Roles), &roleIDs)
+	roles, _ := s.store.GetRolesByIDs(ctx, roleIDs)
 
 	proto := &v1.RegistrationInvite{
 		Id:          inv.ID,
 		Code:        inv.Code,
 		Description: inv.Description,
-		Roles:       roles,
+		Roles:       roleRefsOf(roles),
 		HasPin:      inv.PinHash != "",
 		MaxUses:     int32(inv.MaxUses),
 		UseCount:    int32(inv.UseCount),
@@ -524,16 +560,35 @@ func publicUserToProto(u *storage.User) *v1.User {
 	}
 }
 
-func userToProto(u *storage.User, roles []string) *v1.User {
+// Wire refs for role rows
+func roleRefsOf(roles []*storage.Role) []*v1.RoleRef {
+	refs := make([]*v1.RoleRef, len(roles))
+	for i, r := range roles {
+		refs[i] = &v1.RoleRef{Id: r.ID, Name: r.Name}
+	}
+	return refs
+}
+
+// Casbin subject names for role rows
+func roleNamesOf(roles []*storage.Role) []string {
+	names := make([]string, len(roles))
+	for i, r := range roles {
+		names[i] = r.Name
+	}
+	return names
+}
+
+func userToProto(u *storage.User, roles []*storage.Role) *v1.User {
 	proto := &v1.User{
-		Id:           u.ID,
-		Username:     u.Username,
-		DisplayName:  u.DisplayName,
-		Roles:        roles,
-		AuthProvider: u.AuthProvider,
-		IsActive:     u.IsActive,
-		CreatedAt:    timestamppb.New(u.CreatedAt),
-		UpdatedAt:    timestamppb.New(u.UpdatedAt),
+		Id:                 u.ID,
+		Username:           u.Username,
+		DisplayName:        u.DisplayName,
+		Roles:              roleRefsOf(roles),
+		AuthProvider:       u.AuthProvider,
+		IsActive:           u.IsActive,
+		MustChangePassword: u.MustChangePassword,
+		CreatedAt:          timestamppb.New(u.CreatedAt),
+		UpdatedAt:          timestamppb.New(u.UpdatedAt),
 	}
 	if u.Email != nil {
 		proto.Email = *u.Email

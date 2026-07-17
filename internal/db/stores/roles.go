@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 )
 
@@ -59,10 +60,29 @@ func (s *Store) GetRoleByName(ctx context.Context, name string) (*db.Role, error
 	return &role, nil
 }
 
-func (s *Store) ListRoles(ctx context.Context) ([]*db.Role, error) {
+// RolesQuery allowlists role list filters
+var RolesQuery = pagination.Spec{
+	Fields: map[string]string{
+		"name":        "name",
+		"description": "description",
+	},
+	Text: []string{"name", "description"},
+}
+
+func (s *Store) ListRoles(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.Role, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.Role{}).Scopes(RolesQuery.Scope(q))
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if limit > 0 {
+		tx = tx.Limit(limit).Offset(offset)
+	}
 	var roles []*db.Role
-	err := s.db.WithContext(ctx).Order("is_system DESC, name ASC").Find(&roles).Error
-	return roles, err
+	err := tx.Order("is_system DESC, name ASC").Find(&roles).Error
+	return roles, total, err
 }
 
 func (s *Store) GetDefaultRoles(ctx context.Context) ([]*db.Role, error) {
@@ -156,4 +176,26 @@ func (s *Store) GetUserRoleNames(ctx context.Context, userID string) ([]string, 
 		return nil, err
 	}
 	return names, nil
+}
+
+// Role rows matching the given ids
+func (s *Store) GetRolesByIDs(ctx context.Context, ids []string) ([]*db.Role, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var roles []*db.Role
+	err := s.db.WithContext(ctx).Where("id IN ?", ids).Order("name ASC").Find(&roles).Error
+	return roles, err
+}
+
+// Full role rows a user holds, joined through assignments
+func (s *Store) GetUserRoles(ctx context.Context, userID string) ([]*db.Role, error) {
+	var roles []*db.Role
+	err := s.db.WithContext(ctx).
+		Model(&db.Role{}).
+		Joins("JOIN user_roles ON user_roles.role_name = roles.name").
+		Where("user_roles.user_id = ?", userID).
+		Order("roles.name ASC").
+		Find(&roles).Error
+	return roles, err
 }

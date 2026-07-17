@@ -47,6 +47,7 @@ class AuthStore {
 
 	// Users
 	canReadUsers = $derived(checkPermission(this.permissions, 'users', 'read'));
+	canCreateUsers = $derived(checkPermission(this.permissions, 'users', 'create'));
 	canUpdateUsers = $derived(checkPermission(this.permissions, 'users', 'update'));
 	canDeleteUsers = $derived(checkPermission(this.permissions, 'users', 'delete'));
 

@@ -14,19 +14,21 @@ export class OrgContext {
 	// Mirrors backend requireOrgAdmin, owner/admin membership or global grant
 	get canAdmin(): boolean {
 		const role = this.org?.currentUserRole;
+		const id = this.org?.id ?? '';
 		return (
 			role === OrgRole.OWNER ||
 			role === OrgRole.ADMIN ||
-			authStore.hasPermission('organizations', 'update', this.name) ||
-			authStore.hasPermission('organizations', 'manage', this.name)
+			authStore.hasPermission('organizations', 'update', id) ||
+			authStore.hasPermission('organizations', 'manage', id)
 		);
 	}
 
 	get canDelete(): boolean {
+		const id = this.org?.id ?? '';
 		return (
 			this.org?.currentUserRole === OrgRole.OWNER ||
-			authStore.hasPermission('organizations', 'delete', this.name) ||
-			authStore.hasPermission('organizations', 'manage', this.name)
+			authStore.hasPermission('organizations', 'delete', id) ||
+			authStore.hasPermission('organizations', 'manage', id)
 		);
 	}
 

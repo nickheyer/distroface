@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 )
 
@@ -51,13 +52,23 @@ func (s *Store) GetArtifactRepository(ctx context.Context, namespace, name strin
 }
 
 type ArtifactRepoListOptions struct {
-	Namespace      string   // Optional exact namespace filter
-	ViewerID       string   // Owner whose private repos are visible
-	IncludePrivate bool     // True bypasses visibility filtering
-	GrantedRepos   []string // RBAC granted repos as namespace/name
-	Search         string   // Name substring filter
-	Limit          int      // Zero means no limit
+	Namespace      string           // Optional exact namespace filter
+	ViewerID       string           // Owner whose private repos are visible
+	IncludePrivate bool             // True bypasses visibility filtering
+	GrantedRepos   []string         // RBAC granted repos as namespace/name
+	Query          pagination.Query // Structured filter against ArtifactReposQuery
+	Limit          int              // Zero means no limit
 	Offset         int
+}
+
+// ArtifactReposQuery allowlists artifact repository list filters
+var ArtifactReposQuery = pagination.Spec{
+	Fields: map[string]string{
+		"name":        "name",
+		"namespace":   "namespace",
+		"description": "description",
+	},
+	Text: []string{"name", "namespace", "description"},
 }
 
 func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoListOptions) ([]*db.ArtifactRepository, int64, error) {
@@ -80,9 +91,7 @@ func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoL
 			q = q.Where("is_private = ?", false)
 		}
 	}
-	if opts.Search != "" {
-		q = q.Where("name LIKE ? OR namespace LIKE ? OR description LIKE ?", "%"+opts.Search+"%", "%"+opts.Search+"%", "%"+opts.Search+"%")
-	}
+	q = q.Scopes(ArtifactReposQuery.Scope(opts.Query))
 
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
@@ -262,20 +271,79 @@ func (s *Store) ListArtifacts(ctx context.Context, repoID int64, version string,
 	return artifacts, total, nil
 }
 
+// Pages distinct versions ordered by newest artifact first
+func (s *Store) ListArtifactVersionPage(ctx context.Context, repoID int64, limit, offset int) ([]string, int64, error) {
+	var total int64
+	if err := s.db.WithContext(ctx).Model(&db.Artifact{}).
+		Where("repo_id = ?", repoID).
+		Distinct("version").
+		Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	q := s.db.WithContext(ctx).Model(&db.Artifact{}).
+		Select("version, MAX(created_at) AS latest").
+		Where("repo_id = ?", repoID).
+		Group("version").
+		Order("latest DESC")
+	if limit > 0 {
+		q = q.Limit(limit).Offset(offset)
+	}
+
+	var rows []struct {
+		Version string
+	}
+	if err := q.Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	versions := make([]string, len(rows))
+	for i, r := range rows {
+		versions[i] = r.Version
+	}
+	return versions, total, nil
+}
+
+// All artifacts for the given versions, newest first
+func (s *Store) ListArtifactsByVersions(ctx context.Context, repoID int64, versions []string) ([]*db.Artifact, error) {
+	if len(versions) == 0 {
+		return nil, nil
+	}
+	var artifacts []*db.Artifact
+	err := s.db.WithContext(ctx).
+		Where("repo_id = ? AND version IN ?", repoID, versions).
+		Order("created_at DESC").
+		Find(&artifacts).Error
+	if err != nil {
+		return nil, err
+	}
+	if err := s.loadArtifactProperties(ctx, artifacts); err != nil {
+		return nil, err
+	}
+	return artifacts, nil
+}
+
 type ArtifactSearchCriteria struct {
 	RepoID     *int64
-	RepoIDs    []int64 // Visibility filter, empty means unrestricted
-	Name       string  // LIKE substring
-	Version    string  // LIKE substring
-	Path       string  // LIKE substring
+	RepoIDs    []int64          // Visibility filter, empty means unrestricted
+	Query      pagination.Query // Structured filter against ArtifactsQuery
 	Properties map[string]string
-	Sort       string // Sort column, falls back to created_at
-	Order      string // ASC or DESC, defaults DESC
+	OrderBy    string // Preresolved "column direction", defaults created_at DESC
 	Limit      int    // Zero means no limit
 	Offset     int
 }
 
-var artifactSortColumns = map[string]bool{
+// ArtifactsQuery allowlists artifact search filters
+var ArtifactsQuery = pagination.Spec{
+	Fields: map[string]string{
+		"name":    "name",
+		"version": "version",
+		"path":    "path",
+	},
+	Text: []string{"name", "version", "path"},
+}
+
+// ArtifactSortColumns allowlists order_by columns for artifact search
+var ArtifactSortColumns = map[string]bool{
 	"name": true, "version": true, "path": true,
 	"size": true, "created_at": true, "updated_at": true,
 }
@@ -288,15 +356,7 @@ func (s *Store) SearchArtifacts(ctx context.Context, criteria ArtifactSearchCrit
 	if len(criteria.RepoIDs) > 0 {
 		q = q.Where("repo_id IN ?", criteria.RepoIDs)
 	}
-	if criteria.Name != "" {
-		q = q.Where("name LIKE ?", "%"+criteria.Name+"%")
-	}
-	if criteria.Version != "" {
-		q = q.Where("version LIKE ?", "%"+criteria.Version+"%")
-	}
-	if criteria.Path != "" {
-		q = q.Where("path LIKE ?", "%"+criteria.Path+"%")
-	}
+	q = q.Scopes(ArtifactsQuery.Scope(criteria.Query))
 	for k, v := range criteria.Properties {
 		q = q.Where("EXISTS (SELECT 1 FROM artifact_properties p WHERE p.artifact_id = artifacts.id AND p.key = ? AND p.value = ?)", k, v)
 	}
@@ -306,15 +366,11 @@ func (s *Store) SearchArtifacts(ctx context.Context, criteria ArtifactSearchCrit
 		return nil, 0, err
 	}
 
-	sort := criteria.Sort
-	if !artifactSortColumns[sort] {
-		sort = "created_at"
+	orderBy := criteria.OrderBy
+	if orderBy == "" {
+		orderBy = "created_at DESC"
 	}
-	order := "DESC"
-	if criteria.Order == "ASC" {
-		order = "ASC"
-	}
-	q = q.Order(fmt.Sprintf("%s %s", sort, order))
+	q = q.Order(orderBy)
 
 	if criteria.Limit > 0 {
 		q = q.Limit(criteria.Limit).Offset(criteria.Offset)

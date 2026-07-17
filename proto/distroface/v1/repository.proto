@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/pagination.proto";
 import "distroface/v1/types.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
@@ -44,26 +45,18 @@ message GetRepositoryResponse {
 
 // ListRepositoriesRequest contains pagination and filter parameters.
 message ListRepositoriesRequest {
-  // page_size is the maximum number of repositories to return.
-  int32 page_size = 1;
-  // page_token is the pagination token from a previous response.
-  string page_token = 2;
+  PageRequest page = 1;
   // namespace filters by namespace.
-  string namespace = 3;
-  // query filters by name substring.
-  string query = 4;
+  string namespace = 2;
   // visibility filters by visibility.
-  Visibility visibility = 5;
+  Visibility visibility = 3;
 }
 
 // ListRepositoriesResponse contains a page of repositories.
 message ListRepositoriesResponse {
   // repositories is the list of repositories.
   repeated Repository repositories = 1;
-  // next_page_token is the token for the next page.
-  string next_page_token = 2;
-  // total_count is the total number of matching repositories.
-  int32 total_count = 3;
+  PageInfo page = 2;
 }
 
 // DeleteRepositoryRequest identifies a repository to delete.
@@ -79,24 +72,18 @@ message DeleteRepositoryResponse {}
 
 // ListTagsRequest identifies a repository and pagination parameters.
 message ListTagsRequest {
+  PageRequest page = 1;
   // namespace is the repository namespace.
-  string namespace = 1;
+  string namespace = 2;
   // name is the repository name.
-  string name = 2;
-  // page_size is the maximum number of tags to return.
-  int32 page_size = 3;
-  // page_token is the pagination token from a previous response.
-  string page_token = 4;
+  string name = 3;
 }
 
 // ListTagsResponse contains a page of tags.
 message ListTagsResponse {
   // tags is the list of tags.
   repeated Tag tags = 1;
-  // next_page_token is the token for the next page.
-  string next_page_token = 2;
-  // total_count is the total number of tags.
-  int32 total_count = 3;
+  PageInfo page = 2;
 }
 
 // ResolveTagRequest identifies a tag to resolve.
@@ -163,18 +150,12 @@ message UnstarRepositoryResponse {
 
 // ListStarredRepositoriesRequest contains pagination parameters.
 message ListStarredRepositoriesRequest {
-  // page_size is the maximum number of repositories to return.
-  int32 page_size = 1;
-  // page_token is the pagination token from a previous response.
-  string page_token = 2;
+  PageRequest page = 1;
 }
 
 // ListStarredRepositoriesResponse contains a page of starred repositories.
 message ListStarredRepositoriesResponse {
   // repositories is the list of starred repositories.
   repeated Repository repositories = 1;
-  // next_page_token is the token for the next page.
-  string next_page_token = 2;
-  // total_count is the total number of starred repositories.
-  int32 total_count = 3;
+  PageInfo page = 2;
 }

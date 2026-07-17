@@ -12,6 +12,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -38,16 +39,16 @@ func NewService(store *stores.Store, enforcer *rbac.Enforcer, proxies *Manager, 
 }
 
 // Resolves the org, caller needs global org-manage or owner/admin membership
-func (s *Service) requireOrgAdmin(ctx context.Context, orgName string) (*storage.Organization, error) {
+func (s *Service) requireOrgAdmin(ctx context.Context, orgID string) (*storage.Organization, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
-	if orgName == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("org_name is required"))
+	if orgID == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("org_id is required"))
 	}
 
-	org, err := s.store.GetOrganization(ctx, orgName)
+	org, err := s.store.GetOrganizationByID(ctx, orgID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -55,7 +56,7 @@ func (s *Service) requireOrgAdmin(ctx context.Context, orgName string) (*storage
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
 		member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if member == nil || (member.Role != storage.OrgRoleOwner && member.Role != storage.OrgRoleAdmin) {
@@ -160,7 +161,7 @@ func (s *Service) encodeRules(rules []*v1.PortalRule) (string, error) {
 
 func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.CreatePortalRequest]) (*connect.Response[v1.CreatePortalResponse], error) {
 	msg := req.Msg
-	org, err := s.requireOrgAdmin(ctx, msg.OrgName)
+	org, err := s.requireOrgAdmin(ctx, msg.OrgId)
 	if err != nil {
 		return nil, err
 	}
@@ -194,28 +195,49 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 	s.reconcile(ctx)
 	s.log.Info("portal created: %s port %d -> org %s (%s)", portal.Hostname, portal.Port, org.Name, portal.ID)
 
-	return connect.NewResponse(&v1.CreatePortalResponse{Portal: portalToProto(portal, org.Name)}), nil
+	return connect.NewResponse(&v1.CreatePortalResponse{Portal: portalToProto(portal)}), nil
 }
 
-func (s *Service) ListPortals(ctx context.Context, req *connect.Request[v1.ListPortalsRequest]) (*connect.Response[v1.ListPortalsResponse], error) {
-	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgName)
+func (s *Service) GetPortal(ctx context.Context, req *connect.Request[v1.GetPortalRequest]) (*connect.Response[v1.GetPortalResponse], error) {
+	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
 	if err != nil {
 		return nil, err
 	}
-	portals, err := s.store.ListRegistryPortalsByOrg(ctx, org.ID)
+	portal, err := s.getOrgPortal(ctx, org, req.Msg.Id)
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&v1.GetPortalResponse{
+		Portal: portalToProto(portal),
+	}), nil
+}
+
+func (s *Service) ListPortals(ctx context.Context, req *connect.Request[v1.ListPortalsRequest]) (*connect.Response[v1.ListPortalsResponse], error) {
+	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+	if err != nil {
+		return nil, err
+	}
+	limit, offset := pagination.Parse(req.Msg.Page)
+	q := pagination.ParseQuery(req.Msg.Page)
+	if err := stores.PortalsQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	portals, total, err := s.store.ListRegistryPortalsByOrgPaged(ctx, org.ID, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	resp := &v1.ListPortalsResponse{MainPort: int32(s.mainPort())}
+	resp := &v1.ListPortalsResponse{
+		Page: pagination.Info(offset, limit, total),
+	}
 	for _, p := range portals {
-		resp.Portals = append(resp.Portals, portalToProto(p, org.Name))
+		resp.Portals = append(resp.Portals, portalToProto(p))
 	}
 	return connect.NewResponse(resp), nil
 }
 
 func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.UpdatePortalRequest]) (*connect.Response[v1.UpdatePortalResponse], error) {
 	msg := req.Msg
-	org, err := s.requireOrgAdmin(ctx, msg.OrgName)
+	org, err := s.requireOrgAdmin(ctx, msg.OrgId)
 	if err != nil {
 		return nil, err
 	}
@@ -270,11 +292,11 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 	}
 	s.reconcile(ctx)
 
-	return connect.NewResponse(&v1.UpdatePortalResponse{Portal: portalToProto(portal, org.Name)}), nil
+	return connect.NewResponse(&v1.UpdatePortalResponse{Portal: portalToProto(portal)}), nil
 }
 
 func (s *Service) DeletePortal(ctx context.Context, req *connect.Request[v1.DeletePortalRequest]) (*connect.Response[v1.DeletePortalResponse], error) {
-	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgName)
+	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
 	if err != nil {
 		return nil, err
 	}
@@ -316,10 +338,10 @@ func (s *Service) reconcile(ctx context.Context) {
 	}
 }
 
-func portalToProto(p *storage.RegistryPortal, orgName string) *v1.RegistryPortal {
+func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {
 	proto := &v1.RegistryPortal{
 		Id:             p.ID,
-		OrgName:        orgName,
+		OrgId:          p.OrgID,
 		Name:           p.Name,
 		Hostname:       p.Hostname,
 		Port:           int32(p.Port),

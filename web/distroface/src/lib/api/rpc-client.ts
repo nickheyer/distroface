@@ -21,8 +21,18 @@ import { GCService } from '$lib/proto/distroface/v1/gc_pb';
 import { CertificateService } from '$lib/proto/distroface/v1/certificate_pb';
 import { AuditService } from '$lib/proto/distroface/v1/audit_pb';
 import { toast } from 'svelte-sonner';
+import { networkStore } from '$lib/stores/network.svelte';
 
 const SESSION_KEY = 'distroface_session';
+
+const progressInterceptor: Interceptor = (next) => async (req) => {
+	networkStore.start();
+	try {
+		return await next(req);
+	} finally {
+		networkStore.done();
+	}
+};
 
 const authInterceptor: Interceptor = (next) => async (req) => {
 	const token = typeof window !== 'undefined' ? localStorage.getItem(SESSION_KEY) : null;
@@ -49,7 +59,7 @@ const errorInterceptor: Interceptor = (next) => async (req) => {
 
 const transport = createConnectTransport({
 	baseUrl: '',
-	interceptors: [authInterceptor, errorInterceptor]
+	interceptors: [progressInterceptor, authInterceptor, errorInterceptor]
 });
 
 export const silentCallOptions: CallOptions = {

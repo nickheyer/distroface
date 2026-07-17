@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/pagination.proto";
 import "distroface/v1/types.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
@@ -30,15 +31,13 @@ message CreateAPITokenResponse {
 
 // ListAPITokensRequest supports pagination.
 message ListAPITokensRequest {
-  int32 page_size = 1;
-  string page_token = 2;
+  PageRequest page = 1;
 }
 
 // ListAPITokensResponse contains a page of the user's tokens.
 message ListAPITokensResponse {
   repeated APIToken tokens = 1;
-  string next_page_token = 2;
-  int32 total_count = 3;
+  PageInfo page = 2;
 }
 
 // DeleteAPITokenRequest identifies the token to revoke.

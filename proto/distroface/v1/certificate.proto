@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
@@ -11,12 +13,16 @@ option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;dis
 service CertificateService {
   // Reports whether tls/acme is active and how it is configured
   rpc GetTLSStatus(GetTLSStatusRequest) returns (GetTLSStatusResponse) {}
-  // Lists registered domains, org scoped when org_name is set
+  // Lists registered domains, org scoped when org_id is set
   rpc ListCertificateDomains(ListCertificateDomainsRequest) returns (ListCertificateDomainsResponse) {}
+  // Lists an org's portal hostnames joined with their cert registration
+  rpc ListCertificateHosts(ListCertificateHostsRequest) returns (ListCertificateHostsResponse) {}
   // Registers a domain as allowed to receive certificates
   rpc AddCertificateDomain(AddCertificateDomainRequest) returns (AddCertificateDomainResponse) {}
   // Removes a registered domain
   rpc RemoveCertificateDomain(RemoveCertificateDomainRequest) returns (RemoveCertificateDomainResponse) {}
+  // Removes multiple registered domains in one call
+  rpc BulkRemoveCertificateDomains(BulkRemoveCertificateDomainsRequest) returns (BulkRemoveCertificateDomainsResponse) {}
   // Marks an org scoped domain as allowed to issue, system admin only
   rpc ApproveCertificateDomain(ApproveCertificateDomainRequest) returns (ApproveCertificateDomainResponse) {}
   // Requests immediate issuance for a registered domain, blocks until done
@@ -37,12 +43,13 @@ message CertificateDomain {
   string id = 1;
   string domain = 2;
   string scope = 3; // "system" or "org"
-  string org_name = 4; // Set when scope is org
-  string created_by = 5;
-  google.protobuf.Timestamp created_at = 6;
-  CertificateInfo cert = 7;
-  bool approved = 8; // Org domains need system admin approval before issuance
-  string approved_by = 9;
+  string org_id = 4; // Set when scope is org
+  string org_name = 5; // Display label for org_id
+  string created_by = 6;
+  google.protobuf.Timestamp created_at = 7;
+  CertificateInfo cert = 8;
+  bool approved = 9; // Org domains need system admin approval before issuance
+  string approved_by = 10;
 }
 
 // Empty
@@ -60,20 +67,43 @@ message GetTLSStatusResponse {
   CertificateInfo primary_cert = 8;
 }
 
-// Org scoped listing when org_name set, admins may pass empty for all
+// Org scoped listing when org_id set, admins may pass empty for all
 message ListCertificateDomainsRequest {
-  string org_name = 1;
+  PageRequest page = 1;
+  string org_id = 2;
 }
 
 // Registered domains with live cert details
 message ListCertificateDomainsResponse {
   repeated CertificateDomain domains = 1;
+  PageInfo page = 2;
 }
 
-// Org scope when org_name set, domain must match an org portal hostname
+// A portal hostname and its certificate registration status
+message CertificateHost {
+  string hostname = 1;
+  string portal_id = 2; // Empty for a registered domain with no matching portal
+  string portal_name = 3; // Display label for portal_id
+  bool eligible = 4; // Whether the hostname can receive an acme certificate
+  CertificateDomain registration = 5; // Null when HTTPS is not enabled
+}
+
+// Org scoped hosts listing, org id required
+message ListCertificateHostsRequest {
+  PageRequest page = 1;
+  string org_id = 2;
+}
+
+// Merged portal hostnames and registrations
+message ListCertificateHostsResponse {
+  repeated CertificateHost hosts = 1;
+  PageInfo page = 2;
+}
+
+// Org scope when org_id set, domain must match an org portal hostname
 message AddCertificateDomainRequest {
   string domain = 1;
-  string org_name = 2;
+  string org_id = 2;
 }
 
 // The registered domain
@@ -81,14 +111,26 @@ message AddCertificateDomainResponse {
   CertificateDomain domain = 1;
 }
 
-// Org name required for org scoped domains
+// Org id required for org scoped domains
 message RemoveCertificateDomainRequest {
   string id = 1;
-  string org_name = 2;
+  string org_id = 2;
 }
 
 // Empty
 message RemoveCertificateDomainResponse {}
+
+// Domain ids to remove, org id required for org scoped domains
+message BulkRemoveCertificateDomainsRequest {
+  repeated string ids = 1;
+  string org_id = 2;
+}
+
+// Per domain failures, removed count covers the rest
+message BulkRemoveCertificateDomainsResponse {
+  int32 removed_count = 1;
+  repeated BulkOperationError errors = 2;
+}
 
 // Domain id to approve
 message ApproveCertificateDomainRequest {
@@ -103,7 +145,7 @@ message ApproveCertificateDomainResponse {
 // Domain must already be registered or statically allowed
 message IssueCertificateRequest {
   string domain = 1;
-  string org_name = 2;
+  string org_id = 2;
 }
 
 // Certificate details after issuance

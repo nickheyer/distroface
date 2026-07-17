@@ -12,6 +12,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -68,19 +69,19 @@ func (s *Service) requireSystemAdmin(ctx context.Context) error {
 }
 
 // Resolves the org, caller needs global org-manage or owner/admin membership
-func (s *Service) requireOrgAdmin(ctx context.Context, orgName string) (*storage.Organization, error) {
+func (s *Service) requireOrgAdmin(ctx context.Context, orgID string) (*storage.Organization, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
-	org, err := s.store.GetOrganization(ctx, orgName)
+	org, err := s.store.GetOrganizationByID(ctx, orgID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	if org == nil {
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
-	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.Name)
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
 		member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if member == nil || (member.Role != storage.OrgRoleOwner && member.Role != storage.OrgRoleAdmin) {
@@ -122,10 +123,15 @@ func (s *Service) certInfoProto(ctx context.Context, domain string) *v1.Certific
 }
 
 func (s *Service) domainToProto(ctx context.Context, d *storage.CertificateDomain, orgName string) *v1.CertificateDomain {
+	orgID := ""
+	if d.OrgID != nil {
+		orgID = *d.OrgID
+	}
 	return &v1.CertificateDomain{
 		Id:         d.ID,
 		Domain:     d.Domain,
 		Scope:      d.Scope,
+		OrgId:      orgID,
 		OrgName:    orgName,
 		CreatedBy:  d.CreatedBy,
 		CreatedAt:  timestamppb.New(d.CreatedAt),
@@ -154,26 +160,32 @@ func (s *Service) GetTLSStatus(ctx context.Context, _ *connect.Request[v1.GetTLS
 
 func (s *Service) ListCertificateDomains(ctx context.Context, req *connect.Request[v1.ListCertificateDomainsRequest]) (*connect.Response[v1.ListCertificateDomainsResponse], error) {
 	resp := &v1.ListCertificateDomainsResponse{}
+	limit, offset := pagination.Parse(req.Msg.Page)
+	q := pagination.ParseQuery(req.Msg.Page)
+	if err := stores.CertDomainsQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 
-	if req.Msg.OrgName != "" {
-		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgName)
+	if req.Msg.OrgId != "" {
+		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
 		if err != nil {
 			return nil, err
 		}
-		domains, err := s.store.ListCertificateDomainsByOrg(ctx, org.ID)
+		domains, total, err := s.store.ListCertificateDomainsByOrg(ctx, org.ID, q, limit, offset)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
 		for _, d := range domains {
 			resp.Domains = append(resp.Domains, s.domainToProto(ctx, d, org.Name))
 		}
+		resp.Page = pagination.Info(offset, limit, total)
 		return connect.NewResponse(resp), nil
 	}
 
 	if err := s.requireSystemAdmin(ctx); err != nil {
 		return nil, err
 	}
-	domains, err := s.store.ListCertificateDomains(ctx)
+	domains, total, err := s.store.ListCertificateDomains(ctx, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -184,7 +196,56 @@ func (s *Service) ListCertificateDomains(ctx context.Context, req *connect.Reque
 		}
 		resp.Domains = append(resp.Domains, s.domainToProto(ctx, d, orgName))
 	}
+	resp.Page = pagination.Info(offset, limit, total)
 	return connect.NewResponse(resp), nil
+}
+
+func (s *Service) ListCertificateHosts(ctx context.Context, req *connect.Request[v1.ListCertificateHostsRequest]) (*connect.Response[v1.ListCertificateHostsResponse], error) {
+	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+	if err != nil {
+		return nil, err
+	}
+	limit, offset := pagination.Parse(req.Msg.Page)
+	q := pagination.ParseQuery(req.Msg.Page)
+	if err := stores.CertHostsQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	rows, total, err := s.store.ListCertificateHosts(ctx, org.ID, q, limit, offset)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	hostnames := make([]string, len(rows))
+	for i, r := range rows {
+		hostnames[i] = r.Hostname
+	}
+	domains, err := s.store.GetCertificateDomainsByNames(ctx, org.ID, hostnames)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	regByDomain := make(map[string]*storage.CertificateDomain, len(domains))
+	for _, d := range domains {
+		regByDomain[d.Domain] = d
+	}
+
+	hosts := make([]*v1.CertificateHost, len(rows))
+	for i, r := range rows {
+		host := &v1.CertificateHost{
+			Hostname:   r.Hostname,
+			PortalId:   r.PortalID,
+			PortalName: r.PortalName,
+			Eligible:   issuableHost(r.Hostname),
+		}
+		if reg := regByDomain[r.Hostname]; reg != nil {
+			host.Registration = s.domainToProto(ctx, reg, org.Name)
+		}
+		hosts[i] = host
+	}
+
+	return connect.NewResponse(&v1.ListCertificateHostsResponse{
+		Hosts: hosts,
+		Page:  pagination.Info(offset, limit, total),
+	}), nil
 }
 
 func (s *Service) AddCertificateDomain(ctx context.Context, req *connect.Request[v1.AddCertificateDomainRequest]) (*connect.Response[v1.AddCertificateDomainResponse], error) {
@@ -199,8 +260,8 @@ func (s *Service) AddCertificateDomain(ctx context.Context, req *connect.Request
 	record := &storage.CertificateDomain{Domain: domain, Scope: storage.CertDomainScopeSystem}
 	orgName := ""
 
-	if req.Msg.OrgName != "" {
-		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgName)
+	if req.Msg.OrgId != "" {
+		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
 		if err != nil {
 			return nil, err
 		}
@@ -254,8 +315,8 @@ func (s *Service) RemoveCertificateDomain(ctx context.Context, req *connect.Requ
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	if req.Msg.OrgName != "" {
-		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgName)
+	if req.Msg.OrgId != "" {
+		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
 		if err != nil {
 			return nil, err
 		}
@@ -272,6 +333,51 @@ func (s *Service) RemoveCertificateDomain(ctx context.Context, req *connect.Requ
 	s.log.Info("certificate domain removed: %s", record.Domain)
 
 	return connect.NewResponse(&v1.RemoveCertificateDomainResponse{}), nil
+}
+
+func (s *Service) BulkRemoveCertificateDomains(ctx context.Context, req *connect.Request[v1.BulkRemoveCertificateDomainsRequest]) (*connect.Response[v1.BulkRemoveCertificateDomainsResponse], error) {
+	if len(req.Msg.Ids) == 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no domain ids provided"))
+	}
+
+	var org *storage.Organization
+	if req.Msg.OrgId != "" {
+		var err error
+		org, err = s.requireOrgAdmin(ctx, req.Msg.OrgId)
+		if err != nil {
+			return nil, err
+		}
+	} else if err := s.requireSystemAdmin(ctx); err != nil {
+		return nil, err
+	}
+
+	records, err := s.store.GetCertificateDomainsByIDs(ctx, req.Msg.Ids)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	byID := make(map[string]*storage.CertificateDomain, len(records))
+	for _, r := range records {
+		byID[r.ID] = r
+	}
+
+	resp := &v1.BulkRemoveCertificateDomainsResponse{}
+	var deleteIDs []string
+	for _, id := range req.Msg.Ids {
+		record := byID[id]
+		if record == nil || (org != nil && (record.OrgID == nil || *record.OrgID != org.ID)) {
+			resp.Errors = append(resp.Errors, &v1.BulkOperationError{Id: id, Error: "domain not found"})
+			continue
+		}
+		deleteIDs = append(deleteIDs, id)
+	}
+	if err := s.store.DeleteCertificateDomains(ctx, deleteIDs); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	resp.RemovedCount = int32(len(deleteIDs))
+	if len(deleteIDs) > 0 {
+		s.log.Info("certificate domains removed: %d", len(deleteIDs))
+	}
+	return connect.NewResponse(resp), nil
 }
 
 func (s *Service) ApproveCertificateDomain(ctx context.Context, req *connect.Request[v1.ApproveCertificateDomainRequest]) (*connect.Response[v1.ApproveCertificateDomainResponse], error) {
@@ -308,8 +414,8 @@ func (s *Service) IssueCertificate(ctx context.Context, req *connect.Request[v1.
 	}
 	domain := bareHost(req.Msg.Domain)
 
-	if req.Msg.OrgName != "" {
-		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgName)
+	if req.Msg.OrgId != "" {
+		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
 		if err != nil {
 			return nil, err
 		}

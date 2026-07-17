@@ -16,23 +16,28 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
-	import { Archive, Plus, Trash2, Lock, Globe, Search } from '@lucide/svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
+	import { Archive, Plus, Trash2, Lock, Globe } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime, pageToToken, formatBytes } from '$lib/utils';
+	import { relativeTime, formatBytes } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import type { ArtifactRepository } from '$lib/proto/distroface/v1/types_pb';
 
 	let { namespace, canCreate = false }: { namespace: string; canCreate?: boolean } = $props();
 
 	let repos = $state<ArtifactRepository[]>([]);
 	let loading = $state(true);
-	let totalCount = $state(0);
-	let currentPage = $state(1);
-	const pageSize = 20;
-	let searchQuery = $state('');
-	let searchTimeout: ReturnType<typeof setTimeout> | undefined;
+	let loaded = $state(false);
+	const pager = new Pager(20);
+	const filter = new QueryFilter([
+		{ key: 'name', label: 'Name' },
+		{ key: 'namespace', label: 'Namespace' },
+		{ key: 'description', label: 'Description' }
+	]);
 
 	let createPanelOpen = $state(false);
 	let newName = $state('');
@@ -48,27 +53,23 @@
 		loading = true;
 		try {
 			const resp = await rpcClient.artifact.listArtifactRepositories({
-				namespace,
-				search: searchQuery.trim(),
-				pageSize,
-				pageToken: pageToToken(currentPage, pageSize)
+				page: pager.request(filter.request()),
+				namespace
 			});
 			repos = resp.repositories;
-			totalCount = Number(resp.totalCount);
+			pager.apply(resp.page);
 		} catch {
 			repos = [];
-			totalCount = 0;
+			pager.apply();
 		} finally {
 			loading = false;
+			loaded = true;
 		}
 	}
 
-	function handleSearchInput() {
-		clearTimeout(searchTimeout);
-		searchTimeout = setTimeout(() => {
-			currentPage = 1;
-			loadRepos();
-		}, 300);
+	function filterChanged() {
+		pager.reset();
+		loadRepos();
 	}
 
 	async function createRepo() {
@@ -144,17 +145,11 @@
 		{/if}
 	</div>
 
-	<div class="relative max-w-md">
-		<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/50" />
-		<Input
-			placeholder="Search repositories..."
-			class="pl-9 h-9 bg-muted/30 border-border/50 focus-visible:bg-background"
-			bind:value={searchQuery}
-			oninput={handleSearchInput}
-		/>
+	<div class="max-w-md">
+		<QueryFilterBar {filter} placeholder="Search repositories..." onchange={filterChanged} />
 	</div>
 
-	{#if loading}
+	{#if !loaded}
 		<div class="space-y-2">
 			{#each Array(3)}
 				<Skeleton class="h-14 w-full rounded-xl" />
@@ -163,8 +158,8 @@
 	{:else if repos.length === 0}
 		<EmptyState
 			icon={Archive}
-			message={searchQuery ? 'No matching repositories' : 'No artifact repositories yet'}
-			description={searchQuery
+			message={filter.active ? 'No matching repositories' : 'No artifact repositories yet'}
+			description={filter.active
 				? 'Try a different search.'
 				: `Repositories under ${namespace} hold build artifacts, packages, and other files.`}
 		>
@@ -178,7 +173,7 @@
 			{/snippet}
 		</EmptyState>
 	{:else}
-		<div class="data-table">
+		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			<Table>
 				<TableHeader>
 					<TableRow class="bg-muted/30 hover:bg-muted/30">
@@ -233,9 +228,9 @@
 		</div>
 
 		<DataPagination
-			page={currentPage} {pageSize} {totalCount}
-			onPrev={() => { currentPage--; loadRepos(); }}
-			onNext={() => { currentPage++; loadRepos(); }}
+			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
+			onPrev={() => { if (pager.prev()) loadRepos(); }}
+			onNext={() => { if (pager.next()) loadRepos(); }}
 		/>
 	{/if}
 </div>

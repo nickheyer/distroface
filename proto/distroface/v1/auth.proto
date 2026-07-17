@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/pagination.proto";
 import "distroface/v1/types.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -35,6 +36,8 @@ service AuthService {
   rpc GetInvite(GetInviteRequest) returns (GetInviteResponse) {}
   // DeleteInvite deletes a registration invite (admin).
   rpc DeleteInvite(DeleteInviteRequest) returns (DeleteInviteResponse) {}
+  // BulkDeleteInvites deletes many registration invites (admin).
+  rpc BulkDeleteInvites(BulkDeleteInvitesRequest) returns (BulkDeleteInvitesResponse) {}
   // ValidateInvite checks if an invite code is valid (public).
   rpc ValidateInvite(ValidateInviteRequest) returns (ValidateInviteResponse) {}
 }
@@ -52,8 +55,7 @@ message RegisterRequest {
 message RegisterResponse {
   User user = 1;
   string session_token = 2;
-  repeated string roles = 3;
-  repeated Permission permissions = 4;
+  repeated Permission permissions = 3;
 }
 
 // LoginRequest contains credentials for authentication.
@@ -66,8 +68,7 @@ message LoginRequest {
 message LoginResponse {
   User user = 1;
   string session_token = 2;
-  repeated string roles = 3;
-  repeated Permission permissions = 4;
+  repeated Permission permissions = 3;
 }
 
 // LogoutRequest is empty; the session is identified from the auth header.
@@ -148,7 +149,7 @@ message UpdateAuthSettingsResponse {
 // CreateInviteRequest contains the fields to create a registration invite.
 message CreateInviteRequest {
   string description = 1;
-  repeated string roles = 2;
+  repeated string role_ids = 2;
   optional string pin = 3;
   optional int32 max_uses = 4;
   optional int32 expires_in_hours = 5;
@@ -161,15 +162,13 @@ message CreateInviteResponse {
 
 // ListInvitesRequest supports pagination.
 message ListInvitesRequest {
-  int32 page_size = 1;
-  string page_token = 2;
+  PageRequest page = 1;
 }
 
 // ListInvitesResponse contains a page of registration invites.
 message ListInvitesResponse {
   repeated RegistrationInvite invites = 1;
-  string next_page_token = 2;
-  int32 total_count = 3;
+  PageInfo page = 2;
 }
 
 // GetInviteRequest identifies an invite by ID.
@@ -190,6 +189,17 @@ message DeleteInviteRequest {
 // DeleteInviteResponse is empty on success.
 message DeleteInviteResponse {}
 
+// BulkDeleteInvitesRequest identifies the invites to delete.
+message BulkDeleteInvitesRequest {
+  repeated string ids = 1;
+}
+
+// BulkDeleteInvitesResponse reports per-invite failures.
+message BulkDeleteInvitesResponse {
+  int32 deleted_count = 1;
+  repeated BulkOperationError errors = 2;
+}
+
 // ValidateInviteRequest checks an invite code's validity.
 message ValidateInviteRequest {
   string code = 1;
@@ -206,7 +216,7 @@ message RegistrationInvite {
   string id = 1;
   string code = 2;
   string description = 3;
-  repeated string roles = 4;
+  repeated RoleRef roles = 4;
   bool has_pin = 5;
   int32 max_uses = 6;
   int32 use_count = 7;

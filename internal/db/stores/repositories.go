@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 )
 
@@ -37,16 +38,24 @@ func (s *Store) GetRepository(ctx context.Context, namespace, name string) (*db.
 //   - Private repos in organizations the user is a member of
 //   - Private repos explicitly granted via RBAC (grantedRepos contains "namespace/name")
 //
+// ReposQuery allowlists docker repository list filters
+var ReposQuery = pagination.Spec{
+	Fields: map[string]string{
+		"name":        "name",
+		"namespace":   "namespace",
+		"description": "description",
+	},
+	Text: []string{"name", "namespace", "description"},
+}
+
 // If userID is empty (anonymous), only public repos are returned.
-func (s *Store) ListRepositories(ctx context.Context, namespace, query, userID string, canManage bool, grantedRepos []string, limit, offset int) ([]*db.Repository, int64, error) {
+func (s *Store) ListRepositories(ctx context.Context, namespace string, q pagination.Query, userID string, canManage bool, grantedRepos []string, limit, offset int) ([]*db.Repository, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Repository{})
 
 	if namespace != "" {
 		tx = tx.Where("namespace = ?", namespace)
 	}
-	if query != "" {
-		tx = tx.Where("name LIKE ? OR namespace LIKE ? OR description LIKE ?", "%"+query+"%", "%"+query+"%", "%"+query+"%")
-	}
+	tx = tx.Scopes(ReposQuery.Scope(q))
 
 	if !canManage {
 		if userID != "" {

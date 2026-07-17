@@ -2,14 +2,13 @@ package services
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"strconv"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -72,18 +71,7 @@ func (s *RepositoryService) GetRepository(ctx context.Context, req *connect.Requ
 }
 
 func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.Request[v1.ListRepositoriesRequest]) (*connect.Response[v1.ListRepositoriesResponse], error) {
-	pageSize := int(req.Msg.PageSize)
-	if pageSize <= 0 || pageSize > 100 {
-		pageSize = 20
-	}
-
-	offset := 0
-	if req.Msg.PageToken != "" {
-		decoded, err := base64.StdEncoding.DecodeString(req.Msg.PageToken)
-		if err == nil {
-			offset, _ = strconv.Atoi(string(decoded))
-		}
-	}
+	pageSize, offset := pagination.Parse(req.Msg.Page)
 
 	// Resolve visibility: admin sees all, authenticated users see public +
 	// owned + org membership + RBAC grants, anonymous sees public only.
@@ -101,14 +89,14 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.R
 	}
 
 	namespace := portal.ScopeNamespace(ctx, req.Msg.Namespace)
-	repos, total, err := s.store.ListRepositories(ctx, namespace, req.Msg.Query, userID, canManage, grantedRepos, pageSize, offset)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+	q := pagination.ParseQuery(req.Msg.Page)
+	if err := stores.ReposQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
 
-	var nextPageToken string
-	if offset+pageSize < int(total) {
-		nextPageToken = base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(offset + pageSize)))
+	repos, total, err := s.store.ListRepositories(ctx, namespace, q, userID, canManage, grantedRepos, pageSize, offset)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	protoRepos := make([]*v1.Repository, len(repos))
@@ -118,9 +106,8 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.R
 	s.attachStars(ctx, protoRepos)
 
 	return connect.NewResponse(&v1.ListRepositoriesResponse{
-		Repositories:  protoRepos,
-		NextPageToken: nextPageToken,
-		TotalCount:    int32(total),
+		Repositories: protoRepos,
+		Page:         pagination.Info(offset, pageSize, total),
 	}), nil
 }
 
@@ -182,32 +169,15 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	pageSize := int(req.Msg.PageSize)
-	if pageSize <= 0 || pageSize > 100 {
-		pageSize = 20
-	}
-
-	offset := 0
-	if req.Msg.PageToken != "" {
-		decoded, err := base64.StdEncoding.DecodeString(req.Msg.PageToken)
-		if err == nil {
-			offset, _ = strconv.Atoi(string(decoded))
-		}
-	}
+	pageSize, offset := pagination.Parse(req.Msg.Page)
 
 	total := len(tags)
 	start := min(offset, total)
 	end := min(start+pageSize, total)
 
-	var nextPageToken string
-	if end < total {
-		nextPageToken = base64.StdEncoding.EncodeToString([]byte(strconv.Itoa(end)))
-	}
-
 	return connect.NewResponse(&v1.ListTagsResponse{
-		Tags:          tags[start:end],
-		NextPageToken: nextPageToken,
-		TotalCount:    int32(total),
+		Tags: tags[start:end],
+		Page: pagination.Info(start, pageSize, int64(total)),
 	}), nil
 }
 
@@ -325,7 +295,7 @@ func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *co
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 
-	limit, offset := parsePagination(req.Msg.PageSize, req.Msg.PageToken)
+	limit, offset := pagination.Parse(req.Msg.Page)
 
 	repos, total, err := s.store.ListStarredRepositories(ctx, user.ID, limit, offset)
 	if err != nil {
@@ -339,9 +309,8 @@ func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *co
 	s.attachStars(ctx, protoRepos)
 
 	return connect.NewResponse(&v1.ListStarredRepositoriesResponse{
-		Repositories:  protoRepos,
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    int32(total),
+		Repositories: protoRepos,
+		Page:         pagination.Info(offset, limit, total),
 	}), nil
 }
 

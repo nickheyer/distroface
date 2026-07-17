@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
@@ -454,6 +456,29 @@ func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *aut
 	http.ServeContent(w, r, artifact.Name, info.ModTime(), f)
 }
 
+// V1 name version path params as contains filters
+func v1SearchQuery(query url.Values) pagination.Query {
+	var q pagination.Query
+	for _, f := range []string{"name", "version", "path"} {
+		if v := query.Get(f); v != "" {
+			q.Filters = append(q.Filters, pagination.Filter{Field: f, Value: v})
+		}
+	}
+	return q
+}
+
+// Builds a safe order clause from v1 query params
+func v1OrderBy(sortField, order string) string {
+	if !stores.ArtifactSortColumns[sortField] {
+		sortField = "created_at"
+	}
+	order = strings.ToUpper(order)
+	if order != "ASC" {
+		order = "DESC"
+	}
+	return sortField + " " + order
+}
+
 func (a *V1API) handleQuery(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
 	repo, ok := a.getRepo(w, r, user, a.repoNS(user, vars), vars["repo"], rbac.ActionPull)
 	if !ok {
@@ -467,12 +492,9 @@ func (a *V1API) handleQuery(w http.ResponseWriter, r *http.Request, user *auth.A
 	query := r.URL.Query()
 	criteria := stores.ArtifactSearchCriteria{
 		RepoID:     &repo.ID,
-		Name:       query.Get("name"),
-		Version:    query.Get("version"),
-		Path:       query.Get("path"),
+		Query:      v1SearchQuery(query),
 		Properties: map[string]string{},
-		Sort:       query.Get("sort"),
-		Order:      strings.ToUpper(query.Get("order")),
+		OrderBy:    v1OrderBy(query.Get("sort"), query.Get("order")),
 		Limit:      1, // V1 default latest match only
 	}
 	if n, err := strconv.Atoi(query.Get("num")); err == nil && n > 0 {
@@ -559,9 +581,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 
 	query := r.URL.Query()
 	criteria := stores.ArtifactSearchCriteria{
-		Name:       query.Get("name"),
-		Version:    query.Get("version"),
-		Path:       query.Get("path"),
+		Query:      v1SearchQuery(query),
 		Properties: map[string]string{},
 		Limit:      9999, // V1 default
 	}
@@ -574,13 +594,11 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 		http.Error(w, "INVALID SORT FIELD", http.StatusBadRequest)
 		return
 	}
-	criteria.Sort = sortField
-
 	order := strings.ToUpper(query.Get("order"))
 	if order != "ASC" && order != "DESC" {
 		order = "DESC"
 	}
-	criteria.Order = order
+	criteria.OrderBy = sortField + " " + order
 
 	if n, err := strconv.Atoi(query.Get("num")); err == nil && n > 0 {
 		criteria.Limit = n

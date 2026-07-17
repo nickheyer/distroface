@@ -173,10 +173,11 @@ func (m *Manager) ValidateSession(ctx context.Context, token string) (*Authentic
 	}
 
 	authUser := &AuthenticatedUser{
-		ID:       user.ID,
-		Username: user.Username,
-		Roles:    roleNames,
-		Provider: user.AuthProvider,
+		ID:                 user.ID,
+		Username:           user.Username,
+		Roles:              roleNames,
+		Provider:           user.AuthProvider,
+		MustChangePassword: user.MustChangePassword,
 	}
 	if user.Email != nil {
 		authUser.Email = *user.Email
@@ -249,6 +250,39 @@ func (m *Manager) CreateLocalUser(ctx context.Context, username, email, password
 	return user, nil
 }
 
+// Admin provisioned account, optionally forced to rotate the password
+func (m *Manager) AdminCreateLocalUser(ctx context.Context, username, email, displayName, password string, mustChangePassword bool) (*db.User, error) {
+	hashedPassword, err := hashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+
+	var emailPtr *string
+	if email != "" {
+		emailPtr = &email
+	}
+	if displayName == "" {
+		displayName = username
+	}
+
+	user := &db.User{
+		ID:                 uuid.New().String(),
+		Username:           username,
+		Email:              emailPtr,
+		PasswordHash:       hashedPassword,
+		DisplayName:        displayName,
+		AuthProvider:       "local",
+		IsActive:           true,
+		MustChangePassword: mustChangePassword,
+	}
+
+	if err := m.store.CreateUser(ctx, user); err != nil {
+		return nil, err
+	}
+
+	return user, nil
+}
+
 func (m *Manager) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
 	user, err := m.store.GetUserByID(ctx, userID)
 	if err != nil || user == nil {
@@ -269,6 +303,7 @@ func (m *Manager) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 	}
 
 	user.PasswordHash = hashedPassword
+	user.MustChangePassword = false
 	return m.store.UpdateUser(ctx, user)
 }
 
@@ -444,10 +479,11 @@ func (m *Manager) ValidateAPIToken(ctx context.Context, rawToken string) (*Authe
 	_ = m.store.UpdateAPITokenLastUsed(ctx, apiToken.ID)
 
 	authUser := &AuthenticatedUser{
-		ID:       user.ID,
-		Username: user.Username,
-		Roles:    roleNames,
-		Provider: user.AuthProvider,
+		ID:                 user.ID,
+		Username:           user.Username,
+		Roles:              roleNames,
+		Provider:           user.AuthProvider,
+		MustChangePassword: user.MustChangePassword,
 	}
 	if user.Email != nil {
 		authUser.Email = *user.Email

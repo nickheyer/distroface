@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/pagination.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
@@ -25,16 +26,13 @@ message AuditEvent {
   google.protobuf.Timestamp created_at = 9;
 }
 
-// Filters are optional, limit defaults to 100 capped at 500
+// page.query filters on action, actor, outcome, resource, source_ip
 message ListAuditEventsRequest {
-  string action = 1;
-  string actor = 2;
-  int32 limit = 3;
-  int32 offset = 4;
+  PageRequest page = 1;
 }
 
-// Matching events and the unfiltered total
+// Matching events newest first
 message ListAuditEventsResponse {
   repeated AuditEvent events = 1;
-  int64 total = 2;
+  PageInfo page = 2;
 }

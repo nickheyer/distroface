@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 )
 
@@ -45,6 +46,34 @@ func (s *Store) ListRegistryPortalsByOrg(ctx context.Context, orgID string) ([]*
 	var portals []*db.RegistryPortal
 	err := s.db.WithContext(ctx).Where("org_id = ?", orgID).Order("created_at ASC").Find(&portals).Error
 	return portals, err
+}
+
+// PortalsQuery allowlists registry portal list filters
+var PortalsQuery = pagination.Spec{
+	Fields: map[string]string{
+		"name":     "name",
+		"hostname": "hostname",
+	},
+	Text: []string{"name", "hostname"},
+}
+
+// Paged variant with total for the rpc listing
+func (s *Store) ListRegistryPortalsByOrgPaged(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]*db.RegistryPortal, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.RegistryPortal{}).
+		Where("org_id = ?", orgID).
+		Scopes(PortalsQuery.Scope(q))
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if limit > 0 {
+		tx = tx.Limit(limit).Offset(offset)
+	}
+	var portals []*db.RegistryPortal
+	err := tx.Order("created_at ASC").Find(&portals).Error
+	return portals, total, err
 }
 
 // Returns every portal preloaded with its owning org

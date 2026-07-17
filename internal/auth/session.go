@@ -11,11 +11,12 @@ const userContextKey contextKey = "authenticated_user"
 
 // AuthenticatedUser represents a validated user in context.
 type AuthenticatedUser struct {
-	ID       string
-	Username string
-	Email    string
-	Roles    []string
-	Provider string // "local", "oidc", "anonymous"
+	ID                 string
+	Username           string
+	Email              string
+	Roles              []string
+	Provider           string // "local", "oidc", "anonymous"
+	MustChangePassword bool   // rpc access pending pw rotation
 }
 
 // WithUser attaches an authenticated user to the context.

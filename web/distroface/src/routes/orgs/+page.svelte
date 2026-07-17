@@ -13,23 +13,28 @@
 	import PageHeader from '$lib/components/page-header.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
-	import { Building2, Plus, Users, ShieldCheck, Search } from '@lucide/svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
+	import { Building2, Plus, Users, ShieldCheck } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime, pageToToken, orgRoleLabel } from '$lib/utils';
+	import { relativeTime, orgRoleLabel } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import { OrgRole } from '$lib/proto/distroface/v1/types_pb';
 	import type { Organization } from '$lib/proto/distroface/v1/types_pb';
 
 	let orgs = $state<Organization[]>([]);
 	let loading = $state(true);
-	let totalCount = $state(0);
-	let page = $state(1);
-	const pageSize = 20;
-	let searchQuery = $state('');
-	let searchTimeout: ReturnType<typeof setTimeout> | undefined;
+	let loaded = $state(false);
+	const pager = new Pager(20);
+	const filter = new QueryFilter([
+		{ key: 'name', label: 'Name' },
+		{ key: 'display_name', label: 'Display Name' },
+		{ key: 'description', label: 'Description' }
+	]);
 
 	let createPanelOpen = $state(false);
 	let orgName = $state('');
@@ -41,25 +46,21 @@
 		loading = true;
 		try {
 			const resp = await rpcClient.organization.listOrganizations({
-				search: searchQuery.trim(),
-				pageSize,
-				pageToken: pageToToken(page, pageSize)
+				page: pager.request(filter.request())
 			});
 			orgs = resp.organizations;
-			totalCount = resp.totalCount;
+			pager.apply(resp.page);
 		} catch {
 			// error interceptor
 		} finally {
 			loading = false;
+			loaded = true;
 		}
 	}
 
-	function handleSearchInput() {
-		clearTimeout(searchTimeout);
-		searchTimeout = setTimeout(() => {
-			page = 1;
-			loadOrgs();
-		}, 300);
+	function filterChanged() {
+		pager.reset();
+		loadOrgs();
 	}
 
 	function resetForm() {
@@ -102,17 +103,11 @@
 	{/snippet}
 </PageHeader>
 
-<div class="relative max-w-md mb-4">
-	<Search class="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground/50" />
-	<Input
-		placeholder="Search organizations..."
-		class="pl-9 h-9 bg-muted/30 border-border/50 focus-visible:bg-background"
-		bind:value={searchQuery}
-		oninput={handleSearchInput}
-	/>
+<div class="max-w-md mb-4">
+	<QueryFilterBar {filter} placeholder="Search organizations..." onchange={filterChanged} />
 </div>
 
-{#if loading}
+{#if !loaded}
 	<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
 		{#each { length: 3 }, i (i)}
 			<Skeleton class="h-36 rounded-xl" />
@@ -121,8 +116,8 @@
 {:else if orgs.length === 0}
 	<EmptyState
 		icon={Building2}
-		message={searchQuery ? 'No matching organizations' : 'No organizations yet'}
-		description={searchQuery
+		message={filter.active ? 'No matching organizations' : 'No organizations yet'}
+		description={filter.active
 			? 'Try a different search.'
 			: 'Create an organization to collaborate with your team.'}
 	>
@@ -136,7 +131,7 @@
 		{/snippet}
 	</EmptyState>
 {:else}
-	<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+	<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 		{#each orgs as org (org.id)}
 			<a href={resolve('/orgs/[name]', { name: org.name })} class="block group">
 				<Card class="border-border/60 hover:border-primary/20 transition-all hover:shadow-sm h-full">
@@ -187,11 +182,11 @@
 		{/each}
 	</div>
 	<DataPagination
-		{page}
-		{pageSize}
-		{totalCount}
-		onPrev={() => { page--; loadOrgs(); }}
-		onNext={() => { page++; loadOrgs(); }}
+		page={pager.page}
+		pageSize={pager.pageSize}
+		totalCount={pager.totalCount}
+		onPrev={() => { if (pager.prev()) loadOrgs(); }}
+		onNext={() => { if (pager.next()) loadOrgs(); }}
 	/>
 {/if}
 

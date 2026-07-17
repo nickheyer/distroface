@@ -5,6 +5,8 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
+	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -61,7 +63,7 @@ func (s *TokenService) ListAPITokens(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 
-	limit, offset := parsePagination(req.Msg.PageSize, req.Msg.PageToken)
+	limit, offset := pagination.Parse(req.Msg.Page)
 
 	// Users with manage permission see all tokens
 	userID := user.ID
@@ -70,7 +72,12 @@ func (s *TokenService) ListAPITokens(ctx context.Context, req *connect.Request[v
 		userID = ""
 	}
 
-	tokens, total, err := s.authManager.GetStore().ListAPITokens(ctx, userID, limit, offset)
+	q := pagination.ParseQuery(req.Msg.Page)
+	if err := stores.TokensQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	tokens, total, err := s.authManager.GetStore().ListAPITokens(ctx, userID, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -92,9 +99,8 @@ func (s *TokenService) ListAPITokens(ctx context.Context, req *connect.Request[v
 	}
 
 	return connect.NewResponse(&v1.ListAPITokensResponse{
-		Tokens:        protoTokens,
-		NextPageToken: nextPageToken(offset, limit, total),
-		TotalCount:    int32(total),
+		Tokens: protoTokens,
+		Page:   pagination.Info(offset, limit, total),
 	}), nil
 }
 

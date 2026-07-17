@@ -18,6 +18,7 @@
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
+	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import { Key, Plus, AlertTriangle, Trash2, CheckCircle, Terminal, ShieldCheck } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { configStore } from '$lib/stores/config.svelte';
@@ -26,14 +27,16 @@
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime, pageToToken } from '$lib/utils';
+	import { relativeTime } from '$lib/utils';
+	import { Pager } from '$lib/pager.svelte';
+	import { QueryFilter } from '$lib/query.svelte';
 	import type { APIToken } from '$lib/proto/distroface/v1/types_pb';
 
 	let tokens = $state<APIToken[]>([]);
 	let loading = $state(true);
-	let totalCount = $state(0);
-	let currentPage = $state(1);
-	const pageSize = 20;
+	let loaded = $state(false);
+	const pager = new Pager(20);
+	const filter = new QueryFilter([{ key: 'name', label: 'Name' }]);
 
 	let createPanelOpen = $state(false);
 	let tokenName = $state('');
@@ -67,16 +70,21 @@
 		loading = true;
 		try {
 			const resp = await rpcClient.token.listAPITokens({
-				pageSize,
-				pageToken: pageToToken(currentPage, pageSize)
+				page: pager.request(filter.request())
 			});
 			tokens = resp.tokens;
-			totalCount = resp.totalCount;
+			pager.apply(resp.page);
 		} catch {
 			// error interceptor
 		} finally {
 			loading = false;
+			loaded = true;
 		}
+	}
+
+	function filterChanged() {
+		pager.reset();
+		loadTokens();
 	}
 
 	async function createToken() {
@@ -136,15 +144,20 @@
 			<h2 class="section-title">API Tokens</h2>
 			<p class="section-subtitle">Personal access tokens for API and Docker registry authentication.</p>
 		</div>
-		<PermissionGate resource="tokens" action="create">
-			<Button size="sm" onclick={() => (createPanelOpen = true)}>
-				<Plus class="h-4 w-4 mr-1.5" />
-				Create Token
-			</Button>
-		</PermissionGate>
+		<div class="flex items-center gap-2">
+			<div class="w-80">
+				<QueryFilterBar {filter} placeholder="Search tokens..." onchange={filterChanged} />
+			</div>
+			<PermissionGate resource="tokens" action="create">
+				<Button size="sm" onclick={() => (createPanelOpen = true)}>
+					<Plus class="h-4 w-4 mr-1.5" />
+					Create Token
+				</Button>
+			</PermissionGate>
+		</div>
 	</div>
 
-	{#if loading}
+	{#if !loaded}
 		<div class="space-y-2">
 			{#each Array(3)}
 				<Skeleton class="h-14 w-full rounded-xl" />
@@ -153,8 +166,10 @@
 	{:else if tokens.length === 0}
 		<EmptyState
 			icon={Key}
-			message="No API tokens"
-			description="Create a token to authenticate with the API and Docker registry."
+			message={filter.active ? 'No tokens match the current filter' : 'No API tokens'}
+			description={filter.active
+				? 'Search matches the token name.'
+				: 'Create a token to authenticate with the API and Docker registry.'}
 		>
 			{#snippet actions()}
 				<PermissionGate resource="tokens" action="create">
@@ -166,7 +181,7 @@
 			{/snippet}
 		</EmptyState>
 	{:else}
-		<div class="data-table">
+		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			<Table>
 				<TableHeader>
 					<TableRow class="bg-muted/30 hover:bg-muted/30">
@@ -225,9 +240,9 @@
 		</div>
 
 		<DataPagination
-			page={currentPage} {pageSize} totalCount={totalCount}
-			onPrev={() => { currentPage--; loadTokens(); }}
-			onNext={() => { currentPage++; loadTokens(); }}
+			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
+			onPrev={() => { if (pager.prev()) loadTokens(); }}
+			onNext={() => { if (pager.next()) loadTokens(); }}
 		/>
 	{/if}
 </div>

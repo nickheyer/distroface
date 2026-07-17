@@ -30,6 +30,14 @@ var auditedAuthProcedures = map[string]bool{
 	distrofacev1connect.UserServiceChangePasswordProcedure: true,
 }
 
+// Rpcs still reachable while a password rotation is pending
+var mustChangeExemptProcedures = map[string]bool{
+	distrofacev1connect.AuthServiceGetCurrentUserProcedure: true,
+	distrofacev1connect.AuthServiceLogoutProcedure:         true,
+	distrofacev1connect.AuthServiceRefreshSessionProcedure: true,
+	distrofacev1connect.UserServiceChangePasswordProcedure: true,
+}
+
 // Failed auth counts toward lockout success clears it
 func (s *Server) rateLimitInterceptor() connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
@@ -106,6 +114,11 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 			// Public procedures - no further checks
 			if isPublic {
 				return next(ctx, req)
+			}
+
+			// Forced rotation blocks everything but session and password rpcs
+			if user != nil && user.MustChangePassword && !mustChangeExemptProcedures[procedure] {
+				return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("password change required before continuing"))
 			}
 
 			// Authenticated-only procedures - no specific resource permission needed

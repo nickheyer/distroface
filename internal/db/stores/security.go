@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -47,21 +48,134 @@ func (s *Store) GetCertificateDomainByName(ctx context.Context, domain string) (
 	return &d, nil
 }
 
-// Returns every domain preloaded with its owning org
-func (s *Store) ListCertificateDomains(ctx context.Context) ([]*db.CertificateDomain, error) {
-	var domains []*db.CertificateDomain
-	err := s.db.WithContext(ctx).Preload("Org").Order("created_at ASC").Find(&domains).Error
-	return domains, err
+// CertDomainsQuery allowlists certificate domain list filters
+var CertDomainsQuery = pagination.Spec{
+	Fields: map[string]string{"domain": "domain"},
+	Text:   []string{"domain"},
 }
 
-func (s *Store) ListCertificateDomainsByOrg(ctx context.Context, orgID string) ([]*db.CertificateDomain, error) {
+// Returns a page of domains preloaded with their owning org
+func (s *Store) ListCertificateDomains(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.CertificateDomain, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.CertificateDomain{}).Scopes(CertDomainsQuery.Scope(q))
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if limit > 0 {
+		tx = tx.Limit(limit).Offset(offset)
+	}
 	var domains []*db.CertificateDomain
-	err := s.db.WithContext(ctx).Where("org_id = ?", orgID).Order("created_at ASC").Find(&domains).Error
-	return domains, err
+	err := tx.Preload("Org").Order("created_at ASC").Find(&domains).Error
+	return domains, total, err
+}
+
+func (s *Store) ListCertificateDomainsByOrg(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]*db.CertificateDomain, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.CertificateDomain{}).
+		Where("org_id = ?", orgID).
+		Scopes(CertDomainsQuery.Scope(q))
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	if limit > 0 {
+		tx = tx.Limit(limit).Offset(offset)
+	}
+	var domains []*db.CertificateDomain
+	err := tx.Order("created_at ASC").Find(&domains).Error
+	return domains, total, err
 }
 
 func (s *Store) DeleteCertificateDomain(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Delete(&db.CertificateDomain{}, "id = ?", id).Error
+}
+
+func (s *Store) GetCertificateDomainsByIDs(ctx context.Context, ids []string) ([]*db.CertificateDomain, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var domains []*db.CertificateDomain
+	err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&domains).Error
+	return domains, err
+}
+
+func (s *Store) DeleteCertificateDomains(ctx context.Context, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Delete(&db.CertificateDomain{}, "id IN ?", ids).Error
+}
+
+// CertHostRow is a portal hostname or orphan domain for cert management
+type CertHostRow struct {
+	Hostname   string
+	PortalID   string
+	PortalName string
+}
+
+// CertHostsQuery allowlists certificate host list filters
+var CertHostsQuery = pagination.Spec{
+	Fields: map[string]string{
+		"hostname":    "hostname",
+		"portal_name": "portal_name",
+	},
+	Text: []string{"hostname", "portal_name"},
+}
+
+// Org portal hostnames unioned with orphan cert domains, paged and ordered
+func (s *Store) ListCertificateHosts(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]CertHostRow, int64, error) {
+	const union = `
+		SELECT p.hostname AS hostname, p.id AS portal_id, p.name AS portal_name, 0 AS sort_group
+		FROM registry_portals p
+		WHERE p.org_id = ? AND p.hostname <> ''
+		UNION
+		SELECT d.domain AS hostname, '' AS portal_id, '' AS portal_name, 1 AS sort_group
+		FROM certificate_domains d
+		WHERE d.org_id = ? AND d.domain NOT IN (
+			SELECT hostname FROM registry_portals WHERE org_id = ? AND hostname <> ''
+		)`
+
+	where := ""
+	unionArgs := []any{orgID, orgID, orgID}
+	if cond, condArgs := CertHostsQuery.SQL(q); cond != "" {
+		where = " WHERE " + cond
+		unionArgs = append(unionArgs, condArgs...)
+	}
+
+	var total int64
+	if err := s.db.WithContext(ctx).
+		Raw("SELECT COUNT(*) FROM ("+union+") AS hosts"+where, unionArgs...).
+		Scan(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	sel := "SELECT hostname, portal_id, portal_name FROM (" + union + ") AS hosts" + where +
+		" ORDER BY sort_group ASC, hostname ASC"
+	args := append([]any{}, unionArgs...)
+	if limit > 0 {
+		sel += " LIMIT ? OFFSET ?"
+		args = append(args, limit, offset)
+	}
+	var rows []CertHostRow
+	if err := s.db.WithContext(ctx).Raw(sel, args...).Scan(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	return rows, total, nil
+}
+
+// Org cert domains matching the given hostnames
+func (s *Store) GetCertificateDomainsByNames(ctx context.Context, orgID string, names []string) ([]*db.CertificateDomain, error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	var domains []*db.CertificateDomain
+	err := s.db.WithContext(ctx).
+		Where("org_id = ? AND domain IN ?", orgID, names).
+		Find(&domains).Error
+	return domains, err
 }
 
 // ── ACME cache operations ────────────────────────────────────────────────
@@ -97,24 +211,27 @@ func (s *Store) CreateAuditEvent(ctx context.Context, ev *db.AuditEvent) error {
 	return s.db.WithContext(ctx).Create(ev).Error
 }
 
-// Newest first, action/actor filters optional
-func (s *Store) ListAuditEvents(ctx context.Context, action, actor string, limit, offset int) ([]*db.AuditEvent, int64, error) {
-	q := s.db.WithContext(ctx).Model(&db.AuditEvent{})
-	if action != "" {
-		q = q.Where("action = ?", action)
-	}
-	if actor != "" {
-		q = q.Where("actor = ?", actor)
-	}
+// AuditQuery allowlists audit event list filters
+var AuditQuery = pagination.Spec{
+	Fields: map[string]string{
+		"action":    "action",
+		"actor":     "actor",
+		"outcome":   "outcome",
+		"resource":  "resource",
+		"source_ip": "source_ip",
+	},
+	Text: []string{"action", "actor", "resource"},
+}
+
+// Newest first
+func (s *Store) ListAuditEvents(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.AuditEvent, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.AuditEvent{}).Scopes(AuditQuery.Scope(q))
 	var total int64
-	if err := q.Count(&total).Error; err != nil {
+	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
-	if limit <= 0 || limit > 500 {
-		limit = 100
-	}
 	var events []*db.AuditEvent
-	err := q.Order("created_at DESC").Limit(limit).Offset(offset).Find(&events).Error
+	err := tx.Order("created_at DESC").Limit(limit).Offset(offset).Find(&events).Error
 	return events, total, err
 }
 

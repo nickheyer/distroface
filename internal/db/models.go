@@ -10,18 +10,19 @@ const (
 )
 
 type User struct {
-	ID           string     `json:"id" gorm:"primaryKey"`
-	Username     string     `json:"username" gorm:"not null;uniqueIndex:idx_user_provider"`
-	Email        *string    `json:"email" gorm:"uniqueIndex:idx_user_email,where:email IS NOT NULL AND email <> ''"`
-	PasswordHash string     `json:"-" gorm:"column:password_hash"`
-	DisplayName  string     `json:"display_name"`
-	AuthProvider string     `json:"auth_provider" gorm:"not null;default:'local';uniqueIndex:idx_user_provider"`
-	OIDCSubject  string     `json:"oidc_subject" gorm:"column:oidc_subject;uniqueIndex:idx_oidc_identity,where:oidc_subject != ''"`
-	OIDCIssuer   string     `json:"oidc_issuer" gorm:"column:oidc_issuer;uniqueIndex:idx_oidc_identity,where:oidc_subject != ''"`
-	IsActive     bool       `json:"is_active" gorm:"not null;default:true"`
-	LastLogin    *time.Time `json:"last_login" gorm:"column:last_login"`
-	CreatedAt    time.Time  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt    time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
+	ID                 string     `json:"id" gorm:"primaryKey"`
+	Username           string     `json:"username" gorm:"not null;uniqueIndex:idx_user_provider"`
+	Email              *string    `json:"email" gorm:"uniqueIndex:idx_user_email,where:email IS NOT NULL AND email <> ''"`
+	PasswordHash       string     `json:"-" gorm:"column:password_hash"`
+	DisplayName        string     `json:"display_name"`
+	AuthProvider       string     `json:"auth_provider" gorm:"not null;default:'local';uniqueIndex:idx_user_provider"`
+	OIDCSubject        string     `json:"oidc_subject" gorm:"column:oidc_subject;uniqueIndex:idx_oidc_identity,where:oidc_subject != ''"`
+	OIDCIssuer         string     `json:"oidc_issuer" gorm:"column:oidc_issuer;uniqueIndex:idx_oidc_identity,where:oidc_subject != ''"`
+	IsActive           bool       `json:"is_active" gorm:"not null;default:true"`
+	MustChangePassword bool       `json:"must_change_password" gorm:"not null;default:false;column:must_change_password"`
+	LastLogin          *time.Time `json:"last_login" gorm:"column:last_login"`
+	CreatedAt          time.Time  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt          time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type Role struct {

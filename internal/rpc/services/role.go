@@ -7,6 +7,7 @@ import (
 	"connectrpc.com/connect"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -26,7 +27,13 @@ func NewRoleService(store *stores.Store, enforcer *rbac.Enforcer, log *logger.Lo
 }
 
 func (s *RoleService) ListRoles(ctx context.Context, req *connect.Request[v1.ListRolesRequest]) (*connect.Response[v1.ListRolesResponse], error) {
-	roles, err := s.store.ListRoles(ctx)
+	limit, offset := pagination.Parse(req.Msg.Page)
+	q := pagination.ParseQuery(req.Msg.Page)
+	if err := stores.RolesQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+
+	roles, total, err := s.store.ListRoles(ctx, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -39,6 +46,7 @@ func (s *RoleService) ListRoles(ctx context.Context, req *connect.Request[v1.Lis
 
 	return connect.NewResponse(&v1.ListRolesResponse{
 		Roles: protoRoles,
+		Page:  pagination.Info(offset, limit, total),
 	}), nil
 }
 
@@ -191,10 +199,23 @@ func (s *RoleService) GetPermissionMatrix(ctx context.Context, req *connect.Requ
 		}
 	}
 
-	// Get role permissions
+	// Casbin subjects are role names, the wire keys by role id
+	allRoles, _, err := s.store.ListRoles(ctx, pagination.Query{}, 0, 0)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	idByName := make(map[string]string, len(allRoles))
+	for _, r := range allRoles {
+		idByName[r.Name] = r.ID
+	}
+
 	matrix := s.enforcer.GetPermissionMatrix()
 	rolePerms := make(map[string]*v1.RolePermissions)
 	for role, perms := range matrix {
+		id, ok := idByName[role]
+		if !ok {
+			continue
+		}
 		protoPerms := make([]*v1.Permission, len(perms))
 		for i, p := range perms {
 			protoPerms[i] = &v1.Permission{
@@ -203,100 +224,123 @@ func (s *RoleService) GetPermissionMatrix(ctx context.Context, req *connect.Requ
 				ObjectId: p.ObjectID,
 			}
 		}
-		rolePerms[role] = &v1.RolePermissions{Permissions: protoPerms}
-	}
-
-	// Fetch scopeable objects if requested
-	var availableObjects []*v1.ScopeableObject
-	if req.Msg.IncludeObjects {
-		const batchSize = 100
-		for offset := 0; ; offset += batchSize {
-			repos, total, err := s.store.ListRepositories(ctx, "", "", "", true, nil, batchSize, offset)
-			if err != nil {
-				return nil, connect.NewError(connect.CodeInternal, err)
-			}
-			for _, r := range repos {
-				fullName := r.Namespace + "/" + r.Name
-				availableObjects = append(availableObjects, &v1.ScopeableObject{
-					Id:          fullName,
-					Name:        fullName,
-					Resource:    rbac.ResourceRepositories,
-					ScopeSource: rbac.ResourceRepositories,
-				})
-			}
-			if int64(offset+batchSize) >= total {
-				break
-			}
-		}
-
-		for offset := 0; ; offset += batchSize {
-			artifactRepos, total, err := s.store.ListArtifactRepositories(ctx, stores.ArtifactRepoListOptions{
-				IncludePrivate: true,
-				Limit:          batchSize,
-				Offset:         offset,
-			})
-			if err != nil {
-				return nil, connect.NewError(connect.CodeInternal, err)
-			}
-			for _, r := range artifactRepos {
-				fullName := r.Namespace + "/" + r.Name
-				availableObjects = append(availableObjects, &v1.ScopeableObject{
-					Id:          fullName,
-					Name:        fullName,
-					Resource:    rbac.ResourceArtifacts,
-					ScopeSource: rbac.ResourceArtifacts,
-				})
-			}
-			if int64(offset+batchSize) >= total {
-				break
-			}
-		}
-
-		for offset := 0; ; offset += batchSize {
-			orgs, total, err := s.store.ListOrganizations(ctx, "", true, "", batchSize, offset)
-			if err != nil {
-				return nil, connect.NewError(connect.CodeInternal, err)
-			}
-			for _, o := range orgs {
-				availableObjects = append(availableObjects, &v1.ScopeableObject{
-					Id:          o.Name,
-					Name:        o.Name,
-					Resource:    rbac.ResourceOrganizations,
-					ScopeSource: rbac.ResourceOrganizations,
-				})
-			}
-			if int64(offset+batchSize) >= total {
-				break
-			}
-		}
+		rolePerms[id] = &v1.RolePermissions{Permissions: protoPerms}
 	}
 
 	return connect.NewResponse(&v1.GetPermissionMatrixResponse{
-		ResourceActions:  resourceActions,
-		RolePermissions:  rolePerms,
-		AvailableObjects: availableObjects,
+		ResourceActions: resourceActions,
+		RolePermissions: rolePerms,
+	}), nil
+}
+
+func (s *RoleService) ListScopeableObjects(ctx context.Context, req *connect.Request[v1.ListScopeableObjectsRequest]) (*connect.Response[v1.ListScopeableObjectsResponse], error) {
+	limit, offset := pagination.Parse(req.Msg.Page)
+	// Object pickers search free text only
+	query := pagination.Query{Text: pagination.ParseQuery(req.Msg.Page).Text}
+
+	var objects []*v1.ScopeableObject
+	var total int64
+
+	switch req.Msg.Resource {
+	case rbac.ResourceRepositories:
+		repos, t, err := s.store.ListRepositories(ctx, "", query, "", true, nil, limit, offset)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		total = t
+		for _, r := range repos {
+			fullName := r.Namespace + "/" + r.Name
+			objects = append(objects, &v1.ScopeableObject{
+				Id:          fullName,
+				Name:        fullName,
+				Resource:    rbac.ResourceRepositories,
+				ScopeSource: rbac.ResourceRepositories,
+			})
+		}
+	case rbac.ResourceArtifacts:
+		repos, t, err := s.store.ListArtifactRepositories(ctx, stores.ArtifactRepoListOptions{
+			IncludePrivate: true,
+			Query:          query,
+			Limit:          limit,
+			Offset:         offset,
+		})
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		total = t
+		for _, r := range repos {
+			fullName := r.Namespace + "/" + r.Name
+			objects = append(objects, &v1.ScopeableObject{
+				Id:          fullName,
+				Name:        fullName,
+				Resource:    rbac.ResourceArtifacts,
+				ScopeSource: rbac.ResourceArtifacts,
+			})
+		}
+	case rbac.ResourceOrganizations:
+		orgs, t, err := s.store.ListOrganizations(ctx, "", true, query, limit, offset)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		total = t
+		for _, o := range orgs {
+			objects = append(objects, &v1.ScopeableObject{
+				Id:          o.ID,
+				Name:        o.Name,
+				Resource:    rbac.ResourceOrganizations,
+				ScopeSource: rbac.ResourceOrganizations,
+			})
+		}
+	default:
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("resource must be one of %s, %s, %s",
+			rbac.ResourceRepositories, rbac.ResourceArtifacts, rbac.ResourceOrganizations))
+	}
+
+	return connect.NewResponse(&v1.ListScopeableObjectsResponse{
+		Objects: objects,
+		Page:    pagination.Info(offset, limit, total),
 	}), nil
 }
 
 func (s *RoleService) UpdatePermissions(ctx context.Context, req *connect.Request[v1.UpdatePermissionsRequest]) (*connect.Response[v1.UpdatePermissionsResponse], error) {
-	if req.Msg.RoleName == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	role, err := s.requireRole(ctx, req.Msg.RoleId)
+	if err != nil {
+		return nil, err
 	}
 
 	perms := protoToRBACPermissions(req.Msg.Permissions)
-	if err := s.enforcer.SetPermissionsForRole(req.Msg.RoleName, perms); err != nil {
+	if err := s.enforcer.SetPermissionsForRole(role.Name, perms); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	return connect.NewResponse(&v1.UpdatePermissionsResponse{}), nil
 }
 
-func (s *RoleService) AssignRole(ctx context.Context, req *connect.Request[v1.AssignRoleRequest]) (*connect.Response[v1.AssignRoleResponse], error) {
-	if req.Msg.UserId == "" || req.Msg.RoleName == "" {
+// Resolves a role id, invalid argument when empty, not found when unknown
+func (s *RoleService) requireRole(ctx context.Context, id string) (*storage.Role, error) {
+	if id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
+	role, err := s.store.GetRole(ctx, id)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if role == nil {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("role %q does not exist", id))
+	}
+	return role, nil
+}
 
-	if err := s.store.AssignRole(ctx, req.Msg.UserId, req.Msg.RoleName, "local"); err != nil {
+func (s *RoleService) AssignRole(ctx context.Context, req *connect.Request[v1.AssignRoleRequest]) (*connect.Response[v1.AssignRoleResponse], error) {
+	if req.Msg.UserId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	}
+	role, err := s.requireRole(ctx, req.Msg.RoleId)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.store.AssignRole(ctx, req.Msg.UserId, role.Name, "local"); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -304,11 +348,15 @@ func (s *RoleService) AssignRole(ctx context.Context, req *connect.Request[v1.As
 }
 
 func (s *RoleService) UnassignRole(ctx context.Context, req *connect.Request[v1.UnassignRoleRequest]) (*connect.Response[v1.UnassignRoleResponse], error) {
-	if req.Msg.UserId == "" || req.Msg.RoleName == "" {
+	if req.Msg.UserId == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
+	role, err := s.requireRole(ctx, req.Msg.RoleId)
+	if err != nil {
+		return nil, err
+	}
 
-	if err := s.store.UnassignRole(ctx, req.Msg.UserId, req.Msg.RoleName); err != nil {
+	if err := s.store.UnassignRole(ctx, req.Msg.UserId, role.Name); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
@@ -320,13 +368,13 @@ func (s *RoleService) GetUserRoles(ctx context.Context, req *connect.Request[v1.
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
 
-	roles, err := s.store.GetUserRoleNames(ctx, req.Msg.UserId)
+	roles, err := s.store.GetUserRoles(ctx, req.Msg.UserId)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	return connect.NewResponse(&v1.GetUserRolesResponse{
-		Roles: roles,
+		Roles: roleRefsOf(roles),
 	}), nil
 }
 

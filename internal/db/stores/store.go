@@ -137,6 +137,16 @@ func (s *Store) Migrate() error {
 		return fmt.Errorf("failed to backfill artifact repo namespace: %w", err)
 	}
 
+	// Org scoped casbin objects moved from org name to org id
+	if s.db.Migrator().HasTable("casbin_rule") {
+		if err := s.db.Exec(`UPDATE casbin_rule
+			SET v3 = (SELECT o.id FROM organizations o WHERE o.name = casbin_rule.v3)
+			WHERE ptype = 'p' AND v1 = 'organizations' AND v3 <> '*'
+			AND EXISTS (SELECT 1 FROM organizations o WHERE o.name = casbin_rule.v3)`).Error; err != nil {
+			return fmt.Errorf("failed to migrate casbin org objects: %w", err)
+		}
+	}
+
 	if err := s.SeedSystemRoles(); err != nil {
 		return fmt.Errorf("failed to seed system roles: %w", err)
 	}

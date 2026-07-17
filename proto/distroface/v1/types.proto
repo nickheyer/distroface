@@ -31,18 +31,31 @@ message Permission {
   string object_id = 3;
 }
 
+// RoleRef is a role reference, id for selection, name for display.
+message RoleRef {
+  string id = 1;
+  string name = 2;
+}
+
 // User represents a registered user account.
 message User {
   string id = 1;
   string username = 2;
   string email = 3;
   string display_name = 4;
-  repeated string roles = 5;
+  repeated RoleRef roles = 5;
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
   repeated Permission permissions = 8;
   string auth_provider = 9;
   bool is_active = 10;
+  bool must_change_password = 11;
+}
+
+// Reports a per-item failure in a bulk operation.
+message BulkOperationError {
+  string id = 1;
+  string error = 2;
 }
 
 // Role represents a named role in the RBAC system.

@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/pagination"
 	"gorm.io/gorm"
 )
 
@@ -31,8 +32,14 @@ func (s *Store) GetAPITokenByHash(ctx context.Context, hash string) (*db.APIToke
 	return &token, nil
 }
 
-func (s *Store) ListAPITokens(ctx context.Context, userID string, limit, offset int) ([]*db.APIToken, int64, error) {
-	tx := s.db.WithContext(ctx).Model(&db.APIToken{})
+// TokensQuery allowlists api token list filters
+var TokensQuery = pagination.Spec{
+	Fields: map[string]string{"name": "name"},
+	Text:   []string{"name"},
+}
+
+func (s *Store) ListAPITokens(ctx context.Context, userID string, q pagination.Query, limit, offset int) ([]*db.APIToken, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.APIToken{}).Scopes(TokensQuery.Scope(q))
 	if userID != "" {
 		tx = tx.Where("user_id = ?", userID)
 	}
@@ -42,12 +49,8 @@ func (s *Store) ListAPITokens(ctx context.Context, userID string, limit, offset 
 		return nil, 0, err
 	}
 
-	query := s.db.WithContext(ctx)
-	if userID != "" {
-		query = query.Where("user_id = ?", userID)
-	}
 	var tokens []*db.APIToken
-	err := query.Order("created_at DESC").Limit(limit).Offset(offset).Find(&tokens).Error
+	err := tx.Order("created_at DESC").Limit(limit).Offset(offset).Find(&tokens).Error
 	return tokens, total, err
 }
 
