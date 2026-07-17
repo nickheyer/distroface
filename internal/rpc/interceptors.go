@@ -3,11 +3,13 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
+	"github.com/nickheyer/distroface/internal/admin"
+	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/portal"
-	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
@@ -20,6 +22,14 @@ var throttledProcedures = map[string]bool{
 	distrofacev1connect.UserServiceChangePasswordProcedure: true,
 }
 
+// Credential lifecycle rpcs audited despite lacking a permission entry
+var auditedAuthProcedures = map[string]bool{
+	distrofacev1connect.AuthServiceLoginProcedure:          true,
+	distrofacev1connect.AuthServiceRegisterProcedure:       true,
+	distrofacev1connect.AuthServiceLogoutProcedure:         true,
+	distrofacev1connect.UserServiceChangePasswordProcedure: true,
+}
+
 // Failed auth counts toward lockout success clears it
 func (s *Server) rateLimitInterceptor() connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
@@ -28,7 +38,7 @@ func (s *Server) rateLimitInterceptor() connect.UnaryInterceptorFunc {
 				return next(ctx, req)
 			}
 
-			clientIP := ratelimit.ClientIP(req.Peer().Addr, req.Header())
+			clientIP := admin.ClientIP(req.Peer().Addr, req.Header())
 			if s.AuthLimiter.Blocked(clientIP) {
 				return nil, connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("too many failed attempts, try again later"))
 			}
@@ -65,7 +75,7 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 				return next(ctx, req)
 			}
 
-			// Resolve user from token or anonymous access — always, for every request
+			// Resolve user from token or anonymous access - always, for every request
 			token := auth.ExtractToken(req.Header())
 			var user *auth.AuthenticatedUser
 
@@ -74,9 +84,10 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 				user, err = s.AuthManager.ValidateToken(ctx, token)
 				if err != nil {
 					if !isPublic {
+						s.recordAuthDenial(ctx, req, "invalid token")
 						return nil, connect.NewError(connect.CodeUnauthenticated, err)
 					}
-					// Public route with bad token — proceed without user
+					// Public route with bad token - proceed without user
 				}
 			} else if s.AuthManager.IsAnonymousAccessEnabled() && portalAllowsAnonymous(ctx) {
 				user = s.AuthManager.AnonymousUser()
@@ -92,12 +103,12 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 				return nil, err
 			}
 
-			// Public procedures — no further checks
+			// Public procedures - no further checks
 			if isPublic {
 				return next(ctx, req)
 			}
 
-			// Authenticated-only procedures — no specific resource permission needed
+			// Authenticated-only procedures - no specific resource permission needed
 			if rbac.AuthenticatedOnlyProcedures[procedure] {
 				return next(ctx, req)
 			}
@@ -115,6 +126,7 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 						return nil, connect.NewError(connect.CodeInternal, err)
 					}
 					if !allowed {
+						s.recordAuthDenial(ctx, req, fmt.Sprintf("rbac %s/%s on %s", perm.Resource, perm.Action, objectID))
 						return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("insufficient permissions for %s/%s", perm.Resource, perm.Action))
 					}
 				}
@@ -125,25 +137,68 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 	}
 }
 
-func portalAllowsAnonymous(ctx context.Context) bool {
-	p := portal.FromContext(ctx)
-	return p == nil || !p.RequireAuth
+// Auth interceptor denials never reach the audit interceptor
+func (s *Server) recordAuthDenial(ctx context.Context, req connect.AnyRequest, detail string) {
+	procedure := req.Spec().Procedure
+	resource, ok := auditableResource(procedure)
+	if !ok {
+		return
+	}
+	s.AuditRecorder.Record(ctx, audit.Event{
+		Action:   procedureAction(procedure),
+		Resource: resource,
+		Outcome:  audit.OutcomeDenied,
+		Detail:   detail,
+		SourceIP: admin.ClientIP(req.Peer().Addr, req.Header()),
+	})
 }
 
-// Read-only portals refuse content mutations on the RPC surface too
-func portalAllowsProcedure(ctx context.Context, procedure string) error {
-	p := portal.FromContext(ctx)
-	if p == nil || p.AllowPush {
-		return nil
+func (s *Server) auditInterceptor(recorder *audit.Recorder) connect.UnaryInterceptorFunc {
+	return func(next connect.UnaryFunc) connect.UnaryFunc {
+		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+			resp, err := next(ctx, req)
+			if recorder == nil {
+				return resp, err
+			}
+
+			procedure := req.Spec().Procedure
+			resource, ok := auditableResource(procedure)
+			if !ok {
+				return resp, err
+			}
+
+			ev := audit.Event{
+				Action:   procedureAction(procedure),
+				Resource: resource,
+				Outcome:  audit.OutcomeSuccess,
+				SourceIP: admin.ClientIP(req.Peer().Addr, req.Header()),
+			}
+			if err != nil {
+				switch connect.CodeOf(err) {
+				case connect.CodeUnauthenticated, connect.CodePermissionDenied:
+					ev.Outcome = audit.OutcomeDenied
+				default:
+					ev.Outcome = audit.OutcomeError
+				}
+			}
+			if perm, ok := rbac.ProcedurePermissions[procedure]; ok && perm.ObjectIDField != "" {
+				if obj := rbac.ExtractObjectID(req, perm.ObjectIDField); obj != "*" {
+					ev.Detail = obj
+				}
+			}
+			// Credential rpcs carry the subject in the request
+			if auditedAuthProcedures[procedure] && ev.Detail == "" {
+				for _, field := range []string{"username", "identifier"} {
+					if subject := rbac.ExtractObjectID(req, field); subject != "*" {
+						ev.Detail = subject
+						break
+					}
+				}
+			}
+			recorder.Record(ctx, ev)
+			return resp, err
+		}
 	}
-	perm, ok := rbac.ProcedurePermissions[procedure]
-	if !ok || (perm.Resource != rbac.ResourceArtifacts && perm.Resource != rbac.ResourceRepositories) {
-		return nil
-	}
-	if perm.Action == rbac.ActionRead || perm.Action == rbac.ActionPull {
-		return nil
-	}
-	return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("portal is read-only"))
 }
 
 type loggingInterceptor struct {
@@ -168,4 +223,42 @@ func (i *loggingInterceptor) WrapStreamingHandler(next connect.StreamingHandlerF
 		i.log.Info("RPC Stream closed %s %s", conn.Peer().Addr, conn.Spec().Procedure)
 		return err
 	}
+}
+
+// Mutations and credential events land in the audit trail, reads skip
+func auditableResource(procedure string) (string, bool) {
+	if auditedAuthProcedures[procedure] {
+		return "auth", true
+	}
+	perm, ok := rbac.ProcedurePermissions[procedure]
+	if !ok || perm.Action == rbac.ActionRead || perm.Action == rbac.ActionPull {
+		return "", false
+	}
+	return perm.Resource, true
+}
+
+// Short human form of a connect procedure path
+func procedureAction(procedure string) string {
+	return strings.TrimPrefix(procedure, "/distroface.v1.")
+}
+
+func portalAllowsAnonymous(ctx context.Context) bool {
+	p := portal.FromContext(ctx)
+	return p == nil || !p.RequireAuth
+}
+
+// Read-only portals refuse content mutations on the RPC surface too
+func portalAllowsProcedure(ctx context.Context, procedure string) error {
+	p := portal.FromContext(ctx)
+	if p == nil || p.AllowPush {
+		return nil
+	}
+	perm, ok := rbac.ProcedurePermissions[procedure]
+	if !ok || (perm.Resource != rbac.ResourceArtifacts && perm.Resource != rbac.ResourceRepositories) {
+		return nil
+	}
+	if perm.Action == rbac.ActionRead || perm.Action == rbac.ActionPull {
+		return nil
+	}
+	return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("portal is read-only"))
 }

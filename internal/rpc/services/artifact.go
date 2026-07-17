@@ -13,6 +13,7 @@ import (
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -26,13 +27,13 @@ var _ distrofacev1connect.ArtifactServiceHandler = (*ArtifactService)(nil)
 var artifactRepoNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 
 type ArtifactService struct {
-	store   *storage.Store
+	store   *stores.Store
 	manager *artifacts.Manager
 	access  *artifacts.Access
 	log     *logger.Logger
 }
 
-func NewArtifactService(store *storage.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, log *logger.Logger) *ArtifactService {
+func NewArtifactService(store *stores.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, log *logger.Logger) *ArtifactService {
 	return &ArtifactService{store: store, manager: manager, access: artifacts.NewAccess(store, enforcer), log: log}
 }
 
@@ -285,7 +286,7 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Requ
 	msg := req.Msg
 	limit, offset := parsePagination(msg.PageSize, msg.PageToken)
 
-	criteria := storage.ArtifactSearchCriteria{
+	criteria := stores.ArtifactSearchCriteria{
 		Name:       msg.Name,
 		Version:    msg.Version,
 		Path:       msg.Path,
@@ -396,7 +397,7 @@ func (s *ArtifactService) SetArtifactProperties(ctx context.Context, req *connec
 	}
 
 	if err := s.store.SetArtifactProperties(ctx, artifact.ID, msg.Properties); err != nil {
-		if errors.Is(err, storage.ErrDuplicateIdentity) {
+		if errors.Is(err, stores.ErrDuplicateIdentity) {
 			return nil, connect.NewError(connect.CodeAlreadyExists, err)
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -551,7 +552,7 @@ func mapArtifactErr(err error) error {
 
 // ── Proto mapping ────────────────────────────────────────────────────────
 
-func (s *ArtifactService) repoToProto(ctx context.Context, repo *storage.ArtifactRepository, stats map[int64]storage.ArtifactRepoStats) *v1.ArtifactRepository {
+func (s *ArtifactService) repoToProto(ctx context.Context, repo *storage.ArtifactRepository, stats map[int64]stores.ArtifactRepoStats) *v1.ArtifactRepository {
 	owner := ""
 	if repo.OwnerID != "" {
 		if u, err := s.store.GetUserByID(ctx, repo.OwnerID); err == nil && u != nil {

@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"golang.org/x/oauth2"
@@ -21,7 +23,7 @@ import (
 // OIDCHandler implements OIDC-based authentication flows.
 type OIDCHandler struct {
 	manager      *Manager
-	store        *db.Store
+	store        *stores.Store
 	config       *config.OIDCConfig
 	policy       RegistryAccessPolicy // Validates portal return origins, nil disables
 	provider     *oidc.Provider
@@ -33,7 +35,7 @@ type OIDCHandler struct {
 
 // NewOIDCHandler creates a new OIDC handler. If OIDC is disabled in config,
 // The handler is returned with a nil provider (IsEnabled() returns false).
-func NewOIDCHandler(manager *Manager, store *db.Store, cfg *config.OIDCConfig, policy RegistryAccessPolicy, log *logger.Logger) *OIDCHandler {
+func NewOIDCHandler(manager *Manager, store *stores.Store, cfg *config.OIDCConfig, policy RegistryAccessPolicy, log *logger.Logger) *OIDCHandler {
 	h := &OIDCHandler{
 		manager: manager,
 		store:   store,
@@ -106,6 +108,7 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		MaxAge:   300,
 		HttpOnly: true,
+		Secure:   requestIsTLS(r),
 		SameSite: http.SameSiteLaxMode,
 	})
 
@@ -117,11 +120,17 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			Path:     "/",
 			MaxAge:   300,
 			HttpOnly: true,
+			Secure:   requestIsTLS(r),
 			SameSite: http.SameSiteLaxMode,
 		})
 	}
 
 	http.Redirect(w, r, h.oauth2Config.AuthCodeURL(state), http.StatusFound)
+}
+
+// Direct tls or a forwarded https hop upstream
+func requestIsTLS(r *http.Request) bool {
+	return r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }
 
 // Accepts only http(s) origins whose host is an enabled portal hostname

@@ -10,6 +10,7 @@ import (
 
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
@@ -17,7 +18,7 @@ import (
 // ArtifactPlan is the resolved v1 -> v2 artifact import set. V1 kept every
 // re-upload of the same (repo, version, path, properties); v2 enforces
 // uniqueness on that full identity with replace-on-push semantics, so the plan
-// keeps only the newest row per identity — exactly what v2 would have retained
+// keeps only the newest row per identity - exactly what v2 would have retained
 // had it been running all along. Properties are part of the identity: the same
 // version+path uploaded with different build metadata is a distinct artifact.
 type ArtifactPlan struct {
@@ -60,7 +61,7 @@ func PlanArtifacts(v1db *V1DB) (*ArtifactPlan, error) {
 		propsFingerprint string
 	}
 	identity := func(a V1Artifact) key {
-		return key{a.RepoID, a.Version, a.Path, db.PropsFingerprint(plan.Props[a.ID])}
+		return key{a.RepoID, a.Version, a.Path, stores.PropsFingerprint(plan.Props[a.ID])}
 	}
 	newest := map[key]V1Artifact{}
 	valid := make([]V1Artifact, 0, len(arts))
@@ -135,7 +136,7 @@ func CmdArtifacts(ctx context.Context, cfg *config.MigrateConfig) error {
 		return nil
 	}
 	if cfg.V2DB == "" || cfg.V2Artifacts == "" {
-		fmt.Println("\nplan only — pass -v1-root, -v2-db, and -v2-artifacts (the v2 artifacts.storage_path) to import")
+		fmt.Println("\nplan only - pass -v1-root, -v2-db, and -v2-artifacts (the v2 artifacts.storage_path) to import")
 		return nil
 	}
 	if v1s == nil {

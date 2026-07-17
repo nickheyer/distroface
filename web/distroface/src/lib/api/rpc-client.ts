@@ -18,6 +18,8 @@ import { WebhookService } from '$lib/proto/distroface/v1/webhook_pb';
 import { PortalService } from '$lib/proto/distroface/v1/portal_pb';
 import { ArtifactService } from '$lib/proto/distroface/v1/artifact_pb';
 import { GCService } from '$lib/proto/distroface/v1/gc_pb';
+import { CertificateService } from '$lib/proto/distroface/v1/certificate_pb';
+import { AuditService } from '$lib/proto/distroface/v1/audit_pb';
 import { toast } from 'svelte-sonner';
 
 const SESSION_KEY = 'distroface_session';
@@ -67,6 +69,8 @@ export class RpcClient {
 	public readonly portal: Client<typeof PortalService>;
 	public readonly artifact: Client<typeof ArtifactService>;
 	public readonly gc: Client<typeof GCService>;
+	public readonly certificate: Client<typeof CertificateService>;
+	public readonly audit: Client<typeof AuditService>;
 
 	constructor() {
 		this.health = createClient(HealthService, transport);
@@ -81,6 +85,8 @@ export class RpcClient {
 		this.portal = createClient(PortalService, transport);
 		this.artifact = createClient(ArtifactService, transport);
 		this.gc = createClient(GCService, transport);
+		this.certificate = createClient(CertificateService, transport);
+		this.audit = createClient(AuditService, transport);
 	}
 }
 

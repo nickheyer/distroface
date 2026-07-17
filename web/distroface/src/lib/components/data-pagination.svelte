@@ -26,7 +26,7 @@
 {#if totalCount > pageSize}
 	<div class="flex items-center justify-between pt-2">
 		<p class="text-[13px] text-muted-foreground tabular-nums">
-			{rangeStart}–{rangeEnd} of {totalCount}
+			{rangeStart}-{rangeEnd} of {totalCount}
 		</p>
 		<div class="flex items-center gap-1.5">
 			<span class="text-[13px] text-muted-foreground mr-1">

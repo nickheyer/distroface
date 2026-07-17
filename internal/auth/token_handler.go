@@ -6,8 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/admin"
 	storage "github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/ratelimit"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"golang.org/x/crypto/bcrypt"
@@ -24,11 +25,11 @@ type RegistryAccessPolicy interface {
 // TokenHandler implements the Docker Token Authentication Specification.
 type TokenHandler struct {
 	tokenService *TokenService
-	store        *storage.Store
+	store        *stores.Store
 	authManager  *Manager
 	enforcer     *rbac.Enforcer
 	policy       RegistryAccessPolicy
-	authLimiter  *ratelimit.Limiter // Failed-credential lockout per client IP, nil disables
+	authLimiter  *admin.Limiter // Failed-credential lockout per client IP, nil disables
 	log          *logger.Logger
 }
 
@@ -40,7 +41,7 @@ type tokenResponse struct {
 }
 
 // Makes docker token endpoint nil args disable extras
-func NewTokenHandler(ts *TokenService, store *storage.Store, manager *Manager, enforcer *rbac.Enforcer, policy RegistryAccessPolicy, authLimiter *ratelimit.Limiter, log *logger.Logger) *TokenHandler {
+func NewTokenHandler(ts *TokenService, store *stores.Store, manager *Manager, enforcer *rbac.Enforcer, policy RegistryAccessPolicy, authLimiter *admin.Limiter, log *logger.Logger) *TokenHandler {
 	return &TokenHandler{
 		tokenService: ts,
 		store:        store,
@@ -61,7 +62,7 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hasCreds = username != ""
 	}
 
-	clientIP := ratelimit.ClientIP(r.RemoteAddr, r.Header)
+	clientIP := admin.ClientIP(r.RemoteAddr, r.Header)
 
 	// Brute-force lockout: too many failed credential attempts from this IP
 	if hasCreds && h.authLimiter != nil && h.authLimiter.Blocked(clientIP) {

@@ -77,7 +77,7 @@ func CmdReport(ctx context.Context, cfg *config.MigrateConfig) error {
 			flat++
 		}
 	}
-	fmt.Printf("\nIMAGES (db): %d manifest row(s), %d distinct name(s) — %d flat (-> %s/*), %d two-level (pass through)\n",
+	fmt.Printf("\nIMAGES (db): %d manifest row(s), %d distinct name(s) - %d flat (-> %s/*), %d two-level (pass through)\n",
 		len(images), len(dbNames), flat, cfg.LegacyNS, twoLevel)
 	if len(inconsistent) > 0 {
 		fmt.Printf("  !! %d name(s) have INCONSISTENT private flags across manifests (resolved to private): %s\n",
@@ -132,7 +132,7 @@ func CmdReport(ctx context.Context, cfg *config.MigrateConfig) error {
 			for _, t := range scan.Tags {
 				if issue := t.Issue(); issue != "" {
 					brokenTags++
-					brokenDetail = append(brokenDetail, fmt.Sprintf("  !! %s:%s — %s", repo, t.Tag, issue))
+					brokenDetail = append(brokenDetail, fmt.Sprintf("  !! %s:%s - %s", repo, t.Tag, issue))
 				}
 			}
 		}
@@ -163,7 +163,7 @@ func CmdReport(ctx context.Context, cfg *config.MigrateConfig) error {
 				len(storageOnly), strings.Join(storageOnly, ", "))
 		}
 	} else {
-		fmt.Println("\nIMAGES (storage): skipped — pass -v1-root to scan the storage tree (blob existence, schema1 detection)")
+		fmt.Println("\nIMAGES (storage): skipped - pass -v1-root to scan the storage tree (blob existence, schema1 detection)")
 	}
 
 	// ── Artifacts ────────────────────────────────────────────────────────
@@ -183,7 +183,7 @@ func CmdReport(ctx context.Context, cfg *config.MigrateConfig) error {
 		fmt.Printf("  dropping %d older duplicate row(s) of the same repo/version/path (v2 keeps only the newest)\n", n)
 	}
 	if len(plan.Invalid) > 0 {
-		fmt.Printf("  !! %d row(s) are not importable (bad version/path) — run 'artifacts -dry-run' for detail\n", len(plan.Invalid))
+		fmt.Printf("  !! %d row(s) are not importable (bad version/path) - run 'artifacts -dry-run' for detail\n", len(plan.Invalid))
 	}
 	fmt.Printf("  skipping %d orphaned artifact row(s) + %d orphaned property row(s)\n",
 		plan.Orphans.OrphanedArtifacts, plan.Orphans.OrphanedProperties)
@@ -204,7 +204,7 @@ func CmdReport(ctx context.Context, cfg *config.MigrateConfig) error {
 		fmt.Printf("\nV2 STATE: %d of %d v1 users already exist (will be skipped)\n", existing, len(users))
 	}
 
-	fmt.Println("\nreport complete — run 'users', 'orgs', 'images', 'artifacts', then 'verify'")
+	fmt.Println("\nreport complete - run 'users', 'orgs', 'images', 'artifacts', then 'verify'")
 	return nil
 }
 

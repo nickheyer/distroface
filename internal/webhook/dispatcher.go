@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
@@ -58,13 +59,13 @@ type RepositoryPayload struct {
 
 // Dispatcher handles async webhook delivery with retries.
 type Dispatcher struct {
-	store  *db.Store
+	store  *stores.Store
 	log    *logger.Logger
 	client *http.Client
 }
 
 // NewDispatcher creates a new webhook dispatcher.
-func NewDispatcher(store *db.Store, log *logger.Logger, allowPrivateNetworks bool) *Dispatcher {
+func NewDispatcher(store *stores.Store, log *logger.Logger, allowPrivateNetworks bool) *Dispatcher {
 	return &Dispatcher{
 		store: store,
 		log:   log,

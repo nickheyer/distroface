@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -20,13 +21,13 @@ import (
 var _ distrofacev1connect.WebhookServiceHandler = (*WebhookService)(nil)
 
 type WebhookService struct {
-	store      *storage.Store
+	store      *stores.Store
 	enforcer   *rbac.Enforcer
 	dispatcher *webhook.Dispatcher
 	log        *logger.Logger
 }
 
-func NewWebhookService(store *storage.Store, enforcer *rbac.Enforcer, dispatcher *webhook.Dispatcher, log *logger.Logger) *WebhookService {
+func NewWebhookService(store *stores.Store, enforcer *rbac.Enforcer, dispatcher *webhook.Dispatcher, log *logger.Logger) *WebhookService {
 	return &WebhookService{store: store, enforcer: enforcer, dispatcher: dispatcher, log: log}
 }
 

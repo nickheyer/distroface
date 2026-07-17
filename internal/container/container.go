@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/distribution/distribution/v3/registry/handlers"
+	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/artifacts"
+	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
-	"github.com/nickheyer/distroface/internal/bootstrap"
-	storage "github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/gc"
+	"github.com/nickheyer/distroface/internal/certs"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/portal"
-	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc"
@@ -28,15 +28,17 @@ import (
 
 // App holds all initialized dependencies and the HTTP server.
 type App struct {
-	Config         *config.Config
-	Log            *logger.Logger
-	Store          *storage.Store
-	TokenService   *auth.TokenService
-	AuthManager    *auth.Manager
-	Enforcer       *rbac.Enforcer
-	RegistryAccess *registry.RegistryAccess
-	PortalProxies  *portal.Manager
-	Server         *http.Server
+	Config          *config.Config
+	Log             *logger.Logger
+	Store           *stores.Store
+	TokenService    *auth.TokenService
+	AuthManager     *auth.Manager
+	Enforcer        *rbac.Enforcer
+	RegistryAccess  *registry.RegistryAccess
+	PortalProxies   *portal.Manager
+	CertEngine      *certs.Engine
+	Server          *http.Server
+	ChallengeServer *http.Server // Cleartext acme http-01 and https redirect
 }
 
 // New builds the entire application: config, logger, store, token service,
@@ -66,7 +68,7 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
 
-	store, err := storage.NewSQLiteStore(cfg.Database.Path, storage.DBConfig{
+	store, err := stores.NewSQLiteStore(cfg.Database.Path, stores.DBConfig{
 		MaxOpenConns:    cfg.Database.MaxConnections,
 		MaxIdleConns:    cfg.Database.MaxIdleConns,
 		ConnMaxLifetime: time.Duration(cfg.Database.ConnMaxLifetime) * time.Second,
@@ -99,7 +101,17 @@ func New() (*App, error) {
 	}
 	log.Info("Auth manager initialized")
 
-	if err := bootstrap.Run(context.Background(), cfg.Bootstrap, store, authManager, log); err != nil {
+	if !authManager.IsAnyAuthEnabled() {
+		log.Warn("SECURITY: no auth provider is enabled. Every request runs as admin, do not expose this instance")
+	}
+
+	if err := admin.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("configuring trusted proxies: %w", err)
+	}
+
+	if err := Run(context.Background(), cfg.Bootstrap, store, authManager, log); err != nil {
 		store.Close()
 		log.Close()
 		return nil, fmt.Errorf("bootstrap seeding: %w", err)
@@ -148,15 +160,15 @@ func New() (*App, error) {
 	portalResolver := portal.NewResolver(store, registryLog)
 
 	// Rate limiters nil means tier off
-	var authLimiter, pullLimiter, anonPullLimiter *ratelimit.Limiter
+	var authLimiter, pullLimiter, anonPullLimiter *admin.Limiter
 	if cfg.RateLimit.AuthFailureLimit > 0 && cfg.RateLimit.AuthFailureWindow > 0 {
-		authLimiter = ratelimit.New(cfg.RateLimit.AuthFailureLimit, time.Duration(cfg.RateLimit.AuthFailureWindow)*time.Second)
+		authLimiter = admin.NewLimiter(cfg.RateLimit.AuthFailureLimit, time.Duration(cfg.RateLimit.AuthFailureWindow)*time.Second)
 	}
 	if cfg.RateLimit.PullPerMinute > 0 {
-		pullLimiter = ratelimit.New(cfg.RateLimit.PullPerMinute, time.Minute)
+		pullLimiter = admin.NewLimiter(cfg.RateLimit.PullPerMinute, time.Minute)
 	}
 	if cfg.RateLimit.AnonPullPerMinute > 0 {
-		anonPullLimiter = ratelimit.New(cfg.RateLimit.AnonPullPerMinute, time.Minute)
+		anonPullLimiter = admin.NewLimiter(cfg.RateLimit.AnonPullPerMinute, time.Minute)
 	}
 
 	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, authLimiter, registryLog)
@@ -174,11 +186,43 @@ func New() (*App, error) {
 
 	// Portal listeners serve the whole app on their own ports
 	portalProxies := portal.NewManager(portalResolver, cfg.Server.Host, registryLog)
+	portalProxies.SetTimeouts(portal.ServerTimeouts{
+		ReadHeader: time.Duration(cfg.Server.ReadTimeout) * time.Second,
+		Idle:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
+	})
 	portalService := portal.NewService(store, enforcer, portalProxies, cfg, log)
+
+	// TLS/ACME engine, acme alone pre-provisions certs while serving cleartext
+	var certEngine *certs.Engine
+	if cfg.TLS.Enabled || cfg.TLS.ACME.Enabled {
+		certEngine, err = certs.NewEngine(cfg, store, log)
+		if err != nil {
+			store.Close()
+			log.Close()
+			return nil, fmt.Errorf("initializing tls engine: %w", err)
+		}
+		if cfg.TLS.Enabled {
+			portalProxies.SetTLSConfig(certEngine.TLSConfig())
+			log.Info("TLS enabled (acme=%v manual_cert=%v)", certEngine.ACMEEnabled(), certEngine.ManualCertLoaded())
+		} else {
+			log.Info("ACME pre-provisioning enabled, serving stays cleartext until tls.enabled is set")
+		}
+	}
+	certService := certs.NewService(store, enforcer, certEngine, cfg, log)
+
+	// Audit trail, nil recorder disables recording entirely
+	var auditRecorder *audit.Recorder
+	var auditService *audit.Service
+	if cfg.Security.Audit.Enabled {
+		auditRecorder = audit.NewRecorder(store, log)
+		auditRecorder.ScheduleRetention(context.Background(), cfg.Security.Audit.RetentionDays)
+		auditService = audit.NewService(store, log)
+		log.Info("Audit trail enabled (retention %dd)", cfg.Security.Audit.RetentionDays)
+	}
 
 	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, portalResolver, log)
 
-	gcCollector, err := gc.New(cfg.Registry.StoragePath, registryLog)
+	gcCollector, err := admin.NewCollector(cfg.Registry.StoragePath, registryLog)
 	if err != nil {
 		store.Close()
 		log.Close()
@@ -219,6 +263,9 @@ func New() (*App, error) {
 		ArtifactManager:   artifactManager,
 		ArtifactV1Facade:  artifactV1Facade,
 		GCCollector:       gcCollector,
+		CertService:       certService,
+		AuditRecorder:     auditRecorder,
+		AuditService:      auditService,
 	})
 
 	// Portal listeners reuse the fully built app handler
@@ -234,27 +281,60 @@ func New() (*App, error) {
 		IdleTimeout:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
 	}
 
+	var challengeSrv *http.Server
+	if certEngine != nil {
+		if cfg.TLS.Enabled {
+			srv.TLSConfig = certEngine.TLSConfig()
+		}
+		if cfg.TLS.ACME.Enabled && cfg.TLS.ACME.HTTPPort != "" {
+			challengeSrv = &http.Server{
+				Addr:              fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.TLS.ACME.HTTPPort),
+				Handler:           certEngine.HTTPChallengeHandler(),
+				ReadHeaderTimeout: 10 * time.Second,
+				IdleTimeout:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
+			}
+		}
+	}
+
 	return &App{
-		Config:         cfg,
-		Log:            log,
-		Store:          store,
-		TokenService:   tokenService,
-		AuthManager:    authManager,
-		Enforcer:       enforcer,
-		RegistryAccess: registryAccess,
-		PortalProxies:  portalProxies,
-		Server:         srv,
+		Config:          cfg,
+		Log:             log,
+		Store:           store,
+		TokenService:    tokenService,
+		AuthManager:     authManager,
+		Enforcer:        enforcer,
+		RegistryAccess:  registryAccess,
+		PortalProxies:   portalProxies,
+		CertEngine:      certEngine,
+		Server:          srv,
+		ChallengeServer: challengeSrv,
 	}, nil
 }
 
 // Starts listening and blocks until a SIGINT/SIGTERM is received then shuts down
 func (a *App) Start() error {
 	go func() {
+		if a.Server.TLSConfig != nil {
+			a.Log.Info("Starting Distroface with TLS on %s", a.Server.Addr)
+			if err := a.Server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				a.Log.Fatal("Failed to start server: %v", err)
+			}
+			return
+		}
 		a.Log.Info("Starting Distroface on %s", a.Server.Addr)
 		if err := a.Server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			a.Log.Fatal("Failed to start server: %v", err)
 		}
 	}()
+
+	if a.ChallengeServer != nil {
+		go func() {
+			a.Log.Info("ACME challenge listener on %s", a.ChallengeServer.Addr)
+			if err := a.ChallengeServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				a.Log.Error("ACME challenge listener stopped: %v", err)
+			}
+		}()
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
@@ -267,6 +347,9 @@ func (a *App) Start() error {
 
 	if a.PortalProxies != nil {
 		a.PortalProxies.Close()
+	}
+	if a.ChallengeServer != nil {
+		_ = a.ChallengeServer.Shutdown(ctx)
 	}
 	if err := a.Server.Shutdown(ctx); err != nil {
 		a.Log.Error("Server forced to shutdown: %v", err)

@@ -1,6 +1,7 @@
-package ratelimit
+package admin
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -19,7 +20,7 @@ type Limiter struct {
 }
 
 // Make limiter with given limit and window
-func New(limit int, window time.Duration) *Limiter {
+func NewLimiter(limit int, window time.Duration) *Limiter {
 	return &Limiter{
 		limit:     limit,
 		window:    window,
@@ -110,20 +111,84 @@ func (l *Limiter) pruneLocked(now time.Time) {
 	}
 }
 
-// Client ip from proxy headers then remote addr
-func ClientIP(remoteAddr string, h http.Header) string {
-	if h != nil {
-		if ip := strings.TrimSpace(h.Get("X-Real-IP")); ip != "" {
-			return ip
+var (
+	trustedProxiesMu sync.RWMutex
+	trustedProxies   []*net.IPNet
+)
+
+// Parses cidrs whose forwarded headers are believed, empty trusts none
+func SetTrustedProxies(cidrs []string) error {
+	nets := make([]*net.IPNet, 0, len(cidrs))
+	for _, c := range cidrs {
+		_, ipnet, err := net.ParseCIDR(strings.TrimSpace(c))
+		if err != nil {
+			return fmt.Errorf("invalid trusted proxy cidr %q: %w", c, err)
 		}
-		if xff := h.Get("X-Forwarded-For"); xff != "" {
-			if first := strings.TrimSpace(strings.Split(xff, ",")[0]); first != "" {
-				return first
-			}
+		nets = append(nets, ipnet)
+	}
+	trustedProxiesMu.Lock()
+	trustedProxies = nets
+	trustedProxiesMu.Unlock()
+	return nil
+}
+
+func isTrustedProxy(remoteIP string) bool {
+	ip := net.ParseIP(remoteIP)
+	if ip == nil {
+		return false
+	}
+	trustedProxiesMu.RLock()
+	defer trustedProxiesMu.RUnlock()
+	for _, n := range trustedProxies {
+		if n.Contains(ip) {
+			return true
 		}
 	}
-	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+	return false
+}
+
+// Bare ip from an xff hop, empty when unparsable
+func parseHop(hop string) string {
+	if net.ParseIP(hop) != nil {
+		return hop
+	}
+	if host, _, err := net.SplitHostPort(hop); err == nil && net.ParseIP(host) != nil {
 		return host
 	}
-	return remoteAddr
+	return ""
+}
+
+// Rightmost untrusted xff hop from trusted peers else remote addr
+func ClientIP(remoteAddr string, h http.Header) string {
+	remoteIP := remoteAddr
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		remoteIP = host
+	}
+	if h == nil || !isTrustedProxy(remoteIP) {
+		return remoteIP
+	}
+
+	var hops []string
+	for _, v := range h.Values("X-Forwarded-For") {
+		hops = append(hops, strings.Split(v, ",")...)
+	}
+
+	// Trusted proxies append, so the client is the first hop from
+	// the right that is not a trusted proxy itself
+	leftmost := ""
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop := parseHop(strings.TrimSpace(hops[i]))
+		if hop == "" {
+			// Unparsable hop means a forged header, believe nothing left of it
+			return remoteIP
+		}
+		if !isTrustedProxy(hop) {
+			return hop
+		}
+		leftmost = hop
+	}
+	if leftmost != "" {
+		return leftmost
+	}
+	return remoteIP
 }

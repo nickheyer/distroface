@@ -1,4 +1,4 @@
-package gc
+package admin
 
 import (
 	"context"
@@ -41,7 +41,7 @@ type Collector struct {
 	last    *Run
 }
 
-func New(storagePath string, log *logger.Logger) (*Collector, error) {
+func NewCollector(storagePath string, log *logger.Logger) (*Collector, error) {
 	// Fresh installs lack the layout mark and sweep walks
 	base := filepath.Join(storagePath, "docker", "registry", "v2")
 	for _, dir := range []string{"repositories", filepath.Join("blobs", "sha256")} {

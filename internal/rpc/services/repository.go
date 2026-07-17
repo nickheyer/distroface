@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -21,13 +22,13 @@ import (
 var _ distrofacev1connect.RepositoryServiceHandler = (*RepositoryService)(nil)
 
 type RepositoryService struct {
-	store    *storage.Store
+	store    *stores.Store
 	registry *registry.RegistryAccess
 	enforcer *rbac.Enforcer
 	log      *logger.Logger
 }
 
-func NewRepositoryService(store *storage.Store, reg *registry.RegistryAccess, enforcer *rbac.Enforcer, log *logger.Logger) *RepositoryService {
+func NewRepositoryService(store *stores.Store, reg *registry.RegistryAccess, enforcer *rbac.Enforcer, log *logger.Logger) *RepositoryService {
 	return &RepositoryService{store: store, registry: reg, enforcer: enforcer, log: log}
 }
 

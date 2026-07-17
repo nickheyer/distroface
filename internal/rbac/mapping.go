@@ -117,6 +117,17 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.PortalServiceUpdatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 	distrofacev1connect.PortalServiceDeletePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 
+	// ── CertificateService (system or org scope, checks in-service) ────
+	distrofacev1connect.CertificateServiceGetTLSStatusProcedure:             {Resource: ResourceSettings, Action: ActionRead},
+	distrofacev1connect.CertificateServiceListCertificateDomainsProcedure:   {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
+	distrofacev1connect.CertificateServiceAddCertificateDomainProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.CertificateServiceRemoveCertificateDomainProcedure:  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.CertificateServiceApproveCertificateDomainProcedure: {Resource: ResourceSettings, Action: ActionManage},
+	distrofacev1connect.CertificateServiceIssueCertificateProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+
+	// ── AuditService (admin) ──────────────────────────────────────────
+	distrofacev1connect.AuditServiceListAuditEventsProcedure: {Resource: ResourceSettings, Action: ActionRead},
+
 	// ── ArtifactService ───────────────────────────────────────────────
 	distrofacev1connect.ArtifactServiceCreateArtifactRepositoryProcedure: {Resource: ResourceArtifacts, Action: ActionCreate},
 	distrofacev1connect.ArtifactServiceGetArtifactRepositoryProcedure:    {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "namespace+name"},

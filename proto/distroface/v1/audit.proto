@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// Read access to the security audit trail, admin only
+service AuditService {
+  // Lists audit events newest first with optional filters
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse) {}
+}
+
+// One recorded security relevant action
+message AuditEvent {
+  string id = 1;
+  string actor = 2;
+  string actor_id = 3;
+  string source_ip = 4;
+  string action = 5;
+  string resource = 6;
+  string outcome = 7;
+  string detail = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+// Filters are optional, limit defaults to 100 capped at 500
+message ListAuditEventsRequest {
+  string action = 1;
+  string actor = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+// Matching events and the unfiltered total
+message ListAuditEventsResponse {
+  repeated AuditEvent events = 1;
+  int64 total = 2;
+}

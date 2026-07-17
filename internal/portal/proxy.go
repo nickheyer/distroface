@@ -2,26 +2,35 @@ package portal
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
-// Opens and closes portal listeners to match the enabled portals, every
-// listener serves the full application handler
+// Opens and closes portal listeners to match the enabled portals
 type Manager struct {
 	resolver *Resolver
 	bindHost string
 	log      *logger.Logger
 
-	mu      sync.Mutex
-	handler http.Handler
-	servers map[int]*http.Server
+	mu        sync.Mutex
+	handler   http.Handler
+	tlsConfig *tls.Config
+	timeouts  ServerTimeouts
+	servers   map[int]*http.Server
+}
+
+// Applied to all
+type ServerTimeouts struct {
+	ReadHeader time.Duration
+	Idle       time.Duration
 }
 
 func NewManager(resolver *Resolver, bindHost string, log *logger.Logger) *Manager {
@@ -37,6 +46,20 @@ func NewManager(resolver *Resolver, bindHost string, log *logger.Logger) *Manage
 func (m *Manager) SetHandler(handler http.Handler) {
 	m.mu.Lock()
 	m.handler = handler
+	m.mu.Unlock()
+}
+
+// Portal listeners terminate tls when set, sni picks per host certs
+func (m *Manager) SetTLSConfig(cfg *tls.Config) {
+	m.mu.Lock()
+	m.tlsConfig = cfg
+	m.mu.Unlock()
+}
+
+// Timeouts must be set before the first Reconcile
+func (m *Manager) SetTimeouts(t ServerTimeouts) {
+	m.mu.Lock()
+	m.timeouts = t
 	m.mu.Unlock()
 }
 
@@ -79,7 +102,14 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			m.log.Error("portal proxy failed to bind port %d: %v", port, err)
 			continue
 		}
-		srv := &http.Server{Handler: m.handler}
+		if m.tlsConfig != nil {
+			ln = tls.NewListener(ln, m.tlsConfig)
+		}
+		srv := &http.Server{
+			Handler:           m.handler,
+			ReadHeaderTimeout: m.timeouts.ReadHeader,
+			IdleTimeout:       m.timeouts.Idle,
+		}
 		m.servers[port] = srv
 		go func(port int) {
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {

@@ -18,6 +18,7 @@ import (
 
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -27,7 +28,7 @@ import (
 
 type testEnv struct {
 	t        *testing.T
-	store    *storage.Store
+	store    *stores.Store
 	authMgr  *auth.Manager
 	enforcer *rbac.Enforcer
 	manager  *Manager
@@ -41,7 +42,7 @@ func newTestEnv(t *testing.T, retention config.ArtifactRetentionConfig) *testEnv
 	t.Helper()
 	dir := t.TempDir()
 
-	store, err := storage.NewSQLiteStore(filepath.Join(dir, "test.db"))
+	store, err := stores.NewSQLiteStore(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
@@ -666,7 +667,7 @@ func TestV1AccessControl(t *testing.T) {
 // Finds a repo by bare name across namespaces for tests
 func (e *testEnv) repoByName(name string) *storage.ArtifactRepository {
 	e.t.Helper()
-	repos, _, err := e.store.ListArtifactRepositories(context.Background(), storage.ArtifactRepoListOptions{IncludePrivate: true})
+	repos, _, err := e.store.ListArtifactRepositories(context.Background(), stores.ArtifactRepoListOptions{IncludePrivate: true})
 	if err != nil {
 		e.t.Fatalf("list repos: %v", err)
 	}

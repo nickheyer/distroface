@@ -20,6 +20,45 @@ type Config struct {
 	Artifacts ArtifactsConfig `mapstructure:"artifacts" json:"artifacts"`
 	GC        GCConfig        `mapstructure:"gc" json:"gc"`
 	Bootstrap BootstrapConfig `mapstructure:"bootstrap" json:"bootstrap"`
+	TLS       TLSConfig       `mapstructure:"tls" json:"tls"`
+	Security  SecurityConfig  `mapstructure:"security" json:"security"`
+}
+
+// In-app https, off means cleartext behind an external terminator
+type TLSConfig struct {
+	Enabled  bool       `mapstructure:"enabled" json:"enabled"`
+	CertFile string     `mapstructure:"cert_file" json:"cert_file"`
+	KeyFile  string     `mapstructure:"key_file" json:"key_file"`
+	ACME     ACMEConfig `mapstructure:"acme" json:"acme"`
+}
+
+type ACMEConfig struct {
+	Enabled      bool     `mapstructure:"enabled" json:"enabled"`
+	Email        string   `mapstructure:"email" json:"email"`
+	DirectoryURL string   `mapstructure:"directory_url" json:"directory_url"`
+	Domains      []string `mapstructure:"domains" json:"domains"`
+	HTTPPort     string   `mapstructure:"http_port" json:"http_port"`
+	RedirectHTTP bool     `mapstructure:"redirect_http" json:"redirect_http"`
+}
+
+type SecurityConfig struct {
+	Headers SecurityHeadersConfig `mapstructure:"headers" json:"headers"`
+	Audit   AuditConfig           `mapstructure:"audit" json:"audit"`
+}
+
+type SecurityHeadersConfig struct {
+	Enabled bool `mapstructure:"enabled" json:"enabled"`
+	// Adds strict transport security, defaults on when tls is enabled
+	HSTS       bool `mapstructure:"hsts" json:"hsts"`
+	HSTSMaxAge int  `mapstructure:"hsts_max_age" json:"hsts_max_age"`
+	// Overrides the default policy, empty keeps the built in one
+	ContentSecurityPolicy string `mapstructure:"content_security_policy" json:"content_security_policy"`
+}
+
+type AuditConfig struct {
+	Enabled bool `mapstructure:"enabled" json:"enabled"`
+	// Days of audit history kept zero keeps forever
+	RetentionDays int `mapstructure:"retention_days" json:"retention_days"`
 }
 
 // Seeds entities at startup skipping ones that exist
@@ -121,12 +160,13 @@ type MigrateConfig struct {
 }
 
 type ServerConfig struct {
-	Port         string `mapstructure:"port" json:"port"`
-	Host         string `mapstructure:"host" json:"host"`
-	Hostname     string `mapstructure:"hostname" json:"hostname"`
-	ReadTimeout  int    `mapstructure:"read_timeout" json:"read_timeout"`
-	WriteTimeout int    `mapstructure:"write_timeout" json:"write_timeout"`
-	IdleTimeout  int    `mapstructure:"idle_timeout" json:"idle_timeout"`
+	Port           string   `mapstructure:"port" json:"port"`
+	Host           string   `mapstructure:"host" json:"host"`
+	Hostname       string   `mapstructure:"hostname" json:"hostname"`
+	ReadTimeout    int      `mapstructure:"read_timeout" json:"read_timeout"`
+	WriteTimeout   int      `mapstructure:"write_timeout" json:"write_timeout"`
+	IdleTimeout    int      `mapstructure:"idle_timeout" json:"idle_timeout"`
+	TrustedProxies []string `mapstructure:"trusted_proxies" json:"trusted_proxies"`
 }
 
 type DatabaseConfig struct {
@@ -238,6 +278,26 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.read_timeout", 15)
 	v.SetDefault("server.write_timeout", 15)
 	v.SetDefault("server.idle_timeout", 60)
+	v.SetDefault("server.trusted_proxies", []string{
+		"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7",
+	})
+
+	v.SetDefault("tls.enabled", false)
+	v.SetDefault("tls.cert_file", "")
+	v.SetDefault("tls.key_file", "")
+	v.SetDefault("tls.acme.enabled", false)
+	v.SetDefault("tls.acme.email", "")
+	v.SetDefault("tls.acme.directory_url", "")
+	v.SetDefault("tls.acme.domains", []string{})
+	v.SetDefault("tls.acme.http_port", "80")
+	v.SetDefault("tls.acme.redirect_http", true)
+
+	v.SetDefault("security.headers.enabled", true)
+	v.SetDefault("security.headers.hsts", false)
+	v.SetDefault("security.headers.hsts_max_age", 31536000)
+	v.SetDefault("security.headers.content_security_policy", "")
+	v.SetDefault("security.audit.enabled", true)
+	v.SetDefault("security.audit.retention_days", 90)
 
 	v.SetDefault("database.max_connections", 25)
 	v.SetDefault("database.max_idle_conns", 5)

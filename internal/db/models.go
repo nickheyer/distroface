@@ -211,6 +211,47 @@ type ArtifactProperty struct {
 	Artifact   *Artifact `json:"-" gorm:"foreignKey:ArtifactID;constraint:OnDelete:CASCADE"`
 }
 
+// Certificate domain scope constants
+const (
+	CertDomainScopeSystem = "system"
+	CertDomainScopeOrg    = "org"
+)
+
+type CertificateDomain struct { // Hostname allowed to receive acme certificates
+	ID         string        `json:"id" gorm:"primaryKey"`
+	Domain     string        `json:"domain" gorm:"not null;uniqueIndex"`
+	Scope      string        `json:"scope" gorm:"not null;default:'system'"`
+	OrgID      *string       `json:"org_id" gorm:"index;column:org_id"`
+	Approved   bool          `json:"approved" gorm:"not null;default:false"`
+	ApprovedBy string        `json:"approved_by" gorm:"column:approved_by"`
+	CreatedBy  string        `json:"created_by" gorm:"not null;column:created_by"`
+	CreatedAt  time.Time     `json:"created_at" gorm:"autoCreateTime"`
+	Org        *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
+// System scope issues freely, org scope waits for admin approval
+func (d *CertificateDomain) IssuanceAllowed() bool {
+	return d.Scope == CertDomainScopeSystem || d.Approved
+}
+
+type ACMECacheEntry struct { // Autocert cache row holding certs and account state
+	Key       string    `gorm:"primaryKey"`
+	Data      []byte    `gorm:"not null"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
+}
+
+type AuditEvent struct {
+	ID        string    `json:"id" gorm:"primaryKey"`
+	Actor     string    `json:"actor" gorm:"index"`
+	ActorID   string    `json:"actor_id" gorm:"column:actor_id"`
+	SourceIP  string    `json:"source_ip" gorm:"column:source_ip"`
+	Action    string    `json:"action" gorm:"not null;index"`
+	Resource  string    `json:"resource" gorm:"index"`
+	Outcome   string    `json:"outcome" gorm:"not null"`
+	Detail    string    `json:"detail" gorm:"type:text"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime;index"`
+}
+
 type RegistrationInvite struct {
 	ID          string     `json:"id" gorm:"primaryKey"`
 	Code        string     `json:"code" gorm:"not null;uniqueIndex"`

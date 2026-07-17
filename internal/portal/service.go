@@ -11,6 +11,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -25,14 +26,14 @@ var _ distrofacev1connect.PortalServiceHandler = (*Service)(nil)
 var hostnameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 
 type Service struct {
-	store    *storage.Store
+	store    *stores.Store
 	enforcer *rbac.Enforcer
 	proxies  *Manager
 	config   *config.Config
 	log      *logger.Logger
 }
 
-func NewService(store *storage.Store, enforcer *rbac.Enforcer, proxies *Manager, cfg *config.Config, log *logger.Logger) *Service {
+func NewService(store *stores.Store, enforcer *rbac.Enforcer, proxies *Manager, cfg *config.Config, log *logger.Logger) *Service {
 	return &Service{store: store, enforcer: enforcer, proxies: proxies, config: cfg, log: log}
 }
 

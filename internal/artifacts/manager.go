@@ -13,6 +13,7 @@ import (
 	"time"
 
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
@@ -44,13 +45,13 @@ var ErrUploadNotFound = errors.New("upload session not found")
 
 // Artifact business logic shared by rpc service and v1 facade
 type Manager struct {
-	store *storage.Store
+	store *stores.Store
 	blobs *BlobStore
 	cfg   config.ArtifactsConfig
 	log   *logger.Logger
 }
 
-func NewManager(store *storage.Store, blobs *BlobStore, cfg config.ArtifactsConfig, log *logger.Logger) *Manager {
+func NewManager(store *stores.Store, blobs *BlobStore, cfg config.ArtifactsConfig, log *logger.Logger) *Manager {
 	return &Manager{store: store, blobs: blobs, cfg: cfg, log: log}
 }
 

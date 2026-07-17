@@ -1,4 +1,4 @@
-package db
+package stores
 
 import (
 	"context"
@@ -9,6 +9,7 @@ import (
 	"sort"
 
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/db"
 	"gorm.io/gorm"
 )
 
@@ -33,12 +34,12 @@ func PropsFingerprint(properties map[string]string) string {
 
 // ── Artifact repository operations ───────────────────────────────────────
 
-func (s *Store) CreateArtifactRepository(ctx context.Context, repo *ArtifactRepository) error {
+func (s *Store) CreateArtifactRepository(ctx context.Context, repo *db.ArtifactRepository) error {
 	return s.db.WithContext(ctx).Create(repo).Error
 }
 
-func (s *Store) GetArtifactRepository(ctx context.Context, namespace, name string) (*ArtifactRepository, error) {
-	var repo ArtifactRepository
+func (s *Store) GetArtifactRepository(ctx context.Context, namespace, name string) (*db.ArtifactRepository, error) {
+	var repo db.ArtifactRepository
 	err := s.db.WithContext(ctx).First(&repo, "namespace = ? AND name = ?", namespace, name).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
@@ -59,8 +60,8 @@ type ArtifactRepoListOptions struct {
 	Offset         int
 }
 
-func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoListOptions) ([]*ArtifactRepository, int64, error) {
-	q := s.db.WithContext(ctx).Model(&ArtifactRepository{})
+func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoListOptions) ([]*db.ArtifactRepository, int64, error) {
+	q := s.db.WithContext(ctx).Model(&db.ArtifactRepository{})
 	if opts.Namespace != "" {
 		q = q.Where("namespace = ?", opts.Namespace)
 	}
@@ -92,14 +93,14 @@ func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoL
 		q = q.Limit(opts.Limit).Offset(opts.Offset)
 	}
 
-	var repos []*ArtifactRepository
+	var repos []*db.ArtifactRepository
 	if err := q.Order("name ASC").Find(&repos).Error; err != nil {
 		return nil, 0, err
 	}
 	return repos, total, nil
 }
 
-func (s *Store) UpdateArtifactRepository(ctx context.Context, repo *ArtifactRepository) error {
+func (s *Store) UpdateArtifactRepository(ctx context.Context, repo *db.ArtifactRepository) error {
 	return s.db.WithContext(ctx).Save(repo).Error
 }
 
@@ -109,7 +110,7 @@ func (s *Store) DeleteArtifactRepository(ctx context.Context, id int64) ([]strin
 	if err != nil {
 		return nil, err
 	}
-	if err := s.db.WithContext(ctx).Delete(&ArtifactRepository{}, "id = ?", id).Error; err != nil {
+	if err := s.db.WithContext(ctx).Delete(&db.ArtifactRepository{}, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
 	return digests, nil
@@ -128,7 +129,7 @@ func (s *Store) GetArtifactRepoStats(ctx context.Context, repoIDs []int64) (map[
 		return stats, nil
 	}
 	var rows []ArtifactRepoStats
-	err := s.db.WithContext(ctx).Model(&Artifact{}).
+	err := s.db.WithContext(ctx).Model(&db.Artifact{}).
 		Select("repo_id AS repo_id, COUNT(*) AS count, COALESCE(SUM(size),0) AS size").
 		Where("repo_id IN ?", repoIDs).
 		Group("repo_id").
@@ -145,18 +146,18 @@ func (s *Store) GetArtifactRepoStats(ctx context.Context, repoIDs []int64) (map[
 // ── Artifact operations ──────────────────────────────────────────────────
 
 // Inserts replacing same version path properties, returns replaced digest
-func (s *Store) CreateArtifact(ctx context.Context, artifact *Artifact, properties map[string]string) (replacedDigest string, err error) {
+func (s *Store) CreateArtifact(ctx context.Context, artifact *db.Artifact, properties map[string]string) (replacedDigest string, err error) {
 	if artifact.ID == "" {
 		artifact.ID = uuid.New().String()
 	}
 	artifact.PropsHash = PropsFingerprint(properties)
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var existing Artifact
+		var existing db.Artifact
 		findErr := tx.First(&existing, "repo_id = ? AND version = ? AND path = ? AND props_hash = ?",
 			artifact.RepoID, artifact.Version, artifact.Path, artifact.PropsHash).Error
 		if findErr == nil {
 			replacedDigest = existing.Digest
-			if err := tx.Delete(&Artifact{}, "id = ?", existing.ID).Error; err != nil {
+			if err := tx.Delete(&db.Artifact{}, "id = ?", existing.ID).Error; err != nil {
 				return err
 			}
 		} else if findErr != gorm.ErrRecordNotFound {
@@ -180,15 +181,15 @@ func createPropertiesTx(tx *gorm.DB, artifactID string, properties map[string]st
 		if k == "" {
 			continue
 		}
-		if err := tx.Create(&ArtifactProperty{ArtifactID: artifactID, Key: k, Value: v}).Error; err != nil {
+		if err := tx.Create(&db.ArtifactProperty{ArtifactID: artifactID, Key: k, Value: v}).Error; err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Store) GetArtifact(ctx context.Context, id string) (*Artifact, error) {
-	var artifact Artifact
+func (s *Store) GetArtifact(ctx context.Context, id string) (*db.Artifact, error) {
+	var artifact db.Artifact
 	err := s.db.WithContext(ctx).First(&artifact, "id = ?", id).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil, nil
@@ -196,15 +197,15 @@ func (s *Store) GetArtifact(ctx context.Context, id string) (*Artifact, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := s.loadArtifactProperties(ctx, []*Artifact{&artifact}); err != nil {
+	if err := s.loadArtifactProperties(ctx, []*db.Artifact{&artifact}); err != nil {
 		return nil, err
 	}
 	return &artifact, nil
 }
 
 // Newest match, property variants can share version and path
-func (s *Store) GetArtifactByPathVersion(ctx context.Context, repoID int64, version, path string) (*Artifact, error) {
-	var artifact Artifact
+func (s *Store) GetArtifactByPathVersion(ctx context.Context, repoID int64, version, path string) (*db.Artifact, error) {
+	var artifact db.Artifact
 	err := s.db.WithContext(ctx).Order("created_at DESC, id DESC").
 		First(&artifact, "repo_id = ? AND version = ? AND path = ?", repoID, version, path).Error
 	if err == gorm.ErrRecordNotFound {
@@ -213,15 +214,15 @@ func (s *Store) GetArtifactByPathVersion(ctx context.Context, repoID int64, vers
 	if err != nil {
 		return nil, err
 	}
-	if err := s.loadArtifactProperties(ctx, []*Artifact{&artifact}); err != nil {
+	if err := s.loadArtifactProperties(ctx, []*db.Artifact{&artifact}); err != nil {
 		return nil, err
 	}
 	return &artifact, nil
 }
 
 // Row matching the full four part identity
-func (s *Store) GetArtifactByIdentity(ctx context.Context, repoID int64, version, path string, properties map[string]string) (*Artifact, error) {
-	var artifact Artifact
+func (s *Store) GetArtifactByIdentity(ctx context.Context, repoID int64, version, path string, properties map[string]string) (*db.Artifact, error) {
+	var artifact db.Artifact
 	err := s.db.WithContext(ctx).First(&artifact, "repo_id = ? AND version = ? AND path = ? AND props_hash = ?",
 		repoID, version, path, PropsFingerprint(properties)).Error
 	if err == gorm.ErrRecordNotFound {
@@ -230,14 +231,14 @@ func (s *Store) GetArtifactByIdentity(ctx context.Context, repoID int64, version
 	if err != nil {
 		return nil, err
 	}
-	if err := s.loadArtifactProperties(ctx, []*Artifact{&artifact}); err != nil {
+	if err := s.loadArtifactProperties(ctx, []*db.Artifact{&artifact}); err != nil {
 		return nil, err
 	}
 	return &artifact, nil
 }
 
-func (s *Store) ListArtifacts(ctx context.Context, repoID int64, version string, limit, offset int) ([]*Artifact, int64, error) {
-	q := s.db.WithContext(ctx).Model(&Artifact{}).Where("repo_id = ?", repoID)
+func (s *Store) ListArtifacts(ctx context.Context, repoID int64, version string, limit, offset int) ([]*db.Artifact, int64, error) {
+	q := s.db.WithContext(ctx).Model(&db.Artifact{}).Where("repo_id = ?", repoID)
 	if version != "" {
 		q = q.Where("version = ?", version)
 	}
@@ -251,7 +252,7 @@ func (s *Store) ListArtifacts(ctx context.Context, repoID int64, version string,
 		q = q.Limit(limit).Offset(offset)
 	}
 
-	var artifacts []*Artifact
+	var artifacts []*db.Artifact
 	if err := q.Order("created_at DESC").Find(&artifacts).Error; err != nil {
 		return nil, 0, err
 	}
@@ -279,8 +280,8 @@ var artifactSortColumns = map[string]bool{
 	"size": true, "created_at": true, "updated_at": true,
 }
 
-func (s *Store) SearchArtifacts(ctx context.Context, criteria ArtifactSearchCriteria) ([]*Artifact, int64, error) {
-	q := s.db.WithContext(ctx).Model(&Artifact{})
+func (s *Store) SearchArtifacts(ctx context.Context, criteria ArtifactSearchCriteria) ([]*db.Artifact, int64, error) {
+	q := s.db.WithContext(ctx).Model(&db.Artifact{})
 	if criteria.RepoID != nil {
 		q = q.Where("repo_id = ?", *criteria.RepoID)
 	}
@@ -319,7 +320,7 @@ func (s *Store) SearchArtifacts(ctx context.Context, criteria ArtifactSearchCrit
 		q = q.Limit(criteria.Limit).Offset(criteria.Offset)
 	}
 
-	var artifacts []*Artifact
+	var artifacts []*db.Artifact
 	if err := q.Find(&artifacts).Error; err != nil {
 		return nil, 0, err
 	}
@@ -329,7 +330,7 @@ func (s *Store) SearchArtifacts(ctx context.Context, criteria ArtifactSearchCrit
 	return artifacts, total, nil
 }
 
-func (s *Store) UpdateArtifact(ctx context.Context, artifact *Artifact) error {
+func (s *Store) UpdateArtifact(ctx context.Context, artifact *db.Artifact) error {
 	return s.db.WithContext(ctx).Save(artifact).Error
 }
 
@@ -337,24 +338,24 @@ func (s *Store) UpdateArtifact(ctx context.Context, artifact *Artifact) error {
 func (s *Store) SetArtifactProperties(ctx context.Context, artifactID string, properties map[string]string) error {
 	hash := PropsFingerprint(properties)
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var artifact Artifact
+		var artifact db.Artifact
 		if err := tx.First(&artifact, "id = ?", artifactID).Error; err != nil {
 			return err
 		}
 		if artifact.PropsHash != hash {
 			var occupied int64
-			if err := tx.Model(&Artifact{}).Where("repo_id = ? AND version = ? AND path = ? AND props_hash = ?",
+			if err := tx.Model(&db.Artifact{}).Where("repo_id = ? AND version = ? AND path = ? AND props_hash = ?",
 				artifact.RepoID, artifact.Version, artifact.Path, hash).Count(&occupied).Error; err != nil {
 				return err
 			}
 			if occupied > 0 {
 				return ErrDuplicateIdentity
 			}
-			if err := tx.Model(&Artifact{}).Where("id = ?", artifactID).Update("props_hash", hash).Error; err != nil {
+			if err := tx.Model(&db.Artifact{}).Where("id = ?", artifactID).Update("props_hash", hash).Error; err != nil {
 				return err
 			}
 		}
-		if err := tx.Delete(&ArtifactProperty{}, "artifact_id = ?", artifactID).Error; err != nil {
+		if err := tx.Delete(&db.ArtifactProperty{}, "artifact_id = ?", artifactID).Error; err != nil {
 			return err
 		}
 		return createPropertiesTx(tx, artifactID, properties)
@@ -363,7 +364,7 @@ func (s *Store) SetArtifactProperties(ctx context.Context, artifactID string, pr
 
 // Backfills identity hashes for rows predating props_hash
 func (s *Store) backfillArtifactPropsHash() error {
-	var rows []*Artifact
+	var rows []*db.Artifact
 	if err := s.db.Where("props_hash = ''").Find(&rows).Error; err != nil {
 		return err
 	}
@@ -374,7 +375,7 @@ func (s *Store) backfillArtifactPropsHash() error {
 		return err
 	}
 	for _, a := range rows {
-		if err := s.db.Model(&Artifact{}).Where("id = ?", a.ID).
+		if err := s.db.Model(&db.Artifact{}).Where("id = ?", a.ID).
 			Update("props_hash", PropsFingerprint(a.Properties)).Error; err != nil {
 			return err
 		}
@@ -384,7 +385,7 @@ func (s *Store) backfillArtifactPropsHash() error {
 
 // Backfills namespace for repos predating org scoping
 func (s *Store) backfillArtifactRepoNamespace() error {
-	var repos []*ArtifactRepository
+	var repos []*db.ArtifactRepository
 	if err := s.db.Where("namespace = '' OR namespace IS NULL").Find(&repos).Error; err != nil {
 		return err
 	}
@@ -402,7 +403,7 @@ func (s *Store) backfillArtifactRepoNamespace() error {
 		if ns == "" {
 			ns = r.Name // Names were globally unique pre migration so this stays unique
 		}
-		if err := s.db.Model(&ArtifactRepository{}).Where("id = ?", r.ID).Update("namespace", ns).Error; err != nil {
+		if err := s.db.Model(&db.ArtifactRepository{}).Where("id = ?", r.ID).Update("namespace", ns).Error; err != nil {
 			return err
 		}
 		// Scoped grants match on the object string, follow the rename
@@ -417,7 +418,7 @@ func (s *Store) backfillArtifactRepoNamespace() error {
 
 // Properties cascade with the row
 func (s *Store) DeleteArtifact(ctx context.Context, id string) error {
-	return s.db.WithContext(ctx).Delete(&Artifact{}, "id = ?", id).Error
+	return s.db.WithContext(ctx).Delete(&db.Artifact{}, "id = ?", id).Error
 }
 
 // ── Blob reference counting ──────────────────────────────────────────────
@@ -433,32 +434,32 @@ func (s *Store) ArtifactUniqueBlobBytes(ctx context.Context) (int64, error) {
 
 func (s *Store) CountArtifactsByDigest(ctx context.Context, digest string) (int64, error) {
 	var count int64
-	err := s.db.WithContext(ctx).Model(&Artifact{}).Where("digest = ?", digest).Count(&count).Error
+	err := s.db.WithContext(ctx).Model(&db.Artifact{}).Where("digest = ?", digest).Count(&count).Error
 	return count, err
 }
 
 func (s *Store) ListArtifactDigestsByRepo(ctx context.Context, repoID int64) ([]string, error) {
 	var digests []string
-	err := s.db.WithContext(ctx).Model(&Artifact{}).
+	err := s.db.WithContext(ctx).Model(&db.Artifact{}).
 		Distinct("digest").Where("repo_id = ?", repoID).Pluck("digest", &digests).Error
 	return digests, err
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-func (s *Store) loadArtifactProperties(ctx context.Context, artifacts []*Artifact) error {
+func (s *Store) loadArtifactProperties(ctx context.Context, artifacts []*db.Artifact) error {
 	if len(artifacts) == 0 {
 		return nil
 	}
 	ids := make([]string, len(artifacts))
-	byID := make(map[string]*Artifact, len(artifacts))
+	byID := make(map[string]*db.Artifact, len(artifacts))
 	for i, a := range artifacts {
 		ids[i] = a.ID
 		byID[a.ID] = a
 		a.Properties = map[string]string{}
 	}
 
-	var props []ArtifactProperty
+	var props []db.ArtifactProperty
 	if err := s.db.WithContext(ctx).Where("artifact_id IN ?", ids).Find(&props).Error; err != nil {
 		return err
 	}

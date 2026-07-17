@@ -11,12 +11,13 @@ import (
 	"time"
 
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
-func newTestStore(t *testing.T) *storage.Store {
+func newTestStore(t *testing.T) *stores.Store {
 	t.Helper()
-	store, err := storage.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
+	store, err := stores.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
@@ -24,7 +25,7 @@ func newTestStore(t *testing.T) *storage.Store {
 	return store
 }
 
-func createTestPortal(t *testing.T, store *storage.Store, portal *storage.RegistryPortal) (*storage.Organization, *storage.RegistryPortal) {
+func createTestPortal(t *testing.T, store *stores.Store, portal *storage.RegistryPortal) (*storage.Organization, *storage.RegistryPortal) {
 	t.Helper()
 	ctx := context.Background()
 	org, err := store.GetOrganization(ctx, "acme")

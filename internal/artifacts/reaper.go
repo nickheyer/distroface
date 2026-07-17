@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
@@ -27,7 +27,7 @@ type ReapRun struct {
 // Reaper applies retention policies across every repo on a schedule
 type Reaper struct {
 	mgr      *Manager
-	store    *storage.Store
+	store    *stores.Store
 	staleAge time.Duration
 	log      *logger.Logger
 
@@ -36,7 +36,7 @@ type Reaper struct {
 	last    *ReapRun
 }
 
-func NewReaper(mgr *Manager, store *storage.Store, staleAge time.Duration, log *logger.Logger) *Reaper {
+func NewReaper(mgr *Manager, store *stores.Store, staleAge time.Duration, log *logger.Logger) *Reaper {
 	return &Reaper{mgr: mgr, store: store, staleAge: staleAge, log: log}
 }
 
@@ -80,7 +80,7 @@ func (r *Reaper) sweep() {
 	byNamespace := make(map[string]RetentionPolicy)
 	offset := 0
 	for {
-		repos, _, err := r.store.ListArtifactRepositories(ctx, storage.ArtifactRepoListOptions{
+		repos, _, err := r.store.ListArtifactRepositories(ctx, stores.ArtifactRepoListOptions{
 			IncludePrivate: true,
 			Limit:          reaperPageSize,
 			Offset:         offset,

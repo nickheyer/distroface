@@ -18,3 +18,11 @@ plugins:
     opt:
       - target=ts
       - import_extension=none
+
+  # Generate OpenAPI specs for the embedded api console
+  - remote: buf.build/community/sudorandom-connect-openapi
+    out: web/distroface/src/lib/proto/specs
+    opt:
+      - format=json
+      - short-service-tags
+      - trim-unused-types

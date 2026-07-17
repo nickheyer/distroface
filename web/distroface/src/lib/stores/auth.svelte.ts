@@ -35,7 +35,7 @@ class AuthStore {
 		this.permissions.some((p) => p.resource === '*' && (p.action === '*' || p.action === 'manage'))
 	);
 
-	// Admin panel access — can see at least one admin section
+	// Admin panel access - can see at least one admin section
 	canAccessAdmin = $derived(
 		checkPermission(this.permissions, 'settings', 'read') ||
 			checkPermission(this.permissions, 'users', 'read') ||
@@ -56,11 +56,13 @@ class AuthStore {
 	canUpdateRoles = $derived(checkPermission(this.permissions, 'roles', 'update'));
 	canDeleteRoles = $derived(checkPermission(this.permissions, 'roles', 'delete'));
 
-	// Settings (includes invites — both map to settings resource)
+	// Settings (includes invites - both map to settings resource)
 	canReadSettings = $derived(checkPermission(this.permissions, 'settings', 'read'));
 	canCreateSettings = $derived(checkPermission(this.permissions, 'settings', 'create'));
 	canUpdateSettings = $derived(checkPermission(this.permissions, 'settings', 'update'));
 	canDeleteSettings = $derived(checkPermission(this.permissions, 'settings', 'delete'));
+	// Mirrors backend requireSystemAdmin (settings manage on *)
+	canManageSettings = $derived(checkPermission(this.permissions, 'settings', 'manage', '*'));
 
 	// Repositories
 	canUpdateRepos = $derived(checkPermission(this.permissions, 'repositories', 'update'));

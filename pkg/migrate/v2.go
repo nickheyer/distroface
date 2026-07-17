@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 )
 
 // V1 group -> v2 role. All v1 access levels collapse cleanly: admins get the
@@ -22,14 +23,14 @@ const roleSource = "migration"
 // V2 wraps direct writes to the v2 database. The v2 server may be running
 // concurrently: both sides open sqlite in WAL mode with busy timeouts.
 type V2 struct {
-	Store *db.Store
+	Store *stores.Store
 }
 
 func OpenV2(path string) (*V2, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("v2 db not found (has the v2 server been started once?): %w", err)
 	}
-	store, err := db.NewSQLiteStore(path)
+	store, err := stores.NewSQLiteStore(path)
 	if err != nil {
 		return nil, err
 	}

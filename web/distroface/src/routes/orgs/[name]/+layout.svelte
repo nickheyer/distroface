@@ -6,7 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import {
-		Building2, Package, Archive, Users, Webhook, Globe, Settings
+		Building2, Package, Archive, Users, Webhook, Globe, ShieldCheck, Settings
 	} from '@lucide/svelte';
 	import { OrgContext, ORG_CONTEXT_KEY } from '$lib/org-context.svelte';
 
@@ -33,6 +33,7 @@
 			items.push(
 				{ href: resolve('/orgs/[name]/webhooks', { name }), label: 'Webhooks', icon: Webhook },
 				{ href: resolve('/orgs/[name]/portals', { name }), label: 'Portals', icon: Globe },
+				{ href: resolve('/orgs/[name]/certificates', { name }), label: 'Certificates', icon: ShieldCheck },
 				{ href: resolve('/orgs/[name]/settings', { name }), label: 'Settings', icon: Settings }
 			);
 		}

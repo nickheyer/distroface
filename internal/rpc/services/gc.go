@@ -5,7 +5,7 @@ import (
 	"errors"
 
 	"connectrpc.com/connect"
-	"github.com/nickheyer/distroface/internal/gc"
+	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -16,18 +16,18 @@ import (
 var _ distrofacev1connect.GCServiceHandler = (*GCService)(nil)
 
 type GCService struct {
-	collector *gc.Collector
+	collector *admin.Collector
 	config    *config.Config
 	log       *logger.Logger
 }
 
-func NewGCService(collector *gc.Collector, cfg *config.Config, log *logger.Logger) *GCService {
+func NewGCService(collector *admin.Collector, cfg *config.Config, log *logger.Logger) *GCService {
 	return &GCService{collector: collector, config: cfg, log: log}
 }
 
 func (s *GCService) RunGC(ctx context.Context, req *connect.Request[v1.RunGCRequest]) (*connect.Response[v1.RunGCResponse], error) {
 	if err := s.collector.Start(req.Msg.DryRun, req.Msg.RemoveUntagged); err != nil {
-		if errors.Is(err, gc.ErrAlreadyRunning) {
+		if errors.Is(err, admin.ErrAlreadyRunning) {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 		}
 		return nil, connect.NewError(connect.CodeInternal, err)

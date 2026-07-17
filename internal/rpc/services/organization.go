@@ -9,6 +9,7 @@ import (
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -22,14 +23,14 @@ import (
 var _ distrofacev1connect.OrganizationServiceHandler = (*OrganizationService)(nil)
 
 type OrganizationService struct {
-	store    *storage.Store
+	store    *stores.Store
 	registry *registry.RegistryAccess
 	enforcer *rbac.Enforcer
 	config   *config.Config
 	log      *logger.Logger
 }
 
-func NewOrganizationService(store *storage.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, cfg *config.Config, log *logger.Logger) *OrganizationService {
+func NewOrganizationService(store *stores.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, cfg *config.Config, log *logger.Logger) *OrganizationService {
 	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, config: cfg, log: log}
 }
 

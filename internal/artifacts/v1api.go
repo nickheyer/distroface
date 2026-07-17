@@ -11,28 +11,29 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/ratelimit"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
 // Drop in v1 rest facade for old dfcli and ci
 type V1API struct {
-	store    *storage.Store
+	store    *stores.Store
 	manager  *Manager
 	authMgr  *auth.Manager
 	enforcer *rbac.Enforcer
 	access   *Access
-	limiter  *ratelimit.Limiter // Failed login lockout, nil disables
+	limiter  *admin.Limiter // Failed login lockout, nil disables
 	log      *logger.Logger
 	routes   []v1Route
 }
 
 var v1RepoNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 
-func NewV1API(store *storage.Store, manager *Manager, authMgr *auth.Manager, enforcer *rbac.Enforcer, limiter *ratelimit.Limiter, log *logger.Logger) *V1API {
+func NewV1API(store *stores.Store, manager *Manager, authMgr *auth.Manager, enforcer *rbac.Enforcer, limiter *admin.Limiter, log *logger.Logger) *V1API {
 	a := &V1API{
 		store:    store,
 		manager:  manager,
@@ -166,7 +167,7 @@ type v1AuthResponse struct {
 }
 
 func (a *V1API) handleLogin(w http.ResponseWriter, r *http.Request) {
-	clientIP := ratelimit.ClientIP(r.RemoteAddr, r.Header)
+	clientIP := admin.ClientIP(r.RemoteAddr, r.Header)
 	if a.limiter != nil && a.limiter.Blocked(clientIP) {
 		http.Error(w, "TOO MANY REQUESTS", http.StatusTooManyRequests)
 		return
@@ -464,7 +465,7 @@ func (a *V1API) handleQuery(w http.ResponseWriter, r *http.Request, user *auth.A
 	}
 
 	query := r.URL.Query()
-	criteria := storage.ArtifactSearchCriteria{
+	criteria := stores.ArtifactSearchCriteria{
 		RepoID:     &repo.ID,
 		Name:       query.Get("name"),
 		Version:    query.Get("version"),
@@ -557,7 +558,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 	}
 
 	query := r.URL.Query()
-	criteria := storage.ArtifactSearchCriteria{
+	criteria := stores.ArtifactSearchCriteria{
 		Name:       query.Get("name"),
 		Version:    query.Get("version"),
 		Path:       query.Get("path"),
@@ -739,7 +740,7 @@ func (a *V1API) handleUpdateProperties(w http.ResponseWriter, r *http.Request, u
 	}
 
 	if err := a.store.SetArtifactProperties(r.Context(), artifact.ID, properties); err != nil {
-		if errors.Is(err, storage.ErrDuplicateIdentity) {
+		if errors.Is(err, stores.ErrDuplicateIdentity) {
 			http.Error(w, "Artifact with this version, path, and property set exists", http.StatusConflict)
 			return
 		}

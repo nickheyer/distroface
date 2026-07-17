@@ -9,13 +9,13 @@ import (
 	"strings"
 	"sync"
 
-	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
 // Resolves requests to per-org portals by listener port and Host header
 type Resolver struct {
-	store *storage.Store
+	store *stores.Store
 	log   *logger.Logger
 
 	mu      sync.RWMutex
@@ -23,7 +23,7 @@ type Resolver struct {
 	loaded  bool
 }
 
-func NewResolver(store *storage.Store, log *logger.Logger) *Resolver {
+func NewResolver(store *stores.Store, log *logger.Logger) *Resolver {
 	return &Resolver{store: store, log: log}
 }
 

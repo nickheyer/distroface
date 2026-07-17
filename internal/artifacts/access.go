@@ -5,22 +5,23 @@ import (
 	"slices"
 
 	"github.com/nickheyer/distroface/internal/auth"
-	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 )
 
 // Shared artifact repo access rules for the v1 facade and RPC service
 type Access struct {
-	store    *storage.Store
+	store    *stores.Store
 	enforcer *rbac.Enforcer
 }
 
-func NewAccess(store *storage.Store, enforcer *rbac.Enforcer) *Access {
+func NewAccess(store *stores.Store, enforcer *rbac.Enforcer) *Access {
 	return &Access{store: store, enforcer: enforcer}
 }
 
 // Owner, manage permission, org membership, or scoped grant
-func (a *Access) HasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.ArtifactRepository, action string) bool {
+func (a *Access) HasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser, repo *db.ArtifactRepository, action string) bool {
 	if user == nil {
 		return false
 	}
@@ -38,14 +39,14 @@ func (a *Access) HasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser
 		case rbac.ActionRead, rbac.ActionPull:
 			return true
 		default:
-			return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
+			return role == db.OrgRoleOwner || role == db.OrgRoleAdmin
 		}
 	}
 	return slices.Contains(a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, action), repo.Namespace+"/"+repo.Name)
 }
 
 // Public repos or any read grant
-func (a *Access) CanSee(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.ArtifactRepository) bool {
+func (a *Access) CanSee(ctx context.Context, user *auth.AuthenticatedUser, repo *db.ArtifactRepository) bool {
 	return !repo.IsPrivate || a.HasRepoAccess(ctx, user, repo, rbac.ActionRead)
 }
 
@@ -58,7 +59,7 @@ func (a *Access) CanCreateInNamespace(ctx context.Context, user *auth.Authentica
 		return true
 	}
 	if isMember, role, _ := a.store.IsOrgMember(ctx, namespace, user.ID); isMember {
-		return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
+		return role == db.OrgRoleOwner || role == db.OrgRoleAdmin
 	}
 	if !a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
 		return false
@@ -71,8 +72,8 @@ func (a *Access) CanCreateInNamespace(ctx context.Context, user *auth.Authentica
 }
 
 // Repo list options honoring viewer visibility
-func (a *Access) ListOptions(user *auth.AuthenticatedUser, namespace string) storage.ArtifactRepoListOptions {
-	opts := storage.ArtifactRepoListOptions{Namespace: namespace}
+func (a *Access) ListOptions(user *auth.AuthenticatedUser, namespace string) stores.ArtifactRepoListOptions {
+	opts := stores.ArtifactRepoListOptions{Namespace: namespace}
 	if user != nil {
 		opts.ViewerID = user.ID
 		opts.IncludePrivate = a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage)

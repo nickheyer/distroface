@@ -7,6 +7,43 @@ server:
   read_timeout: 15
   write_timeout: 15
   idle_timeout: 60
+  # Peers whose X-Forwarded-For / X-Real-IP headers are trusted.
+  # Defaults to loopback plus private ranges, set [] to trust none.
+  # trusted_proxies: ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+
+# In-app TLS. Off by default (terminate at your proxy instead).
+# The same certificates cover the main server and every portal listener,
+# SNI picks the right cert per hostname.
+# tls:
+#   enabled: true
+#   # Manual certificate (also acts as fallback when acme declines a host)
+#   # cert_file: "/etc/distroface/tls/fullchain.pem"
+#   # key_file: "/etc/distroface/tls/privkey.pem"
+#   acme:
+#     enabled: true
+#     email: "admin@example.com"       # Expiry notices from the CA
+#     # directory_url: ""              # Empty means Let's Encrypt production
+#     domains:                         # Statically allowed hostnames
+#       - "registry.example.com"
+#     http_port: "80"                  # Cleartext listener for http-01 + redirect, "" disables
+#     redirect_http: true
+# Notes:
+# - The primary server hostname is allowed automatically when it is a
+#   public dns name. Additional domains (including org portal hostnames)
+#   are managed at runtime via the CertificateService API.
+# - Issuance requires the CA to reach this host on port 80 (http-01)
+#   or 443 (tls-alpn-01).
+
+# Security hardening
+security:
+  headers:
+    enabled: true              # Response security headers on every route
+    hsts: false                # Force HSTS even without in-app tls (behind a proxy)
+    hsts_max_age: 31536000
+    # content_security_policy: ""   # Override the built in policy
+  audit:
+    enabled: true              # DB audit trail of logins and admin mutations
+    retention_days: 90         # Zero keeps history forever
 
 # Storage configuration
 storage:

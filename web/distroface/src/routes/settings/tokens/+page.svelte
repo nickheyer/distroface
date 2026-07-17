@@ -238,7 +238,7 @@
 	onOpenChange={(v) => { if (!v) closeCreatePanel(); }}
 	title={newPlaintextToken ? 'Token Created' : 'Create API Token'}
 	description={newPlaintextToken
-		? 'Your new token has been generated. Copy it now — it will not be shown again.'
+		? 'Your new token has been generated. Copy it now - it will not be shown again.'
 		: 'Create a personal access token for authenticating with the API and Docker registry.'}
 	icon={newPlaintextToken ? CheckCircle : Key}
 >

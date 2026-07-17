@@ -12,6 +12,7 @@ import (
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/utils"
@@ -20,14 +21,14 @@ import (
 // listenerDeps holds the dependencies needed by the repository middleware listener.
 // Set via RegisterListenerMiddleware before handlers.NewApp is called.
 var listenerDeps struct {
-	store      *storage.Store
+	store      *stores.Store
 	log        *logger.Logger
 	dispatcher *webhook.Dispatcher
 }
 
 // RegisterListenerMiddleware stores the dependencies needed by the
 // repository middleware listener. Must be called before handlers.NewApp.
-func RegisterListenerMiddleware(store *storage.Store, log *logger.Logger, dispatcher *webhook.Dispatcher) {
+func RegisterListenerMiddleware(store *stores.Store, log *logger.Logger, dispatcher *webhook.Dispatcher) {
 	listenerDeps.store = store
 	listenerDeps.log = log
 	listenerDeps.dispatcher = dispatcher
@@ -52,7 +53,7 @@ func init() {
 // registryListener implements notifications.Listener to handle distribution v3
 // repository events directly via the repository middleware system.
 type registryListener struct {
-	store      *storage.Store
+	store      *stores.Store
 	log        *logger.Logger
 	dispatcher *webhook.Dispatcher
 	ctx        context.Context

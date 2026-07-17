@@ -6,6 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -15,12 +16,12 @@ import (
 var _ distrofacev1connect.RoleServiceHandler = (*RoleService)(nil)
 
 type RoleService struct {
-	store    *storage.Store
+	store    *stores.Store
 	enforcer *rbac.Enforcer
 	log      *logger.Logger
 }
 
-func NewRoleService(store *storage.Store, enforcer *rbac.Enforcer, log *logger.Logger) *RoleService {
+func NewRoleService(store *stores.Store, enforcer *rbac.Enforcer, log *logger.Logger) *RoleService {
 	return &RoleService{store: store, enforcer: enforcer, log: log}
 }
 
@@ -229,7 +230,7 @@ func (s *RoleService) GetPermissionMatrix(ctx context.Context, req *connect.Requ
 		}
 
 		for offset := 0; ; offset += batchSize {
-			artifactRepos, total, err := s.store.ListArtifactRepositories(ctx, storage.ArtifactRepoListOptions{
+			artifactRepos, total, err := s.store.ListArtifactRepositories(ctx, stores.ArtifactRepoListOptions{
 				IncludePrivate: true,
 				Limit:          batchSize,
 				Offset:         offset,

@@ -114,7 +114,7 @@
       "type": "section",
       "text": {
         "type": "mrkdwn",
-        "text": "*{{ .Event }}* on <{{ .Repository.FullName }}>{{ if .Tag }} — tag \`{{ .Tag }}\`{{ end }}"
+        "text": "*{{ .Event }}* on <{{ .Repository.FullName }}>{{ if .Tag }} - tag \`{{ .Tag }}\`{{ end }}"
       }
     },
     {
@@ -139,7 +139,7 @@
       "version": "1.4",
       "body": [
         { "type": "TextBlock", "size": "medium", "weight": "bolder", "text": "{{ .Repository.FullName }}" },
-        { "type": "TextBlock", "text": "**{{ .Event }}**{{ if .Tag }} — tag {{ .Tag }}{{ end }}", "wrap": true },
+        { "type": "TextBlock", "text": "**{{ .Event }}**{{ if .Tag }} - tag {{ .Tag }}{{ end }}", "wrap": true },
         { "type": "FactSet", "facts": [
           { "title": "Digest", "value": "{{ .Digest }}" },
           { "title": "Time", "value": "{{ .Timestamp }}" }
@@ -154,7 +154,7 @@
 			label: 'ntfy',
 			template: `{
   "topic": "distroface",
-  "title": "{{ .Event }} — {{ .Repository.FullName }}",
+  "title": "{{ .Event }} - {{ .Repository.FullName }}",
   "message": "{{ if .Tag }}Tag: {{ .Tag }}\\n{{ end }}Digest: {{ .Digest }}",
   "tags": ["package"]
 }`

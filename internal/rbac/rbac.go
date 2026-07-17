@@ -10,19 +10,19 @@ import (
 	"gorm.io/gorm"
 )
 
-// Permission represents a single resource/action/object permission tuple.
+// Represents a single resource/action/object permission tuple
 type Permission struct {
 	Resource string
 	Action   string
 	ObjectID string
 }
 
-// Enforcer wraps a Casbin enforcer with convenience methods for RBAC.
+// Rraps a Casbin enforcer with convenience methods for RBAC
 type Enforcer struct {
 	enforcer *casbin.Enforcer
 }
 
-// NewEnforcer creates a new Casbin RBAC enforcer backed by the given GORM database.
+// Creates a new Casbin RBAC enforcer backed by the given GORM database
 func NewEnforcer(db *gorm.DB) (*Enforcer, error) {
 	adapter, err := gormadapter.NewAdapterByDB(db)
 	if err != nil {
@@ -174,7 +174,7 @@ func (e *Enforcer) GetAllowedObjects(roles []string, resource, action string) (a
 }
 
 // GetGrantedObjects returns only the non-wildcard object IDs granted to any of
-// the given roles for a resource+action. Wildcard grants are ignored — this is
+// the given roles for a resource+action. Wildcard grants are ignored - this is
 // used for visibility filtering where "has permission" is separate from "can
 // see private resources."
 func (e *Enforcer) GetGrantedObjects(roles []string, resource, action string) []string {
@@ -188,7 +188,7 @@ func (e *Enforcer) GetGrantedObjects(roles []string, resource, action string) []
 			}
 			pRes, pAct, pObj := p[1], p[2], p[3]
 			if pObj == "*" {
-				continue // Skip wildcards — they don't grant visibility
+				continue // Skip wildcards - they don't grant visibility
 			}
 			if (pRes == "*" || pRes == resource) && (pAct == "*" || pAct == action) {
 				if !seen[pObj] {

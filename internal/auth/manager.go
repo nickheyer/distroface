@@ -15,6 +15,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"golang.org/x/crypto/bcrypt"
@@ -41,7 +42,7 @@ const (
 )
 
 type Manager struct {
-	store     *db.Store
+	store     *stores.Store
 	enforcer  *rbac.Enforcer
 	config    *config.AuthConfig
 	jwtSecret []byte
@@ -49,7 +50,7 @@ type Manager struct {
 
 const jwtSecretSettingKey = "jwt_secret"
 
-func NewManager(store *db.Store, enforcer *rbac.Enforcer, cfg *config.AuthConfig) (*Manager, error) {
+func NewManager(store *stores.Store, enforcer *rbac.Enforcer, cfg *config.AuthConfig) (*Manager, error) {
 	ctx := context.Background()
 	var secret []byte
 
@@ -300,7 +301,7 @@ func (m *Manager) GetConfig() *config.AuthConfig {
 	return m.config
 }
 
-func (m *Manager) GetStore() *db.Store {
+func (m *Manager) GetStore() *stores.Store {
 	return m.store
 }
 

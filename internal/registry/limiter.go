@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nickheyer/distroface/internal/ratelimit"
+	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
@@ -19,7 +19,7 @@ type SubjectVerifier interface {
 var manifestPathRe = regexp.MustCompile(`^/v2/.+/manifests/[^/]+$`)
 
 // Throttle manifest pulls per user or per ip
-func PullRateLimit(next http.Handler, verifier SubjectVerifier, userLimiter, anonLimiter *ratelimit.Limiter, log *logger.Logger) http.Handler {
+func PullRateLimit(next http.Handler, verifier SubjectVerifier, userLimiter, anonLimiter *admin.Limiter, log *logger.Logger) http.Handler {
 	if userLimiter == nil && anonLimiter == nil {
 		return next
 	}
@@ -37,7 +37,7 @@ func PullRateLimit(next http.Handler, verifier SubjectVerifier, userLimiter, ano
 		}
 
 		limiter := anonLimiter
-		key := "ip:" + ratelimit.ClientIP(r.RemoteAddr, r.Header)
+		key := "ip:" + admin.ClientIP(r.RemoteAddr, r.Header)
 		if verifier != nil {
 			if sub, err := verifier.VerifyTokenSubject(strings.TrimSpace(raw)); err == nil && sub != "" {
 				limiter = userLimiter

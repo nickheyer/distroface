@@ -1,0 +1,112 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// Manages tls certificate domains and acme issuance, system admins manage
+// system scope, org admins manage domains matching their portal hostnames
+service CertificateService {
+  // Reports whether tls/acme is active and how it is configured
+  rpc GetTLSStatus(GetTLSStatusRequest) returns (GetTLSStatusResponse) {}
+  // Lists registered domains, org scoped when org_name is set
+  rpc ListCertificateDomains(ListCertificateDomainsRequest) returns (ListCertificateDomainsResponse) {}
+  // Registers a domain as allowed to receive certificates
+  rpc AddCertificateDomain(AddCertificateDomainRequest) returns (AddCertificateDomainResponse) {}
+  // Removes a registered domain
+  rpc RemoveCertificateDomain(RemoveCertificateDomainRequest) returns (RemoveCertificateDomainResponse) {}
+  // Marks an org scoped domain as allowed to issue, system admin only
+  rpc ApproveCertificateDomain(ApproveCertificateDomainRequest) returns (ApproveCertificateDomainResponse) {}
+  // Requests immediate issuance for a registered domain, blocks until done
+  rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse) {}
+}
+
+// Live certificate details read from the acme cache
+message CertificateInfo {
+  bool issued = 1;
+  string issuer = 2;
+  google.protobuf.Timestamp not_before = 3;
+  google.protobuf.Timestamp not_after = 4;
+  repeated string sans = 5;
+}
+
+// A hostname allowed to receive acme certificates
+message CertificateDomain {
+  string id = 1;
+  string domain = 2;
+  string scope = 3; // "system" or "org"
+  string org_name = 4; // Set when scope is org
+  string created_by = 5;
+  google.protobuf.Timestamp created_at = 6;
+  CertificateInfo cert = 7;
+  bool approved = 8; // Org domains need system admin approval before issuance
+  string approved_by = 9;
+}
+
+// Empty
+message GetTLSStatusRequest {}
+
+// Effective tls configuration, secrets excluded
+message GetTLSStatusResponse {
+  bool tls_enabled = 1;
+  bool acme_enabled = 2;
+  string acme_email = 3;
+  string acme_directory = 4; // Empty means lets encrypt production
+  bool manual_cert = 5;
+  repeated string config_domains = 6;
+  string primary_hostname = 7;
+  CertificateInfo primary_cert = 8;
+}
+
+// Org scoped listing when org_name set, admins may pass empty for all
+message ListCertificateDomainsRequest {
+  string org_name = 1;
+}
+
+// Registered domains with live cert details
+message ListCertificateDomainsResponse {
+  repeated CertificateDomain domains = 1;
+}
+
+// Org scope when org_name set, domain must match an org portal hostname
+message AddCertificateDomainRequest {
+  string domain = 1;
+  string org_name = 2;
+}
+
+// The registered domain
+message AddCertificateDomainResponse {
+  CertificateDomain domain = 1;
+}
+
+// Org name required for org scoped domains
+message RemoveCertificateDomainRequest {
+  string id = 1;
+  string org_name = 2;
+}
+
+// Empty
+message RemoveCertificateDomainResponse {}
+
+// Domain id to approve
+message ApproveCertificateDomainRequest {
+  string id = 1;
+}
+
+// The approved domain
+message ApproveCertificateDomainResponse {
+  CertificateDomain domain = 1;
+}
+
+// Domain must already be registered or statically allowed
+message IssueCertificateRequest {
+  string domain = 1;
+  string org_name = 2;
+}
+
+// Certificate details after issuance
+message IssueCertificateResponse {
+  CertificateInfo cert = 1;
+}

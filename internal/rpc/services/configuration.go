@@ -10,7 +10,7 @@ import (
 	"sort"
 
 	"connectrpc.com/connect"
-	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -26,12 +26,12 @@ var publicKeys = []string{
 }
 
 type ConfigurationService struct {
-	store  *storage.Store
+	store  *stores.Store
 	config *config.Config
 	log    *logger.Logger
 }
 
-func NewConfigurationService(store *storage.Store, cfg *config.Config, log *logger.Logger) *ConfigurationService {
+func NewConfigurationService(store *stores.Store, cfg *config.Config, log *logger.Logger) *ConfigurationService {
 	return &ConfigurationService{store: store, config: cfg, log: log}
 }
 
@@ -70,7 +70,7 @@ func (s *ConfigurationService) GetStorageUsage(ctx context.Context, req *connect
 	if resp.ArtifactBytes, err = s.store.ArtifactUniqueBlobBytes(ctx); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	repos, _, err := s.store.ListArtifactRepositories(ctx, storage.ArtifactRepoListOptions{IncludePrivate: true})
+	repos, _, err := s.store.ListArtifactRepositories(ctx, stores.ArtifactRepoListOptions{IncludePrivate: true})
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}

@@ -36,7 +36,8 @@
 		Menu,
 		Shield,
 		Archive,
-		ExternalLink
+		ExternalLink,
+		BookOpen
 	} from '@lucide/svelte';
 	import { toggleMode, mode } from 'mode-watcher';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -101,7 +102,8 @@
 			: []),
 		...(authStore.canAccessAdmin && !portalStore.isPortal
 			? [{ href: '/admin', label: 'Admin', icon: Shield } satisfies NavLink]
-			: [])
+			: []),
+		{ href: '/docs/api', label: 'API', icon: BookOpen }
 	]);
 
 	const brandName = $derived(portalStore.isPortal ? portalStore.displayName : 'Distroface');

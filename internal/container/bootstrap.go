@@ -1,4 +1,4 @@
-package bootstrap
+package container
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
@@ -14,14 +15,14 @@ import (
 const createdByBootstrap = "bootstrap"
 
 // Creates configured users then orgs never touching existing rows
-func Run(ctx context.Context, cfg config.BootstrapConfig, store *db.Store, authManager *auth.Manager, log *logger.Logger) error {
+func Run(ctx context.Context, cfg config.BootstrapConfig, store *stores.Store, authManager *auth.Manager, log *logger.Logger) error {
 	if err := seedUsers(ctx, cfg.Users, store, authManager, log); err != nil {
 		return err
 	}
 	return seedOrgs(ctx, cfg.Orgs, store, log)
 }
 
-func seedUsers(ctx context.Context, users []config.BootstrapUser, store *db.Store, authManager *auth.Manager, log *logger.Logger) error {
+func seedUsers(ctx context.Context, users []config.BootstrapUser, store *stores.Store, authManager *auth.Manager, log *logger.Logger) error {
 	for _, u := range users {
 		if u.Username == "" || u.Password == "" {
 			return fmt.Errorf("bootstrap user requires username and password")
@@ -61,7 +62,7 @@ func seedUsers(ctx context.Context, users []config.BootstrapUser, store *db.Stor
 	return nil
 }
 
-func seedOrgs(ctx context.Context, orgs []config.BootstrapOrg, store *db.Store, log *logger.Logger) error {
+func seedOrgs(ctx context.Context, orgs []config.BootstrapOrg, store *stores.Store, log *logger.Logger) error {
 	for _, o := range orgs {
 		if o.Name == "" {
 			return fmt.Errorf("bootstrap org requires name")
@@ -145,7 +146,7 @@ func seedOrgs(ctx context.Context, orgs []config.BootstrapOrg, store *db.Store, 
 }
 
 // First owner else first member else sentinel
-func resolveCreator(ctx context.Context, members []config.BootstrapOrgMember, store *db.Store) string {
+func resolveCreator(ctx context.Context, members []config.BootstrapOrgMember, store *stores.Store) string {
 	pick := func(role string) string {
 		for _, m := range members {
 			if m.Role != role {

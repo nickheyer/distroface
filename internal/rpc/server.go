@@ -6,12 +6,13 @@ import (
 
 	"connectrpc.com/connect"
 	"connectrpc.com/grpcreflect"
+	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/artifacts"
+	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
-	storage "github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/gc"
+	"github.com/nickheyer/distroface/internal/certs"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/portal"
-	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc/services"
@@ -19,13 +20,14 @@ import (
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	"github.com/nickheyer/distroface/pkg/utils"
 	web "github.com/nickheyer/distroface/web/distroface"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
 
 type ServerDeps struct {
-	Store             *storage.Store
+	Store             *stores.Store
 	Config            *config.Config
 	Log               *logger.Logger
 	RegistryHandler   http.Handler
@@ -37,10 +39,13 @@ type ServerDeps struct {
 	WebhookDispatcher *webhook.Dispatcher
 	PortalResolver    *portal.Resolver
 	PortalService     *portal.Service
-	AuthLimiter       *ratelimit.Limiter // Lockout limiter nil disables
+	AuthLimiter       *admin.Limiter // Lockout limiter nil disables
 	ArtifactManager   *artifacts.Manager
 	ArtifactV1Facade  *artifacts.V1API
-	GCCollector       *gc.Collector
+	GCCollector       *admin.Collector
+	CertService       *certs.Service  // Nil hides the certificate api
+	AuditRecorder     *audit.Recorder // Nil disables the audit trail
+	AuditService      *audit.Service
 }
 
 type Server struct {
@@ -62,6 +67,9 @@ func (s *Server) setupHandler() {
 		connect.UnaryInterceptorFunc(s.authInterceptor()),
 		&loggingInterceptor{log: s.Log},
 	}
+	if s.AuditRecorder != nil {
+		interceptors = append(interceptors, connect.UnaryInterceptorFunc(s.auditInterceptor(s.AuditRecorder)))
+	}
 
 	opts := []connect.HandlerOption{
 		connect.WithInterceptors(interceptors...),
@@ -78,7 +86,7 @@ func (s *Server) setupHandler() {
 		mux.Handle("POST /auth/token", s.TokenHandler)
 	}
 
-	// OIDC HTTP handlers (not Connect RPC — these are OAuth2 redirect flows)
+	// OIDC HTTP handlers (not Connect RPC - these are OAuth2 redirect flows)
 	if s.OIDCHandler != nil && s.OIDCHandler.IsEnabled() {
 		mux.HandleFunc("/api/v1/auth/oidc/login", s.OIDCHandler.HandleLogin)
 		mux.HandleFunc("/api/v1/auth/oidc/callback", s.OIDCHandler.HandleCallback)
@@ -144,6 +152,16 @@ func (s *Server) setupHandler() {
 		mux.Handle(gcPath, gcHandler)
 	}
 
+	if s.CertService != nil {
+		certPath, certHandler := distrofacev1connect.NewCertificateServiceHandler(s.CertService, opts...)
+		mux.Handle(certPath, certHandler)
+	}
+
+	if s.AuditService != nil {
+		auditPath, auditHandler := distrofacev1connect.NewAuditServiceHandler(s.AuditService, opts...)
+		mux.Handle(auditPath, auditHandler)
+	}
+
 	// GRPC reflection
 	reflector := grpcreflect.NewStaticReflector(
 		distrofacev1connect.HealthServiceName,
@@ -158,6 +176,8 @@ func (s *Server) setupHandler() {
 		distrofacev1connect.PortalServiceName,
 		distrofacev1connect.ArtifactServiceName,
 		distrofacev1connect.GCServiceName,
+		distrofacev1connect.CertificateServiceName,
+		distrofacev1connect.AuditServiceName,
 	)
 	reflectV1Path, reflectV1Handler := grpcreflect.NewHandlerV1(reflector)
 	mux.Handle(reflectV1Path, s.requireAuth(reflectV1Handler))
@@ -172,6 +192,7 @@ func (s *Server) setupHandler() {
 	if s.PortalResolver != nil {
 		root = s.PortalResolver.Middleware(s.Config.Server.Hostname, mux)
 	}
+	root = utils.Headers(s.Config.Security.Headers, s.Config.TLS.Enabled, root)
 	s.handler = h2c.NewHandler(root, &http2.Server{})
 }
 

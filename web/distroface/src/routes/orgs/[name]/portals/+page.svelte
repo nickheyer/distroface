@@ -100,10 +100,6 @@
 	<div class="section-header">
 		<div class="min-w-0 space-y-1">
 			<h2 class="section-title">Portals</h2>
-			<p class="section-subtitle max-w-2xl">
-				A portal serves this organization's own view of the app — registry, artifacts, and web
-				UI, scoped to {orgName} — on another hostname or port.
-			</p>
 		</div>
 		<Button size="sm" class="shrink-0" onclick={() => goto(resolve('/orgs/[name]/portals/new', { name: orgName }))}>
 			<Plus class="h-4 w-4 mr-1.5" />New Portal
@@ -120,7 +116,7 @@
 		<EmptyState
 			icon={Globe}
 			message="No portals yet"
-			description="Give {orgName} its own address, like registry.example.com — clients that use it only ever see this organization."
+			description="Give {orgName} its own address, like registry.example.com - clients that use it only ever see this organization."
 		>
 			{#snippet actions()}
 				<Button

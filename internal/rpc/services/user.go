@@ -6,7 +6,7 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
-	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -16,13 +16,13 @@ import (
 var _ distrofacev1connect.UserServiceHandler = (*UserService)(nil)
 
 type UserService struct {
-	store       *storage.Store
+	store       *stores.Store
 	authManager *auth.Manager
 	enforcer    *rbac.Enforcer
 	log         *logger.Logger
 }
 
-func NewUserService(store *storage.Store, manager *auth.Manager, enforcer *rbac.Enforcer, log *logger.Logger) *UserService {
+func NewUserService(store *stores.Store, manager *auth.Manager, enforcer *rbac.Enforcer, log *logger.Logger) *UserService {
 	return &UserService{store: store, authManager: manager, enforcer: enforcer, log: log}
 }
 

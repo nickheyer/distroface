@@ -13,6 +13,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -27,7 +28,7 @@ var _ distrofacev1connect.AuthServiceHandler = (*AuthService)(nil)
 var usernameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{1,38}[a-z0-9]$`)
 
 type AuthService struct {
-	store       *storage.Store
+	store       *stores.Store
 	log         *logger.Logger
 	config      *config.Config
 	authManager *auth.Manager
@@ -35,7 +36,7 @@ type AuthService struct {
 	oidcHandler *auth.OIDCHandler
 }
 
-func NewAuthService(store *storage.Store, cfg *config.Config, manager *auth.Manager, enforcer *rbac.Enforcer, oidcHandler *auth.OIDCHandler, log *logger.Logger) *AuthService {
+func NewAuthService(store *stores.Store, cfg *config.Config, manager *auth.Manager, enforcer *rbac.Enforcer, oidcHandler *auth.OIDCHandler, log *logger.Logger) *AuthService {
 	return &AuthService{store: store, config: cfg, authManager: manager, enforcer: enforcer, oidcHandler: oidcHandler, log: log}
 }
 

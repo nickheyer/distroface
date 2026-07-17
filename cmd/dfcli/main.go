@@ -313,11 +313,11 @@ func saveConfig(config AuthConfig) error {
 
 func (c *APIClient) refreshToken() error {
 	if c.TokenManager.IsPAT() {
-		return fmt.Errorf("personal access token was rejected — it may be expired or revoked (create a new one and run 'dfcli login --token ...')")
+		return fmt.Errorf("personal access token was rejected - it may be expired or revoked (create a new one and run 'dfcli login --token ...')")
 	}
 	token := c.TokenManager.GetToken()
 	if token == "" {
-		return fmt.Errorf("not logged in — run 'dfcli login'")
+		return fmt.Errorf("not logged in - run 'dfcli login'")
 	}
 
 	if viper.GetBool("debug") {
@@ -338,7 +338,7 @@ func (c *APIClient) refreshToken() error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("refresh failed with status %d: %s — run 'dfcli login'", resp.StatusCode, strings.TrimSpace(string(body)))
+		return fmt.Errorf("refresh failed with status %d: %s - run 'dfcli login'", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var result struct {
@@ -512,7 +512,7 @@ stored token without touching the config file.`,
 			// PAT login stores and verifies, no session dance
 			if patToken != "" {
 				if !strings.HasPrefix(patToken, patPrefix) {
-					return fmt.Errorf("token must start with %q — create one under Settings → Tokens", patPrefix)
+					return fmt.Errorf("token must start with %q - create one under Settings → Tokens", patPrefix)
 				}
 				config := AuthConfig{
 					Token:     patToken,
