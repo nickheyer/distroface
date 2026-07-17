@@ -2,8 +2,6 @@ package db
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -1096,12 +1094,6 @@ func (s *Store) GetWebhookDelivery(ctx context.Context, id string) (*WebhookDeli
 		return nil, err
 	}
 	return &delivery, nil
-}
-
-// HashToken computes SHA-256 of a raw token string.
-func HashToken(token string) string {
-	h := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(h[:])
 }
 
 func (s *Store) CreateRegistryPortal(ctx context.Context, portal *RegistryPortal) error {

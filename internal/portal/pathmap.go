@@ -1,4 +1,4 @@
-package registry
+package portal
 
 import (
 	"fmt"
@@ -7,15 +7,6 @@ import (
 
 	"github.com/nickheyer/distroface/pkg/logger"
 )
-
-// Extracts repo name from OCI path, filters OCI keywords
-var apiRoutePattern = regexp.MustCompile(`^/v2/(.+)/((?:manifests|tags|referrers|blobs)/.*)$`)
-
-// Extracts the artifact repo name from the v1 data plane path
-var artifactRoutePattern = regexp.MustCompile(`^/api/v1/artifacts/([^/]+)/(.+)$`)
-
-// First segment control-plane keywords never namespace rewritten
-var artifactReservedRepo = map[string]bool{"repos": true, "search": true}
 
 // Rewrites a repository name
 type MappingRule struct {
@@ -29,18 +20,18 @@ type mappingRule struct {
 }
 
 // Ordered first-match-wins rule set for rewriting repo names
-type PathMapper struct {
+type pathMapper struct {
 	rules []mappingRule
 	log   *logger.Logger
 }
 
 // Compiles mapping rules, nil when no rules are given
-func NewPathMapper(rules []MappingRule, log *logger.Logger) (*PathMapper, error) {
+func newPathMapper(rules []MappingRule, log *logger.Logger) (*pathMapper, error) {
 	if len(rules) == 0 {
 		return nil, nil
 	}
 
-	m := &PathMapper{log: log}
+	m := &pathMapper{log: log}
 	for i, r := range rules {
 		if r.Pattern == "" || r.Replace == "" {
 			return nil, fmt.Errorf("rules[%d]: pattern and replace are both required", i)
@@ -54,8 +45,14 @@ func NewPathMapper(rules []MappingRule, log *logger.Logger) (*PathMapper, error)
 	return m, nil
 }
 
+// Validates that rules compile
+func ValidateRules(rules []MappingRule, log *logger.Logger) error {
+	_, err := newPathMapper(rules, log)
+	return err
+}
+
 // Applies first matching rule, else return name given
-func (m *PathMapper) MapName(name string) string {
+func (m *pathMapper) MapName(name string) string {
 	if m == nil {
 		return name
 	}

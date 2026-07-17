@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"path"
 	"regexp"
-	"slices"
 	"sort"
 	"strings"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -26,14 +26,14 @@ var _ distrofacev1connect.ArtifactServiceHandler = (*ArtifactService)(nil)
 var artifactRepoNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 
 type ArtifactService struct {
-	store    *storage.Store
-	manager  *artifacts.Manager
-	enforcer *rbac.Enforcer
-	log      *logger.Logger
+	store   *storage.Store
+	manager *artifacts.Manager
+	access  *artifacts.Access
+	log     *logger.Logger
 }
 
 func NewArtifactService(store *storage.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, log *logger.Logger) *ArtifactService {
-	return &ArtifactService{store: store, manager: manager, enforcer: enforcer, log: log}
+	return &ArtifactService{store: store, manager: manager, access: artifacts.NewAccess(store, enforcer), log: log}
 }
 
 // ── Repositories ─────────────────────────────────────────────────────────
@@ -50,7 +50,7 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *con
 	}
 
 	ns, name := repoRef(user, msg.Namespace, msg.Name)
-	if !s.canCreateInNamespace(ctx, user, ns) {
+	if !s.access.CanCreateInNamespace(ctx, user, ns) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("cannot create repository in namespace %q", ns))
 	}
 
@@ -104,19 +104,10 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *con
 	msg := req.Msg
 	limit, offset := parsePagination(msg.PageSize, msg.PageToken)
 
-	opts := storage.ArtifactRepoListOptions{
-		Namespace: msg.Namespace,
-		Search:    msg.Search,
-		Limit:     limit,
-		Offset:    offset,
-	}
-	if user != nil {
-		opts.ViewerID = user.ID
-		opts.IncludePrivate = s.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage)
-		if !opts.IncludePrivate {
-			opts.GrantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
-		}
-	}
+	opts := s.access.ListOptions(user, portal.ScopeNamespace(ctx, msg.Namespace))
+	opts.Search = msg.Search
+	opts.Limit = limit
+	opts.Offset = offset
 
 	repos, total, err := s.store.ListArtifactRepositories(ctx, opts)
 	if err != nil {
@@ -312,7 +303,7 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Requ
 		}
 		criteria.RepoID = &repo.ID
 	} else {
-		repoIDs, err := s.visibleRepoIDs(ctx, user, msg.Namespace)
+		repoIDs, err := s.visibleRepoIDs(ctx, user, portal.ScopeNamespace(ctx, msg.Namespace))
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
@@ -473,7 +464,7 @@ func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.Authentica
 	if repo == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
 	}
-	if repo.IsPrivate && !s.hasRepoAccess(ctx, user, repo, rbac.ActionRead) {
+	if repo.IsPrivate && !s.access.HasRepoAccess(ctx, user, repo, rbac.ActionRead) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
 	}
 	return repo, nil
@@ -485,7 +476,7 @@ func (s *ArtifactService) pushableRepo(ctx context.Context, user *auth.Authentic
 	if cerr != nil {
 		return nil, cerr
 	}
-	if repo.IsPrivate && !s.hasRepoAccess(ctx, user, repo, rbac.ActionPush) {
+	if repo.IsPrivate && !s.access.HasRepoAccess(ctx, user, repo, rbac.ActionPush) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
 	}
 	return repo, nil
@@ -504,69 +495,15 @@ func (s *ArtifactService) mutableRepo(ctx context.Context, user *auth.Authentica
 	if repo == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
 	}
-	if !s.hasRepoAccess(ctx, user, repo, action) {
+	if !s.access.HasRepoAccess(ctx, user, repo, action) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
 	}
 	return repo, nil
 }
 
-// Owner, manage permission, org membership, or scoped grant
-func (s *ArtifactService) hasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.ArtifactRepository, action string) bool {
-	if user == nil {
-		return false
-	}
-	if repo.OwnerID != "" && repo.OwnerID == user.ID {
-		return true
-	}
-	if s.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
-		return true
-	}
-	if repo.Namespace == user.Username {
-		return true
-	}
-	if isMember, role, _ := s.store.IsOrgMember(ctx, repo.Namespace, user.ID); isMember {
-		switch action {
-		case rbac.ActionRead, rbac.ActionPull:
-			return true
-		default:
-			return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
-		}
-	}
-	return slices.Contains(s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, action), repo.Namespace+"/"+repo.Name)
-}
-
-// Owner username, org owner/admin, or manage into an existing namespace
-func (s *ArtifactService) canCreateInNamespace(ctx context.Context, user *auth.AuthenticatedUser, namespace string) bool {
-	if user == nil {
-		return false
-	}
-	if namespace == user.Username {
-		return true
-	}
-	if isMember, role, _ := s.store.IsOrgMember(ctx, namespace, user.ID); isMember {
-		return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
-	}
-	if !s.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
-		return false
-	}
-	if u, _ := s.store.GetUserByUsername(ctx, namespace); u != nil {
-		return true
-	}
-	org, _ := s.store.GetOrganization(ctx, namespace)
-	return org != nil
-}
-
 // Repo ids readable by the user, optionally scoped to a namespace
 func (s *ArtifactService) visibleRepoIDs(ctx context.Context, user *auth.AuthenticatedUser, namespace string) ([]int64, error) {
-	opts := storage.ArtifactRepoListOptions{Namespace: namespace}
-	if user != nil {
-		opts.ViewerID = user.ID
-		opts.IncludePrivate = s.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage)
-		if !opts.IncludePrivate {
-			opts.GrantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
-		}
-	}
-	repos, _, err := s.store.ListArtifactRepositories(ctx, opts)
+	repos, _, err := s.store.ListArtifactRepositories(ctx, s.access.ListOptions(user, namespace))
 	if err != nil {
 		return nil, err
 	}

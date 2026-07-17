@@ -1,4 +1,4 @@
-package services
+package portal
 
 import (
 	"context"
@@ -12,7 +12,6 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/rbac"
-	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -20,31 +19,25 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var _ distrofacev1connect.PortalServiceHandler = (*PortalService)(nil)
+var _ distrofacev1connect.PortalServiceHandler = (*Service)(nil)
 
 // Lowercase host, no port
 var hostnameRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 
-// Syncs proxy listeners and the portal cache after writes
-type PortalReconciler interface {
-	Reconcile(ctx context.Context) error
-	ProbePort(port int) error
-}
-
-type PortalService struct {
+type Service struct {
 	store    *storage.Store
 	enforcer *rbac.Enforcer
-	proxies  PortalReconciler
+	proxies  *Manager
 	config   *config.Config
 	log      *logger.Logger
 }
 
-func NewPortalService(store *storage.Store, enforcer *rbac.Enforcer, proxies PortalReconciler, cfg *config.Config, log *logger.Logger) *PortalService {
-	return &PortalService{store: store, enforcer: enforcer, proxies: proxies, config: cfg, log: log}
+func NewService(store *storage.Store, enforcer *rbac.Enforcer, proxies *Manager, cfg *config.Config, log *logger.Logger) *Service {
+	return &Service{store: store, enforcer: enforcer, proxies: proxies, config: cfg, log: log}
 }
 
 // Resolves the org, caller needs global org-manage or owner/admin membership
-func (s *PortalService) requireOrgAdmin(ctx context.Context, orgName string) (*storage.Organization, error) {
+func (s *Service) requireOrgAdmin(ctx context.Context, orgName string) (*storage.Organization, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
@@ -72,7 +65,7 @@ func (s *PortalService) requireOrgAdmin(ctx context.Context, orgName string) (*s
 }
 
 // Fetches a portal, must belong to the org
-func (s *PortalService) getOrgPortal(ctx context.Context, org *storage.Organization, id string) (*storage.RegistryPortal, error) {
+func (s *Service) getOrgPortal(ctx context.Context, org *storage.Organization, id string) (*storage.RegistryPortal, error) {
 	if id == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("id is required"))
 	}
@@ -87,7 +80,7 @@ func (s *PortalService) getOrgPortal(ctx context.Context, org *storage.Organizat
 }
 
 // Normalizes and validates hostname/port, rejects primary hostname and hosts claimed by another portal
-func (s *PortalService) validatePlacement(ctx context.Context, hostname string, port int, excludePortalID string) (string, error) {
+func (s *Service) validatePlacement(ctx context.Context, hostname string, port int, excludePortalID string) (string, error) {
 	hostname = strings.ToLower(strings.TrimSpace(hostname))
 	if hostname == "" && port == 0 {
 		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname or port is required"))
@@ -136,15 +129,15 @@ func (s *PortalService) validatePlacement(ctx context.Context, hostname string, 
 }
 
 // Validates rules compile, returns their JSON form
-func (s *PortalService) encodeRules(rules []*v1.PortalRule) (string, error) {
+func (s *Service) encodeRules(rules []*v1.PortalRule) (string, error) {
 	if len(rules) == 0 {
 		return "[]", nil
 	}
-	mappingRules := make([]registry.MappingRule, 0, len(rules))
+	mappingRules := make([]MappingRule, 0, len(rules))
 	for _, r := range rules {
-		mappingRules = append(mappingRules, registry.MappingRule{Pattern: r.Pattern, Replace: r.Replace})
+		mappingRules = append(mappingRules, MappingRule{Pattern: r.Pattern, Replace: r.Replace})
 	}
-	if _, err := registry.NewPathMapper(mappingRules, s.log); err != nil {
+	if err := ValidateRules(mappingRules, s.log); err != nil {
 		return "", connect.NewError(connect.CodeInvalidArgument, err)
 	}
 	encoded, err := json.Marshal(mappingRules)
@@ -154,7 +147,7 @@ func (s *PortalService) encodeRules(rules []*v1.PortalRule) (string, error) {
 	return string(encoded), nil
 }
 
-func (s *PortalService) CreatePortal(ctx context.Context, req *connect.Request[v1.CreatePortalRequest]) (*connect.Response[v1.CreatePortalResponse], error) {
+func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.CreatePortalRequest]) (*connect.Response[v1.CreatePortalResponse], error) {
 	msg := req.Msg
 	org, err := s.requireOrgAdmin(ctx, msg.OrgName)
 	if err != nil {
@@ -193,19 +186,7 @@ func (s *PortalService) CreatePortal(ctx context.Context, req *connect.Request[v
 	return connect.NewResponse(&v1.CreatePortalResponse{Portal: portalToProto(portal, org.Name)}), nil
 }
 
-func (s *PortalService) GetPortal(ctx context.Context, req *connect.Request[v1.GetPortalRequest]) (*connect.Response[v1.GetPortalResponse], error) {
-	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgName)
-	if err != nil {
-		return nil, err
-	}
-	portal, err := s.getOrgPortal(ctx, org, req.Msg.Id)
-	if err != nil {
-		return nil, err
-	}
-	return connect.NewResponse(&v1.GetPortalResponse{Portal: portalToProto(portal, org.Name)}), nil
-}
-
-func (s *PortalService) ListPortals(ctx context.Context, req *connect.Request[v1.ListPortalsRequest]) (*connect.Response[v1.ListPortalsResponse], error) {
+func (s *Service) ListPortals(ctx context.Context, req *connect.Request[v1.ListPortalsRequest]) (*connect.Response[v1.ListPortalsResponse], error) {
 	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgName)
 	if err != nil {
 		return nil, err
@@ -221,7 +202,7 @@ func (s *PortalService) ListPortals(ctx context.Context, req *connect.Request[v1
 	return connect.NewResponse(resp), nil
 }
 
-func (s *PortalService) UpdatePortal(ctx context.Context, req *connect.Request[v1.UpdatePortalRequest]) (*connect.Response[v1.UpdatePortalResponse], error) {
+func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.UpdatePortalRequest]) (*connect.Response[v1.UpdatePortalResponse], error) {
 	msg := req.Msg
 	org, err := s.requireOrgAdmin(ctx, msg.OrgName)
 	if err != nil {
@@ -281,7 +262,7 @@ func (s *PortalService) UpdatePortal(ctx context.Context, req *connect.Request[v
 	return connect.NewResponse(&v1.UpdatePortalResponse{Portal: portalToProto(portal, org.Name)}), nil
 }
 
-func (s *PortalService) DeletePortal(ctx context.Context, req *connect.Request[v1.DeletePortalRequest]) (*connect.Response[v1.DeletePortalResponse], error) {
+func (s *Service) DeletePortal(ctx context.Context, req *connect.Request[v1.DeletePortalRequest]) (*connect.Response[v1.DeletePortalResponse], error) {
 	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgName)
 	if err != nil {
 		return nil, err
@@ -299,8 +280,25 @@ func (s *PortalService) DeletePortal(ctx context.Context, req *connect.Request[v
 	return connect.NewResponse(&v1.DeletePortalResponse{}), nil
 }
 
+// Reports the portal serving the current request host, empty off portals
+func (s *Service) ResolvePortal(ctx context.Context, _ *connect.Request[v1.ResolvePortalRequest]) (*connect.Response[v1.ResolvePortalResponse], error) {
+	p := FromContext(ctx)
+	if p == nil {
+		return connect.NewResponse(&v1.ResolvePortalResponse{}), nil
+	}
+	return connect.NewResponse(&v1.ResolvePortalResponse{
+		IsPortal:       true,
+		OrgName:        p.OrgName,
+		OrgDisplayName: p.OrgDisplayName,
+		PortalName:     p.Name,
+		AllowPush:      p.AllowPush,
+		RequireAuth:    p.RequireAuth,
+		MapUnqualified: p.MapUnqualified,
+	}), nil
+}
+
 // Probes/applies portal changes to the running proxies
-func (s *PortalService) reconcile(ctx context.Context) {
+func (s *Service) reconcile(ctx context.Context) {
 	if err := s.proxies.Reconcile(ctx); err != nil {
 		s.log.Error("portal proxy reconcile: %v", err)
 	}
@@ -320,7 +318,7 @@ func portalToProto(p *storage.RegistryPortal, orgName string) *v1.RegistryPortal
 		CreatedAt:      timestamppb.New(p.CreatedAt),
 		UpdatedAt:      timestamppb.New(p.UpdatedAt),
 	}
-	if rules, err := registry.ParsePortalRules(p.Rules); err == nil {
+	if rules, err := ParseRules(p.Rules); err == nil {
 		for _, r := range rules {
 			proto.Rules = append(proto.Rules, &v1.PortalRule{Pattern: r.Pattern, Replace: r.Replace})
 		}

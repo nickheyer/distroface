@@ -9,6 +9,7 @@ import (
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/pkg/config"
@@ -110,6 +111,21 @@ func (s *OrganizationService) GetOrganization(ctx context.Context, req *connect.
 }
 
 func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connect.Request[v1.ListOrganizationsRequest]) (*connect.Response[v1.ListOrganizationsResponse], error) {
+	// Portal hosts see only their own org
+	if p := portal.FromContext(ctx); p != nil {
+		org, err := s.store.GetOrganization(ctx, p.OrgName)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		resp := &v1.ListOrganizationsResponse{}
+		if org != nil {
+			memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
+			resp.Organizations = []*v1.Organization{orgToProto(org, int32(memberCount))}
+			resp.TotalCount = 1
+		}
+		return connect.NewResponse(resp), nil
+	}
+
 	limit, offset := parsePagination(req.Msg.PageSize, req.Msg.PageToken)
 
 	user := auth.UserFromContext(ctx)

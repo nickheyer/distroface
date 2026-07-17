@@ -80,7 +80,7 @@ func newTestEnv(t *testing.T, retention config.ArtifactRetentionConfig) *testEnv
 	mux := http.NewServeMux()
 	v1 := NewV1API(store, manager, authMgr, enforcer, nil, log)
 	v1.RegisterAuth(mux)
-	v1.RegisterArtifacts(mux, v1)
+	v1.RegisterArtifacts(mux)
 
 	return &testEnv{t: t, store: store, authMgr: authMgr, enforcer: enforcer, manager: manager, blobs: blobs, v1: v1, mux: mux, blobRoot: blobRoot}
 }

@@ -1,4 +1,4 @@
-package registry
+package portal
 
 import (
 	"testing"
@@ -6,11 +6,11 @@ import (
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
-func newTestMapper(t *testing.T, rules []MappingRule) *PathMapper {
+func newTestMapper(t *testing.T, rules []MappingRule) *pathMapper {
 	t.Helper()
-	m, err := NewPathMapper(rules, logger.New())
+	m, err := newPathMapper(rules, logger.New())
 	if err != nil {
-		t.Fatalf("NewPathMapper: %v", err)
+		t.Fatalf("newPathMapper: %v", err)
 	}
 	return m
 }
@@ -20,17 +20,17 @@ func TestNewPathMapper(t *testing.T) {
 		t.Error("expected nil mapper for empty rules")
 	}
 
-	_, err := NewPathMapper([]MappingRule{{Pattern: `(`, Replace: `x`}}, logger.New())
+	_, err := newPathMapper([]MappingRule{{Pattern: `(`, Replace: `x`}}, logger.New())
 	if err == nil {
 		t.Error("expected error for invalid regex")
 	}
 
-	_, err = NewPathMapper([]MappingRule{{Pattern: ``, Replace: `x`}}, logger.New())
+	_, err = newPathMapper([]MappingRule{{Pattern: ``, Replace: `x`}}, logger.New())
 	if err == nil {
 		t.Error("expected error for empty pattern")
 	}
 
-	_, err = NewPathMapper([]MappingRule{{Pattern: `x`, Replace: ``}}, logger.New())
+	_, err = newPathMapper([]MappingRule{{Pattern: `x`, Replace: ``}}, logger.New())
 	if err == nil {
 		t.Error("expected error for empty replace")
 	}
@@ -97,7 +97,7 @@ func TestMapNameRejectsInvalidResult(t *testing.T) {
 }
 
 func TestMapNameNilMapper(t *testing.T) {
-	var m *PathMapper
+	var m *pathMapper
 	if got := m.MapName("myimage"); got != "myimage" {
 		t.Errorf("nil mapper must be identity, got %q", got)
 	}

@@ -3,10 +3,10 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
+	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -24,12 +24,12 @@ var throttledProcedures = map[string]bool{
 func (s *Server) rateLimitInterceptor() connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			if s.authLimiter == nil || !throttledProcedures[req.Spec().Procedure] {
+			if s.AuthLimiter == nil || !throttledProcedures[req.Spec().Procedure] {
 				return next(ctx, req)
 			}
 
 			clientIP := ratelimit.ClientIP(req.Peer().Addr, req.Header())
-			if s.authLimiter.Blocked(clientIP) {
+			if s.AuthLimiter.Blocked(clientIP) {
 				return nil, connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("too many failed attempts, try again later"))
 			}
 
@@ -37,10 +37,10 @@ func (s *Server) rateLimitInterceptor() connect.UnaryInterceptorFunc {
 			if err != nil {
 				switch connect.CodeOf(err) {
 				case connect.CodeUnauthenticated, connect.CodePermissionDenied:
-					s.authLimiter.Record(clientIP)
+					s.AuthLimiter.Record(clientIP)
 				}
 			} else {
-				s.authLimiter.Reset(clientIP)
+				s.AuthLimiter.Reset(clientIP)
 			}
 			return resp, err
 		}
@@ -55,7 +55,7 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 			isPublic := rbac.PublicProcedures[procedure]
 
 			// If no auth providers are enabled, bypass auth entirely
-			if !s.authManager.IsAnyAuthEnabled() {
+			if !s.AuthManager.IsAnyAuthEnabled() {
 				ctx = auth.WithUser(ctx, &auth.AuthenticatedUser{
 					ID:       "admin",
 					Username: "admin",
@@ -71,25 +71,25 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 
 			if token != "" {
 				var err error
-				if strings.HasPrefix(token, "df_") {
-					user, err = s.authManager.ValidateAPIToken(ctx, token)
-				} else {
-					user, err = s.authManager.ValidateSession(ctx, token)
-				}
+				user, err = s.AuthManager.ValidateToken(ctx, token)
 				if err != nil {
 					if !isPublic {
 						return nil, connect.NewError(connect.CodeUnauthenticated, err)
 					}
 					// Public route with bad token — proceed without user
 				}
-			} else if s.authManager.IsAnonymousAccessEnabled() {
-				user = s.authManager.AnonymousUser()
+			} else if s.AuthManager.IsAnonymousAccessEnabled() && portalAllowsAnonymous(ctx) {
+				user = s.AuthManager.AnonymousUser()
 			} else if !isPublic {
 				return nil, connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
 			}
 
 			if user != nil {
 				ctx = auth.WithUser(ctx, user)
+			}
+
+			if err := portalAllowsProcedure(ctx, procedure); err != nil {
+				return nil, err
 			}
 
 			// Public procedures — no further checks
@@ -104,14 +104,14 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 
 			// RBAC permission check
 			if perm, ok := rbac.ProcedurePermissions[procedure]; ok {
-				if s.enforcer != nil {
+				if s.Enforcer != nil {
 					objectID := "*"
 					if perm.ObjectIDField != "" {
 						objectID = rbac.ExtractObjectID(req, perm.ObjectIDField)
 					}
-					allowed, err := s.enforcer.Enforce(user.Roles, perm.Resource, perm.Action, objectID)
+					allowed, err := s.Enforcer.Enforce(user.Roles, perm.Resource, perm.Action, objectID)
 					if err != nil {
-						s.log.Error("RBAC enforcement error: %v", err)
+						s.Log.Error("RBAC enforcement error: %v", err)
 						return nil, connect.NewError(connect.CodeInternal, err)
 					}
 					if !allowed {
@@ -123,6 +123,27 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 			return next(ctx, req)
 		}
 	}
+}
+
+func portalAllowsAnonymous(ctx context.Context) bool {
+	p := portal.FromContext(ctx)
+	return p == nil || !p.RequireAuth
+}
+
+// Read-only portals refuse content mutations on the RPC surface too
+func portalAllowsProcedure(ctx context.Context, procedure string) error {
+	p := portal.FromContext(ctx)
+	if p == nil || p.AllowPush {
+		return nil
+	}
+	perm, ok := rbac.ProcedurePermissions[procedure]
+	if !ok || (perm.Resource != rbac.ResourceArtifacts && perm.Resource != rbac.ResourceRepositories) {
+		return nil
+	}
+	if perm.Action == rbac.ActionRead || perm.Action == rbac.ActionPull {
+		return nil
+	}
+	return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("portal is read-only"))
 }
 
 type loggingInterceptor struct {

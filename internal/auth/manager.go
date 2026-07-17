@@ -403,6 +403,14 @@ func (m *Manager) GenerateAPIToken(ctx context.Context, userID, name string, exp
 	return plaintext, token, nil
 }
 
+// Routes to the API token or session validator by prefix
+func (m *Manager) ValidateToken(ctx context.Context, token string) (*AuthenticatedUser, error) {
+	if strings.HasPrefix(token, "df_") {
+		return m.ValidateAPIToken(ctx, token)
+	}
+	return m.ValidateSession(ctx, token)
+}
+
 // ValidateAPIToken validates a raw API token (df_...) and returns the authenticated user.
 func (m *Manager) ValidateAPIToken(ctx context.Context, rawToken string) (*AuthenticatedUser, error) {
 	if !strings.HasPrefix(rawToken, "df_") {

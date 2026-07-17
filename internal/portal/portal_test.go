@@ -1,4 +1,4 @@
-package registry
+package portal
 
 import (
 	"context"
@@ -55,7 +55,7 @@ func portalRequest(method, path, host string, port int) *http.Request {
 	return r
 }
 
-func TestPortalResolverMapName(t *testing.T) {
+func TestResolverMapName(t *testing.T) {
 	store := newTestStore(t)
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name:           "main",
@@ -65,7 +65,7 @@ func TestPortalResolverMapName(t *testing.T) {
 		AllowPush:      true,
 		Enabled:        true,
 	})
-	pr := NewPortalResolver(store, logger.New())
+	res := NewResolver(store, logger.New())
 
 	cases := []struct {
 		host, name, want string
@@ -80,84 +80,88 @@ func TestPortalResolverMapName(t *testing.T) {
 	}
 	for _, c := range cases {
 		r := portalRequest(http.MethodGet, "/", c.host, 0)
-		if got := pr.MapName(r, c.name); got != c.want {
+		if got := res.MapName(r, c.name); got != c.want {
 			t.Errorf("MapName(%q, %q) = %q, want %q", c.host, c.name, got, c.want)
 		}
 	}
 }
 
-func TestPortalResolverPortMatching(t *testing.T) {
+func TestResolverPortMatching(t *testing.T) {
 	store := newTestStore(t)
-	_, catchAll := createTestPortal(t, store, &storage.RegistryPortal{
+	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "port-only", Hostname: "", Port: 9500, MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
 	})
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "hosted", Hostname: "vanity.example.com", Port: 9501, MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
 	})
-	pr := NewPortalResolver(store, logger.New())
+	res := NewResolver(store, logger.New())
 
 	// Catch-all matches any host on its port
 	r := portalRequest(http.MethodGet, "/", "whatever.example.com:9500", 9500)
-	if got := pr.MapName(r, "myimg"); got != "acme/myimg" {
+	if got := res.MapName(r, "myimg"); got != "acme/myimg" {
 		t.Errorf("port catch-all: got %q", got)
 	}
 	r = portalRequest(http.MethodGet, "/", "127.0.0.1:9500", 9500)
-	if got := pr.MapName(r, "myimg"); got != "acme/myimg" {
+	if got := res.MapName(r, "myimg"); got != "acme/myimg" {
 		t.Errorf("port catch-all by IP: got %q", got)
 	}
 
 	// Host+port portal matches its host on its port
 	r = portalRequest(http.MethodGet, "/", "vanity.example.com:9501", 9501)
-	if got := pr.MapName(r, "myimg"); got != "acme/myimg" {
+	if got := res.MapName(r, "myimg"); got != "acme/myimg" {
 		t.Errorf("host+port portal: got %q", got)
 	}
 
 	// Same port, unmatched host, no catch-all on 9501, no mapping
 	r = portalRequest(http.MethodGet, "/", "other.example.com:9501", 9501)
-	if got := pr.MapName(r, "myimg"); got != "myimg" {
+	if got := res.MapName(r, "myimg"); got != "myimg" {
 		t.Errorf("unmatched host on dedicated port: got %q", got)
 	}
 
 	// Port-bound portal does not match on other listeners
 	r = portalRequest(http.MethodGet, "/", "whatever.example.com", 8080)
-	if got := pr.MapName(r, "myimg"); got != "myimg" {
+	if got := res.MapName(r, "myimg"); got != "myimg" {
 		t.Errorf("catch-all must not match other ports: got %q", got)
 	}
-
-	_ = catchAll
 }
 
-func TestPortalResolverAccessOptions(t *testing.T) {
+func TestResolverAccessOptions(t *testing.T) {
 	store := newTestStore(t)
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "ro", Hostname: "ro.example.com", Rules: "[]",
 		AllowPush: false, RequireAuth: true, Enabled: true,
 	})
-	pr := NewPortalResolver(store, logger.New())
+	res := NewResolver(store, logger.New())
 
 	ro := portalRequest(http.MethodGet, "/", "ro.example.com", 0)
 	other := portalRequest(http.MethodGet, "/", "other.example.com", 0)
 
-	if pr.AllowPush(ro) {
+	if res.AllowPush(ro) {
 		t.Error("read-only portal must not allow push")
 	}
-	if pr.AllowAnonymous(ro) {
+	if res.AllowAnonymous(ro) {
 		t.Error("require_auth portal must not allow anonymous")
 	}
-	if !pr.AllowPush(other) || !pr.AllowAnonymous(other) {
+	if !res.AllowPush(other) || !res.AllowAnonymous(other) {
 		t.Error("non-portal hosts keep default access")
+	}
+	if !res.IsPortalHost("ro.example.com:8443") {
+		t.Error("portal hostname must be recognized")
+	}
+	if res.IsPortalHost("other.example.com") {
+		t.Error("unknown hostname must not be recognized")
 	}
 }
 
-func TestPortalResolverDisabledAndInvalidate(t *testing.T) {
+func TestResolverDisabledAndInvalidate(t *testing.T) {
 	store := newTestStore(t)
 	_, portal := createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "main", Hostname: "acme.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
 	})
-	pr := NewPortalResolver(store, logger.New())
+	res := NewResolver(store, logger.New())
 	req := func() *http.Request { return portalRequest(http.MethodGet, "/", "acme.example.com", 0) }
 
-	if got := pr.MapName(req(), "myimg"); got != "acme/myimg" {
+	if got := res.MapName(req(), "myimg"); got != "acme/myimg" {
 		t.Fatalf("expected portal mapping before disable, got %q", got)
 	}
 
@@ -167,26 +171,27 @@ func TestPortalResolverDisabledAndInvalidate(t *testing.T) {
 	}
 
 	// Stale cache until invalidated
-	if got := pr.MapName(req(), "myimg"); got != "acme/myimg" {
+	if got := res.MapName(req(), "myimg"); got != "acme/myimg" {
 		t.Errorf("expected cached mapping before Invalidate, got %q", got)
 	}
-	pr.Invalidate()
-	if got := pr.MapName(req(), "myimg"); got != "myimg" {
+	res.Invalidate()
+	if got := res.MapName(req(), "myimg"); got != "myimg" {
 		t.Errorf("disabled portal must not map, got %q", got)
 	}
 }
 
-func TestPortalMiddlewareRouteShapes(t *testing.T) {
+func TestMiddlewareRouteShapes(t *testing.T) {
 	store := newTestStore(t)
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "main", Hostname: "acme.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
 	})
-	pr := NewPortalResolver(store, logger.New())
+	res := NewResolver(store, logger.New())
 
 	cases := []struct {
 		path string
 		want string
 	}{
+		// Registry data plane
 		{"/v2/myimg/manifests/v1", "/v2/acme/myimg/manifests/v1"},
 		{"/v2/myimg/manifests/sha256:abc", "/v2/acme/myimg/manifests/sha256:abc"},
 		{"/v2/myimg/blobs/sha256:abc", "/v2/acme/myimg/blobs/sha256:abc"},
@@ -198,11 +203,27 @@ func TestPortalMiddlewareRouteShapes(t *testing.T) {
 		{"/v2/acme/myimg/tags/list", "/v2/acme/myimg/tags/list"},
 		{"/v2/", "/v2/"},
 		{"/v2/_catalog", "/v2/_catalog"},
+		// Artifact data plane
+		{"/api/v1/artifacts/myrepo/upload", "/api/v1/artifacts/_ns/acme/myrepo/upload"},
+		{"/api/v1/artifacts/myrepo/upload/uuid-1", "/api/v1/artifacts/_ns/acme/myrepo/upload/uuid-1"},
+		{"/api/v1/artifacts/myrepo/1.0.0/some/file.txt", "/api/v1/artifacts/_ns/acme/myrepo/1.0.0/some/file.txt"},
+		{"/api/v1/artifacts/myrepo/query", "/api/v1/artifacts/_ns/acme/myrepo/query"},
+		{"/api/v1/artifacts/myrepo/versions", "/api/v1/artifacts/_ns/acme/myrepo/versions"},
+		{"/api/v1/artifacts/myrepo/abc/metadata", "/api/v1/artifacts/_ns/acme/myrepo/abc/metadata"},
+		// Control plane keywords pass through
+		{"/api/v1/artifacts/repos", "/api/v1/artifacts/repos"},
+		{"/api/v1/artifacts/repos/myrepo", "/api/v1/artifacts/repos/myrepo"},
+		{"/api/v1/artifacts/search", "/api/v1/artifacts/search"},
+		// Org qualified and marker forms both land on the marker path
+		{"/api/v1/artifacts/acme/myrepo/1.0.0/f", "/api/v1/artifacts/_ns/acme/myrepo/1.0.0/f"},
+		{"/api/v1/artifacts/_ns/acme/myrepo/upload", "/api/v1/artifacts/_ns/acme/myrepo/upload"},
+		// Everything else untouched
+		{"/orgs/acme", "/orgs/acme"},
 	}
 
 	for _, c := range cases {
 		var got string
-		h := pr.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			got = r.URL.Path
 		}))
 		h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, c.path, "acme.example.com", 0))
@@ -210,37 +231,173 @@ func TestPortalMiddlewareRouteShapes(t *testing.T) {
 			t.Errorf("Middleware(%q) routed %q, want %q", c.path, got, c.want)
 		}
 	}
+
+	// Control plane listings pick up the org namespace
+	var gotNS string
+	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotNS = r.URL.Query().Get("namespace")
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/repos?namespace=elsewhere", "acme.example.com", 0))
+	if gotNS != "acme" {
+		t.Errorf("repos listing namespace = %q, want acme", gotNS)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/search", "acme.example.com", 0))
+	if gotNS != "acme" {
+		t.Errorf("search namespace = %q, want acme", gotNS)
+	}
 }
 
-func TestPortalMiddlewareReadOnly(t *testing.T) {
+func TestMiddlewareInjectsContext(t *testing.T) {
+	store := newTestStore(t)
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "main", Hostname: "acme.example.com", Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	res := NewResolver(store, logger.New())
+
+	var p *Portal
+	var scoped string
+	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p = FromContext(r.Context())
+		scoped = ScopeNamespace(r.Context(), "someone-else")
+	}))
+
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/anything", "acme.example.com", 0))
+	if p == nil || p.OrgName != "acme" || p.OrgDisplayName != "Acme" {
+		t.Fatalf("portal context missing or wrong: %+v", p)
+	}
+	if scoped != "acme" {
+		t.Errorf("ScopeNamespace on portal traffic = %q, want acme", scoped)
+	}
+
+	p = nil
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/anything", "other.example.com", 0))
+	if p != nil {
+		t.Error("non-portal traffic must not carry portal context")
+	}
+	if got := ScopeNamespace(context.Background(), "me"); got != "me" {
+		t.Errorf("ScopeNamespace off portal = %q, want me", got)
+	}
+}
+
+func TestMiddlewareReadOnly(t *testing.T) {
 	store := newTestStore(t)
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "ro", Hostname: "ro.example.com", MapUnqualified: true, Rules: "[]", AllowPush: false, Enabled: true,
 	})
-	pr := NewPortalResolver(store, logger.New())
+	res := NewResolver(store, logger.New())
 
 	nextCalled := false
-	h := pr.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
 	}))
 
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, portalRequest(http.MethodPost, "/v2/myimg/blobs/uploads/", "ro.example.com", 0))
-	if nextCalled || rec.Code != http.StatusForbidden {
-		t.Errorf("write through read-only portal: nextCalled=%v code=%d", nextCalled, rec.Code)
+	writes := []struct {
+		method, path string
+	}{
+		{http.MethodPost, "/v2/myimg/blobs/uploads/"},
+		{http.MethodPost, "/api/v1/artifacts/myrepo/upload"},
+		{http.MethodPatch, "/api/v1/artifacts/myrepo/upload/uuid-1"},
+		{http.MethodPut, "/api/v1/artifacts/myrepo/upload/uuid-1"},
+		{http.MethodDelete, "/api/v1/artifacts/myrepo/1.0.0/f"},
+		// Marker paths from upload Locations must not bypass enforcement
+		{http.MethodPatch, "/api/v1/artifacts/_ns/acme/myrepo/upload/uuid-1"},
+	}
+	for _, c := range writes {
+		nextCalled = false
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, portalRequest(c.method, c.path, "ro.example.com", 0))
+		if nextCalled || rec.Code != http.StatusForbidden {
+			t.Errorf("%s %s through read-only portal: nextCalled=%v code=%d", c.method, c.path, nextCalled, rec.Code)
+		}
 	}
 
-	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/v2/myimg/manifests/v1", "ro.example.com", 0))
+	for _, path := range []string{"/v2/myimg/manifests/v1", "/api/v1/artifacts/myrepo/1.0.0/f"} {
+		nextCalled = false
+		h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, path, "ro.example.com", 0))
+		if !nextCalled {
+			t.Errorf("read of %s through read-only portal must pass", path)
+		}
+	}
+}
+
+func TestMiddlewareRequireAuth(t *testing.T) {
+	store := newTestStore(t)
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "auth", Hostname: "auth.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, RequireAuth: true, Enabled: true,
+	})
+	res := NewResolver(store, logger.New())
+
+	nextCalled := false
+	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		nextCalled = true
+	}))
+
+	anon := []string{
+		"/api/v1/artifacts/myrepo/1.0.0/f",
+		"/api/v1/artifacts/_ns/acme/myrepo/1.0.0/f",
+	}
+	for _, path := range anon {
+		nextCalled = false
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, portalRequest(http.MethodGet, path, "auth.example.com", 0))
+		if nextCalled || rec.Code != http.StatusUnauthorized {
+			t.Errorf("anonymous %s through require-auth portal: nextCalled=%v code=%d", path, nextCalled, rec.Code)
+		}
+	}
+
+	nextCalled = false
+	r := portalRequest(http.MethodGet, "/api/v1/artifacts/myrepo/1.0.0/f", "auth.example.com", 0)
+	r.Header.Set("Authorization", "Bearer df_token")
+	h.ServeHTTP(httptest.NewRecorder(), r)
 	if !nextCalled {
-		t.Error("read through read-only portal must pass")
+		t.Error("authenticated request through require-auth portal must pass")
+	}
+
+	// UI and login stay reachable, auth is enforced at the data planes and RPC
+	nextCalled = false
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/login", "auth.example.com", 0))
+	if !nextCalled {
+		t.Error("login page through require-auth portal must pass")
+	}
+}
+
+func TestMiddlewareOIDCBounce(t *testing.T) {
+	store := newTestStore(t)
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "main", Hostname: "acme.example.com", Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	res := NewResolver(store, logger.New())
+
+	h := res.Middleware("registry.example.com", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("bounced request must not reach the app")
+	}))
+
+	r := portalRequest(http.MethodGet, "/api/v1/auth/oidc/login", "acme.example.com", 0)
+	r.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, r)
+
+	want := "https://registry.example.com/api/v1/auth/oidc/login?return_to=https%3A%2F%2Facme.example.com"
+	if rec.Code != http.StatusFound || rec.Header().Get("Location") != want {
+		t.Errorf("OIDC bounce: code=%d location=%q, want 302 %q", rec.Code, rec.Header().Get("Location"), want)
+	}
+
+	// Off portals the login route passes through untouched
+	passed := false
+	h = res.Middleware("registry.example.com", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		passed = true
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/auth/oidc/login", "registry.example.com", 0))
+	if !passed {
+		t.Error("primary-host OIDC login must pass through")
 	}
 }
 
 func TestRealmRewrite(t *testing.T) {
 	store := newTestStore(t)
-	pr := NewPortalResolver(store, logger.New())
+	res := NewResolver(store, logger.New())
 
-	h := pr.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Www-Authenticate", `Bearer realm="http://0.0.0.0:8080/auth/token",service="distroface-registry",scope="repository:acme/myimg:pull"`)
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -255,7 +412,7 @@ func TestRealmRewrite(t *testing.T) {
 		t.Errorf("realm rewrite:\n got %q\nwant %q", got, want)
 	}
 
-	h = pr.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h = res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	rec = httptest.NewRecorder()
@@ -276,13 +433,13 @@ func freePort(t *testing.T) int {
 	return port
 }
 
-func TestPortalProxyManagerReconcile(t *testing.T) {
+func TestManagerReconcile(t *testing.T) {
 	store := newTestStore(t)
-	pr := NewPortalResolver(store, logger.New())
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	res := NewResolver(store, logger.New())
+	m := NewManager(res, "127.0.0.1", logger.New())
+	m.SetHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "portal-surface")
-	})
-	m := NewPortalProxyManager(pr, handler, "127.0.0.1", logger.New())
+	}))
 	t.Cleanup(m.Close)
 
 	port := freePort(t)

@@ -10,6 +10,7 @@
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
+	import { portalStore } from '$lib/stores/portal.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { formatBytes, pageToToken, truncateDigest, relativeTime } from '$lib/utils';
 	import { toast } from 'svelte-sonner';
@@ -70,7 +71,9 @@
 	let deletingRepo = $state(false);
 	let starPending = $state(false);
 
-	const registryHost = $derived(configStore.get('server.hostname', 'localhost:8080') as string);
+	const registryHost = $derived(
+		portalStore.host(configStore.get('server.hostname', 'localhost:8080') as string)
+	);
 
 	const namespaceHref = $derived(repo?.isOrgNamespace ? `orgs/${namespace}` : `${namespace}`);
 	const isNamespaceMember = $derived(authStore.user?.username === namespace);
@@ -88,7 +91,9 @@
 	);
 
 	const canManage = $derived(canUpdateRepo || canDeleteRepo);
-	const pullCommand = $derived(`${registryHost}/${namespace}/${name}`);
+	const pullCommand = $derived(
+		`${registryHost}/${portalStore.imageRef(namespace ?? '', name ?? '')}`
+	);
 	const isPrivate = $derived(repo?.visibility === Visibility.PRIVATE);
 	const initials = $derived((namespace ?? '').slice(0, 2).toUpperCase());
 

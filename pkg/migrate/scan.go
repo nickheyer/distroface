@@ -33,16 +33,6 @@ type RepoScan struct {
 	Tags   []TagScan
 }
 
-func (r RepoScan) BrokenTags() int {
-	n := 0
-	for _, t := range r.Tags {
-		if t.Issue() != "" {
-			n++
-		}
-	}
-	return n
-}
-
 // ScanRepo validates that every tag of a v1 repo can be replayed: tag link
 // resolves, manifest bytes hash-verify, and every referenced blob exists
 // (recursing through manifest lists).

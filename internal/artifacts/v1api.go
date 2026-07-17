@@ -1,14 +1,12 @@
 package artifacts
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"path"
 	"regexp"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +24,7 @@ type V1API struct {
 	manager  *Manager
 	authMgr  *auth.Manager
 	enforcer *rbac.Enforcer
+	access   *Access
 	limiter  *ratelimit.Limiter // Failed login lockout, nil disables
 	log      *logger.Logger
 	routes   []v1Route
@@ -39,6 +38,7 @@ func NewV1API(store *storage.Store, manager *Manager, authMgr *auth.Manager, enf
 		manager:  manager,
 		authMgr:  authMgr,
 		enforcer: enforcer,
+		access:   NewAccess(store, enforcer),
 		limiter:  limiter,
 		log:      log,
 	}
@@ -52,10 +52,10 @@ func (a *V1API) RegisterAuth(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/refresh", a.handleRefresh)
 }
 
-// Mounts the artifact data plane behind an optional wrapper
-func (a *V1API) RegisterArtifacts(mux *http.ServeMux, handler http.Handler) {
-	mux.Handle("/api/v1/artifacts", handler)
-	mux.Handle("/api/v1/artifacts/", handler)
+// Mounts the artifact data plane
+func (a *V1API) RegisterArtifacts(mux *http.ServeMux) {
+	mux.Handle("/api/v1/artifacts", a)
+	mux.Handle("/api/v1/artifacts/", a)
 }
 
 // ── Ordered router ───────────────────────────────────────────────────────
@@ -149,13 +149,7 @@ func (a *V1API) resolveUser(w http.ResponseWriter, r *http.Request) (*auth.Authe
 		return nil, false
 	}
 
-	var user *auth.AuthenticatedUser
-	var err error
-	if strings.HasPrefix(token, "df_") {
-		user, err = a.authMgr.ValidateAPIToken(r.Context(), token)
-	} else {
-		user, err = a.authMgr.ValidateSession(r.Context(), token)
-	}
+	user, err := a.authMgr.ValidateToken(r.Context(), token)
 	if err != nil {
 		http.Error(w, "INVALID TOKEN", http.StatusUnauthorized)
 		return nil, false
@@ -217,13 +211,7 @@ func (a *V1API) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var user *auth.AuthenticatedUser
-	var err error
-	if strings.HasPrefix(req.RefreshToken, "df_") {
-		user, err = a.authMgr.ValidateAPIToken(r.Context(), req.RefreshToken)
-	} else {
-		user, err = a.authMgr.ValidateSession(r.Context(), req.RefreshToken)
-	}
+	user, err := a.authMgr.ValidateToken(r.Context(), req.RefreshToken)
 	if err != nil || user == nil {
 		http.Error(w, "INVALID REFRESH TOKEN", http.StatusUnauthorized)
 		return
@@ -283,7 +271,7 @@ func (a *V1API) handleCreateRepo(w http.ResponseWriter, r *http.Request, user *a
 	if ns == "" {
 		ns = user.Username
 	}
-	if !a.canCreateInNamespace(r.Context(), user, ns) {
+	if !a.access.CanCreateInNamespace(r.Context(), user, ns) {
 		http.Error(w, "FORBIDDEN", http.StatusForbidden)
 		return
 	}
@@ -341,7 +329,7 @@ func (a *V1API) handleDeleteRepo(w http.ResponseWriter, r *http.Request, user *a
 	if !ok {
 		return
 	}
-	if !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionDelete) {
+	if !a.access.HasRepoAccess(r.Context(), user, repo, rbac.ActionDelete) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -360,7 +348,7 @@ func (a *V1API) handleInitiateUpload(w http.ResponseWriter, r *http.Request, use
 	if !ok {
 		return
 	}
-	if repo.IsPrivate && !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionPush) {
+	if repo.IsPrivate && !a.access.HasRepoAccess(r.Context(), user, repo, rbac.ActionPush) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -403,7 +391,7 @@ func (a *V1API) handleCompleteUpload(w http.ResponseWriter, r *http.Request, use
 	if !ok {
 		return
 	}
-	if repo.IsPrivate && !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionPush) {
+	if repo.IsPrivate && !a.access.HasRepoAccess(r.Context(), user, repo, rbac.ActionPush) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -436,7 +424,7 @@ func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *aut
 	if !ok {
 		return
 	}
-	if !a.canSee(r.Context(), user, repo) {
+	if !a.access.CanSee(r.Context(), user, repo) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -470,7 +458,7 @@ func (a *V1API) handleQuery(w http.ResponseWriter, r *http.Request, user *auth.A
 	if !ok {
 		return
 	}
-	if !a.canSee(r.Context(), user, repo) {
+	if !a.access.CanSee(r.Context(), user, repo) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -528,7 +516,7 @@ func (a *V1API) handleListVersions(w http.ResponseWriter, r *http.Request, user 
 	if !ok {
 		return
 	}
-	if !a.canSee(r.Context(), user, repo) {
+	if !a.access.CanSee(r.Context(), user, repo) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -615,7 +603,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 			http.Error(w, "Repository not found", http.StatusNotFound)
 			return
 		}
-		if !a.canSee(r.Context(), user, repo) {
+		if !a.access.CanSee(r.Context(), user, repo) {
 			http.Error(w, "Access denied", http.StatusForbidden)
 			return
 		}
@@ -672,7 +660,7 @@ func (a *V1API) handleDeleteArtifact(w http.ResponseWriter, r *http.Request, use
 	if !ok {
 		return
 	}
-	if !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionDelete) {
+	if !a.access.HasRepoAccess(r.Context(), user, repo, rbac.ActionDelete) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -700,7 +688,7 @@ func (a *V1API) handleUpdateMetadata(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 	// V1 allowed metadata updates on any visible repo
-	if !a.canSee(r.Context(), user, repo) {
+	if !a.access.CanSee(r.Context(), user, repo) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -734,7 +722,7 @@ func (a *V1API) handleUpdateProperties(w http.ResponseWriter, r *http.Request, u
 	if !ok {
 		return
 	}
-	if !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionUpdate) {
+	if !a.access.HasRepoAccess(r.Context(), user, repo, rbac.ActionUpdate) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -766,7 +754,7 @@ func (a *V1API) handleRename(w http.ResponseWriter, r *http.Request, user *auth.
 	if !ok {
 		return
 	}
-	if !a.hasRepoAccess(r.Context(), user, repo, rbac.ActionUpdate) {
+	if !a.access.HasRepoAccess(r.Context(), user, repo, rbac.ActionUpdate) {
 		http.Error(w, "Access denied", http.StatusForbidden)
 		return
 	}
@@ -843,27 +831,6 @@ func (a *V1API) canAny(user *auth.AuthenticatedUser, action string) bool {
 	return user != nil && len(a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, action)) > 0
 }
 
-// Owner username, org owner/admin, or manage into an existing namespace
-func (a *V1API) canCreateInNamespace(ctx context.Context, user *auth.AuthenticatedUser, namespace string) bool {
-	if user == nil {
-		return false
-	}
-	if namespace == user.Username {
-		return true
-	}
-	if isMember, role, _ := a.store.IsOrgMember(ctx, namespace, user.ID); isMember {
-		return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
-	}
-	if !a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
-		return false
-	}
-	if u, _ := a.store.GetUserByUsername(ctx, namespace); u != nil {
-		return true
-	}
-	org, _ := a.store.GetOrganization(ctx, namespace)
-	return org != nil
-}
-
 // Resolves the request namespace, marker takes precedence over caller
 func (a *V1API) repoNS(user *auth.AuthenticatedUser, vars map[string]string) string {
 	if ns := vars["namespace"]; ns != "" {
@@ -909,46 +876,9 @@ func (a *V1API) getRepoArtifact(w http.ResponseWriter, r *http.Request, repo *st
 	return artifact, true
 }
 
-// Owner, manage permission, org membership, or scoped grant
-func (a *V1API) hasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.ArtifactRepository, action string) bool {
-	if user == nil {
-		return false
-	}
-	if repo.OwnerID != "" && repo.OwnerID == user.ID {
-		return true
-	}
-	if a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
-		return true
-	}
-	if repo.Namespace == user.Username {
-		return true
-	}
-	if isMember, role, _ := a.store.IsOrgMember(ctx, repo.Namespace, user.ID); isMember {
-		switch action {
-		case rbac.ActionRead, rbac.ActionPull:
-			return true
-		default:
-			return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
-		}
-	}
-	return slices.Contains(a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, action), repo.Namespace+"/"+repo.Name)
-}
-
-func (a *V1API) canSee(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.ArtifactRepository) bool {
-	return !repo.IsPrivate || a.hasRepoAccess(ctx, user, repo, rbac.ActionRead)
-}
-
 // Public repos plus own plus org plus scoped grants
 func (a *V1API) listVisibleRepos(r *http.Request, user *auth.AuthenticatedUser, namespace string) ([]*storage.ArtifactRepository, error) {
-	opts := storage.ArtifactRepoListOptions{Namespace: namespace}
-	if user != nil {
-		opts.ViewerID = user.ID
-		opts.IncludePrivate = a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage)
-		if !opts.IncludePrivate {
-			opts.GrantedRepos = a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
-		}
-	}
-	repos, _, err := a.store.ListArtifactRepositories(r.Context(), opts)
+	repos, _, err := a.store.ListArtifactRepositories(r.Context(), a.access.ListOptions(user, namespace))
 	if err != nil {
 		return nil, err
 	}

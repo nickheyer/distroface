@@ -23,6 +23,7 @@ type OIDCHandler struct {
 	manager      *Manager
 	store        *db.Store
 	config       *config.OIDCConfig
+	policy       RegistryAccessPolicy // Validates portal return origins, nil disables
 	provider     *oidc.Provider
 	verifier     *oidc.IDTokenVerifier
 	oauth2Config *oauth2.Config
@@ -32,11 +33,12 @@ type OIDCHandler struct {
 
 // NewOIDCHandler creates a new OIDC handler. If OIDC is disabled in config,
 // The handler is returned with a nil provider (IsEnabled() returns false).
-func NewOIDCHandler(manager *Manager, store *db.Store, cfg *config.OIDCConfig, log *logger.Logger) *OIDCHandler {
+func NewOIDCHandler(manager *Manager, store *db.Store, cfg *config.OIDCConfig, policy RegistryAccessPolicy, log *logger.Logger) *OIDCHandler {
 	h := &OIDCHandler{
 		manager: manager,
 		store:   store,
 		config:  cfg,
+		policy:  policy,
 		log:     log,
 	}
 
@@ -107,7 +109,35 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 
+	// Portal origins bounce through the primary host, remember where to return
+	if origin := h.validReturnOrigin(r.URL.Query().Get("return_to")); origin != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "oidc_return",
+			Value:    origin,
+			Path:     "/",
+			MaxAge:   300,
+			HttpOnly: true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
+
 	http.Redirect(w, r, h.oauth2Config.AuthCodeURL(state), http.StatusFound)
+}
+
+// Accepts only http(s) origins whose host is an enabled portal hostname
+func (h *OIDCHandler) validReturnOrigin(returnTo string) string {
+	if returnTo == "" || h.policy == nil {
+		return ""
+	}
+	u, err := url.Parse(returnTo)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return ""
+	}
+	if !h.policy.IsPortalHost(u.Host) {
+		h.log.Warn("OIDC: return_to host %q is not a portal, ignored", u.Host)
+		return ""
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // HandleCallback processes the OIDC callback, verifies the ID token,
@@ -230,7 +260,14 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	h.log.Info("OIDC: user %s authenticated via OIDC", user.Username)
 	// Fragment keeps token out of server logs
-	http.Redirect(w, r, "/login#token="+url.QueryEscape(token), http.StatusFound)
+	target := "/login#token=" + url.QueryEscape(token)
+	if c, err := r.Cookie("oidc_return"); err == nil {
+		if origin := h.validReturnOrigin(c.Value); origin != "" {
+			target = origin + target
+		}
+		http.SetCookie(w, &http.Cookie{Name: "oidc_return", Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 // FindOrCreateOIDCUser looks up a user by OIDC subject and creates them if new.

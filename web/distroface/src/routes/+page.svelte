@@ -4,6 +4,7 @@
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
+	import { portalStore } from '$lib/stores/portal.svelte';
 	import { pageToToken } from '$lib/utils';
 	import RepoList from '$lib/components/repo-list.svelte';
 	import type { Repository } from '$lib/proto/distroface/v1/types_pb';
@@ -93,7 +94,12 @@
 					<div class="text-center space-y-2">
 						<p class="text-[13px] text-muted-foreground">Push your first image:</p>
 						<code class="code-inline block text-xs">
-							docker push {configStore.get('server.hostname', 'localhost:8080')}/{authStore.user?.username}/myimage:latest
+							docker push {portalStore.host(
+								configStore.get('server.hostname', 'localhost:8080') as string
+							)}/{portalStore.imageRef(
+								portalStore.isPortal ? portalStore.orgName : (authStore.user?.username ?? ''),
+								'myimage'
+							)}:latest
 						</code>
 					</div>
 				{:else}

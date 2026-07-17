@@ -18,6 +18,7 @@ type RegistryAccessPolicy interface {
 	MapName(r *http.Request, name string) string // Rewrites repo name
 	AllowAnonymous(r *http.Request) bool         // Check if anon access permitted
 	AllowPush(r *http.Request) bool              // Check if push permitted
+	IsPortalHost(host string) bool               // Check if host is an enabled portal hostname
 }
 
 // TokenHandler implements the Docker Token Authentication Specification.

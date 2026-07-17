@@ -40,6 +40,7 @@
 	import { toggleMode, mode } from 'mode-watcher';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
+	import { portalStore } from '$lib/stores/portal.svelte';
 
 	let { children } = $props();
 	let initialized = $state(false);
@@ -66,6 +67,7 @@
 	onMount(async () => {
 		await authStore.init();
 		configStore.init();
+		await portalStore.init();
 		initialized = true;
 
 		if (!isLoginPage && authStore.firstUserSetup) {
@@ -94,16 +96,26 @@
 		{ href: '/', label: 'Explore', icon: Package },
 		{ href: '/artifacts', label: 'Artifacts', icon: Archive },
 		...(authStore.isAuthenticated
-			? [{ href: '/orgs', label: 'Organizations', icon: Building2 } satisfies NavLink]
+			? [
+					portalStore.isPortal
+						? ({
+								href: `/orgs/${portalStore.orgName}` as Pathname,
+								label: portalStore.displayName,
+								icon: Building2
+							} satisfies NavLink)
+						: ({ href: '/orgs', label: 'Organizations', icon: Building2 } satisfies NavLink)
+				]
 			: []),
-		...(authStore.canAccessAdmin
+		...(authStore.canAccessAdmin && !portalStore.isPortal
 			? [{ href: '/admin', label: 'Admin', icon: Shield } satisfies NavLink]
 			: [])
 	]);
+
+	const brandName = $derived(portalStore.isPortal ? portalStore.displayName : 'Distroface');
 </script>
 
 <svelte:head>
-	<title>Distroface</title>
+	<title>{brandName}</title>
 </svelte:head>
 
 <ModeWatcher />
@@ -121,8 +133,11 @@
 		<header class="sticky top-0 z-50 border-b border-border/50 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80">
 			<div class="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4 sm:px-6">
 				<a href={resolve('/')} class="flex items-center gap-2.5 shrink-0">
-					<img src="/adaptive-icon.png" alt="Distroface" class="h-7 w-7 rounded-lg" />
-					<span class="font-bold text-lg tracking-tight hidden sm:inline">Distroface</span>
+					<img src="/adaptive-icon.png" alt={brandName} class="h-7 w-7 rounded-lg" />
+					<span class="font-bold text-lg tracking-tight hidden sm:inline">{brandName}</span>
+					{#if portalStore.isPortal}
+						<span class="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Portal</span>
+					{/if}
 				</a>
 
 				<nav class="hidden md:flex items-center gap-0.5">

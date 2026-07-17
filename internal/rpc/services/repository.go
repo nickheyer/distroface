@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -98,7 +99,8 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.R
 		}
 	}
 
-	repos, total, err := s.store.ListRepositories(ctx, req.Msg.Namespace, req.Msg.Query, userID, canManage, grantedRepos, pageSize, offset)
+	namespace := portal.ScopeNamespace(ctx, req.Msg.Namespace)
+	repos, total, err := s.store.ListRepositories(ctx, namespace, req.Msg.Query, userID, canManage, grantedRepos, pageSize, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}

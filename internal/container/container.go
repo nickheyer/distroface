@@ -15,6 +15,7 @@ import (
 	"github.com/nickheyer/distroface/internal/bootstrap"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/gc"
+	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/ratelimit"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -23,8 +24,6 @@ import (
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/sirupsen/logrus"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 // App holds all initialized dependencies and the HTTP server.
@@ -36,7 +35,7 @@ type App struct {
 	AuthManager    *auth.Manager
 	Enforcer       *rbac.Enforcer
 	RegistryAccess *registry.RegistryAccess
-	PortalProxies  *registry.PortalProxyManager
+	PortalProxies  *portal.Manager
 	Server         *http.Server
 }
 
@@ -146,7 +145,7 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("initializing registry access: %w", err)
 	}
 
-	portalResolver := registry.NewPortalResolver(store, registryLog)
+	portalResolver := portal.NewResolver(store, registryLog)
 
 	// Rate limiters nil means tier off
 	var authLimiter, pullLimiter, anonPullLimiter *ratelimit.Limiter
@@ -162,7 +161,7 @@ func New() (*App, error) {
 
 	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, authLimiter, registryLog)
 
-	registryHandler := registry.PullRateLimit(portalResolver.Middleware(registryApp), tokenService, pullLimiter, anonPullLimiter, registryLog)
+	registryHandler := registry.PullRateLimit(registryApp, tokenService, pullLimiter, anonPullLimiter, registryLog)
 
 	blobStore, err := artifacts.NewBlobStore(cfg.Artifacts.StoragePath)
 	if err != nil {
@@ -172,21 +171,12 @@ func New() (*App, error) {
 	}
 	artifactManager := artifacts.NewManager(store, blobStore, cfg.Artifacts, log)
 	artifactV1Facade := artifacts.NewV1API(store, artifactManager, authManager, enforcer, authLimiter, log)
-	artifactPortalHandler := portalResolver.ArtifactMiddleware(artifactV1Facade)
 
-	// Portal proxies serve the docker and artifact surfaces on their own ports
-	portalMux := http.NewServeMux()
-	portalMux.Handle("/v2/", registryHandler)
-	portalMux.Handle("GET /auth/token", tokenHandler)
-	portalMux.Handle("POST /auth/token", tokenHandler)
-	artifactV1Facade.RegisterAuth(portalMux)
-	artifactV1Facade.RegisterArtifacts(portalMux, artifactPortalHandler)
-	portalProxies := registry.NewPortalProxyManager(portalResolver, h2c.NewHandler(portalMux, &http2.Server{}), cfg.Server.Host, registryLog)
-	if err := portalProxies.Reconcile(context.Background()); err != nil {
-		registryLog.Error("portal proxy startup: %v", err)
-	}
+	// Portal listeners serve the whole app on their own ports
+	portalProxies := portal.NewManager(portalResolver, cfg.Server.Host, registryLog)
+	portalService := portal.NewService(store, enforcer, portalProxies, cfg, log)
 
-	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, log)
+	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, portalResolver, log)
 
 	gcCollector, err := gc.New(cfg.Registry.StoragePath, registryLog)
 	if err != nil {
@@ -213,23 +203,29 @@ func New() (*App, error) {
 	}
 
 	rpcServer := rpc.NewServer(rpc.ServerDeps{
-		Store:                 store,
-		Config:                cfg,
-		Log:                   log,
-		RegistryHandler:       registryHandler,
-		RegistryAccess:        registryAccess,
-		TokenHandler:          tokenHandler,
-		AuthManager:           authManager,
-		Enforcer:              enforcer,
-		OIDCHandler:           oidcHandler,
-		WebhookDispatcher:     dispatcher,
-		PortalProxies:         portalProxies,
-		AuthLimiter:           authLimiter,
-		ArtifactManager:       artifactManager,
-		ArtifactV1Facade:      artifactV1Facade,
-		ArtifactPortalHandler: artifactPortalHandler,
-		GCCollector:           gcCollector,
+		Store:             store,
+		Config:            cfg,
+		Log:               log,
+		RegistryHandler:   registryHandler,
+		RegistryAccess:    registryAccess,
+		TokenHandler:      tokenHandler,
+		AuthManager:       authManager,
+		Enforcer:          enforcer,
+		OIDCHandler:       oidcHandler,
+		WebhookDispatcher: dispatcher,
+		PortalResolver:    portalResolver,
+		PortalService:     portalService,
+		AuthLimiter:       authLimiter,
+		ArtifactManager:   artifactManager,
+		ArtifactV1Facade:  artifactV1Facade,
+		GCCollector:       gcCollector,
 	})
+
+	// Portal listeners reuse the fully built app handler
+	portalProxies.SetHandler(rpcServer.Handler())
+	if err := portalProxies.Reconcile(context.Background()); err != nil {
+		registryLog.Error("portal proxy startup: %v", err)
+	}
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port),

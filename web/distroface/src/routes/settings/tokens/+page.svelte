@@ -21,6 +21,7 @@
 	import { Key, Plus, AlertTriangle, Trash2, CheckCircle, Terminal, ShieldCheck } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { configStore } from '$lib/stores/config.svelte';
+	import { portalStore } from '$lib/stores/portal.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import { toast } from 'svelte-sonner';
@@ -52,7 +53,9 @@
 		{ value: 'never', label: 'No expiration' }
 	];
 
-	const registryHost = $derived(configStore.get('server.hostname', 'localhost:8080') as string);
+	const registryHost = $derived(
+		portalStore.host(configStore.get('server.hostname', 'localhost:8080') as string)
+	);
 	const dockerLoginExample = $derived(
 		`docker login ${registryHost} \\\n  -u ${authStore.user?.username} \\\n  -p ${newPlaintextToken ?? 'YOUR_TOKEN'}`
 	);

@@ -54,16 +54,6 @@ func (r *Reaper) Start() error {
 	return nil
 }
 
-func (r *Reaper) Status() (bool, *ReapRun) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.last == nil {
-		return r.running, nil
-	}
-	last := *r.last
-	return r.running, &last
-}
-
 // Schedule triggers sweeps on an interval until ctx ends
 func (r *Reaper) Schedule(ctx context.Context, interval time.Duration) {
 	go func() {

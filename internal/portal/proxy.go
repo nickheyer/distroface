@@ -1,4 +1,4 @@
-package registry
+package portal
 
 import (
 	"context"
@@ -12,29 +12,36 @@ import (
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
-// Opens and closes portal proxy listeners to match the enabled portals
-type PortalProxyManager struct {
-	resolver *PortalResolver
-	handler  http.Handler // Portal surface, /v2/ and /auth/token only
+// Opens and closes portal listeners to match the enabled portals, every
+// listener serves the full application handler
+type Manager struct {
+	resolver *Resolver
 	bindHost string
 	log      *logger.Logger
 
 	mu      sync.Mutex
+	handler http.Handler
 	servers map[int]*http.Server
 }
 
-func NewPortalProxyManager(resolver *PortalResolver, handler http.Handler, bindHost string, log *logger.Logger) *PortalProxyManager {
-	return &PortalProxyManager{
+func NewManager(resolver *Resolver, bindHost string, log *logger.Logger) *Manager {
+	return &Manager{
 		resolver: resolver,
-		handler:  handler,
 		bindHost: bindHost,
 		log:      log,
 		servers:  map[int]*http.Server{},
 	}
 }
 
+// Handler must be set before the first Reconcile
+func (m *Manager) SetHandler(handler http.Handler) {
+	m.mu.Lock()
+	m.handler = handler
+	m.mu.Unlock()
+}
+
 // Syncs running listeners with the enabled portals, called at startup and after every portal write
-func (m *PortalProxyManager) Reconcile(ctx context.Context) error {
+func (m *Manager) Reconcile(ctx context.Context) error {
 	m.resolver.Invalidate()
 
 	ports, err := m.resolver.DesiredPorts()
@@ -62,6 +69,10 @@ func (m *PortalProxyManager) Reconcile(ctx context.Context) error {
 		if _, ok := m.servers[port]; ok {
 			continue
 		}
+		if m.handler == nil {
+			errs = append(errs, fmt.Errorf("port %d: no handler set", port))
+			continue
+		}
 		ln, err := net.Listen("tcp", net.JoinHostPort(m.bindHost, strconv.Itoa(port)))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("port %d: %w", port, err))
@@ -81,7 +92,7 @@ func (m *PortalProxyManager) Reconcile(ctx context.Context) error {
 }
 
 // Probes that a port can be bound, used to validate before storing a portal
-func (m *PortalProxyManager) ProbePort(port int) error {
+func (m *Manager) ProbePort(port int) error {
 	m.mu.Lock()
 	if _, ok := m.servers[port]; ok {
 		m.mu.Unlock()
@@ -97,7 +108,7 @@ func (m *PortalProxyManager) ProbePort(port int) error {
 }
 
 // Closes every portal listener
-func (m *PortalProxyManager) Close() {
+func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for port, srv := range m.servers {

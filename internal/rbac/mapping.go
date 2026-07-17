@@ -31,6 +31,8 @@ var PublicProcedures = map[string]bool{
 	distrofacev1connect.UserServiceGetUserProcedure:                true,
 	// Invite validation is public (used during registration)
 	distrofacev1connect.AuthServiceValidateInviteProcedure: true,
+	// Portal identity for the serving host, needed pre-login
+	distrofacev1connect.PortalServiceResolvePortalProcedure: true,
 }
 
 // AuthenticatedOnlyProcedures lists RPC procedures that require authentication
@@ -96,22 +98,21 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.TokenServiceDeleteAPITokenProcedure: {Resource: ResourceTokens, Action: ActionDelete},
 
 	// ── OrganizationService ───────────────────────────────────────────
-	distrofacev1connect.OrganizationServiceCreateOrganizationProcedure:  {Resource: ResourceOrganizations, Action: ActionCreate},
-	distrofacev1connect.OrganizationServiceGetOrganizationProcedure:     {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "name"},
-	distrofacev1connect.OrganizationServiceListOrganizationsProcedure:   {Resource: ResourceOrganizations, Action: ActionRead},
-	distrofacev1connect.OrganizationServiceUpdateOrganizationProcedure:  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "name"},
-	distrofacev1connect.OrganizationServiceDeleteOrganizationProcedure:  {Resource: ResourceOrganizations, Action: ActionDelete, ObjectIDField: "name"},
-	distrofacev1connect.OrganizationServiceListOrgMembersProcedure:      {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
-	distrofacev1connect.OrganizationServiceAddOrgMemberProcedure:        {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.OrganizationServiceRemoveOrgMemberProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.OrganizationServiceUpdateOrgMemberRoleProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.OrganizationServiceCreateOrganizationProcedure:   {Resource: ResourceOrganizations, Action: ActionCreate},
+	distrofacev1connect.OrganizationServiceGetOrganizationProcedure:      {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "name"},
+	distrofacev1connect.OrganizationServiceListOrganizationsProcedure:    {Resource: ResourceOrganizations, Action: ActionRead},
+	distrofacev1connect.OrganizationServiceUpdateOrganizationProcedure:   {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "name"},
+	distrofacev1connect.OrganizationServiceDeleteOrganizationProcedure:   {Resource: ResourceOrganizations, Action: ActionDelete, ObjectIDField: "name"},
+	distrofacev1connect.OrganizationServiceListOrgMembersProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
+	distrofacev1connect.OrganizationServiceAddOrgMemberProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.OrganizationServiceRemoveOrgMemberProcedure:      {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
+	distrofacev1connect.OrganizationServiceUpdateOrgMemberRoleProcedure:  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 	distrofacev1connect.OrganizationServiceGetOrgSettingsProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
 	distrofacev1connect.OrganizationServiceUpdateOrgSettingsProcedure:    {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 	distrofacev1connect.OrganizationServiceTransferOrgOwnershipProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 
 	// ── PortalService (org-scoped; owner/admin checks in-service) ──────
 	distrofacev1connect.PortalServiceCreatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
-	distrofacev1connect.PortalServiceGetPortalProcedure:    {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
 	distrofacev1connect.PortalServiceListPortalsProcedure:  {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_name"},
 	distrofacev1connect.PortalServiceUpdatePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
 	distrofacev1connect.PortalServiceDeletePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_name"},
