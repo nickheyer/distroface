@@ -56,13 +56,6 @@ func NewManager(store *storage.Store, blobs *BlobStore, cfg config.ArtifactsConf
 
 func (m *Manager) Blobs() *BlobStore { return m.blobs }
 
-func (m *Manager) MaxFileSizeBytes() int64 {
-	if m.cfg.MaxFileSizeMB <= 0 {
-		return 0
-	}
-	return m.cfg.MaxFileSizeMB * 1024 * 1024
-}
-
 // Rejects traversal, absolute, and oversized paths
 func ValidatePath(p string) error {
 	if p == "" {

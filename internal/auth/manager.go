@@ -300,10 +300,6 @@ func (m *Manager) GetConfig() *config.AuthConfig {
 	return m.config
 }
 
-func (m *Manager) GetEnforcer() *rbac.Enforcer {
-	return m.enforcer
-}
-
 func (m *Manager) GetStore() *db.Store {
 	return m.store
 }

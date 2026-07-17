@@ -438,36 +438,12 @@ func (s *Store) GetSession(ctx context.Context, token string) (*Session, error) 
 	return &session, nil
 }
 
-func (s *Store) GetSessionByTokenHash(ctx context.Context, tokenHash string) (*Session, error) {
-	var session Session
-	err := s.db.WithContext(ctx).Preload("User").First(&session, "token = ?", tokenHash).Error
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &session, nil
-}
-
 func (s *Store) DeleteSession(ctx context.Context, token string) error {
 	return s.db.WithContext(ctx).Where("token = ?", token).Delete(&Session{}).Error
 }
 
-func (s *Store) DeleteSessionByID(ctx context.Context, id string) error {
-	return s.db.WithContext(ctx).Delete(&Session{}, "id = ?", id).Error
-}
-
-func (s *Store) DeleteExpiredSessions(ctx context.Context) error {
-	return s.db.WithContext(ctx).Delete(&Session{}, "expires_at < ?", time.Now().UTC()).Error
-}
-
 func (s *Store) CleanAllSessions(ctx context.Context) error {
 	return s.db.WithContext(ctx).Where("1 = 1").Delete(&Session{}).Error
-}
-
-func (s *Store) UpdateSession(ctx context.Context, session *Session) error {
-	return s.db.WithContext(ctx).Save(session).Error
 }
 
 // ── APIToken operations ──────────────────────────────────────────────────

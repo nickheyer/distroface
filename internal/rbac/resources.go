@@ -23,27 +23,6 @@ const (
 	ActionManage = "manage"
 )
 
-// All actions
-var AllActions = []string{
-	ActionRead, ActionCreate, ActionUpdate, ActionDelete,
-	ActionPush, ActionPull, ActionManage,
-}
-
-// All resources
-var AllResources = []string{
-	ResourceRepositories, ResourceUsers, ResourceRoles,
-	ResourceSettings, ResourceTokens, ResourceOrganizations,
-	ResourceWebhooks, ResourceArtifacts,
-}
-
-// Maps scopeable resources to the source they derive their object list from.
-// Only repos and orgs support per-object scoping.
-var ResourceScopeSource = map[string]string{
-	ResourceRepositories:  ResourceRepositories,
-	ResourceOrganizations: ResourceOrganizations,
-	ResourceArtifacts:     ResourceArtifacts,
-}
-
 // Pairs a resource with its valid actions
 type ResourceActionEntry struct {
 	Resource string

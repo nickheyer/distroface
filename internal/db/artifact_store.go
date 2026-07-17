@@ -49,18 +49,6 @@ func (s *Store) GetArtifactRepository(ctx context.Context, namespace, name strin
 	return &repo, nil
 }
 
-func (s *Store) GetArtifactRepositoryByID(ctx context.Context, id int64) (*ArtifactRepository, error) {
-	var repo ArtifactRepository
-	err := s.db.WithContext(ctx).First(&repo, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &repo, nil
-}
-
 type ArtifactRepoListOptions struct {
 	Namespace      string   // Optional exact namespace filter
 	ViewerID       string   // Owner whose private repos are visible
