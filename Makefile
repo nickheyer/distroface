@@ -1,9 +1,14 @@
-.PHONY: dev prod clean build build-frontend dfcli run deps test fmt lint check help kill-dev image dev-docker proto proto-clean proto-lint proto-format proto-breaking gen dev-auth
+.PHONY: dev prod clean build build-frontend dfcli run deps test fmt lint check help kill-dev image dev-docker proto proto-clean proto-lint proto-format proto-breaking gen dev-auth seed
 
 DATA_DIR := ./data
 DB_FILE := $(DATA_DIR)/distroface.db
 FRONTEND_DIR := web/distroface
 DISTROFACE_BIN := build/distroface
+
+ifneq (,$(wildcard dev.env))
+include dev.env
+export $(shell sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' dev.env)
+endif
 BUF_IMAGE := bufbuild/buf:latest
 BUF_RUN := docker run --rm \
 	--volume "$(shell pwd):/workspace" \
@@ -55,6 +60,10 @@ build-frontend:
 build: build-frontend
 	@echo "Building backend with embedded frontend..."
 	go build -o $(DISTROFACE_BIN) cmd/distroface/main.go
+
+# Seed a running instance w/ lots of data (see scripts/seeder/README.md)
+seed:
+	go run ./scripts/seeder $(SEED_ARGS)
 
 # Build the dfcli binary
 dfcli:

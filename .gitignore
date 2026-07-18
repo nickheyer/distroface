@@ -22,6 +22,7 @@ config.yaml
 *.userosscache
 *.sln.docstates
 *.env
+!dev.env
 
 # User-specific files (MonoDevelop/Xamarin Studio)
 *.userprefs

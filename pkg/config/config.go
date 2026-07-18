@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -262,6 +263,7 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
+	applyEnvBootstrapUser(&cfg)
 	applyDerivedPaths(&cfg)
 
 	if err := validateConfig(&cfg); err != nil {
@@ -269,6 +271,32 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// Appends one env defined bootstrap user
+func applyEnvBootstrapUser(cfg *Config) {
+	username := os.Getenv("DISTROFACE_BOOTSTRAP_USERNAME")
+	password := os.Getenv("DISTROFACE_BOOTSTRAP_PASSWORD")
+	if username == "" || password == "" {
+		return
+	}
+	for _, u := range cfg.Bootstrap.Users {
+		if u.Username == username {
+			return
+		}
+	}
+	var roles []string
+	for r := range strings.SplitSeq(os.Getenv("DISTROFACE_BOOTSTRAP_ROLES"), ",") {
+		if r = strings.TrimSpace(r); r != "" {
+			roles = append(roles, r)
+		}
+	}
+	cfg.Bootstrap.Users = append(cfg.Bootstrap.Users, BootstrapUser{
+		Username: username,
+		Password: password,
+		Email:    os.Getenv("DISTROFACE_BOOTSTRAP_EMAIL"),
+		Roles:    roles,
+	})
 }
 
 func setDefaults(v *viper.Viper) {
