@@ -3,6 +3,7 @@ package pagination
 import (
 	"encoding/base64"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -37,20 +38,41 @@ func Parse(p *v1.PageRequest) (limit, offset int) {
 	return
 }
 
-// OrderBy resolves "column direction" against an allowlist
-func OrderBy(p *v1.PageRequest, allowed map[string]bool, def string) string {
-	if p == nil || p.OrderBy == "" {
-		return def
+func splitOrderBy(p *v1.PageRequest) (col string, desc bool) {
+	if p == nil {
+		return "", false
 	}
 	fields := strings.Fields(strings.ToLower(p.OrderBy))
-	if len(fields) == 0 || !allowed[fields[0]] {
+	if len(fields) == 0 {
+		return "", false
+	}
+	return fields[0], len(fields) > 1 && fields[1] == "desc"
+}
+
+// OrderBy resolves "column direction" against an allowlist
+func OrderBy(p *v1.PageRequest, allowed map[string]bool, def string) string {
+	col, desc := splitOrderBy(p)
+	if !allowed[col] {
 		return def
 	}
-	dir := "ASC"
-	if len(fields) > 1 && fields[1] == "desc" {
-		dir = "DESC"
+	if desc {
+		return col + " DESC"
 	}
-	return fields[0] + " " + dir
+	return col + " ASC"
+}
+
+// For sorting in memory only when sql isn't there to do it for us
+func Sort[T any](p *v1.PageRequest, items []T, columns map[string]func(a, b T) int) {
+	col, desc := splitOrderBy(p)
+	cmp := columns[col]
+	if cmp == nil {
+		return
+	}
+	if desc {
+		asc := cmp
+		cmp = func(a, b T) int { return -asc(a, b) }
+	}
+	slices.SortStableFunc(items, cmp)
 }
 
 // Info builds the response cursor from the served window

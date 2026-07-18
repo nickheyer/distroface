@@ -93,6 +93,7 @@
 	const pullCommand = $derived(
 		`${registryHost}/${portalStore.imageRef(namespace ?? '', name ?? '')}`
 	);
+	let pullTag = $state<string|null>(null);
 	const isPrivate = $derived(repo?.visibility === Visibility.PRIVATE);
 	const initials = $derived((namespace ?? '').slice(0, 2).toUpperCase());
 
@@ -121,6 +122,19 @@
 			tags = [];
 		} finally {
 			tagsLoading = false;
+		}
+	}
+
+	// Newest pushed tag names the pull command
+	async function loadPullTag() {
+		try {
+			const resp = await rpcClient.repository.listTags({
+				page: { pageSize: 1, orderBy: 'pushed_at desc' },
+				namespace, name
+			});
+			pullTag = resp.tags[0]?.name ?? null;
+		} catch {
+			pullTag = null;
 		}
 	}
 
@@ -241,6 +255,7 @@
 	onMount(() => {
 		loadRepo();
 		loadTags();
+		loadPullTag();
 	});
 </script>
 
@@ -395,11 +410,13 @@
 			</div>
 
 			<!-- Pull command bar -->
-			<div class="border-t border-border/40 bg-muted/20 px-5 py-3 flex items-center gap-3">
-				<Terminal class="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
-				<code class="text-[13px] font-mono text-muted-foreground flex-1 min-w-0 truncate select-all">docker pull {pullCommand}:latest</code>
-				<CopyButton text="docker pull {pullCommand}:latest" label="Pull command copied!" />
-			</div>
+			{#if pullTag !== null}
+				<div class="border-t border-border/40 bg-muted/20 px-5 py-3 flex items-center gap-3">
+					<Terminal class="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
+					<code class="text-[13px] font-mono text-muted-foreground flex-1 min-w-0 truncate select-all">docker pull {pullCommand}:{pullTag}</code>
+					<CopyButton text="docker pull {pullCommand}:{pullTag}" label="Pull command copied!" />
+				</div>
+			{/if}
 		</div>
 
 		<!-- Tags section -->

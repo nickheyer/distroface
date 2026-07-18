@@ -106,6 +106,31 @@ func TestOrderByAllowlist(t *testing.T) {
 	}
 }
 
+func TestSort(t *testing.T) {
+	columns := map[string]func(a, b int) int{
+		"value": func(a, b int) int { return a - b },
+	}
+
+	items := []int{2, 3, 1}
+	Sort(&v1.PageRequest{OrderBy: "value desc"}, items, columns)
+	if items[0] != 3 || items[2] != 1 {
+		t.Fatalf("desc got %v", items)
+	}
+
+	Sort(&v1.PageRequest{OrderBy: "value"}, items, columns)
+	if items[0] != 1 || items[2] != 3 {
+		t.Fatalf("asc got %v", items)
+	}
+
+	// Unknown column and nil page leave order alone
+	items = []int{2, 3, 1}
+	Sort(&v1.PageRequest{OrderBy: "secret desc"}, items, columns)
+	Sort(nil, items, columns)
+	if items[0] != 2 || items[1] != 3 || items[2] != 1 {
+		t.Fatalf("got %v", items)
+	}
+}
+
 func TestLikeContainsEscapes(t *testing.T) {
 	got := LikeContains(`50%_\`)
 	if !strings.Contains(got, `\%`) || !strings.Contains(got, `\_`) || !strings.Contains(got, `\\`) {

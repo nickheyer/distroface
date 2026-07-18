@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -147,6 +148,12 @@ func (s *RepositoryService) DeleteRepository(ctx context.Context, req *connect.R
 	return connect.NewResponse(&v1.DeleteRepositoryResponse{}), nil
 }
 
+// Tags are derived from distribution, so no sql to sort for us
+var tagSortColumns = map[string]func(a, b *v1.Tag) int{
+	"name":      func(a, b *v1.Tag) int { return strings.Compare(a.Name, b.Name) },
+	"pushed_at": func(a, b *v1.Tag) int { return a.GetPushedAt().AsTime().Compare(b.GetPushedAt().AsTime()) },
+}
+
 func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v1.ListTagsRequest]) (*connect.Response[v1.ListTagsResponse], error) {
 	if req.Msg.Namespace == "" || req.Msg.Name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
@@ -168,6 +175,8 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+
+	pagination.Sort(req.Msg.Page, tags, tagSortColumns)
 
 	pageSize, offset := pagination.Parse(req.Msg.Page)
 
