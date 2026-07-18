@@ -17,9 +17,9 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 )
 
 // Drop in v1 rest facade for old dfcli and ci
@@ -540,11 +540,11 @@ func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *aut
 }
 
 // V1 name version path params as contains filters
-func v1SearchQuery(query url.Values) pagination.Query {
-	var q pagination.Query
+func v1SearchQuery(query url.Values) pages.Query {
+	var q pages.Query
 	for _, f := range []string{"name", "version", "path"} {
 		if v := query.Get(f); v != "" {
-			q.Filters = append(q.Filters, pagination.Filter{Field: f, Value: v})
+			q.Filters = append(q.Filters, pages.Filter{Field: f, Value: v})
 		}
 	}
 	return q

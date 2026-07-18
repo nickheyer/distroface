@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/pagination"
+	"github.com/nickheyer/distroface/pkg/pages"
 	"gorm.io/gorm"
 )
 
@@ -31,7 +31,7 @@ func (s *Store) GetWebhook(ctx context.Context, id string) (*db.Webhook, error) 
 }
 
 // WebhooksQuery allowlists webhook list filters
-var WebhooksQuery = pagination.Spec{
+var WebhooksQuery = pages.Spec{
 	Fields: map[string]string{
 		"url":        "url",
 		"events":     "events",
@@ -40,7 +40,7 @@ var WebhooksQuery = pagination.Spec{
 	Text: []string{"url"},
 }
 
-func (s *Store) ListWebhooksByRepo(ctx context.Context, repoID string, q pagination.Query, limit, offset int) ([]*db.Webhook, int64, error) {
+func (s *Store) ListWebhooksByRepo(ctx context.Context, repoID string, q pages.Query, limit, offset int) ([]*db.Webhook, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Webhook{}).
 		Where("repo_id = ? AND scope = ?", repoID, db.WebhookScopeRepository).
 		Scopes(WebhooksQuery.Scope(q))
@@ -55,7 +55,7 @@ func (s *Store) ListWebhooksByRepo(ctx context.Context, repoID string, q paginat
 	return webhooks, total, err
 }
 
-func (s *Store) ListWebhooksByOrg(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]*db.Webhook, int64, error) {
+func (s *Store) ListWebhooksByOrg(ctx context.Context, orgID string, q pages.Query, limit, offset int) ([]*db.Webhook, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Webhook{}).
 		Where("org_id = ? AND scope = ?", orgID, db.WebhookScopeOrganization).
 		Scopes(WebhooksQuery.Scope(q))
@@ -121,12 +121,12 @@ func (s *Store) CreateWebhookDelivery(ctx context.Context, delivery *db.WebhookD
 }
 
 // WebhookDeliveriesQuery allowlists delivery list filters
-var WebhookDeliveriesQuery = pagination.Spec{
+var WebhookDeliveriesQuery = pages.Spec{
 	Fields: map[string]string{"event": "event"},
 	Text:   []string{"event"},
 }
 
-func (s *Store) ListWebhookDeliveries(ctx context.Context, webhookID string, q pagination.Query, limit, offset int) ([]*db.WebhookDelivery, int64, error) {
+func (s *Store) ListWebhookDeliveries(ctx context.Context, webhookID string, q pages.Query, limit, offset int) ([]*db.WebhookDelivery, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.WebhookDelivery{}).
 		Where("webhook_id = ?", webhookID).
 		Scopes(WebhookDeliveriesQuery.Scope(q))

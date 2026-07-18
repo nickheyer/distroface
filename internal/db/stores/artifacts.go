@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/pagination"
+	"github.com/nickheyer/distroface/pkg/pages"
 	"gorm.io/gorm"
 )
 
@@ -52,17 +52,17 @@ func (s *Store) GetArtifactRepository(ctx context.Context, namespace, name strin
 }
 
 type ArtifactRepoListOptions struct {
-	Namespace      string           // Optional exact namespace filter
-	ViewerID       string           // Owner whose private repos are visible
-	IncludePrivate bool             // True bypasses visibility filtering
-	GrantedRepos   []string         // RBAC granted repos as namespace/name
-	Query          pagination.Query // Structured filter against ArtifactReposQuery
-	Limit          int              // Zero means no limit
+	Namespace      string      // Optional exact namespace filter
+	ViewerID       string      // Owner whose private repos are visible
+	IncludePrivate bool        // True bypasses visibility filtering
+	GrantedRepos   []string    // RBAC granted repos as namespace/name
+	Query          pages.Query // Structured filter against ArtifactReposQuery
+	Limit          int         // Zero means no limit
 	Offset         int
 }
 
 // ArtifactReposQuery allowlists artifact repository list filters
-var ArtifactReposQuery = pagination.Spec{
+var ArtifactReposQuery = pages.Spec{
 	Fields: map[string]string{
 		"name":        "name",
 		"namespace":   "namespace",
@@ -324,8 +324,8 @@ func (s *Store) ListArtifactsByVersions(ctx context.Context, repoID int64, versi
 
 type ArtifactSearchCriteria struct {
 	RepoID     *int64
-	RepoIDs    []int64          // Visibility filter, empty means unrestricted
-	Query      pagination.Query // Structured filter against ArtifactsQuery
+	RepoIDs    []int64     // Visibility filter, empty means unrestricted
+	Query      pages.Query // Structured filter against ArtifactsQuery
 	Properties map[string]string
 	OrderBy    string // Preresolved "column direction", defaults created_at DESC
 	Limit      int    // Zero means no limit
@@ -333,7 +333,7 @@ type ArtifactSearchCriteria struct {
 }
 
 // ArtifactsQuery allowlists artifact search filters
-var ArtifactsQuery = pagination.Spec{
+var ArtifactsQuery = pages.Spec{
 	Fields: map[string]string{
 		"name":    "name",
 		"version": "version",

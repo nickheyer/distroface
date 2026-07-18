@@ -14,10 +14,10 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"golang.org/x/crypto/bcrypt"
@@ -398,9 +398,9 @@ func (s *AuthService) CreateInvite(ctx context.Context, req *connect.Request[v1.
 }
 
 func (s *AuthService) ListInvites(ctx context.Context, req *connect.Request[v1.ListInvitesRequest]) (*connect.Response[v1.ListInvitesResponse], error) {
-	limit, offset := pagination.Parse(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
 
-	q := pagination.ParseQuery(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.InvitesQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -417,7 +417,7 @@ func (s *AuthService) ListInvites(ctx context.Context, req *connect.Request[v1.L
 
 	return connect.NewResponse(&v1.ListInvitesResponse{
 		Invites: protoInvites,
-		Page:    pagination.Info(offset, limit, total),
+		Page:    pages.Info(offset, limit, total),
 	}), nil
 }
 

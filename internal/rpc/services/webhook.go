@@ -10,10 +10,10 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -125,8 +125,8 @@ func (s *WebhookService) ListWebhooks(ctx context.Context, req *connect.Request[
 	}
 
 	msg := req.Msg
-	limit, offset := pagination.Parse(msg.Page)
-	q := pagination.ParseQuery(msg.Page)
+	limit, offset := pages.Parse(msg.Page)
+	q := pages.ParseQuery(msg.Page)
 	if err := stores.WebhooksQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -160,7 +160,7 @@ func (s *WebhookService) ListWebhooks(ctx context.Context, req *connect.Request[
 
 	return connect.NewResponse(&v1.ListWebhooksResponse{
 		Webhooks: protoWebhooks,
-		Page:     pagination.Info(offset, limit, total),
+		Page:     pages.Info(offset, limit, total),
 	}), nil
 }
 
@@ -292,8 +292,8 @@ func (s *WebhookService) ListWebhookDeliveries(ctx context.Context, req *connect
 		return nil, err
 	}
 
-	limit, offset := pagination.Parse(msg.Page)
-	q := pagination.ParseQuery(msg.Page)
+	limit, offset := pages.Parse(msg.Page)
+	q := pages.ParseQuery(msg.Page)
 	if err := stores.WebhookDeliveriesQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -309,7 +309,7 @@ func (s *WebhookService) ListWebhookDeliveries(ctx context.Context, req *connect
 
 	return connect.NewResponse(&v1.ListWebhookDeliveriesResponse{
 		Deliveries: protoDeliveries,
-		Page:       pagination.Info(offset, limit, total),
+		Page:       pages.Info(offset, limit, total),
 	}), nil
 }
 

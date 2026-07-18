@@ -12,10 +12,10 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -160,8 +160,8 @@ func (s *Service) GetTLSStatus(ctx context.Context, _ *connect.Request[v1.GetTLS
 
 func (s *Service) ListCertificateDomains(ctx context.Context, req *connect.Request[v1.ListCertificateDomainsRequest]) (*connect.Response[v1.ListCertificateDomainsResponse], error) {
 	resp := &v1.ListCertificateDomainsResponse{}
-	limit, offset := pagination.Parse(req.Msg.Page)
-	q := pagination.ParseQuery(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.CertDomainsQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -178,7 +178,7 @@ func (s *Service) ListCertificateDomains(ctx context.Context, req *connect.Reque
 		for _, d := range domains {
 			resp.Domains = append(resp.Domains, s.domainToProto(ctx, d, org.Name))
 		}
-		resp.Page = pagination.Info(offset, limit, total)
+		resp.Page = pages.Info(offset, limit, total)
 		return connect.NewResponse(resp), nil
 	}
 
@@ -196,7 +196,7 @@ func (s *Service) ListCertificateDomains(ctx context.Context, req *connect.Reque
 		}
 		resp.Domains = append(resp.Domains, s.domainToProto(ctx, d, orgName))
 	}
-	resp.Page = pagination.Info(offset, limit, total)
+	resp.Page = pages.Info(offset, limit, total)
 	return connect.NewResponse(resp), nil
 }
 
@@ -205,8 +205,8 @@ func (s *Service) ListCertificateHosts(ctx context.Context, req *connect.Request
 	if err != nil {
 		return nil, err
 	}
-	limit, offset := pagination.Parse(req.Msg.Page)
-	q := pagination.ParseQuery(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.CertHostsQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -244,7 +244,7 @@ func (s *Service) ListCertificateHosts(ctx context.Context, req *connect.Request
 
 	return connect.NewResponse(&v1.ListCertificateHostsResponse{
 		Hosts: hosts,
-		Page:  pagination.Info(offset, limit, total),
+		Page:  pages.Info(offset, limit, total),
 	}), nil
 }
 

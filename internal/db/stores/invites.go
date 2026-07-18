@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/pagination"
+	"github.com/nickheyer/distroface/pkg/pages"
 	"gorm.io/gorm"
 )
 
@@ -44,7 +44,7 @@ func (s *Store) GetRegistrationInviteByCode(ctx context.Context, code string) (*
 }
 
 // InvitesQuery allowlists registration invite list filters
-var InvitesQuery = pagination.Spec{
+var InvitesQuery = pages.Spec{
 	Fields: map[string]string{
 		"code":        "code",
 		"description": "description",
@@ -53,7 +53,7 @@ var InvitesQuery = pagination.Spec{
 	Text: []string{"code", "description"},
 }
 
-func (s *Store) ListRegistrationInvites(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.RegistrationInvite, int64, error) {
+func (s *Store) ListRegistrationInvites(ctx context.Context, q pages.Query, limit, offset int) ([]*db.RegistrationInvite, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.RegistrationInvite{}).Scopes(InvitesQuery.Scope(q))
 
 	var total int64

@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/pagination"
+	"github.com/nickheyer/distroface/pkg/pages"
 	"gorm.io/gorm"
 )
 
@@ -49,7 +49,7 @@ func (s *Store) ListRegistryPortalsByOrg(ctx context.Context, orgID string) ([]*
 }
 
 // PortalsQuery allowlists registry portal list filters
-var PortalsQuery = pagination.Spec{
+var PortalsQuery = pages.Spec{
 	Fields: map[string]string{
 		"name":     "name",
 		"hostname": "hostname",
@@ -58,7 +58,7 @@ var PortalsQuery = pagination.Spec{
 }
 
 // Paged variant with total for the rpc listing
-func (s *Store) ListRegistryPortalsByOrgPaged(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]*db.RegistryPortal, int64, error) {
+func (s *Store) ListRegistryPortalsByOrgPaged(ctx context.Context, orgID string, q pages.Query, limit, offset int) ([]*db.RegistryPortal, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.RegistryPortal{}).
 		Where("org_id = ?", orgID).
 		Scopes(PortalsQuery.Scope(q))

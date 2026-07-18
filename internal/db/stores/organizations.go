@@ -5,7 +5,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/pagination"
+	"github.com/nickheyer/distroface/pkg/pages"
+
 	"gorm.io/gorm"
 )
 
@@ -46,7 +47,7 @@ func (s *Store) GetOrganizationByID(ctx context.Context, id string) (*db.Organiz
 // If canManage is true, all organizations are returned.
 // Otherwise, only organizations the user is a member of are returned.
 // OrgsQuery allowlists organization list filters
-var OrgsQuery = pagination.Spec{
+var OrgsQuery = pages.Spec{
 	Fields: map[string]string{
 		"name":         "name",
 		"display_name": "display_name",
@@ -55,7 +56,7 @@ var OrgsQuery = pagination.Spec{
 	Text: []string{"name", "display_name"},
 }
 
-func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, q pagination.Query, limit, offset int) ([]*db.Organization, int64, error) {
+func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, q pages.Query, limit, offset int) ([]*db.Organization, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Organization{}).Scopes(OrgsQuery.Scope(q))
 
 	if !canManage && userID != "" {
@@ -127,7 +128,7 @@ func (s *Store) GetOrgMember(ctx context.Context, orgID, userID string) (*db.Org
 }
 
 // OrgMembersQuery allowlists org member list filters
-var OrgMembersQuery = pagination.Spec{
+var OrgMembersQuery = pages.Spec{
 	Fields: map[string]string{
 		"username": "users.username",
 		"role":     "org_members.role",
@@ -135,7 +136,7 @@ var OrgMembersQuery = pagination.Spec{
 	Text: []string{"users.username"},
 }
 
-func (s *Store) ListOrgMembers(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]*db.OrgMember, int64, error) {
+func (s *Store) ListOrgMembers(ctx context.Context, orgID string, q pages.Query, limit, offset int) ([]*db.OrgMember, int64, error) {
 	base := func() *gorm.DB {
 		tx := s.db.WithContext(ctx).Model(&db.OrgMember{}).Where("org_members.org_id = ?", orgID)
 		if !q.IsZero() {

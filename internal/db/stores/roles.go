@@ -6,7 +6,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/pagination"
+	"github.com/nickheyer/distroface/pkg/pages"
+
 	"gorm.io/gorm"
 )
 
@@ -61,7 +62,7 @@ func (s *Store) GetRoleByName(ctx context.Context, name string) (*db.Role, error
 }
 
 // RolesQuery allowlists role list filters
-var RolesQuery = pagination.Spec{
+var RolesQuery = pages.Spec{
 	Fields: map[string]string{
 		"name":        "name",
 		"description": "description",
@@ -69,7 +70,7 @@ var RolesQuery = pagination.Spec{
 	Text: []string{"name", "description"},
 }
 
-func (s *Store) ListRoles(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.Role, int64, error) {
+func (s *Store) ListRoles(ctx context.Context, q pages.Query, limit, offset int) ([]*db.Role, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Role{}).Scopes(RolesQuery.Scope(q))
 
 	var total int64

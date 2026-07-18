@@ -6,9 +6,9 @@ import (
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -63,7 +63,7 @@ func (s *TokenService) ListAPITokens(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 
-	limit, offset := pagination.Parse(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
 
 	// Users with manage permission see all tokens
 	userID := user.ID
@@ -72,7 +72,7 @@ func (s *TokenService) ListAPITokens(ctx context.Context, req *connect.Request[v
 		userID = ""
 	}
 
-	q := pagination.ParseQuery(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.TokensQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -100,7 +100,7 @@ func (s *TokenService) ListAPITokens(ctx context.Context, req *connect.Request[v
 
 	return connect.NewResponse(&v1.ListAPITokensResponse{
 		Tokens: protoTokens,
-		Page:   pagination.Info(offset, limit, total),
+		Page:   pages.Info(offset, limit, total),
 	}), nil
 }
 

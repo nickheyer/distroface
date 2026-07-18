@@ -10,12 +10,12 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -141,7 +141,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connec
 		return connect.NewResponse(resp), nil
 	}
 
-	limit, offset := pagination.Parse(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
 
 	user := auth.UserFromContext(ctx)
 	var userID string
@@ -153,7 +153,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connec
 		roles, _ = s.store.ListUserOrgRoles(ctx, user.ID)
 	}
 
-	q := pagination.ParseQuery(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.OrgsQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -171,7 +171,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *connec
 
 	return connect.NewResponse(&v1.ListOrganizationsResponse{
 		Organizations: protoOrgs,
-		Page:          pagination.Info(offset, limit, total),
+		Page:          pages.Info(offset, limit, total),
 	}), nil
 }
 
@@ -273,9 +273,9 @@ func (s *OrganizationService) ListOrgMembers(ctx context.Context, req *connect.R
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	limit, offset := pagination.Parse(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
 
-	q := pagination.ParseQuery(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.OrgMembersQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -292,7 +292,7 @@ func (s *OrganizationService) ListOrgMembers(ctx context.Context, req *connect.R
 
 	return connect.NewResponse(&v1.ListOrgMembersResponse{
 		Members: protoMembers,
-		Page:    pagination.Info(offset, limit, total),
+		Page:    pages.Info(offset, limit, total),
 	}), nil
 }
 

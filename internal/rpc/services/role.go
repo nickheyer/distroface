@@ -7,9 +7,9 @@ import (
 	"connectrpc.com/connect"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 )
@@ -27,8 +27,8 @@ func NewRoleService(store *stores.Store, enforcer *rbac.Enforcer, log *logger.Lo
 }
 
 func (s *RoleService) ListRoles(ctx context.Context, req *connect.Request[v1.ListRolesRequest]) (*connect.Response[v1.ListRolesResponse], error) {
-	limit, offset := pagination.Parse(req.Msg.Page)
-	q := pagination.ParseQuery(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.RolesQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -46,7 +46,7 @@ func (s *RoleService) ListRoles(ctx context.Context, req *connect.Request[v1.Lis
 
 	return connect.NewResponse(&v1.ListRolesResponse{
 		Roles: protoRoles,
-		Page:  pagination.Info(offset, limit, total),
+		Page:  pages.Info(offset, limit, total),
 	}), nil
 }
 
@@ -200,7 +200,7 @@ func (s *RoleService) GetPermissionMatrix(ctx context.Context, req *connect.Requ
 	}
 
 	// Casbin subjects are role names, the wire keys by role id
-	allRoles, _, err := s.store.ListRoles(ctx, pagination.Query{}, 0, 0)
+	allRoles, _, err := s.store.ListRoles(ctx, pages.Query{}, 0, 0)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -234,9 +234,9 @@ func (s *RoleService) GetPermissionMatrix(ctx context.Context, req *connect.Requ
 }
 
 func (s *RoleService) ListScopeableObjects(ctx context.Context, req *connect.Request[v1.ListScopeableObjectsRequest]) (*connect.Response[v1.ListScopeableObjectsResponse], error) {
-	limit, offset := pagination.Parse(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
 	// Object pickers search free text only
-	query := pagination.Query{Text: pagination.ParseQuery(req.Msg.Page).Text}
+	query := pages.Query{Text: pages.ParseQuery(req.Msg.Page).Text}
 
 	var objects []*v1.ScopeableObject
 	var total int64
@@ -298,7 +298,7 @@ func (s *RoleService) ListScopeableObjects(ctx context.Context, req *connect.Req
 
 	return connect.NewResponse(&v1.ListScopeableObjectsResponse{
 		Objects: objects,
-		Page:    pagination.Info(offset, limit, total),
+		Page:    pages.Info(offset, limit, total),
 	}), nil
 }
 

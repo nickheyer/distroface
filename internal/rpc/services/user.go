@@ -8,9 +8,9 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 )
@@ -126,8 +126,8 @@ func (s *UserService) ChangePassword(ctx context.Context, req *connect.Request[v
 }
 
 func (s *UserService) ListUsers(ctx context.Context, req *connect.Request[v1.ListUsersRequest]) (*connect.Response[v1.ListUsersResponse], error) {
-	limit, offset := pagination.Parse(req.Msg.Page)
-	q := pagination.ParseQuery(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.UsersQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -145,7 +145,7 @@ func (s *UserService) ListUsers(ctx context.Context, req *connect.Request[v1.Lis
 
 	return connect.NewResponse(&v1.ListUsersResponse{
 		Users: protoUsers,
-		Page:  pagination.Info(offset, limit, total),
+		Page:  pages.Info(offset, limit, total),
 	}), nil
 }
 

@@ -14,10 +14,10 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -104,9 +104,9 @@ func (s *ArtifactService) GetArtifactRepository(ctx context.Context, req *connec
 func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *connect.Request[v1.ListArtifactRepositoriesRequest]) (*connect.Response[v1.ListArtifactRepositoriesResponse], error) {
 	user := auth.UserFromContext(ctx)
 	msg := req.Msg
-	limit, offset := pagination.Parse(msg.Page)
+	limit, offset := pages.Parse(msg.Page)
 
-	q := pagination.ParseQuery(msg.Page)
+	q := pages.ParseQuery(msg.Page)
 	if err := stores.ArtifactReposQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -137,7 +137,7 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *con
 
 	return connect.NewResponse(&v1.ListArtifactRepositoriesResponse{
 		Repositories: protoRepos,
-		Page:         pagination.Info(offset, limit, total),
+		Page:         pages.Info(offset, limit, total),
 	}), nil
 }
 
@@ -241,7 +241,7 @@ func (s *ArtifactService) ListArtifacts(ctx context.Context, req *connect.Reques
 		return nil, err
 	}
 
-	limit, offset := pagination.Parse(msg.Page)
+	limit, offset := pages.Parse(msg.Page)
 	list, total, err := s.store.ListArtifacts(ctx, repo.ID, msg.Version, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -249,7 +249,7 @@ func (s *ArtifactService) ListArtifacts(ctx context.Context, req *connect.Reques
 
 	return connect.NewResponse(&v1.ListArtifactsResponse{
 		Artifacts: artifactsToProto(list),
-		Page:      pagination.Info(offset, limit, total),
+		Page:      pages.Info(offset, limit, total),
 	}), nil
 }
 
@@ -260,7 +260,7 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *connect
 		return nil, err
 	}
 
-	limit, offset := pagination.Parse(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
 	order, total, err := s.store.ListArtifactVersionPage(ctx, repo.ID, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -286,16 +286,16 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *connect
 
 	return connect.NewResponse(&v1.ListArtifactVersionsResponse{
 		Versions: versions,
-		Page:     pagination.Info(offset, limit, total),
+		Page:     pages.Info(offset, limit, total),
 	}), nil
 }
 
 func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Request[v1.SearchArtifactsRequest]) (*connect.Response[v1.SearchArtifactsResponse], error) {
 	user := auth.UserFromContext(ctx)
 	msg := req.Msg
-	limit, offset := pagination.Parse(msg.Page)
+	limit, offset := pages.Parse(msg.Page)
 
-	q := pagination.ParseQuery(msg.Page)
+	q := pages.ParseQuery(msg.Page)
 	if err := stores.ArtifactsQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -303,7 +303,7 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Requ
 	criteria := stores.ArtifactSearchCriteria{
 		Query:      q,
 		Properties: msg.Properties,
-		OrderBy:    pagination.OrderBy(msg.Page, stores.ArtifactSortColumns, "created_at DESC"),
+		OrderBy:    pages.OrderBy(msg.Page, stores.ArtifactSortColumns, "created_at DESC"),
 		Limit:      limit,
 		Offset:     offset,
 	}
@@ -332,7 +332,7 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Requ
 
 	return connect.NewResponse(&v1.SearchArtifactsResponse{
 		Artifacts: artifactsToProto(list),
-		Page:      pagination.Info(offset, limit, total),
+		Page:      pages.Info(offset, limit, total),
 	}), nil
 }
 

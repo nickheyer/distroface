@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/pagination"
+	"github.com/nickheyer/distroface/pkg/pages"
 	"gorm.io/gorm"
 )
 
@@ -91,7 +91,7 @@ func (s *Store) GetUserByOIDCSubject(ctx context.Context, subject string) (*db.U
 }
 
 // UsersQuery allowlists user list filters
-var UsersQuery = pagination.Spec{
+var UsersQuery = pages.Spec{
 	Fields: map[string]string{
 		"username":      "username",
 		"email":         "email",
@@ -101,7 +101,7 @@ var UsersQuery = pagination.Spec{
 	Text: []string{"username", "email", "display_name"},
 }
 
-func (s *Store) ListUsers(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.User, int64, error) {
+func (s *Store) ListUsers(ctx context.Context, q pages.Query, limit, offset int) ([]*db.User, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.User{}).Scopes(UsersQuery.Scope(q))
 
 	var total int64

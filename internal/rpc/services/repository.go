@@ -9,11 +9,11 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -72,7 +72,7 @@ func (s *RepositoryService) GetRepository(ctx context.Context, req *connect.Requ
 }
 
 func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.Request[v1.ListRepositoriesRequest]) (*connect.Response[v1.ListRepositoriesResponse], error) {
-	pageSize, offset := pagination.Parse(req.Msg.Page)
+	pageSize, offset := pages.Parse(req.Msg.Page)
 
 	// Resolve visibility: admin sees all, authenticated users see public +
 	// owned + org membership + RBAC grants, anonymous sees public only.
@@ -90,7 +90,7 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.R
 	}
 
 	namespace := portal.ScopeNamespace(ctx, req.Msg.Namespace)
-	q := pagination.ParseQuery(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.ReposQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -108,7 +108,7 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.R
 
 	return connect.NewResponse(&v1.ListRepositoriesResponse{
 		Repositories: protoRepos,
-		Page:         pagination.Info(offset, pageSize, total),
+		Page:         pages.Info(offset, pageSize, total),
 	}), nil
 }
 
@@ -176,9 +176,9 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	pagination.Sort(req.Msg.Page, tags, tagSortColumns)
+	pages.Sort(req.Msg.Page, tags, tagSortColumns)
 
-	pageSize, offset := pagination.Parse(req.Msg.Page)
+	pageSize, offset := pages.Parse(req.Msg.Page)
 
 	total := len(tags)
 	start := min(offset, total)
@@ -186,7 +186,7 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v
 
 	return connect.NewResponse(&v1.ListTagsResponse{
 		Tags: tags[start:end],
-		Page: pagination.Info(start, pageSize, int64(total)),
+		Page: pages.Info(start, pageSize, int64(total)),
 	}), nil
 }
 
@@ -304,7 +304,7 @@ func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *co
 		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 
-	limit, offset := pagination.Parse(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
 
 	repos, total, err := s.store.ListStarredRepositories(ctx, user.ID, limit, offset)
 	if err != nil {
@@ -319,7 +319,7 @@ func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *co
 
 	return connect.NewResponse(&v1.ListStarredRepositoriesResponse{
 		Repositories: protoRepos,
-		Page:         pagination.Info(offset, limit, total),
+		Page:         pages.Info(offset, limit, total),
 	}), nil
 }
 

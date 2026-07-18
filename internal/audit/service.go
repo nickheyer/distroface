@@ -5,8 +5,8 @@ import (
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -24,8 +24,8 @@ func NewService(store *stores.Store, log *logger.Logger) *Service {
 }
 
 func (s *Service) ListAuditEvents(ctx context.Context, req *connect.Request[v1.ListAuditEventsRequest]) (*connect.Response[v1.ListAuditEventsResponse], error) {
-	limit, offset := pagination.Parse(req.Msg.Page)
-	q := pagination.ParseQuery(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.AuditQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -33,7 +33,7 @@ func (s *Service) ListAuditEvents(ctx context.Context, req *connect.Request[v1.L
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	resp := &v1.ListAuditEventsResponse{Page: pagination.Info(offset, limit, total)}
+	resp := &v1.ListAuditEventsResponse{Page: pages.Info(offset, limit, total)}
 	for _, ev := range events {
 		resp.Events = append(resp.Events, &v1.AuditEvent{
 			Id:        ev.ID,

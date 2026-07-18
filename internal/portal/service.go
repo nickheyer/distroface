@@ -12,10 +12,10 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/internal/pagination"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -217,8 +217,8 @@ func (s *Service) ListPortals(ctx context.Context, req *connect.Request[v1.ListP
 	if err != nil {
 		return nil, err
 	}
-	limit, offset := pagination.Parse(req.Msg.Page)
-	q := pagination.ParseQuery(req.Msg.Page)
+	limit, offset := pages.Parse(req.Msg.Page)
+	q := pages.ParseQuery(req.Msg.Page)
 	if err := stores.PortalsQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
@@ -227,7 +227,7 @@ func (s *Service) ListPortals(ctx context.Context, req *connect.Request[v1.ListP
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	resp := &v1.ListPortalsResponse{
-		Page: pagination.Info(offset, limit, total),
+		Page: pages.Info(offset, limit, total),
 	}
 	for _, p := range portals {
 		resp.Portals = append(resp.Portals, portalToProto(p))

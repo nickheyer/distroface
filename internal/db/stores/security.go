@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/pagination"
+	"github.com/nickheyer/distroface/pkg/pages"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -49,13 +49,13 @@ func (s *Store) GetCertificateDomainByName(ctx context.Context, domain string) (
 }
 
 // CertDomainsQuery allowlists certificate domain list filters
-var CertDomainsQuery = pagination.Spec{
+var CertDomainsQuery = pages.Spec{
 	Fields: map[string]string{"domain": "domain"},
 	Text:   []string{"domain"},
 }
 
 // Returns a page of domains preloaded with their owning org
-func (s *Store) ListCertificateDomains(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.CertificateDomain, int64, error) {
+func (s *Store) ListCertificateDomains(ctx context.Context, q pages.Query, limit, offset int) ([]*db.CertificateDomain, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.CertificateDomain{}).Scopes(CertDomainsQuery.Scope(q))
 
 	var total int64
@@ -71,7 +71,7 @@ func (s *Store) ListCertificateDomains(ctx context.Context, q pagination.Query, 
 	return domains, total, err
 }
 
-func (s *Store) ListCertificateDomainsByOrg(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]*db.CertificateDomain, int64, error) {
+func (s *Store) ListCertificateDomainsByOrg(ctx context.Context, orgID string, q pages.Query, limit, offset int) ([]*db.CertificateDomain, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.CertificateDomain{}).
 		Where("org_id = ?", orgID).
 		Scopes(CertDomainsQuery.Scope(q))
@@ -117,7 +117,7 @@ type CertHostRow struct {
 }
 
 // CertHostsQuery allowlists certificate host list filters
-var CertHostsQuery = pagination.Spec{
+var CertHostsQuery = pages.Spec{
 	Fields: map[string]string{
 		"hostname":    "hostname",
 		"portal_name": "portal_name",
@@ -126,7 +126,7 @@ var CertHostsQuery = pagination.Spec{
 }
 
 // Org portal hostnames unioned with orphan cert domains, paged and ordered
-func (s *Store) ListCertificateHosts(ctx context.Context, orgID string, q pagination.Query, limit, offset int) ([]CertHostRow, int64, error) {
+func (s *Store) ListCertificateHosts(ctx context.Context, orgID string, q pages.Query, limit, offset int) ([]CertHostRow, int64, error) {
 	const union = `
 		SELECT p.hostname AS hostname, p.id AS portal_id, p.name AS portal_name, 0 AS sort_group
 		FROM registry_portals p
@@ -212,7 +212,7 @@ func (s *Store) CreateAuditEvent(ctx context.Context, ev *db.AuditEvent) error {
 }
 
 // AuditQuery allowlists audit event list filters
-var AuditQuery = pagination.Spec{
+var AuditQuery = pages.Spec{
 	Fields: map[string]string{
 		"action":    "action",
 		"actor":     "actor",
@@ -224,7 +224,7 @@ var AuditQuery = pagination.Spec{
 }
 
 // Newest first
-func (s *Store) ListAuditEvents(ctx context.Context, q pagination.Query, limit, offset int) ([]*db.AuditEvent, int64, error) {
+func (s *Store) ListAuditEvents(ctx context.Context, q pages.Query, limit, offset int) ([]*db.AuditEvent, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.AuditEvent{}).Scopes(AuditQuery.Scope(q))
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
