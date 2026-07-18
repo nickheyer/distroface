@@ -63,7 +63,7 @@
 		`docker login ${registryHost} \\\n  -u ${authStore.user?.username} \\\n  -p ${newPlaintextToken ?? 'YOUR_TOKEN'}`
 	);
 	const apiCurlExample = $derived(
-		`curl -X POST \\\n  ${window.location.protocol}//${registryHost}/distroface.v1.RepositoryService/ListRepositories \\\n  -H "authorization: Bearer ${newPlaintextToken ?? 'YOUR_TOKEN'}" \\\n  -H "content-type: application/json" \\\n  -d '{}'`
+		`curl -X POST \\\n  ${portalStore.scheme()}://${registryHost}/distroface.v1.RepositoryService/ListRepositories \\\n  -H "authorization: Bearer ${newPlaintextToken ?? 'YOUR_TOKEN'}" \\\n  -H "content-type: application/json" \\\n  -d '{}'`
 	);
 
 	async function loadTokens() {

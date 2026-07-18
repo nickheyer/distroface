@@ -71,6 +71,42 @@ func (s *Store) ListRegistryPortals(ctx context.Context) ([]*db.RegistryPortal, 
 	return portals, err
 }
 
+// Enabled portals with the hostname on any port
+func (s *Store) ListPortalsByHostname(ctx context.Context, hostname string) ([]*db.RegistryPortal, error) {
+	var portals []*db.RegistryPortal
+	err := s.db.WithContext(ctx).Where("hostname = ? AND enabled = ?", hostname, true).Find(&portals).Error
+	return portals, err
+}
+
+// Enabled portal answering host on the listener port, exact hostname
+// wins over a port only portal, exact port wins over the app port
+func (s *Store) GetPortalForHost(ctx context.Context, hostname string, port int) (*db.RegistryPortal, error) {
+	var portals []*db.RegistryPortal
+	err := s.db.WithContext(ctx).
+		Where("hostname IN ? AND enabled = ? AND port IN ?", []string{hostname, ""}, true, []int{port, 0}).
+		Find(&portals).Error
+	if err != nil || len(portals) == 0 {
+		return nil, err
+	}
+	score := func(p *db.RegistryPortal) int {
+		n := 0
+		if p.Hostname == hostname {
+			n += 2
+		}
+		if p.Port == port {
+			n++
+		}
+		return n
+	}
+	best := portals[0]
+	for _, p := range portals[1:] {
+		if score(p) > score(best) {
+			best = p
+		}
+	}
+	return best, nil
+}
+
 func (s *Store) UpdateRegistryPortal(ctx context.Context, portal *db.RegistryPortal) error {
 	return s.db.WithContext(ctx).Save(portal).Error
 }

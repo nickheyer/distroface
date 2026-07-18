@@ -2,6 +2,7 @@ syntax = "proto3";
 
 package distroface.v1;
 
+import "distroface/v1/certificate.proto";
 import "distroface/v1/pagination.proto";
 import "google/protobuf/timestamp.proto";
 
@@ -44,6 +45,11 @@ message RegistryPortal {
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
   bool tls = 13; // Https enforced for this portal, cleartext requests redirect
+  CertSource cert_source = 14;
+  string acme_email = 15; // Per portal acme account email override
+  string acme_directory_url = 16; // Per portal acme directory override
+  CertState cert_state = 17; // Computed serving state
+  string cert_detail = 18; // Computed, first blocker when not ready
 }
 
 // Fields to create a portal, hostname or port required
@@ -57,6 +63,9 @@ message CreatePortalRequest {
   bool require_auth = 7;
   int32 port = 8;
   bool tls = 9;
+  CertSource cert_source = 10; // UNSPECIFIED IS THE SAME AS NO CERT YOU IDIOT
+  string acme_email = 11;
+  string acme_directory_url = 12;
 }
 
 // The newly created portal
@@ -71,6 +80,7 @@ message ResolvePortalRequest {}
 message ResolvePortalResponse {
   bool is_portal = 1;
   string org_name = 2;
+  string primary_scheme = 9; // http or https for the primary ui host
   string org_display_name = 3;
   string portal_name = 4;
   bool allow_push = 5;
@@ -116,6 +126,9 @@ message UpdatePortalRequest {
   optional bool enabled = 10;
   optional int32 port = 11;
   optional bool tls = 12;
+  CertSource cert_source = 13; // Unspecified keeps the current source
+  optional string acme_email = 14;
+  optional string acme_directory_url = 15;
 }
 
 // The updated portal

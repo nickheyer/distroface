@@ -118,6 +118,7 @@ func (s *Store) Migrate() error {
 		&db.ArtifactProperty{},
 		&db.CertificateDomain{},
 		&db.ACMECacheEntry{},
+		&db.TLSCertificate{},
 		&db.AuditEvent{},
 	); err != nil {
 		return fmt.Errorf("failed to auto-migrate: %w", err)
@@ -137,6 +138,10 @@ func (s *Store) Migrate() error {
 		return fmt.Errorf("failed to backfill artifact repo namespace: %w", err)
 	}
 
+	if err := s.backfillPortalCertSource(); err != nil {
+		return fmt.Errorf("failed to backfill portal cert source: %w", err)
+	}
+
 	// Org scoped casbin objects moved from org name to org id
 	if s.db.Migrator().HasTable("casbin_rule") {
 		if err := s.db.Exec(`UPDATE casbin_rule
@@ -152,4 +157,17 @@ func (s *Store) Migrate() error {
 	}
 
 	return nil
+}
+
+// Pre explicit-source portals become manual when material exists, else none
+func (s *Store) backfillPortalCertSource() error {
+	if err := s.db.Exec(`UPDATE registry_portals SET cert_source = ?
+		WHERE cert_source = '' AND EXISTS (
+			SELECT 1 FROM tls_certificates t
+			WHERE t.scope = ? AND t.portal_id = registry_portals.id)`,
+		db.CertSourceManual, db.TLSCertScopePortal).Error; err != nil {
+		return err
+	}
+	return s.db.Exec(`UPDATE registry_portals SET cert_source = ? WHERE cert_source = ''`,
+		db.CertSourceNone).Error
 }

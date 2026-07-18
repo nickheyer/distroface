@@ -63,13 +63,6 @@ func (m *Manager) SetTLSConfig(cfg *tls.Config) {
 	m.mu.Unlock()
 }
 
-// True when listeners are able to terminate tls
-func (m *Manager) TLSAvailable() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.tlsConfig != nil
-}
-
 // Timeouts must be set before the first Reconcile
 func (m *Manager) SetTimeouts(t ServerTimeouts) {
 	m.mu.Lock()

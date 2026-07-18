@@ -1,20 +1,23 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { rpcClient } from '$lib/api/rpc-client';
-	import { toast } from 'svelte-sonner';
+	import { onMount } from 'svelte';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
+	import { Textarea } from '$lib/components/ui/textarea';
+	import * as Select from '$lib/components/ui/select';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
-	import { Globe, Tag, Network, Lock, Shuffle, Plus, X, ShieldCheck } from '@lucide/svelte';
-	import { effectiveAddress, placementError } from '$lib/portal-address';
-	import { certDate, isIssuableHostname } from '$lib/cert-utils';
-	import { configStore } from '$lib/stores/config.svelte';
+	import { Plus, X } from '@lucide/svelte';
+	import { Act } from '$lib/act.svelte';
+	import { effectiveAddress, placementError, portalScheme } from '$lib/portal-address';
+	import { certDate, certSourceLabels, certStateBadge, isIssuableHostname } from '$lib/cert-utils';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
+	import { CertSource, TLSScope, type TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
 
 	let {
 		orgName,
@@ -29,6 +32,9 @@
 	} = $props();
 
 	type RuleDraft = { pattern: string; replace: string };
+
+	const ACME_EMAIL_KEY = 'tls.acme.email';
+	const ACME_DIR_KEY = 'tls.acme.directory_url';
 
 	// Draft snapshot on mount, parent keys this component per portal
 	/* svelte-ignore state_referenced_locally */
@@ -45,15 +51,58 @@
 	let requireAuth = $state(portal?.requireAuth ?? false);
 	/* svelte-ignore state_referenced_locally */
 	let tls = $state(portal?.tls ?? false);
+	/* svelte-ignore state_referenced_locally */
+	let certSource = $state<CertSource>(portal?.certSource || CertSource.NONE);
+	/* svelte-ignore state_referenced_locally */
+	let acmeEmail = $state(portal?.acmeEmail ?? '');
+	/* svelte-ignore state_referenced_locally */
+	let acmeDirectory = $state(portal?.acmeDirectoryUrl ?? '');
 	let provisionCert = $state(true);
+	let certPem = $state('');
+	let keyPem = $state('');
+	let orgCA = $state<TLSMaterialInfo | null>(null);
+	let orgCert = $state<TLSMaterialInfo | null>(null);
+	let portalCert = $state<TLSMaterialInfo | null>(null);
+	let acmeDirInherited = $state('');
+	let acmeEmailInherited = $state('');
 	/* svelte-ignore state_referenced_locally */
 	let rules = $state<RuleDraft[]>(
 		portal?.rules.map((r) => ({ pattern: r.pattern, replace: r.replace })) ?? []
 	);
-	let submitting = $state(false);
+	const submitAct = new Act();
 
-	const serverTLS = $derived(configStore.get('tls.enabled', false) === true);
-	const acmeEnabled = $derived(configStore.get('tls.acme.enabled', false) === true);
+	const sourceOptions = [
+		CertSource.NONE, CertSource.ACME, CertSource.ORG_CA, CertSource.ORG_CERT, CertSource.MANUAL
+	];
+
+	async function loadMaterial() {
+		try {
+			const resp = await rpcClient.certificate.getTLSMaterial({
+				orgId,
+				portalId: portal?.id ?? ''
+			}, silentCallOptions);
+			orgCA = resp.orgCa ?? null;
+			orgCert = resp.orgCert ?? null;
+			portalCert = resp.portalCert ?? null;
+		} catch {
+			// Notes fall back to their generic wording
+		}
+	}
+
+	async function loadInherited() {
+		try {
+			const resp = await rpcClient.organization.getOrgSettings({ orgId }, silentCallOptions);
+			acmeDirInherited = resp.overrides[ACME_DIR_KEY] ?? resp.defaults[ACME_DIR_KEY] ?? '';
+			acmeEmailInherited = resp.overrides[ACME_EMAIL_KEY] ?? resp.defaults[ACME_EMAIL_KEY] ?? '';
+		} catch {
+			// Placeholders stay generic
+		}
+	}
+
+	onMount(() => {
+		loadMaterial();
+		loadInherited();
+	});
 
 	function goBack() {
 		goto(resolve('/orgs/[name]/portals', { name: orgName }));
@@ -73,43 +122,44 @@
 			: ''
 	);
 	const previewImage = $derived(mapUnqualified ? 'myimage' : `${orgName}/myimage`);
-	const canProvision = $derived(
-		!portal && tls && acmeEnabled && isIssuableHostname(hostname)
-	);
-	// App port portals ride the primary listener's scheme
-	const onAppPort = $derived(portText.trim() === '');
-	const httpsOn = $derived(tls || (serverTLS && onAppPort));
-	const scheme = $derived(
-		httpsOn
-			? 'https'
-			: onAppPort && typeof window !== 'undefined'
-				? window.location.protocol.replace(':', '')
-				: 'http'
-	);
+	const canProvision = $derived(!portal && certSource === CertSource.ACME && isIssuableHostname(hostname));
+	const pemsFilled = $derived(certPem.trim() !== '' && keyPem.trim() !== '');
+	// Explicit source means https answers, the tls flag only forces redirects
+	const httpsOn = $derived(certSource !== CertSource.NONE);
+	const scheme = $derived(portalScheme(certSource));
+	// Manual portals must not go live without material to serve
+	const manualNeedsPems = $derived(certSource === CertSource.MANUAL && !portalCert && !pemsFilled);
+	// Live serving state computed by the server, only exists after save
+	const liveState = $derived(portal ? certStateBadge(portal.certState) : null);
 	const ruleCount = $derived(
 		rules.filter((r) => r.pattern.trim() !== '' || r.replace.trim() !== '').length
 	);
 
-	// Same enable flow as the certificates page, the portal must exist first
+	// Issuance failures surface as the portal's live cert state
 	async function provisionCertificate(domain: string) {
 		try {
-			const resp = await rpcClient.certificate.addCertificateDomain({ domain, orgId });
-			if (resp.domain?.approved) {
-				toast.info(`Requesting certificate for ${domain} - this can take a minute`);
-				const issued = await rpcClient.certificate.issueCertificate({ domain, orgId });
-				toast.success(
-					issued.cert?.notAfter
-						? `Certificate issued for ${domain}, valid until ${certDate(issued.cert)}`
-						: `Certificate issued for ${domain}`
-				);
-			} else {
-				toast.success(`${domain} registered - a system administrator must approve it before issuance`);
-			}
-		} catch { /* error interceptor */ }
+			await rpcClient.certificate.issueCertificate({ domain, orgId }, silentCallOptions);
+		} catch {
+			// Portal list shows the pending or error state
+		}
+	}
+
+	// Throws on failure so the caller never reports a broken portal as done
+	async function uploadPortalCert(portalId: string) {
+		const resp = await rpcClient.certificate.uploadTLSCertificate({
+			scope: TLSScope.TLS_SCOPE_PORTAL,
+			orgId,
+			portalId,
+			certPem,
+			keyPem
+		}, silentCallOptions);
+		portalCert = resp.info ?? null;
+		certPem = '';
+		keyPem = '';
 	}
 
 	async function submit() {
-		if (!formValid) return;
+		if (!formValid || manualNeedsPems) return;
 		const cleanedRules = rules
 			.map((r) => ({ pattern: r.pattern.trim(), replace: r.replace.trim() }))
 			.filter((r) => r.pattern !== '' || r.replace !== '');
@@ -122,44 +172,54 @@
 			allowPush,
 			requireAuth,
 			tls,
+			certSource,
+			acmeEmail: acmeEmail.trim(),
+			acmeDirectoryUrl: acmeDirectory.trim(),
 			rules: cleanedRules
 		};
-		submitting = true;
-		try {
+		let redirected = false;
+		const ok = await submitAct.run(async () => {
 			if (portal) {
-				await rpcClient.portal.updatePortal({ ...common, id: portal.id, setRules: true });
-				toast.success('Portal updated');
-			} else {
-				await rpcClient.portal.createPortal(common);
-				toast.success('Portal created');
-				if (canProvision && provisionCert) {
-					await provisionCertificate(common.hostname);
+				await rpcClient.portal.updatePortal({ ...common, id: portal.id, setRules: true }, silentCallOptions);
+				if (certSource === CertSource.MANUAL && pemsFilled) {
+					await uploadPortalCert(portal.id);
+				}
+				return;
+			}
+			const resp = await rpcClient.portal.createPortal(common, silentCallOptions);
+			const created = resp.portal;
+			if (created && certSource === CertSource.MANUAL && pemsFilled) {
+				try {
+					await uploadPortalCert(created.id);
+				} catch {
+					// Portal exists but serves nothing, its editor shows the broken state
+					redirected = true;
+					goto(resolve('/orgs/[name]/portals/[id]', { name: orgName, id: created.id }));
+					return;
 				}
 			}
-			goBack();
-		} catch { /* error interceptor */ }
-		finally { submitting = false; }
+			if (canProvision && provisionCert) {
+				await provisionCertificate(common.hostname);
+			}
+		});
+		if (ok && !redirected) goBack();
 	}
 </script>
 
 <div class="grid gap-6 lg:grid-cols-[1fr_19rem] items-start">
 	<div class="space-y-4 min-w-0">
-		<FormCard title="Portal" description="A label for this portal, shown only in the portal list." icon={Tag}>
+		<FormCard title="Portal" description="Label shown in the portal list.">
 			<FormField label="Name" id="portal-name" required>
 				<Input id="portal-name" bind:value={name} placeholder="e.g. public-mirror" class="max-w-sm" />
 			</FormField>
 		</FormCard>
 
-		<FormCard
-			title="Address"
-			description="Where the portal answers. Set a hostname, a dedicated port, or both."
-			icon={Network}
-		>
+		<FormCard title="Address" description="Where the portal answers.">
 			<div class="grid grid-cols-1 sm:grid-cols-[1fr_9rem] gap-3">
 				<FormField
 					label="Hostname"
 					id="portal-hostname"
-					help="A DNS name pointed at this server. Empty answers on any hostname."
+					help="DNS name for this portal, empty matches any."
 					error={addressError && !addressError.startsWith('Port') ? addressError : ''}
 				>
 					<Input
@@ -172,7 +232,7 @@
 				<FormField
 					label="Port"
 					id="portal-port"
-					help="Empty uses the app's port{mainPort ? ` (${mainPort})` : ''}."
+					help="Empty uses the app port{mainPort ? ` (${mainPort})` : ''}."
 					error={addressError.startsWith('Port') ? addressError : ''}
 				>
 					<Input
@@ -186,78 +246,133 @@
 			</div>
 		</FormCard>
 
-		<FormCard
-			title="HTTPS"
-			description="Serve this portal over TLS. Portals sharing the port are unaffected."
-			icon={ShieldCheck}
-		>
+		<FormCard title="HTTPS" description="Certificate source for this portal.">
 			<div class="space-y-3">
+				{#if portal && liveState}
+					<div class="flex items-center gap-2 flex-wrap">
+						<Badge variant="outline" class="text-xs {liveState.cls}">{liveState.label}</Badge>
+						<span class="text-xs text-muted-foreground">
+							{portal.certDetail || 'Serving a valid certificate.'}
+						</span>
+					</div>
+				{/if}
 				<FormField
-					label="Serve HTTPS"
-					horizontal
-					help="Certificates are picked per hostname. HTTP requests to this portal redirect to HTTPS."
+					label="Certificate source"
+					id="portal-cert-source"
+					help="Picks what certificate this portal serves."
 				>
-					<Switch bind:checked={tls} />
-				</FormField>
-				{#if canProvision}
-					<FormField
-						label="Provision certificate now"
-						horizontal
-						help="Request an ACME certificate for {hostname.trim().toLowerCase()} as soon as the portal is created."
+					<Select.Root
+						type="single"
+						value={String(certSource)}
+						onValueChange={(v) => (certSource = Number(v) as CertSource)}
 					>
-						<Switch bind:checked={provisionCert} />
+						<Select.Trigger id="portal-cert-source" class="w-64">
+							{certSourceLabels[certSource]}
+						</Select.Trigger>
+						<Select.Content>
+							{#each sourceOptions as option (option)}
+								<Select.Item value={String(option)} label={certSourceLabels[option]} />
+							{/each}
+						</Select.Content>
+					</Select.Root>
+				</FormField>
+
+				{#if certSource !== CertSource.NONE}
+					<FormField label="Require HTTPS" horizontal help="Redirects cleartext requests to HTTPS.">
+						<Switch bind:checked={tls} />
 					</FormField>
-				{:else if tls && !portal && !isIssuableHostname(hostname)}
+				{/if}
+
+				{#if certSource === CertSource.ACME}
+					{#if canProvision}
+						<FormField
+							label="Provision now"
+							horizontal
+							help="Requests the certificate right after creation."
+						>
+							<Switch bind:checked={provisionCert} />
+						</FormField>
+					{/if}
+					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+						<FormField label="Directory URL" id="portal-acme-dir" help="Empty inherits the organization value.">
+							<Input id="portal-acme-dir" bind:value={acmeDirectory} class="font-mono text-xs" placeholder={acmeDirInherited || 'inherited'} />
+						</FormField>
+						<FormField label="Account email" id="portal-acme-email" help="Empty inherits the organization value.">
+							<Input id="portal-acme-email" bind:value={acmeEmail} placeholder={acmeEmailInherited || 'inherited'} />
+						</FormField>
+					</div>
 					<p class="text-[13px] text-muted-foreground">
-						Automatic certificates need a public DNS hostname. Without one, the server's manual
-						certificate is used.
+						Issuance needs the hostname reachable from the internet.
 					</p>
-				{:else if tls && portal}
-					<p class="text-[13px] text-muted-foreground">
-						Certificates for this hostname are managed on the Certificates page.
-					</p>
+				{:else if certSource === CertSource.ORG_CA}
+					{#if orgCA}
+						<p class="text-[13px] text-muted-foreground">
+							Certificates mint from <span class="font-medium">{orgCA.subject}</span>, clients must
+							trust its chain.
+						</p>
+					{:else}
+						<p class="text-[13px] text-amber-600 dark:text-amber-400">
+							No signing CA yet, add one on the Certificates page.
+						</p>
+					{/if}
+				{:else if certSource === CertSource.ORG_CERT}
+					{#if orgCert}
+						<p class="text-[13px] text-muted-foreground">
+							Serves <span class="font-medium">{orgCert.subject}</span>, its SANs must cover this
+							hostname.
+						</p>
+					{:else}
+						<p class="text-[13px] text-amber-600 dark:text-amber-400">
+							No shared certificate yet, upload one on the Certificates page.
+						</p>
+					{/if}
+				{:else if certSource === CertSource.MANUAL}
+					{#if portalCert}
+						<p class="text-[13px] text-muted-foreground">
+							Uploaded <span class="font-medium">{portalCert.subject || 'certificate'}</span>,
+							expires {certDate(portalCert)}. Paste a new pair to replace it.
+						</p>
+					{/if}
+					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+						<FormField label="Certificate (PEM)" id="portal-cert-pem" required={!portalCert} help="Full chain, leaf first.">
+							<Textarea id="portal-cert-pem" bind:value={certPem} class="font-mono text-xs" rows={5} placeholder="-----BEGIN CERTIFICATE-----" />
+						</FormField>
+						<FormField label="Private key (PEM)" id="portal-key-pem" required={!portalCert} help="Stored server side, never shown.">
+							<Textarea id="portal-key-pem" bind:value={keyPem} class="font-mono text-xs" rows={5} placeholder="-----BEGIN PRIVATE KEY-----" />
+						</FormField>
+					</div>
+					{#if manualNeedsPems}
+						<p class="text-[13px] text-amber-600 dark:text-amber-400">
+							Paste a certificate and key or handshakes fail.
+						</p>
+					{/if}
 				{/if}
 			</div>
 		</FormCard>
 
-		<FormCard title="Access" description="What clients on this address are allowed to do." icon={Lock}>
+		<FormCard title="Access" description="What clients on this address can do.">
 			<div class="space-y-3">
-				<FormField
-					label="Allow push"
-					horizontal
-					help="Off makes the portal read-only. Pushes and uploads are rejected."
-				>
+				<FormField label="Allow push" horizontal help="Off makes the portal pull only.">
 					<Switch bind:checked={allowPush} />
 				</FormField>
 
-				<FormField
-					label="Require sign-in"
-					horizontal
-					help="On refuses anonymous pulls, even from public repositories."
-				>
+				<FormField label="Require sign-in" horizontal help="On refuses anonymous pulls.">
 					<Switch bind:checked={requireAuth} />
 				</FormField>
 			</div>
 		</FormCard>
 
-		<FormCard
-			title="Image names"
-			description="How names requested on this address map into {orgName}'s namespace."
-			icon={Shuffle}
-		>
+		<FormCard title="Image names" description="How requested names map into {orgName}.">
 			<div class="space-y-3">
 				<FormField
 					label="Map bare names"
 					horizontal
-					help="docker pull {previewAddress || 'portal-host'}/myimage resolves to {orgName}/myimage."
+					help="Resolves {previewAddress || 'portal-host'}/myimage to {orgName}/myimage."
 				>
 					<Switch bind:checked={mapUnqualified} />
 				</FormField>
 
-				<FormField
-					label="Rewrite rules"
-					help="Optional regex rewrites of requested names, before bare-name mapping. First match wins; results must stay under {orgName}/."
-				>
+				<FormField label="Rewrite rules" help="Regex rewrites applied before bare name mapping.">
 					<div class="space-y-2">
 						{#each rules as rule, i (i)}
 							<div class="flex items-center gap-2">
@@ -267,7 +382,7 @@
 									placeholder="legacy/(.+)"
 									aria-label="Rule pattern"
 								/>
-								<span class="text-xs text-muted-foreground shrink-0">→</span>
+								<span class="text-xs text-muted-foreground shrink-0">&rarr;</span>
 								<Input
 									bind:value={rule.replace}
 									class="font-mono text-xs"
@@ -292,21 +407,23 @@
 			</div>
 		</FormCard>
 
-		<div class="flex items-center justify-end gap-2 pt-1">
+		<div class="flex items-center justify-end gap-3 pt-1">
+			{#if submitAct.error}
+				<p class="text-[13px] text-destructive mr-auto">{submitAct.error}</p>
+			{/if}
 			<Button variant="outline" onclick={goBack}>Cancel</Button>
-			<Button onclick={submit} disabled={submitting || !formValid}>
+			<Button onclick={submit} disabled={submitAct.busy || !formValid || manualNeedsPems}>
 				{#if portal}
-					{submitting ? 'Saving...' : 'Save Changes'}
+					{submitAct.busy ? 'Saving...' : 'Save Changes'}
 				{:else}
-					{submitting ? 'Creating...' : 'Create Portal'}
+					{submitAct.busy ? 'Creating...' : 'Create Portal'}
 				{/if}
 			</Button>
 		</div>
 	</div>
 
 	<aside class="lg:sticky lg:top-20 rounded-xl border border-border/60 bg-card overflow-hidden">
-		<div class="px-5 py-3.5 border-b border-border/40 bg-muted/20 flex items-center gap-2">
-			<Globe class="h-4 w-4 text-primary" />
+		<div class="px-5 py-3.5 border-b border-border/40 bg-muted/20">
 			<h3 class="text-sm font-semibold">This portal serves</h3>
 		</div>
 		<div class="p-5 space-y-4">
@@ -319,7 +436,7 @@
 					</div>
 					{#if portText.trim() === ''}
 						<p class="text-xs text-muted-foreground/70 mt-1">
-							On the app's own port{mainPort ? ` (${mainPort})` : ''}.
+							On the app port{mainPort ? ` (${mainPort})` : ''}.
 						</p>
 					{:else if hostname.trim() === ''}
 						<p class="text-xs text-muted-foreground/70 mt-1">Any hostname reaching port {portText}.</p>

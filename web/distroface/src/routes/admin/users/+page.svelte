@@ -16,16 +16,12 @@
 	import FormPanel from '$lib/components/form-panel.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import FormField from '$lib/components/form-field.svelte';
-	import FormSection from '$lib/components/form-section.svelte';
 	import AsyncSelect from '$lib/components/async-select.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import BulkActionBar from '$lib/components/bulk-action-bar.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import PasswordInput from '$lib/components/password-input.svelte';
 	import PasswordStrength from '$lib/components/password-strength.svelte';
-	import {
-		Pencil, Trash2, UserCog, UserPlus, UserCheck, UserX, Sparkles, KeyRound, Plus, Minus
-	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
@@ -76,6 +72,13 @@
 
 	let bulkDeleteDialogOpen = $state(false);
 	let bulkWorking = $state(false);
+
+	const createPasswordError = $derived(
+		createPassword && createPassword.length < 8 ? 'At least 8 characters' : ''
+	);
+	const createValid = $derived(
+		!!createUsername && !!createPassword && !createPasswordError
+	);
 
 	function getInitials(user: User): string {
 		const name = user.displayName || user.username;
@@ -143,7 +146,6 @@
 				userIds: [...selected],
 				isActive: active
 			});
-			toast.success(`${resp.updatedCount} user${resp.updatedCount !== 1 ? 's' : ''} ${active ? 'activated' : 'deactivated'}`);
 			reportBulkErrors(resp.errors);
 			selected.clear();
 			await loadUsers();
@@ -163,7 +165,6 @@
 				addRoleIds: add ? [bulkRoleId] : [],
 				removeRoleIds: add ? [] : [bulkRoleId]
 			});
-			toast.success(`Role ${add ? 'added to' : 'removed from'} ${resp.updatedCount} user${resp.updatedCount !== 1 ? 's' : ''}`);
 			reportBulkErrors(resp.errors);
 			bulkRoleId = '';
 			selected.clear();
@@ -179,7 +180,6 @@
 		bulkWorking = true;
 		try {
 			const resp = await rpcClient.user.adminBulkDeleteUsers({ userIds: [...selected] });
-			toast.success(`${resp.deletedCount} user${resp.deletedCount !== 1 ? 's' : ''} deleted`);
 			reportBulkErrors(resp.errors);
 			selected.clear();
 			bulkDeleteDialogOpen = false;
@@ -208,14 +208,7 @@
 	}
 
 	async function saveCreate() {
-		if (!createUsername || !createPassword) {
-			toast.error('Username and password are required');
-			return;
-		}
-		if (createPassword.length < 8) {
-			toast.error('Password must be at least 8 characters');
-			return;
-		}
+		if (!createValid) return;
 		createSaving = true;
 		try {
 			await rpcClient.user.adminCreateUser({
@@ -226,7 +219,6 @@
 				roleIds: createSelectedRoles,
 				mustChangePassword: createMustChange
 			});
-			toast.success(`User ${createUsername} created`);
 			createPanelOpen = false;
 			await loadUsers();
 		} catch {
@@ -254,7 +246,6 @@
 				isActive: editActive,
 				roleIds: editSelectedRoles
 			});
-			toast.success('User updated');
 			editPanelOpen = false;
 			await loadUsers();
 		} catch {
@@ -274,7 +265,6 @@
 		deleting = true;
 		try {
 			await rpcClient.user.adminDeleteUser({ userId: deleteUser.id });
-			toast.success('User deleted');
 			deleteDialogOpen = false;
 			await loadUsers();
 		} catch {
@@ -305,10 +295,7 @@
 				<QueryFilterBar {filter} placeholder="Search users..." onchange={filterChanged} />
 			</div>
 			<PermissionGate resource="users" action="create">
-				<Button class="h-9" onclick={openCreate}>
-					<UserPlus class="h-4 w-4 mr-1.5" />
-					Create User
-				</Button>
+				<Button class="h-9" onclick={openCreate}>Create User</Button>
 			</PermissionGate>
 		</div>
 	</div>
@@ -341,7 +328,7 @@
 						<TableHead class="th">Status</TableHead>
 						<TableHead class="th">Joined</TableHead>
 						<PermissionGate allowed={canBulkSelect}>
-							<TableHead class="th w-20"></TableHead>
+							<TableHead class="th w-28"></TableHead>
 						</PermissionGate>
 					</TableRow>
 				</TableHeader>
@@ -368,8 +355,7 @@
 										{user.username}
 									</a>
 									{#if user.mustChangePassword}
-										<Badge variant="outline" class="text-[10px] px-1.5 py-0 gap-1" title="Must change password at next login">
-											<KeyRound class="h-2.5 w-2.5" />
+										<Badge variant="outline" class="text-[10px] px-1.5 py-0" title="Must change password at next login">
 											Reset pending
 										</Badge>
 									{/if}
@@ -403,13 +389,13 @@
 								<TableCell class="text-right py-3 px-3">
 									<div class="flex gap-1 justify-end">
 										<PermissionGate resource="users" action="update">
-											<Button variant="ghost" size="icon" class="h-7 w-7" onclick={() => openEdit(user)}>
-												<Pencil class="h-3.5 w-3.5" />
+											<Button variant="ghost" size="sm" class="h-7 px-2 text-xs" onclick={() => openEdit(user)}>
+												Edit
 											</Button>
 										</PermissionGate>
 										<PermissionGate resource="users" action="delete">
-											<Button variant="ghost" size="icon" class="h-7 w-7 text-destructive hover:text-destructive" onclick={() => openDelete(user)}>
-												<Trash2 class="h-3.5 w-3.5" />
+											<Button variant="ghost" size="sm" class="h-7 px-2 text-xs text-destructive hover:text-destructive" onclick={() => openDelete(user)}>
+												Delete
 											</Button>
 										</PermissionGate>
 									</div>
@@ -433,11 +419,9 @@
 <BulkActionBar count={selected.size} onClear={() => selected.clear()}>
 	<PermissionGate resource="users" action="update">
 		<Button variant="ghost" size="sm" class="h-7" disabled={bulkWorking} onclick={() => bulkSetActive(true)}>
-			<UserCheck class="h-3.5 w-3.5 mr-1" />
 			Activate
 		</Button>
 		<Button variant="ghost" size="sm" class="h-7" disabled={bulkWorking} onclick={() => bulkSetActive(false)}>
-			<UserX class="h-3.5 w-3.5 mr-1" />
 			Deactivate
 		</Button>
 		<div class="h-4 w-px bg-border"></div>
@@ -453,23 +437,23 @@
 		</div>
 		<Button
 			variant="ghost"
-			size="icon"
-			class="h-7 w-7"
+			size="sm"
+			class="h-7"
 			disabled={bulkWorking || !bulkRoleId}
 			title="Add role to selected users"
 			onclick={() => bulkRole(true)}
 		>
-			<Plus class="h-3.5 w-3.5" />
+			Add
 		</Button>
 		<Button
 			variant="ghost"
-			size="icon"
-			class="h-7 w-7"
+			size="sm"
+			class="h-7"
 			disabled={bulkWorking || !bulkRoleId}
 			title="Remove role from selected users"
 			onclick={() => bulkRole(false)}
 		>
-			<Minus class="h-3.5 w-3.5" />
+			Remove
 		</Button>
 		<div class="h-4 w-px bg-border"></div>
 	</PermissionGate>
@@ -481,56 +465,36 @@
 			disabled={bulkWorking}
 			onclick={() => (bulkDeleteDialogOpen = true)}
 		>
-			<Trash2 class="h-3.5 w-3.5 mr-1" />
 			Delete
 		</Button>
 	</PermissionGate>
 </BulkActionBar>
 
 <!-- Create User Panel -->
-<FormPanel
-	bind:open={createPanelOpen}
-	title="Create User"
-	description="Provision a local account directly. Share the credentials with the user."
-	icon={UserPlus}
->
-	<div class="space-y-6">
-		<FormSection title="Account">
-			<div class="space-y-3">
-				<FormField label="Username" id="create-username" help="Lowercase letters, numbers, and . _ - only.">
-					<Input id="create-username" bind:value={createUsername} placeholder="jdoe" autocomplete="off" />
-				</FormField>
-				<FormField label="Display Name" id="create-display-name">
-					<Input id="create-display-name" bind:value={createDisplayName} placeholder="Jane Doe" autocomplete="off" />
-				</FormField>
-				<FormField label="Email" id="create-email">
-					<Input id="create-email" bind:value={createEmail} placeholder="user@example.com" autocomplete="off" />
-				</FormField>
+<FormPanel bind:open={createPanelOpen} title="Create User">
+	<div class="space-y-3">
+		<FormField label="Username" id="create-username" required help="Lowercase letters numbers dots dashes underscores">
+			<Input id="create-username" bind:value={createUsername} placeholder="jdoe" autocomplete="off" />
+		</FormField>
+		<FormField label="Display name" id="create-display-name">
+			<Input id="create-display-name" bind:value={createDisplayName} placeholder="Jane Doe" autocomplete="off" />
+		</FormField>
+		<FormField label="Email" id="create-email">
+			<Input id="create-email" bind:value={createEmail} placeholder="user@example.com" autocomplete="off" />
+		</FormField>
+		<FormField label="Password" id="create-password" required error={createPasswordError}>
+			<div class="flex gap-2">
+				<div class="flex-1">
+					<PasswordInput id="create-password" bind:value={createPassword} placeholder="Set a password" autocomplete="new-password" />
+				</div>
+				<Button variant="outline" class="shrink-0" onclick={generatePassword}>Generate</Button>
 			</div>
-		</FormSection>
-
-		<FormSection title="Credentials">
-			<div class="space-y-3">
-				<FormField label="Password" id="create-password" help="At least 8 characters. The user signs in with this password.">
-					<div class="flex gap-2">
-						<div class="flex-1">
-							<PasswordInput id="create-password" bind:value={createPassword} placeholder="Set a password" autocomplete="new-password" />
-						</div>
-						<Button variant="outline" class="shrink-0" onclick={generatePassword} title="Generate a random password">
-							<Sparkles class="h-3.5 w-3.5 mr-1.5" />
-							Generate
-						</Button>
-					</div>
-					<PasswordStrength password={createPassword} />
-				</FormField>
-
-				<FormField label="Require password change" help="Prompt the user to set a new password at first login." horizontal>
-					<Switch bind:checked={createMustChange} />
-				</FormField>
-			</div>
-		</FormSection>
-
-		<FormSection title="Roles" description="Leave empty to assign the default role(s).">
+			<PasswordStrength password={createPassword} />
+		</FormField>
+		<FormField label="Require password change at first login" horizontal>
+			<Switch bind:checked={createMustChange} />
+		</FormField>
+		<FormField label="Roles" help="Empty assigns the default roles">
 			<AsyncSelect
 				multiple
 				bind:selected={createSelectedRoles}
@@ -538,27 +502,21 @@
 				searchPlaceholder="Search roles..."
 				fetchPage={fetchRolePage}
 			/>
-		</FormSection>
+		</FormField>
 	</div>
 
 	{#snippet footer()}
 		<Button variant="outline" onclick={() => (createPanelOpen = false)}>Cancel</Button>
-		<Button onclick={saveCreate} disabled={createSaving || !createUsername || !createPassword}>
+		<Button onclick={saveCreate} disabled={createSaving || !createValid}>
 			{createSaving ? 'Creating...' : 'Create User'}
 		</Button>
 	{/snippet}
 </FormPanel>
 
 <!-- Edit User Panel -->
-<FormPanel
-	bind:open={editPanelOpen}
-	title="Edit User"
-	description={editUser ? `Manage ${editUser.username}'s account settings, roles, and access.` : ''}
-	icon={UserCog}
->
+<FormPanel bind:open={editPanelOpen} title="Edit User">
 	{#if editUser}
-		<div class="space-y-6">
-			<!-- User Identity -->
+		<div class="space-y-3">
 			<div class="flex items-center gap-3 p-4 rounded-xl border border-border/60 bg-muted/20">
 				<Avatar class="h-11 w-11">
 					<AvatarFallback class="text-sm bg-primary/10 text-primary font-medium">
@@ -576,21 +534,13 @@
 				</div>
 			</div>
 
-			<!-- Account Settings -->
-			<FormSection title="Account Settings">
-				<div class="space-y-3">
-					<FormField label="Email" id="edit-email" help="The user's contact email address.">
-						<Input id="edit-email" bind:value={editEmail} placeholder="user@example.com" />
-					</FormField>
-
-					<FormField label="Account Active" help="Inactive users cannot sign in or access the API." horizontal>
-						<Switch bind:checked={editActive} />
-					</FormField>
-				</div>
-			</FormSection>
-
-			<!-- Roles -->
-			<FormSection title="Roles" description="Assign roles that determine this user's permissions across the system.">
+			<FormField label="Email" id="edit-email">
+				<Input id="edit-email" bind:value={editEmail} placeholder="user@example.com" />
+			</FormField>
+			<FormField label="Active" help="Inactive users cannot sign in" horizontal>
+				<Switch bind:checked={editActive} />
+			</FormField>
+			<FormField label="Roles">
 				<AsyncSelect
 					multiple
 					bind:selected={editSelectedRoles}
@@ -599,7 +549,7 @@
 					searchPlaceholder="Search roles..."
 					fetchPage={fetchRolePage}
 				/>
-			</FormSection>
+			</FormField>
 		</div>
 	{/if}
 
@@ -618,7 +568,6 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
 >
 	{#snippet description()}
 		Are you sure you want to delete <strong>{deleteUser?.username}</strong>? This will remove all
@@ -633,7 +582,6 @@
 	confirmLabel="Delete"
 	onConfirm={confirmBulkDelete}
 	loading={bulkWorking}
-	icon={Trash2}
 >
 	{#snippet description()}
 		Are you sure you want to delete <strong>{selected.size} user{selected.size !== 1 ? 's' : ''}</strong>?

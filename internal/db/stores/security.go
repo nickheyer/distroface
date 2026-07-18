@@ -54,9 +54,16 @@ var CertDomainsQuery = pages.Spec{
 	Text:   []string{"domain"},
 }
 
-// Returns a page of domains preloaded with their owning org
-func (s *Store) ListCertificateDomains(ctx context.Context, q pages.Query, limit, offset int) ([]*db.CertificateDomain, int64, error) {
+// Returns a page of domains preloaded with their owning org,
+// empty scope lists both scopes
+func (s *Store) ListCertificateDomains(ctx context.Context, q pages.Query, scope string, pendingOnly bool, limit, offset int) ([]*db.CertificateDomain, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.CertificateDomain{}).Scopes(CertDomainsQuery.Scope(q))
+	if scope != "" {
+		tx = tx.Where("scope = ?", scope)
+	}
+	if pendingOnly {
+		tx = tx.Where("approved = ?", false)
+	}
 
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -71,10 +78,13 @@ func (s *Store) ListCertificateDomains(ctx context.Context, q pages.Query, limit
 	return domains, total, err
 }
 
-func (s *Store) ListCertificateDomainsByOrg(ctx context.Context, orgID string, q pages.Query, limit, offset int) ([]*db.CertificateDomain, int64, error) {
+func (s *Store) ListCertificateDomainsByOrg(ctx context.Context, orgID string, q pages.Query, pendingOnly bool, limit, offset int) ([]*db.CertificateDomain, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.CertificateDomain{}).
 		Where("org_id = ?", orgID).
 		Scopes(CertDomainsQuery.Scope(q))
+	if pendingOnly {
+		tx = tx.Where("approved = ?", false)
+	}
 
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -109,73 +119,46 @@ func (s *Store) DeleteCertificateDomains(ctx context.Context, ids []string) erro
 	return s.db.WithContext(ctx).Delete(&db.CertificateDomain{}, "id IN ?", ids).Error
 }
 
-// CertHostRow is a portal hostname or orphan domain for cert management
-type CertHostRow struct {
-	Hostname   string
-	PortalID   string
-	PortalName string
-}
+// ── Uploaded TLS material operations ─────────────────────────────────────
 
-// CertHostsQuery allowlists certificate host list filters
-var CertHostsQuery = pages.Spec{
-	Fields: map[string]string{
-		"hostname":    "hostname",
-		"portal_name": "portal_name",
-	},
-	Text: []string{"hostname", "portal_name"},
-}
-
-// Org portal hostnames unioned with orphan cert domains, paged and ordered
-func (s *Store) ListCertificateHosts(ctx context.Context, orgID string, q pages.Query, limit, offset int) ([]CertHostRow, int64, error) {
-	const union = `
-		SELECT p.hostname AS hostname, p.id AS portal_id, p.name AS portal_name, 0 AS sort_group
-		FROM registry_portals p
-		WHERE p.org_id = ? AND p.hostname <> ''
-		UNION
-		SELECT d.domain AS hostname, '' AS portal_id, '' AS portal_name, 1 AS sort_group
-		FROM certificate_domains d
-		WHERE d.org_id = ? AND d.domain NOT IN (
-			SELECT hostname FROM registry_portals WHERE org_id = ? AND hostname <> ''
-		)`
-
-	where := ""
-	unionArgs := []any{orgID, orgID, orgID}
-	if cond, condArgs := CertHostsQuery.SQL(q); cond != "" {
-		where = " WHERE " + cond
-		unionArgs = append(unionArgs, condArgs...)
-	}
-
-	var total int64
-	if err := s.db.WithContext(ctx).
-		Raw("SELECT COUNT(*) FROM ("+union+") AS hosts"+where, unionArgs...).
-		Scan(&total).Error; err != nil {
-		return nil, 0, err
-	}
-
-	sel := "SELECT hostname, portal_id, portal_name FROM (" + union + ") AS hosts" + where +
-		" ORDER BY sort_group ASC, hostname ASC"
-	args := append([]any{}, unionArgs...)
-	if limit > 0 {
-		sel += " LIMIT ? OFFSET ?"
-		args = append(args, limit, offset)
-	}
-	var rows []CertHostRow
-	if err := s.db.WithContext(ctx).Raw(sel, args...).Scan(&rows).Error; err != nil {
-		return nil, 0, err
-	}
-	return rows, total, nil
-}
-
-// Org cert domains matching the given hostnames
-func (s *Store) GetCertificateDomainsByNames(ctx context.Context, orgID string, names []string) ([]*db.CertificateDomain, error) {
-	if len(names) == 0 {
-		return nil, nil
-	}
-	var domains []*db.CertificateDomain
+// Nil when no material stored for the target
+func (s *Store) GetTLSCertificate(ctx context.Context, scope, orgID, portalID string) (*db.TLSCertificate, error) {
+	var cert db.TLSCertificate
 	err := s.db.WithContext(ctx).
-		Where("org_id = ? AND domain IN ?", orgID, names).
-		Find(&domains).Error
-	return domains, err
+		First(&cert, "scope = ? AND org_id = ? AND portal_id = ?", scope, orgID, portalID).Error
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &cert, nil
+}
+
+// Upserts by scope target
+func (s *Store) SaveTLSCertificate(ctx context.Context, cert *db.TLSCertificate) error {
+	existing, err := s.GetTLSCertificate(ctx, cert.Scope, cert.OrgID, cert.PortalID)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		cert.ID = existing.ID
+		cert.CreatedAt = existing.CreatedAt
+		return s.db.WithContext(ctx).Save(cert).Error
+	}
+	if cert.ID == "" {
+		cert.ID = uuid.New().String()
+	}
+	return s.db.WithContext(ctx).Create(cert).Error
+}
+
+func (s *Store) DeleteTLSCertificate(ctx context.Context, scope, orgID, portalID string) error {
+	return s.db.WithContext(ctx).
+		Delete(&db.TLSCertificate{}, "scope = ? AND org_id = ? AND portal_id = ?", scope, orgID, portalID).Error
+}
+
+func (s *Store) DeleteTLSCertificatesByPortal(ctx context.Context, portalID string) error {
+	return s.db.WithContext(ctx).Delete(&db.TLSCertificate{}, "portal_id = ?", portalID).Error
 }
 
 // ── ACME cache operations ────────────────────────────────────────────────

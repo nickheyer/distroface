@@ -472,7 +472,11 @@ var orgSettingValidators = map[string]func(string) bool{
 	artifacts.SettingRetentionExcludeLatest: isBoolValue,
 	artifacts.SettingMaxFileSizeMB:          isIntValue,
 	artifacts.SettingPrivateByDefault:       isBoolValue,
+	storage.OrgSettingACMEEmail:             isAnyValue,
+	storage.OrgSettingACMEDirectory:         isAnyValue,
 }
+
+func isAnyValue(string) bool { return true }
 
 func isBoolValue(v string) bool {
 	_, err := strconv.ParseBool(v)
@@ -485,9 +489,9 @@ func isIntValue(v string) bool {
 }
 
 // Instance level values every known key falls back to
-func (s *OrganizationService) orgSettingDefaults() map[string]string {
+func (s *OrganizationService) orgSettingDefaults(ctx context.Context) map[string]string {
 	a := s.config.Artifacts
-	return map[string]string{
+	defaults := map[string]string{
 		artifacts.SettingRetentionEnabled:       strconv.FormatBool(a.Retention.Enabled),
 		artifacts.SettingRetentionMaxVersions:   strconv.Itoa(a.Retention.MaxVersions),
 		artifacts.SettingRetentionMaxAgeDays:    strconv.Itoa(a.Retention.MaxAgeDays),
@@ -495,7 +499,17 @@ func (s *OrganizationService) orgSettingDefaults() map[string]string {
 		artifacts.SettingRetentionExcludeLatest: strconv.FormatBool(a.Retention.ExcludeLatest),
 		artifacts.SettingMaxFileSizeMB:          strconv.FormatInt(a.MaxFileSizeMB, 10),
 		artifacts.SettingPrivateByDefault:       "false",
+		storage.OrgSettingACMEEmail:             s.config.TLS.ACME.Email,
+		storage.OrgSettingACMEDirectory:         s.config.TLS.ACME.DirectoryURL,
 	}
+	// App tier acme values are runtime managed, db wins over config
+	if v, err := s.store.GetSystemSetting(ctx, storage.SettingACMEEmail); err == nil {
+		defaults[storage.OrgSettingACMEEmail] = v
+	}
+	if v, err := s.store.GetSystemSetting(ctx, storage.SettingACMEDirectory); err == nil {
+		defaults[storage.OrgSettingACMEDirectory] = v
+	}
+	return defaults
 }
 
 func (s *OrganizationService) GetOrgSettings(ctx context.Context, req *connect.Request[v1.GetOrgSettingsRequest]) (*connect.Response[v1.GetOrgSettingsResponse], error) {
@@ -510,7 +524,7 @@ func (s *OrganizationService) GetOrgSettings(ctx context.Context, req *connect.R
 	}
 	return connect.NewResponse(&v1.GetOrgSettingsResponse{
 		Overrides: overrides,
-		Defaults:  s.orgSettingDefaults(),
+		Defaults:  s.orgSettingDefaults(ctx),
 	}), nil
 }
 
@@ -553,7 +567,7 @@ func (s *OrganizationService) UpdateOrgSettings(ctx context.Context, req *connec
 	}
 	return connect.NewResponse(&v1.UpdateOrgSettingsResponse{
 		Overrides: overrides,
-		Defaults:  s.orgSettingDefaults(),
+		Defaults:  s.orgSettingDefaults(ctx),
 	}), nil
 }
 

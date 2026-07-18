@@ -14,14 +14,13 @@
 	import FormPanel from '$lib/components/form-panel.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import FormField from '$lib/components/form-field.svelte';
-	import FormSection from '$lib/components/form-section.svelte';
 	import AsyncSelect from '$lib/components/async-select.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import BulkActionBar from '$lib/components/bulk-action-bar.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Ticket, Plus, Trash2, Clock, Lock, Link } from '@lucide/svelte';
+	import { Ticket } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
@@ -111,7 +110,6 @@
 		bulkWorking = true;
 		try {
 			const resp = await rpcClient.auth.bulkDeleteInvites({ ids: [...selected] });
-			toast.success(`${resp.deletedCount} invite${resp.deletedCount !== 1 ? 's' : ''} deleted`);
 			reportBulkErrors(resp.errors);
 			selected.clear();
 			bulkDeleteDialogOpen = false;
@@ -142,7 +140,6 @@
 				maxUses: inviteMaxUses && inviteMaxUses > 0 ? inviteMaxUses : undefined,
 				expiresInHours: inviteExpiryHours && inviteExpiryHours > 0 ? inviteExpiryHours : undefined
 			});
-			toast.success('Invite created');
 			createPanelOpen = false;
 			resetCreateForm();
 			await loadInvites();
@@ -163,7 +160,6 @@
 		deleting = true;
 		try {
 			await rpcClient.auth.deleteInvite({ id: deleteInvite.id });
-			toast.success('Invite deleted');
 			deleteDialogOpen = false;
 			await loadInvites();
 		} catch {
@@ -194,10 +190,7 @@
 				<QueryFilterBar {filter} placeholder="Search invites..." onchange={filterChanged} />
 			</div>
 			<PermissionGate resource="settings" action="create">
-				<Button size="sm" onclick={() => (createPanelOpen = true)}>
-					<Plus class="h-4 w-4 mr-1" />
-					Create Invite
-				</Button>
+				<Button size="sm" onclick={() => (createPanelOpen = true)}>Create Invite</Button>
 			</PermissionGate>
 		</div>
 	</div>
@@ -212,16 +205,10 @@
 		<EmptyState
 			icon={Ticket}
 			message={filter.active ? 'No invites match the current filter' : 'No invites yet'}
-			description={filter.active
-				? 'Search matches code and description.'
-				: 'Create an invite to allow users to register.'}
 		>
 			{#snippet actions()}
 				<PermissionGate resource="settings" action="create">
-					<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>
-						<Plus class="h-4 w-4 mr-1.5" />
-						Create Invite
-					</Button>
+					<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>Create Invite</Button>
 				</PermissionGate>
 			{/snippet}
 		</EmptyState>
@@ -282,9 +269,7 @@
 							</TableCell>
 							<TableCell class="py-3 px-3">
 								{#if invite.hasPin}
-									<Badge variant="outline" class="text-xs gap-0.5">
-										<Lock class="h-2.5 w-2.5" />PIN
-									</Badge>
+									<Badge variant="outline" class="text-xs">PIN</Badge>
 								{:else}
 									<span class="text-xs text-muted-foreground">None</span>
 								{/if}
@@ -293,8 +278,7 @@
 								{#if invite.expiresAt}
 									{@const expires = timestampDate(invite.expiresAt)}
 									{@const isExpired = expires < new Date()}
-									<Badge variant={isExpired ? 'destructive' : 'outline'} class="text-xs gap-0.5">
-										<Clock class="h-2.5 w-2.5" />
+									<Badge variant={isExpired ? 'destructive' : 'outline'} class="text-xs">
 										{isExpired ? 'Expired' : relativeTime(expires).replace(' ago', '')}
 									</Badge>
 								{:else}
@@ -303,8 +287,8 @@
 							</TableCell>
 							<PermissionGate resource="settings" action="delete">
 								<TableCell class="text-right py-3 px-3">
-									<Button variant="ghost" size="icon" class="h-7 w-7 text-destructive hover:text-destructive" onclick={() => openDelete(invite)}>
-										<Trash2 class="h-3.5 w-3.5" />
+									<Button variant="ghost" size="sm" class="h-7 px-2 text-xs text-destructive hover:text-destructive" onclick={() => openDelete(invite)}>
+										Delete
 									</Button>
 								</TableCell>
 							</PermissionGate>
@@ -332,28 +316,18 @@
 			disabled={bulkWorking}
 			onclick={() => (bulkDeleteDialogOpen = true)}
 		>
-			<Trash2 class="h-3.5 w-3.5 mr-1" />
 			Delete
 		</Button>
 	</PermissionGate>
 </BulkActionBar>
 
 <!-- Create Invite Panel -->
-<FormPanel
-	bind:open={createPanelOpen}
-	title="Create Registration Invite"
-	description="Generate an invite link that allows new users to register with pre-assigned roles."
-	icon={Link}
-	wide
->
-	<div class="space-y-6">
-		<FormSection title="Details">
-			<FormField label="Description" id="invite-desc" help="A label to identify this invite (e.g., 'Engineering team Q1')." required>
-				<Input id="invite-desc" bind:value={inviteDescription} placeholder="e.g., Team onboarding Q1" />
-			</FormField>
-		</FormSection>
-
-		<FormSection title="Roles" description="Roles automatically assigned to users who register with this invite.">
+<FormPanel bind:open={createPanelOpen} title="Create Registration Invite" wide>
+	<div class="space-y-3">
+		<FormField label="Description" id="invite-desc" required>
+			<Input id="invite-desc" bind:value={inviteDescription} placeholder="Team onboarding Q1" />
+		</FormField>
+		<FormField label="Roles" help="Granted on registration">
 			<AsyncSelect
 				multiple
 				bind:selected={inviteSelectedRoles}
@@ -369,23 +343,18 @@
 					};
 				}}
 			/>
-		</FormSection>
-
-		<FormSection title="Security & Limits" description="Optional restrictions on how this invite can be used.">
-			<div class="space-y-3">
-				<FormField label="PIN Protection" id="invite-pin-input" help="Require a numeric PIN in addition to the invite code.">
-					<Input id="invite-pin-input" bind:value={invitePin} placeholder="Leave empty for no PIN" />
-				</FormField>
-				<div class="grid grid-cols-2 gap-3">
-					<FormField label="Max Uses" id="invite-max" help="How many times this invite can be used.">
-						<Input id="invite-max" type="number" bind:value={inviteMaxUses} placeholder="Unlimited" min={1} />
-					</FormField>
-					<FormField label="Expires In (hours)" id="invite-expiry" help="Auto-expire after this many hours.">
-						<Input id="invite-expiry" type="number" bind:value={inviteExpiryHours} placeholder="Never" min={1} />
-					</FormField>
-				</div>
-			</div>
-		</FormSection>
+		</FormField>
+		<FormField label="PIN" id="invite-pin-input" help="Also required to register">
+			<Input id="invite-pin-input" bind:value={invitePin} placeholder="None" />
+		</FormField>
+		<div class="grid grid-cols-2 gap-3">
+			<FormField label="Max uses" id="invite-max">
+				<Input id="invite-max" type="number" bind:value={inviteMaxUses} placeholder="Unlimited" min={1} />
+			</FormField>
+			<FormField label="Expires in hours" id="invite-expiry">
+				<Input id="invite-expiry" type="number" bind:value={inviteExpiryHours} placeholder="Never" min={1} />
+			</FormField>
+		</div>
 	</div>
 
 	{#snippet footer()}
@@ -416,7 +385,6 @@
 	confirmLabel="Delete"
 	onConfirm={confirmBulkDelete}
 	loading={bulkWorking}
-	icon={Trash2}
 >
 	{#snippet description()}
 		Are you sure you want to delete <strong>{selected.size} invite{selected.size !== 1 ? 's' : ''}</strong>?

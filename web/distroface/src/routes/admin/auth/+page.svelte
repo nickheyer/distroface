@@ -2,37 +2,33 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
-	import { Shield, Globe, Save } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
+	import { Button } from '$lib/components/ui/button';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
-	import { toast } from 'svelte-sonner';
+	import { Act, errText } from '$lib/act.svelte';
 	import type { GetAuthConfigResponse } from '$lib/proto/distroface/v1/auth_pb';
 
 	let config = $state<GetAuthConfigResponse | null>(null);
 	let loading = $state(true);
-	let saving = $state(false);
+	let loadError = $state('');
 
 	let localEnabled = $state(true);
 	let registrationEnabled = $state(false);
 	let anonymousAccess = $state(false);
 	let sessionTimeout = $state(60);
 
-	let canEdit = $derived(authStore.canUpdateSettings);
+	const localAct = new Act();
+	const registrationAct = new Act();
+	const anonymousAct = new Act();
+	const timeoutAct = new Act();
 
-	let hasChanges = $derived(
-		config !== null &&
-			(localEnabled !== config.localEnabled ||
-				registrationEnabled !== config.registrationEnabled ||
-				anonymousAccess !== config.anonymousAccess ||
-				sessionTimeout !== config.sessionTimeout)
-	);
+	let canEdit = $derived(authStore.canUpdateSettings);
 
 	const oidcFields = $derived(
 		config
@@ -45,44 +41,45 @@
 			: []
 	);
 
+	function seedForm(resp: GetAuthConfigResponse) {
+		localEnabled = resp.localEnabled;
+		registrationEnabled = resp.registrationEnabled;
+		anonymousAccess = resp.anonymousAccess;
+		sessionTimeout = resp.sessionTimeout;
+	}
+
 	async function loadConfig() {
 		loading = true;
+		loadError = '';
 		try {
-			const resp = await rpcClient.auth.getAuthConfig({});
+			const resp = await rpcClient.auth.getAuthConfig({}, silentCallOptions);
 			config = resp;
-			localEnabled = resp.localEnabled;
-			registrationEnabled = resp.registrationEnabled;
-			anonymousAccess = resp.anonymousAccess;
-			sessionTimeout = resp.sessionTimeout;
-		} catch {
-			// error interceptor
+			seedForm(resp);
+		} catch (err) {
+			loadError = errText(err);
 		} finally {
 			loading = false;
 		}
 	}
 
-	async function saveSettings() {
-		saving = true;
-		try {
-			const resp = await rpcClient.auth.updateAuthSettings({
-				localEnabled,
-				registrationEnabled,
-				anonymousAccess,
-				sessionTimeout
-			});
+	// Settings apply on interaction, a failed patch reverts the control
+	async function apply(act: Act) {
+		const ok = await act.run(async () => {
+			const resp = await rpcClient.auth.updateAuthSettings(
+				{ localEnabled, registrationEnabled, anonymousAccess, sessionTimeout },
+				silentCallOptions
+			);
 			if (resp.config) {
 				config = resp.config;
-				localEnabled = resp.config.localEnabled;
-				registrationEnabled = resp.config.registrationEnabled;
-				anonymousAccess = resp.config.anonymousAccess;
-				sessionTimeout = resp.config.sessionTimeout;
+				seedForm(resp.config);
 			}
-			toast.success('Settings saved');
-		} catch {
-			// error interceptor
-		} finally {
-			saving = false;
-		}
+		});
+		if (!ok && config) seedForm(config);
+	}
+
+	function commitTimeout() {
+		if (config && sessionTimeout === config.sessionTimeout) return;
+		apply(timeoutAct);
 	}
 
 	onMount(() => {
@@ -96,52 +93,87 @@
 		<Skeleton class="h-52 w-full rounded-xl" />
 		<Skeleton class="h-40 w-full rounded-xl" />
 	</div>
+{:else if loadError}
+	<div class="rounded-xl border border-destructive/40 bg-destructive/5 px-6 py-10 text-center space-y-3">
+		<p class="text-sm text-destructive">{loadError}</p>
+		<Button variant="outline" size="sm" onclick={loadConfig}>Retry</Button>
+	</div>
 {:else if config}
 	<div class="space-y-6">
-		<!-- Local Auth Card -->
-		<FormCard title="Local Authentication" description="Username and password sign-in" icon={Shield}>
+		<FormCard title="Sign-in">
 			<div class="space-y-3">
-				<FormField label="Enable local authentication" help="Allow users to sign in with username and password." horizontal>
-					<Switch bind:checked={localEnabled} disabled={!canEdit} />
+				<FormField
+					label="Local sign-in"
+					horizontal
+					tag={localAct.tag}
+					error={localAct.error}
+				>
+					<Switch
+						checked={localEnabled}
+						disabled={!canEdit || localAct.busy}
+						onCheckedChange={(v) => { localEnabled = v; apply(localAct); }}
+					/>
 				</FormField>
-				<FormField label="Allow registration" help="Allow new users to create accounts without an invite." horizontal>
-					<Switch bind:checked={registrationEnabled} disabled={!canEdit} />
-				</FormField>
-				<FormField label="Anonymous access" help="Allow unauthenticated users to browse public repositories." horizontal>
-					<Switch bind:checked={anonymousAccess} disabled={!canEdit} />
+				{#if localEnabled}
+					<FormField
+						label="Open registration"
+						horizontal
+						help="Account creation without an invite"
+						tag={registrationAct.tag}
+						error={registrationAct.error}
+						class="ml-7"
+					>
+						<Switch
+							checked={registrationEnabled}
+							disabled={!canEdit || registrationAct.busy}
+							onCheckedChange={(v) => { registrationEnabled = v; apply(registrationAct); }}
+						/>
+					</FormField>
+				{/if}
+				<FormField
+					label="Anonymous access"
+					horizontal
+					help="Browse public repos signed out"
+					tag={anonymousAct.tag}
+					error={anonymousAct.error}
+				>
+					<Switch
+						checked={anonymousAccess}
+						disabled={!canEdit || anonymousAct.busy}
+						onCheckedChange={(v) => { anonymousAccess = v; apply(anonymousAct); }}
+					/>
 				</FormField>
 				<FormField
 					label="Session timeout"
 					id="session-timeout"
-					help="Minutes before sessions expire (5-10,080)."
+					horizontal
+					tag={timeoutAct.tag}
+					error={timeoutAct.error}
 				>
-					<Input
-						id="session-timeout"
-						type="number"
-						bind:value={sessionTimeout}
-						min={5}
-						max={10080}
-						class="w-36"
-						disabled={!canEdit}
-					/>
+					<div class="flex items-center gap-2">
+						<Input
+							id="session-timeout"
+							type="number"
+							bind:value={sessionTimeout}
+							min={5}
+							max={10080}
+							class="w-28"
+							disabled={!canEdit || timeoutAct.busy}
+							onblur={commitTimeout}
+							onkeydown={(e) => { if (e.key === 'Enter') commitTimeout(); }}
+						/>
+						<span class="text-[13px] text-muted-foreground">minutes</span>
+					</div>
 				</FormField>
 			</div>
-			{#snippet footer()}
-				{#if hasChanges && canEdit}
-					<Button onclick={saveSettings} disabled={saving} class="gap-2">
-						<Save class="h-4 w-4" />
-						{saving ? 'Saving...' : 'Save Changes'}
-					</Button>
-				{/if}
-			{/snippet}
 		</FormCard>
 
-		<!-- OIDC Card -->
-		<FormCard title="OIDC / SSO" description="OpenID Connect single sign-on" icon={Globe}>
+		<FormCard title="OIDC / SSO">
 			<div class="space-y-4">
 				<div class="flex items-center gap-2">
 					<span class="status-dot {config.oidcEnabled ? 'status-dot-active' : 'status-dot-inactive'}"></span>
-					<span class="text-sm font-medium">{config.oidcEnabled ? 'Enabled' : 'Disabled'}</span>
+					<span class="text-sm font-medium">{config.oidcEnabled ? 'Enabled' : 'Not configured'}</span>
+					<span class="text-[13px] text-muted-foreground">&middot; set via environment variables</span>
 				</div>
 
 				{#if config.oidcEnabled}
@@ -171,13 +203,6 @@
 							</tbody>
 						</table>
 					</div>
-					<p class="text-[13px] text-muted-foreground">
-						OIDC settings are configured via environment variables and cannot be changed here.
-					</p>
-				{:else}
-					<p class="text-[13px] text-muted-foreground">
-						OIDC is not configured. Set the OIDC environment variables to enable single sign-on.
-					</p>
 				{/if}
 			</div>
 		</FormCard>

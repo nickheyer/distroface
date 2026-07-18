@@ -1,6 +1,33 @@
-import { timestampDate } from '@bufbuild/protobuf/wkt';
-import type { CertificateInfo } from '$lib/proto/distroface/v1/certificate_pb';
+import { timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
+import { CertSource, CertState, type CertificateInfo } from '$lib/proto/distroface/v1/certificate_pb';
 import { hostnamePattern } from '$lib/portal-address';
+
+export const certSourceLabels: Record<CertSource, string> = {
+	[CertSource.UNSPECIFIED]: 'None (cleartext only)',
+	[CertSource.NONE]: 'None (cleartext only)',
+	[CertSource.CONFIG]: 'Config file pair',
+	[CertSource.MANUAL]: 'Uploaded certificate',
+	[CertSource.ACME]: 'ACME (automatic)',
+	[CertSource.ORG_CA]: 'Organization CA',
+	[CertSource.ORG_CERT]: 'Organization certificate',
+	[CertSource.APP_CA]: 'Instance CA (self signed)'
+};
+
+export type CertStateBadge = { label: string; cls: string };
+
+// Badge presentation for a computed cert state, null hides the badge
+export function certStateBadge(state: CertState | undefined): CertStateBadge | null {
+	switch (state) {
+		case CertState.READY:
+			return { label: 'https', cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400' };
+		case CertState.PENDING:
+			return { label: 'https pending', cls: 'border-amber-500/40 text-amber-600 dark:text-amber-400' };
+		case CertState.ERROR:
+			return { label: 'https broken', cls: 'border-red-500/40 text-red-600 dark:text-red-400' };
+		default:
+			return null;
+	}
+}
 
 export type CertHealth = {
 	issued: boolean;
@@ -39,7 +66,7 @@ export function certBadgeClass(tone: CertHealth['tone']): string {
 	}
 }
 
-export function certDate(cert?: CertificateInfo): string {
+export function certDate(cert?: { notAfter?: Timestamp }): string {
 	if (!cert?.notAfter) return '';
 	return timestampDate(cert.notAfter).toLocaleDateString(undefined, {
 		year: 'numeric',

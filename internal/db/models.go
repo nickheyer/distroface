@@ -168,11 +168,66 @@ type RegistryPortal struct { // Alternate org-owned registry host and/or proxy p
 	Rules          string        `json:"rules" gorm:"not null;default:'[]'"` // JSON array of {pattern, replace}
 	AllowPush      bool          `json:"allow_push" gorm:"not null"`
 	RequireAuth    bool          `json:"require_auth" gorm:"not null"`
-	TLS            bool          `json:"tls" gorm:"not null;default:false;column:tls"` // Https enforced for this portal, cleartext requests redirect
+	TLS            bool          `json:"tls" gorm:"not null;default:false;column:tls"`                            // Https enforced for this portal, cleartext requests redirect
+	CertSource     string        `json:"cert_source" gorm:"not null;default:'none';column:cert_source"`           // One of none, acme, org_ca, org_cert, manual
+	ACMEEmail      string        `json:"acme_email" gorm:"not null;default:'';column:acme_email"`                 // Per portal acme account override
+	ACMEDirectory  string        `json:"acme_directory_url" gorm:"not null;default:'';column:acme_directory_url"` // Per portal acme directory override
 	Enabled        bool          `json:"enabled" gorm:"not null"`
 	CreatedAt      time.Time     `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt      time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
 	Org            *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
+const (
+	CertSourceNone    = "none"
+	CertSourceACME    = "acme"
+	CertSourceOrgCA   = "org_ca"
+	CertSourceOrgCert = "org_cert"
+	CertSourceManual  = "manual"
+)
+
+const (
+	TLSCertScopeApp    = "app"
+	TLSCertScopeAppCA  = "app_ca"
+	TLSCertScopeOrg    = "org"
+	TLSCertScopeOrgCA  = "org_ca"
+	TLSCertScopePortal = "portal"
+)
+
+// How the primary hostname's certificate materializes
+const (
+	PrimarySourceConfig = "config"
+	PrimarySourceManual = "manual"
+	PrimarySourceACME   = "acme"
+	PrimarySourceAppCA  = "app_ca"
+)
+
+// System setting keys, db values override the config file
+const (
+	SettingACMEEnabled       = "tls.acme.enabled"
+	SettingACMEEmail         = "tls.acme.email"
+	SettingACMEDirectory     = "tls.acme.directory_url"
+	SettingPrimarySource     = "tls.primary_source"
+	SettingHostnameBlacklist = "portals.hostname_blacklist"
+	SettingRequireApproval   = "portals.require_hostname_approval"
+)
+
+// Org setting keys, unset means inherit the app tier
+const (
+	OrgSettingACMEEmail     = "tls.acme.email"
+	OrgSettingACMEDirectory = "tls.acme.directory_url"
+)
+
+type TLSCertificate struct { // Uploaded pem material, keys never leave the db
+	ID        string    `json:"id" gorm:"primaryKey"`
+	Scope     string    `json:"scope" gorm:"not null;uniqueIndex:idx_tls_cert_target"`
+	OrgID     string    `json:"org_id" gorm:"not null;default:'';uniqueIndex:idx_tls_cert_target;column:org_id"`
+	PortalID  string    `json:"portal_id" gorm:"not null;default:'';uniqueIndex:idx_tls_cert_target;column:portal_id"`
+	CertPEM   string    `json:"-" gorm:"type:text;not null;column:cert_pem"`
+	KeyPEM    string    `json:"-" gorm:"type:text;not null;column:key_pem"`
+	CreatedBy string    `json:"created_by" gorm:"column:created_by"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v1 parity
@@ -219,7 +274,7 @@ const (
 	CertDomainScopeOrg    = "org"
 )
 
-type CertificateDomain struct { // Hostname allowed to receive acme certificates
+type CertificateDomain struct { // Allowlist and approval entry for a portal hostname
 	ID         string        `json:"id" gorm:"primaryKey"`
 	Domain     string        `json:"domain" gorm:"not null;uniqueIndex"`
 	Scope      string        `json:"scope" gorm:"not null;default:'system'"`
@@ -229,11 +284,6 @@ type CertificateDomain struct { // Hostname allowed to receive acme certificates
 	CreatedBy  string        `json:"created_by" gorm:"not null;column:created_by"`
 	CreatedAt  time.Time     `json:"created_at" gorm:"autoCreateTime"`
 	Org        *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
-}
-
-// System scope issues freely, org scope waits for admin approval
-func (d *CertificateDomain) IssuanceAllowed() bool {
-	return d.Scope == CertDomainScopeSystem || d.Approved
 }
 
 type ACMECacheEntry struct { // Autocert cache row holding certs and account state

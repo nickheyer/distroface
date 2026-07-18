@@ -9,6 +9,7 @@ class PortalStore {
 	allowPush = $state(true);
 	mapUnqualified = $state(false);
 	primaryHost = $state('');
+	primaryScheme = $state('http');
 
 	async init() {
 		try {
@@ -20,6 +21,7 @@ class PortalStore {
 			this.allowPush = resp.allowPush;
 			this.mapUnqualified = resp.mapUnqualified;
 			this.primaryHost = resp.primaryHost;
+			if (resp.primaryScheme) this.primaryScheme = resp.primaryScheme;
 		} catch {
 			// Treated as the primary host on failure
 		}
@@ -27,18 +29,27 @@ class PortalStore {
 
 	displayName = $derived(this.orgDisplayName || this.orgName);
 
-	// Absolute URL of the primary UI, empty when unknown
+	// Absolute URL of the primary UI, scheme comes from the server
 	get primaryOrigin(): string {
-		if (!this.primaryHost || typeof window === 'undefined') return '';
-		return `${window.location.protocol}//${this.primaryHost}`;
+		if (!this.primaryHost) return '';
+		return `${this.primaryScheme}://${this.primaryHost}`;
 	}
 
-	// Registry host for docker/api examples, portals answer on their own host
+	// Registry host for docker/api examples, the host being browsed IS the
+	// portal's address so the browser host is authoritative on portals
 	host(fallback: string): string {
 		if (this.isPortal && typeof window !== 'undefined') {
 			return window.location.host;
 		}
 		return fallback;
+	}
+
+	// Scheme matching host(), the portal's live one or the primary's
+	scheme(): string {
+		if (this.isPortal && typeof window !== 'undefined') {
+			return window.location.protocol.replace(':', '');
+		}
+		return this.primaryScheme || 'http';
 	}
 
 	// Repo path as pulled through this host, org prefix dropped when mapped

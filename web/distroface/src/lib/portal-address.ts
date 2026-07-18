@@ -1,11 +1,33 @@
+import { configStore } from '$lib/stores/config.svelte';
+import { CertSource } from '$lib/proto/distroface/v1/certificate_pb';
+
 // Lowercase host, no port
 export const hostnamePattern = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 
-// Address clients actually dial, inheriting the app's host and port when unset
+// Configured app host and port, server.hostname may embed its own port
+export function appHostPort(): { host: string; port: string } {
+	const hostname = String(configStore.get('server.hostname', '') ?? '');
+	const [host, inlinePort] = hostname.split(':');
+	let port = inlinePort || String(configStore.get('server.port', '') ?? '');
+	if (port === '80' || port === '443') port = '';
+	return { host: host || 'localhost', port };
+}
+
+// Address clients actually dial, inheriting the configured app host and port
 export function effectiveAddress(hostname: string, port: number): string {
-	const host = hostname || window.location.hostname;
-	const portPart = port > 0 ? `:${port}` : window.location.port ? `:${window.location.port}` : '';
+	const app = appHostPort();
+	const host = hostname || app.host;
+	const portPart = port > 0 ? `:${port}` : app.port ? `:${app.port}` : '';
 	return host + portPart;
+}
+
+// Explicit sources answer https, none stays cleartext
+export function portalScheme(certSource: CertSource | undefined): 'http' | 'https' {
+	return certSource && certSource !== CertSource.NONE ? 'https' : 'http';
+}
+
+export function portalUrl(hostname: string, port: number, certSource: CertSource | undefined): string {
+	return `${portalScheme(certSource)}://${effectiveAddress(hostname, port)}`;
 }
 
 // Validation message for a hostname/port pair, empty when valid

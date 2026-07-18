@@ -4,7 +4,6 @@
 	import { resolve } from '$app/paths';
 	import { onMount, getContext } from 'svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
-	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -23,6 +22,8 @@
 	import { Pager } from '$lib/pager.svelte';
 	import { QueryFilter } from '$lib/query.svelte';
 	import { effectiveAddress } from '$lib/portal-address';
+	import { certStateBadge } from '$lib/cert-utils';
+	import { CertState } from '$lib/proto/distroface/v1/certificate_pb';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
@@ -83,7 +84,6 @@
 			const resp = await rpcClient.portal.updatePortal({ orgId, id: portal.id, enabled });
 			const updated = resp.portal;
 			if (updated) portals = portals.map((p) => (p.id === updated.id ? updated : p));
-			toast.success(enabled ? 'Portal started' : 'Portal stopped');
 		} catch { load(); }
 		finally { toggling = null; }
 	}
@@ -103,7 +103,6 @@
 		try {
 			await rpcClient.portal.deletePortal({ orgId, id: deleteTarget.id });
 			deleteOpen = false;
-			toast.success('Portal deleted');
 			await load();
 			if (portals.length === 0 && pager.prev()) {
 				await load();
@@ -146,7 +145,7 @@
 			message={filter.active ? 'No matching portals' : 'No portals yet'}
 			description={filter.active
 				? 'Try a different search.'
-				: `Give ${orgName} its own address, like registry.example.com - clients that use it only ever see this organization.`}
+				: `Give ${orgName} its own address like registry.example.com.`}
 		>
 			{#snippet actions()}
 				{#if !filter.active}
@@ -174,6 +173,7 @@
 				</TableHeader>
 				<TableBody>
 					{#each portals as portal (portal.id)}
+						{@const stateBadge = certStateBadge(portal.certState)}
 						<TableRow>
 							<TableCell class="py-3 px-3">
 								<p class="font-medium">{portal.name}</p>
@@ -189,11 +189,19 @@
 										{effectiveAddress(portal.hostname, portal.port)}
 									</span>
 									<CopyButton text={effectiveAddress(portal.hostname, portal.port)} label="Address copied" />
+									{#if stateBadge}
+										<Badge variant="outline" class="text-xs shrink-0 {stateBadge.cls}" title={portal.certDetail}>{stateBadge.label}</Badge>
+									{/if}
 								</div>
 								{#if portal.hostname === ''}
 									<p class="text-xs text-muted-foreground/70 mt-0.5">Any hostname on port {portal.port}</p>
 								{:else if portal.port === 0}
 									<p class="text-xs text-muted-foreground/70 mt-0.5">App port{mainPort ? ` (${mainPort})` : ''}</p>
+								{/if}
+								{#if portal.certState === CertState.ERROR || portal.certState === CertState.PENDING}
+									<p class="text-xs mt-0.5 {portal.certState === CertState.ERROR ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}">
+										{portal.certDetail}
+									</p>
 								{/if}
 							</TableCell>
 							<TableCell class="py-3 px-3 hidden lg:table-cell">

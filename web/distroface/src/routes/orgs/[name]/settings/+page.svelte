@@ -209,7 +209,7 @@
 
 <ConfirmDialog bind:open={deleteOrgOpen} title="Delete Organization" confirmLabel="Delete" onConfirm={confirmDeleteOrg} loading={deletingOrg} icon={Trash2}>
 	{#snippet description()}
-		Are you sure you want to delete <strong>{orgName}</strong>? All repositories under this
+		Are you sure you want to delete <strong>{orgName}</strong>? All repositories and artifacts under this
 		namespace will also be deleted. This action cannot be undone.
 	{/snippet}
 </ConfirmDialog>

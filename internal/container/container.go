@@ -29,17 +29,16 @@ import (
 
 // App holds all initialized dependencies and the HTTP server.
 type App struct {
-	Config          *config.Config
-	Log             *logger.Logger
-	Store           *stores.Store
-	TokenService    *auth.TokenService
-	AuthManager     *auth.Manager
-	Enforcer        *rbac.Enforcer
-	RegistryAccess  *registry.RegistryAccess
-	PortalProxies   *portal.Manager
-	CertEngine      *certs.Engine
-	Server          *http.Server
-	ChallengeServer *http.Server // Cleartext acme http-01 and https redirect
+	Config         *config.Config
+	Log            *logger.Logger
+	Store          *stores.Store
+	TokenService   *auth.TokenService
+	AuthManager    *auth.Manager
+	Enforcer       *rbac.Enforcer
+	RegistryAccess *registry.RegistryAccess
+	PortalProxies  *portal.Manager
+	CertEngine     *certs.Engine
+	Server         *http.Server
 }
 
 // New builds the entire application: config, logger, store, token service,
@@ -201,26 +200,19 @@ func New() (*App, error) {
 		ReadHeader: time.Duration(cfg.Server.ReadTimeout) * time.Second,
 		Idle:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
 	})
-	portalService := portal.NewService(store, enforcer, portalProxies, cfg, log)
-
-	// Any cert source builds the engine, primary tls stays a startup choice
-	var certEngine *certs.Engine
-	if cfg.TLS.Enabled || cfg.TLS.ACME.Enabled || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" {
-		certEngine, err = certs.NewEngine(cfg, store, log)
-		if err != nil {
-			store.Close()
-			log.Close()
-			return nil, fmt.Errorf("initializing tls engine: %w", err)
-		}
-		// Portals decide https themselves, independent of the primary's tls
-		portalProxies.SetTLSConfig(certEngine.TLSConfig())
-		if cfg.TLS.Enabled {
-			log.Info("TLS enabled (acme=%v manual_cert=%v)", certEngine.ACMEEnabled(), certEngine.ManualCertLoaded())
-		} else {
-			log.Info("TLS engine ready for portals (acme=%v manual_cert=%v), primary serving stays cleartext until tls.enabled is set",
-				certEngine.ACMEEnabled(), certEngine.ManualCertLoaded())
-		}
+	// Cert material and acme settings are runtime managed, primary tls only stays a startup choice
+	certEngine, err := certs.NewEngine(cfg, store, log)
+	if err != nil {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("initializing tls engine: %w", err)
 	}
+	portalService := portal.NewService(store, enforcer, portalProxies, certEngine, cfg, log)
+
+	// Portals decide https themselves, independent of the primary's tls
+	portalProxies.SetTLSConfig(certEngine.TLSConfig())
+	log.Info("TLS engine ready (primary_tls=%v acme=%v config_cert=%v)",
+		cfg.TLS.Enabled, certEngine.ACMEEnabled(), certEngine.ManualCertLoaded())
 	certService := certs.NewService(store, enforcer, certEngine, cfg, log)
 
 	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, portalResolver, log)
@@ -284,33 +276,21 @@ func New() (*App, error) {
 		IdleTimeout:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
 	}
 
-	var challengeSrv *http.Server
-	if certEngine != nil {
-		if cfg.TLS.Enabled {
-			srv.TLSConfig = certEngine.TLSConfig()
-		}
-		if cfg.TLS.ACME.Enabled && cfg.TLS.ACME.HTTPPort != "" {
-			challengeSrv = &http.Server{
-				Addr:              fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.TLS.ACME.HTTPPort),
-				Handler:           certEngine.HTTPChallengeHandler(),
-				ReadHeaderTimeout: 10 * time.Second,
-				IdleTimeout:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
-			}
-		}
+	if cfg.TLS.Enabled {
+		srv.TLSConfig = certEngine.TLSConfig()
 	}
 
 	return &App{
-		Config:          cfg,
-		Log:             log,
-		Store:           store,
-		TokenService:    tokenService,
-		AuthManager:     authManager,
-		Enforcer:        enforcer,
-		RegistryAccess:  registryAccess,
-		PortalProxies:   portalProxies,
-		CertEngine:      certEngine,
-		Server:          srv,
-		ChallengeServer: challengeSrv,
+		Config:         cfg,
+		Log:            log,
+		Store:          store,
+		TokenService:   tokenService,
+		AuthManager:    authManager,
+		Enforcer:       enforcer,
+		RegistryAccess: registryAccess,
+		PortalProxies:  portalProxies,
+		CertEngine:     certEngine,
+		Server:         srv,
 	}, nil
 }
 
@@ -324,34 +304,20 @@ func (a *App) Start() error {
 			}
 			return
 		}
-		if a.CertEngine != nil {
-			// Portal hostnames on the app port may serve https, the app itself stays cleartext
-			ln, err := net.Listen("tcp", a.Server.Addr)
-			if err != nil {
-				a.Log.Fatal("Failed to start server: %v", err)
-				return
-			}
-			a.Log.Info("Starting Distroface on %s (tls+cleartext)", a.Server.Addr)
-			ln = certs.DualSchemeListener(ln, a.CertEngine.TLSConfig(), a.Server.ReadHeaderTimeout)
-			if err := a.Server.Serve(ln); err != nil && err != http.ErrServerClosed {
-				a.Log.Fatal("Failed to start server: %v", err)
-			}
+		// Portal hostnames on the app port may serve https, the app itself stays cleartext
+		ln, err := net.Listen("tcp", a.Server.Addr)
+		if err != nil {
+			a.Log.Fatal("Failed to start server: %v", err)
 			return
 		}
-		a.Log.Info("Starting Distroface on %s", a.Server.Addr)
-		if err := a.Server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		a.Log.Info("Starting Distroface on %s (tls+cleartext)", a.Server.Addr)
+		ln = certs.DualSchemeListener(ln, a.CertEngine.TLSConfig(), a.Server.ReadHeaderTimeout)
+		if err := a.Server.Serve(ln); err != nil && err != http.ErrServerClosed {
 			a.Log.Fatal("Failed to start server: %v", err)
 		}
 	}()
 
-	if a.ChallengeServer != nil {
-		go func() {
-			a.Log.Info("ACME challenge listener on %s", a.ChallengeServer.Addr)
-			if err := a.ChallengeServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				a.Log.Error("ACME challenge listener stopped: %v", err)
-			}
-		}()
-	}
+	a.CertEngine.ReconcileChallengeServer()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
@@ -365,8 +331,8 @@ func (a *App) Start() error {
 	if a.PortalProxies != nil {
 		a.PortalProxies.Close()
 	}
-	if a.ChallengeServer != nil {
-		_ = a.ChallengeServer.Shutdown(ctx)
+	if a.CertEngine != nil {
+		a.CertEngine.Close()
 	}
 	if err := a.Server.Shutdown(ctx); err != nil {
 		a.Log.Error("Server forced to shutdown: %v", err)

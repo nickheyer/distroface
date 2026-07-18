@@ -128,12 +128,19 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	// ── CertificateService (system or org scope, checks in-service) ────
 	distrofacev1connect.CertificateServiceGetTLSStatusProcedure:                 {Resource: ResourceSettings, Action: ActionRead},
 	distrofacev1connect.CertificateServiceListCertificateDomainsProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceListCertificateHostsProcedure:         {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
 	distrofacev1connect.CertificateServiceAddCertificateDomainProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 	distrofacev1connect.CertificateServiceRemoveCertificateDomainProcedure:      {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 	distrofacev1connect.CertificateServiceBulkRemoveCertificateDomainsProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 	distrofacev1connect.CertificateServiceApproveCertificateDomainProcedure:     {Resource: ResourceSettings, Action: ActionManage},
 	distrofacev1connect.CertificateServiceIssueCertificateProcedure:             {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceUpdateACMESettingsProcedure:           {Resource: ResourceSettings, Action: ActionManage},
+	distrofacev1connect.CertificateServiceUploadTLSCertificateProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceDeleteTLSCertificateProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceGetTLSMaterialProcedure:               {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceGenerateOrgCAProcedure:                {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceGenerateAppCAProcedure:                {Resource: ResourceSettings, Action: ActionManage},
+	distrofacev1connect.CertificateServiceIssueOrgICAProcedure:                  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceGetCertStatusProcedure:                {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
 
 	// ── AuditService (admin) ──────────────────────────────────────────
 	distrofacev1connect.AuditServiceListAuditEventsProcedure: {Resource: ResourceSettings, Action: ActionRead},

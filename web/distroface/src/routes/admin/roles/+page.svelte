@@ -15,19 +15,14 @@
 	import FormPanel from '$lib/components/form-panel.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import FormField from '$lib/components/form-field.svelte';
-	import FormSection from '$lib/components/form-section.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import AsyncSelect from '$lib/components/async-select.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import {
-		Plus, Trash2, Pencil, Loader2, Shield, KeyRound, Save,
-		Globe, Target, Package, Building2, Archive
-	} from '@lucide/svelte';
+	import { Loader2 } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import { toast } from 'svelte-sonner';
 	import { Pager } from '$lib/pager.svelte';
 	import { QueryFilter } from '$lib/query.svelte';
 	import type { ResourceActions } from '$lib/proto/distroface/v1/role_pb';
@@ -85,12 +80,6 @@
 		const ra = resourceActions.find((r) => r.resource === scopedResource);
 		return ra?.actions ?? [];
 	});
-
-	const RESOURCE_ICONS: Record<string, typeof Package> = {
-		repositories: Package,
-		artifacts: Archive,
-		organizations: Building2
-	};
 
 	function hasFullAccess(roleId: string): boolean {
 		const perms = permissionMatrix[roleId] || [];
@@ -305,7 +294,6 @@
 				roleId: editingRole.id,
 				permissions
 			});
-			toast.success('Permissions updated');
 			showPermissionsDialog = false;
 			editingRole = null;
 			await loadRoles();
@@ -326,7 +314,6 @@
 				isDefault: newRoleForm.isDefault,
 				permissions: []
 			});
-			toast.success('Role created');
 			showCreateDialog = false;
 			newRoleForm = { name: '', description: '', isDefault: false };
 			pager.reset();
@@ -348,7 +335,6 @@
 		deleting = true;
 		try {
 			await rpcClient.role.deleteRole({ id: deleteTarget.id });
-			toast.success('Role deleted');
 			deleteDialogOpen = false;
 			await loadRoles();
 		} catch {
@@ -375,10 +361,7 @@
 				<QueryFilterBar {filter} placeholder="Search roles..." onchange={filterChanged} />
 			</div>
 			<PermissionGate resource="roles" action="create">
-				<Button size="sm" onclick={() => (showCreateDialog = true)}>
-					<Plus class="h-4 w-4 mr-1" />
-					Create Role
-				</Button>
+				<Button size="sm" onclick={() => (showCreateDialog = true)}>Create Role</Button>
 			</PermissionGate>
 		</div>
 	</div>
@@ -394,10 +377,6 @@
 			{#each roles as role (role.id)}
 				<div class="rounded-xl border border-border/60 bg-card p-4">
 					<div class="flex items-center gap-4">
-						<div class="h-10 w-10 rounded-lg shrink-0 flex items-center justify-center {role.isSystem ? 'bg-primary/10' : 'bg-muted'}">
-							<Shield class="h-5 w-5 {role.isSystem ? 'text-primary' : 'text-muted-foreground'}" />
-						</div>
-
 						<div class="flex-1 min-w-0">
 							<div class="flex items-center gap-2">
 								<span class="font-medium">{role.name}</span>
@@ -424,7 +403,6 @@
 									variant="outline"
 									onclick={() => openPermissionsDialog(role)}
 								>
-									<Pencil class="mr-1.5 h-3 w-3" />
 									Permissions ({getPermCount(role.id)})
 								</Button>
 							{:else}
@@ -435,11 +413,11 @@
 								<PermissionGate resource="roles" action="delete">
 									<Button
 										variant="ghost"
-										size="icon"
-										class="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+										size="sm"
+										class="h-8 px-2 text-xs shrink-0 text-destructive hover:text-destructive"
 										onclick={() => openDelete(role)}
 									>
-										<Trash2 class="h-4 w-4" />
+										Delete
 									</Button>
 								</PermissionGate>
 							{/if}
@@ -457,32 +435,20 @@
 	{/if}
 </div>
 
-<FormPanel
-	bind:open={showCreateDialog}
-	title="Create Role"
-	description="Create a custom role with specific permissions. You can configure permissions after creation."
-	icon={Shield}
->
-	<div class="space-y-6">
-		<FormSection title="Details">
-			<div class="space-y-3">
-				<FormField label="Name" id="role-name" help="Lowercase letters, numbers, hyphens. This is used as the role identifier." required>
-					<Input id="role-name" bind:value={newRoleForm.name} placeholder="e.g., moderator" />
-				</FormField>
-				<FormField label="Description" id="role-desc" help="A human-readable description of what this role is for.">
-					<Input id="role-desc" bind:value={newRoleForm.description} placeholder="What this role is for" />
-				</FormField>
-			</div>
-		</FormSection>
-
-		<FormSection title="Options">
-			<FormField label="Default role" help="Automatically assign to new users on registration." horizontal>
-				<Switch
-					checked={newRoleForm.isDefault}
-					onCheckedChange={(checked) => (newRoleForm.isDefault = checked)}
-				/>
-			</FormField>
-		</FormSection>
+<FormPanel bind:open={showCreateDialog} title="Create Role" description="Permissions are configured after creation">
+	<div class="space-y-3">
+		<FormField label="Name" id="role-name" required help="Lowercase letters numbers hyphens">
+			<Input id="role-name" bind:value={newRoleForm.name} placeholder="moderator" />
+		</FormField>
+		<FormField label="Description" id="role-desc">
+			<Input id="role-desc" bind:value={newRoleForm.description} placeholder="What this role is for" />
+		</FormField>
+		<FormField label="Default role" help="Granted to new users" horizontal>
+			<Switch
+				checked={newRoleForm.isDefault}
+				onCheckedChange={(checked) => (newRoleForm.isDefault = checked)}
+			/>
+		</FormField>
 	</div>
 	{#snippet footer()}
 		<Button variant="outline" onclick={() => (showCreateDialog = false)}>Cancel</Button>
@@ -495,13 +461,12 @@
 <AppDialog
 	bind:open={showPermissionsDialog}
 	title={activeSection === 'global' ? 'Global Permissions' : 'Scoped Permissions'}
-	icon={activeSection === 'global' ? KeyRound : Target}
 	sidebarTitle={editingRole?.name ?? ''}
 	sidebarSubtitle={editingRole?.isSystem ? 'System role' : 'Custom role'}
 	size="full"
 	description={activeSection === 'global'
-		? 'Global permissions apply to all objects of each resource type.'
-		: 'Scoped permissions grant access to specific objects only.'}
+		? 'Apply to every object of a resource'
+		: 'Apply to specific objects only'}
 >
 	{#snippet sidebar()}
 		<nav class="flex-1 p-4 space-y-1">
@@ -511,7 +476,6 @@
 					: 'hover:bg-muted'}"
 				onclick={() => (activeSection = 'global')}
 			>
-				<Globe class="h-5 w-5" />
 				<span class="font-medium flex-1">Global</span>
 				<span class="text-xs opacity-75">{globalPermCount}</span>
 			</button>
@@ -521,7 +485,6 @@
 					: 'hover:bg-muted'}"
 				onclick={() => (activeSection = 'scoped')}
 			>
-				<Target class="h-5 w-5" />
 				<span class="font-medium flex-1">Scoped</span>
 				<span class="text-xs opacity-75">{scopedCount}</span>
 			</button>
@@ -581,15 +544,13 @@
 	{:else}
 		<div class="flex gap-2 mb-4">
 			{#each scopeableResources as res (res)}
-				{@const Icon = RESOURCE_ICONS[res] || Package}
 				<button
-					class="flex items-center gap-2 px-4 py-2 rounded-lg border text-sm font-medium transition-colors {scopedResource === res
+					class="px-4 py-2 rounded-lg border text-sm font-medium capitalize transition-colors {scopedResource === res
 						? 'bg-primary text-primary-foreground border-primary'
 						: 'bg-background hover:bg-muted border-border'}"
 					onclick={() => (scopedResource = res)}
 				>
-					<Icon class="h-4 w-4" />
-					<span class="capitalize">{formatResourceName(res)}</span>
+					{formatResourceName(res)}
 				</button>
 			{/each}
 		</div>
@@ -606,11 +567,7 @@
 		{/key}
 
 		{#if currentRows.length === 0}
-			<EmptyState
-				message="No scoped {formatResourceName(scopedResource)}"
-				description="Search above to add {formatResourceName(scopedResource)} and grant per-object permissions."
-				icon={RESOURCE_ICONS[scopedResource] || Package}
-			/>
+			<EmptyState message="No scoped {formatResourceName(scopedResource)}, search above to add one" />
 		{:else}
 			<div class="overflow-x-auto border rounded-xl">
 				<Table>
@@ -675,7 +632,6 @@
 				<Loader2 class="h-4 w-4 animate-spin" />
 				Saving...
 			{:else}
-				<Save class="h-4 w-4" />
 				Save Permissions ({totalPermCount})
 			{/if}
 		</Button>
@@ -688,7 +644,6 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
 >
 	{#snippet description()}
 		Are you sure you want to delete the <strong>{deleteTarget?.name}</strong> role? Users with

@@ -20,7 +20,7 @@
 			? [{ href: '/admin/auth', label: 'Authentication', icon: Shield } satisfies NavItem]
 			: []),
 		...(authStore.canManageSettings
-			? [{ href: '/admin/security', label: 'Security', icon: ShieldCheck } satisfies NavItem]
+			? [{ href: '/admin/pki', label: 'PKI', icon: ShieldCheck } satisfies NavItem]
 			: []),
 		...(authStore.canReadSettings
 			? [{ href: '/admin/audit', label: 'Audit Log', icon: ScrollText } satisfies NavItem]
@@ -50,7 +50,7 @@
 	});
 </script>
 
-<PageHeader title="Administration" subtitle="Manage your Distroface instance" icon={Shield} />
+<PageHeader title="Administration" subtitle="Manage your Distroface instance" />
 
 <div class="flex flex-col md:flex-row gap-8 mt-2">
 	<nav class="md:w-52 shrink-0">
