@@ -10,8 +10,10 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
-	import { Globe, Tag, Network, Lock, Shuffle, Plus, X } from '@lucide/svelte';
+	import { Globe, Tag, Network, Lock, Shuffle, Plus, X, ShieldCheck } from '@lucide/svelte';
 	import { effectiveAddress, placementError } from '$lib/portal-address';
+	import { certDate, isIssuableHostname } from '$lib/cert-utils';
+	import { configStore } from '$lib/stores/config.svelte';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 
 	let {
@@ -42,10 +44,16 @@
 	/* svelte-ignore state_referenced_locally */
 	let requireAuth = $state(portal?.requireAuth ?? false);
 	/* svelte-ignore state_referenced_locally */
+	let tls = $state(portal?.tls ?? false);
+	let provisionCert = $state(true);
+	/* svelte-ignore state_referenced_locally */
 	let rules = $state<RuleDraft[]>(
 		portal?.rules.map((r) => ({ pattern: r.pattern, replace: r.replace })) ?? []
 	);
 	let submitting = $state(false);
+
+	const serverTLS = $derived(configStore.get('tls.enabled', false) === true);
+	const acmeEnabled = $derived(configStore.get('tls.acme.enabled', false) === true);
 
 	function goBack() {
 		goto(resolve('/orgs/[name]/portals', { name: orgName }));
@@ -65,12 +73,40 @@
 			: ''
 	);
 	const previewImage = $derived(mapUnqualified ? 'myimage' : `${orgName}/myimage`);
+	const canProvision = $derived(
+		!portal && tls && acmeEnabled && isIssuableHostname(hostname)
+	);
+	// App port portals ride the primary listener's scheme
+	const onAppPort = $derived(portText.trim() === '');
+	const httpsOn = $derived(tls || (serverTLS && onAppPort));
 	const scheme = $derived(
-		typeof window !== 'undefined' ? window.location.protocol.replace(':', '') : 'http'
+		httpsOn
+			? 'https'
+			: onAppPort && typeof window !== 'undefined'
+				? window.location.protocol.replace(':', '')
+				: 'http'
 	);
 	const ruleCount = $derived(
 		rules.filter((r) => r.pattern.trim() !== '' || r.replace.trim() !== '').length
 	);
+
+	// Same enable flow as the certificates page, the portal must exist first
+	async function provisionCertificate(domain: string) {
+		try {
+			const resp = await rpcClient.certificate.addCertificateDomain({ domain, orgId });
+			if (resp.domain?.approved) {
+				toast.info(`Requesting certificate for ${domain} - this can take a minute`);
+				const issued = await rpcClient.certificate.issueCertificate({ domain, orgId });
+				toast.success(
+					issued.cert?.notAfter
+						? `Certificate issued for ${domain}, valid until ${certDate(issued.cert)}`
+						: `Certificate issued for ${domain}`
+				);
+			} else {
+				toast.success(`${domain} registered - a system administrator must approve it before issuance`);
+			}
+		} catch { /* error interceptor */ }
+	}
 
 	async function submit() {
 		if (!formValid) return;
@@ -85,6 +121,7 @@
 			mapUnqualified,
 			allowPush,
 			requireAuth,
+			tls,
 			rules: cleanedRules
 		};
 		submitting = true;
@@ -95,6 +132,9 @@
 			} else {
 				await rpcClient.portal.createPortal(common);
 				toast.success('Portal created');
+				if (canProvision && provisionCert) {
+					await provisionCertificate(common.hostname);
+				}
 			}
 			goBack();
 		} catch { /* error interceptor */ }
@@ -143,6 +183,40 @@
 						placeholder={mainPort ? String(mainPort) : 'app port'}
 					/>
 				</FormField>
+			</div>
+		</FormCard>
+
+		<FormCard
+			title="HTTPS"
+			description="Serve this portal over TLS. Portals sharing the port are unaffected."
+			icon={ShieldCheck}
+		>
+			<div class="space-y-3">
+				<FormField
+					label="Serve HTTPS"
+					horizontal
+					help="Certificates are picked per hostname. HTTP requests to this portal redirect to HTTPS."
+				>
+					<Switch bind:checked={tls} />
+				</FormField>
+				{#if canProvision}
+					<FormField
+						label="Provision certificate now"
+						horizontal
+						help="Request an ACME certificate for {hostname.trim().toLowerCase()} as soon as the portal is created."
+					>
+						<Switch bind:checked={provisionCert} />
+					</FormField>
+				{:else if tls && !portal && !isIssuableHostname(hostname)}
+					<p class="text-[13px] text-muted-foreground">
+						Automatic certificates need a public DNS hostname. Without one, the server's manual
+						certificate is used.
+					</p>
+				{:else if tls && portal}
+					<p class="text-[13px] text-muted-foreground">
+						Certificates for this hostname are managed on the Certificates page.
+					</p>
+				{/if}
 			</div>
 		</FormCard>
 
@@ -276,6 +350,9 @@
 
 			<div class="flex flex-wrap gap-1 pt-1 border-t border-border/40">
 				<Badge variant="outline" class="text-xs font-normal mt-2">Scoped to {orgName}</Badge>
+				{#if httpsOn}
+					<Badge variant="outline" class="text-xs font-normal mt-2">HTTPS</Badge>
+				{/if}
 				<Badge variant="outline" class="text-xs font-normal mt-2">{allowPush ? 'Push enabled' : 'Pull only'}</Badge>
 				{#if requireAuth}
 					<Badge variant="outline" class="text-xs font-normal mt-2">Sign-in required</Badge>

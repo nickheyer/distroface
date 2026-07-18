@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/certs"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
@@ -24,7 +25,13 @@ type Manager struct {
 	handler   http.Handler
 	tlsConfig *tls.Config
 	timeouts  ServerTimeouts
-	servers   map[int]*http.Server
+	servers   map[int]*portListener
+}
+
+// One bound port with its raw listener
+type portListener struct {
+	srv *http.Server
+	raw net.Listener
 }
 
 // Applied to all
@@ -38,7 +45,7 @@ func NewManager(resolver *Resolver, bindHost string, log *logger.Logger) *Manage
 		resolver: resolver,
 		bindHost: bindHost,
 		log:      log,
-		servers:  map[int]*http.Server{},
+		servers:  map[int]*portListener{},
 	}
 }
 
@@ -49,11 +56,18 @@ func (m *Manager) SetHandler(handler http.Handler) {
 	m.mu.Unlock()
 }
 
-// Portal listeners terminate tls when set, sni picks per host certs
+// Enables https on every portal listener, sni picks per host certs
 func (m *Manager) SetTLSConfig(cfg *tls.Config) {
 	m.mu.Lock()
 	m.tlsConfig = cfg
 	m.mu.Unlock()
+}
+
+// True when listeners are able to terminate tls
+func (m *Manager) TLSAvailable() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.tlsConfig != nil
 }
 
 // Timeouts must be set before the first Reconcile
@@ -79,9 +93,10 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	for port, srv := range m.servers {
+	for port, pl := range m.servers {
 		if !desired[port] {
-			_ = srv.Close()
+			_ = pl.raw.Close()
+			_ = pl.srv.Close()
 			delete(m.servers, port)
 			m.log.Info("portal proxy on port %d closed", port)
 		}
@@ -96,27 +111,29 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("port %d: no handler set", port))
 			continue
 		}
-		ln, err := net.Listen("tcp", net.JoinHostPort(m.bindHost, strconv.Itoa(port)))
+		raw, err := net.Listen("tcp", net.JoinHostPort(m.bindHost, strconv.Itoa(port)))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("port %d: %w", port, err))
 			m.log.Error("portal proxy failed to bind port %d: %v", port, err)
 			continue
 		}
+		ln, mode := raw, "cleartext"
 		if m.tlsConfig != nil {
-			ln = tls.NewListener(ln, m.tlsConfig)
+			// Both schemes share the port, hostnames stay independent
+			ln, mode = certs.DualSchemeListener(raw, m.tlsConfig, m.timeouts.ReadHeader), "tls+cleartext"
 		}
 		srv := &http.Server{
 			Handler:           m.handler,
 			ReadHeaderTimeout: m.timeouts.ReadHeader,
 			IdleTimeout:       m.timeouts.Idle,
 		}
-		m.servers[port] = srv
+		m.servers[port] = &portListener{srv: srv, raw: raw}
 		go func(port int) {
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				m.log.Error("portal proxy on port %d stopped: %v", port, err)
 			}
 		}(port)
-		m.log.Info("portal proxy listening on %s:%d", m.bindHost, port)
+		m.log.Info("portal proxy listening on %s:%d (%s)", m.bindHost, port, mode)
 	}
 	return errors.Join(errs...)
 }
@@ -141,8 +158,9 @@ func (m *Manager) ProbePort(port int) error {
 func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for port, srv := range m.servers {
-		_ = srv.Close()
+	for port, pl := range m.servers {
+		_ = pl.raw.Close()
+		_ = pl.srv.Close()
 		delete(m.servers, port)
 	}
 }

@@ -114,6 +114,7 @@ func (res *Resolver) reloadLocked() {
 			MapUnqualified: p.MapUnqualified,
 			AllowPush:      p.AllowPush,
 			RequireAuth:    p.RequireAuth,
+			TLS:            p.TLS,
 		}
 		if rules, err := ParseRules(p.Rules); err != nil {
 			res.log.Error("portal %s (%s): stored rules invalid, custom rules disabled: %v", p.Name, p.Hostname, err)

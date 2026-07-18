@@ -145,7 +145,7 @@
 			bind:this={tableWrap}
 			onscrollcapture={onTableScroll}
 			class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}
-				[&_[data-slot=table-container]]:max-h-[65vh] [&_[data-slot=table-container]]:overflow-y-auto"
+				**:data-[slot=table-container]:max-h-[65vh] **:data-[slot=table-container]:overflow-y-auto"
 		>
 			<Table>
 				<TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur">

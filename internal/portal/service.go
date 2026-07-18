@@ -112,23 +112,22 @@ func (s *Service) validatePlacement(ctx context.Context, hostname string, port i
 		if hostname == primary || hostname == strings.SplitN(primary, ":", 2)[0] {
 			return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname conflicts with the server's primary hostname"))
 		}
-		existing, err := s.store.GetRegistryPortalByHostname(ctx, hostname)
-		if err != nil {
-			return "", 0, connect.NewError(connect.CodeInternal, err)
+	}
+
+	// Hostnames are unique per port, catch-alls one per port
+	portals, err := s.store.ListRegistryPortals(ctx)
+	if err != nil {
+		return "", 0, connect.NewError(connect.CodeInternal, err)
+	}
+	for _, p := range portals {
+		if p.ID == excludePortalID || p.Port != port {
+			continue
 		}
-		if existing != nil && existing.ID != excludePortalID {
-			return "", 0, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("hostname already in use"))
-		}
-	} else {
-		// Port catch-all, only one per port
-		portals, err := s.store.ListRegistryPortals(ctx)
-		if err != nil {
-			return "", 0, connect.NewError(connect.CodeInternal, err)
-		}
-		for _, p := range portals {
-			if p.ID != excludePortalID && p.Port == port && p.Hostname == "" {
+		if p.Hostname == hostname {
+			if hostname == "" {
 				return "", 0, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("port %d already has a catch-all portal", port))
 			}
+			return "", 0, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("hostname already in use on this port"))
 		}
 	}
 
@@ -138,6 +137,17 @@ func (s *Service) validatePlacement(ctx context.Context, hostname string, port i
 		}
 	}
 	return hostname, port, nil
+}
+
+// Tls needs the server's cert engine
+func (s *Service) validateTLS(tlsOn bool) error {
+	if !tlsOn {
+		return nil
+	}
+	if !s.proxies.TLSAvailable() {
+		return connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("tls is unavailable, enable tls, acme, or a cert bundle in the server configuration"))
+	}
+	return nil
 }
 
 // Validates rules compile, returns their JSON form
@@ -173,6 +183,9 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateTLS(msg.Tls); err != nil {
+		return nil, err
+	}
 	rulesJSON, err := s.encodeRules(msg.Rules)
 	if err != nil {
 		return nil, err
@@ -187,13 +200,14 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 		Rules:          rulesJSON,
 		AllowPush:      msg.AllowPush,
 		RequireAuth:    msg.RequireAuth,
+		TLS:            msg.Tls,
 		Enabled:        true,
 	}
 	if err := s.store.CreateRegistryPortal(ctx, portal); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	s.reconcile(ctx)
-	s.log.Info("portal created: %s port %d -> org %s (%s)", portal.Hostname, portal.Port, org.Name, portal.ID)
+	s.log.Info("portal created: %s port %d tls=%v -> org %s (%s)", portal.Hostname, portal.Port, portal.TLS, org.Name, portal.ID)
 
 	return connect.NewResponse(&v1.CreatePortalResponse{Portal: portalToProto(portal)}), nil
 }
@@ -283,8 +297,14 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 	if msg.RequireAuth != nil {
 		portal.RequireAuth = *msg.RequireAuth
 	}
+	if msg.Tls != nil {
+		portal.TLS = *msg.Tls
+	}
 	if msg.Enabled != nil {
 		portal.Enabled = *msg.Enabled
+	}
+	if err := s.validateTLS(portal.TLS); err != nil {
+		return nil, err
 	}
 
 	if err := s.store.UpdateRegistryPortal(ctx, portal); err != nil {
@@ -348,6 +368,7 @@ func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {
 		MapUnqualified: p.MapUnqualified,
 		AllowPush:      p.AllowPush,
 		RequireAuth:    p.RequireAuth,
+		Tls:            p.TLS,
 		Enabled:        p.Enabled,
 		CreatedAt:      timestamppb.New(p.CreatedAt),
 		UpdatedAt:      timestamppb.New(p.UpdatedAt),

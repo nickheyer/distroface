@@ -24,6 +24,8 @@ var _ distrofacev1connect.ConfigurationServiceHandler = (*ConfigurationService)(
 var publicKeys = []string{
 	"server.hostname",
 	"server.port",
+	"tls.enabled",
+	"tls.acme.enabled",
 }
 
 type ConfigurationService struct {

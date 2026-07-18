@@ -30,18 +30,6 @@ func (s *Store) GetRegistryPortal(ctx context.Context, id string) (*db.RegistryP
 	return &portal, nil
 }
 
-func (s *Store) GetRegistryPortalByHostname(ctx context.Context, hostname string) (*db.RegistryPortal, error) {
-	var portal db.RegistryPortal
-	err := s.db.WithContext(ctx).First(&portal, "hostname = ?", hostname).Error
-	if err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &portal, nil
-}
-
 func (s *Store) ListRegistryPortalsByOrg(ctx context.Context, orgID string) ([]*db.RegistryPortal, error) {
 	var portals []*db.RegistryPortal
 	err := s.db.WithContext(ctx).Where("org_id = ?", orgID).Order("created_at ASC").Find(&portals).Error

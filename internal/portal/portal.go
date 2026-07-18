@@ -14,6 +14,7 @@ type Portal struct {
 	MapUnqualified bool
 	AllowPush      bool
 	RequireAuth    bool
+	TLS            bool
 	rules          *pathMapper
 }
 

@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -202,20 +203,22 @@ func New() (*App, error) {
 	})
 	portalService := portal.NewService(store, enforcer, portalProxies, cfg, log)
 
-	// TLS/ACME engine, acme alone pre-provisions certs while serving cleartext
+	// Any cert source builds the engine, primary tls stays a startup choice
 	var certEngine *certs.Engine
-	if cfg.TLS.Enabled || cfg.TLS.ACME.Enabled {
+	if cfg.TLS.Enabled || cfg.TLS.ACME.Enabled || cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" {
 		certEngine, err = certs.NewEngine(cfg, store, log)
 		if err != nil {
 			store.Close()
 			log.Close()
 			return nil, fmt.Errorf("initializing tls engine: %w", err)
 		}
+		// Portals decide https themselves, independent of the primary's tls
+		portalProxies.SetTLSConfig(certEngine.TLSConfig())
 		if cfg.TLS.Enabled {
-			portalProxies.SetTLSConfig(certEngine.TLSConfig())
 			log.Info("TLS enabled (acme=%v manual_cert=%v)", certEngine.ACMEEnabled(), certEngine.ManualCertLoaded())
 		} else {
-			log.Info("ACME pre-provisioning enabled, serving stays cleartext until tls.enabled is set")
+			log.Info("TLS engine ready for portals (acme=%v manual_cert=%v), primary serving stays cleartext until tls.enabled is set",
+				certEngine.ACMEEnabled(), certEngine.ManualCertLoaded())
 		}
 	}
 	certService := certs.NewService(store, enforcer, certEngine, cfg, log)
@@ -317,6 +320,20 @@ func (a *App) Start() error {
 		if a.Server.TLSConfig != nil {
 			a.Log.Info("Starting Distroface with TLS on %s", a.Server.Addr)
 			if err := a.Server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
+				a.Log.Fatal("Failed to start server: %v", err)
+			}
+			return
+		}
+		if a.CertEngine != nil {
+			// Portal hostnames on the app port may serve https, the app itself stays cleartext
+			ln, err := net.Listen("tcp", a.Server.Addr)
+			if err != nil {
+				a.Log.Fatal("Failed to start server: %v", err)
+				return
+			}
+			a.Log.Info("Starting Distroface on %s (tls+cleartext)", a.Server.Addr)
+			ln = certs.DualSchemeListener(ln, a.CertEngine.TLSConfig(), a.Server.ReadHeaderTimeout)
+			if err := a.Server.Serve(ln); err != nil && err != http.ErrServerClosed {
 				a.Log.Fatal("Failed to start server: %v", err)
 			}
 			return

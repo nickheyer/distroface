@@ -67,6 +67,7 @@
 
 	function accessBadges(portal: RegistryPortal): string[] {
 		const badges = [];
+		if (portal.tls) badges.push('HTTPS');
 		if (!portal.allowPush) badges.push('Pull only');
 		if (portal.requireAuth) badges.push('Sign-in required');
 		if (portal.mapUnqualified) badges.push('Bare names');

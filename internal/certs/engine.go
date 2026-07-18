@@ -6,9 +6,11 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -149,6 +151,100 @@ func (e *Engine) HTTPChallengeHandler() http.Handler {
 		})
 	}
 	return fallback
+}
+
+// Tls handshakes open with this record type
+const tlsRecordHandshake = 0x16
+
+// Accepts tls and cleartext on one port, first byte of each conn decides
+type dualListener struct {
+	raw    net.Listener
+	tlsCfg *tls.Config
+	sniff  time.Duration
+	conns  chan net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+// Any hostname may speak https while others stay cleartext
+func DualSchemeListener(raw net.Listener, cfg *tls.Config, sniffTimeout time.Duration) net.Listener {
+	if sniffTimeout <= 0 {
+		sniffTimeout = 10 * time.Second
+	}
+	l := &dualListener{
+		raw:    raw,
+		tlsCfg: cfg,
+		sniff:  sniffTimeout,
+		conns:  make(chan net.Conn),
+		closed: make(chan struct{}),
+	}
+	go l.acceptLoop()
+	return l
+}
+
+func (l *dualListener) acceptLoop() {
+	for {
+		conn, err := l.raw.Accept()
+		if err != nil {
+			_ = l.Close()
+			return
+		}
+		go l.classify(conn)
+	}
+}
+
+func (l *dualListener) classify(conn net.Conn) {
+	_ = conn.SetReadDeadline(time.Now().Add(l.sniff))
+	var first [1]byte
+	if _, err := io.ReadFull(conn, first[:]); err != nil {
+		conn.Close()
+		return
+	}
+	_ = conn.SetReadDeadline(time.Time{})
+	c := net.Conn(&sniffedConn{Conn: conn, peeked: first[:]})
+	if first[0] == tlsRecordHandshake {
+		c = tls.Server(c, l.tlsCfg)
+	}
+	select {
+	case l.conns <- c:
+	case <-l.closed:
+		conn.Close()
+	}
+}
+
+func (l *dualListener) Accept() (net.Conn, error) {
+	select {
+	case c := <-l.conns:
+		return c, nil
+	case <-l.closed:
+		return nil, net.ErrClosed
+	}
+}
+
+func (l *dualListener) Close() error {
+	var err error
+	l.once.Do(func() {
+		close(l.closed)
+		err = l.raw.Close()
+	})
+	return err
+}
+
+func (l *dualListener) Addr() net.Addr { return l.raw.Addr() }
+
+// Replays the sniffed byte before the rest of the stream
+type sniffedConn struct {
+	net.Conn
+	peeked []byte
+}
+
+func (c *sniffedConn) Read(p []byte) (int, error) {
+	if len(c.peeked) > 0 {
+		n := copy(p, c.peeked)
+		c.peeked = c.peeked[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
 }
 
 // Modern ecdsa capable hello so the cache key matches real clients

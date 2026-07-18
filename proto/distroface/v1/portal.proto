@@ -43,6 +43,7 @@ message RegistryPortal {
   int32 port = 10; // Dedicated proxy port, 0 serves on the main port only, ports may be shared
   google.protobuf.Timestamp created_at = 11;
   google.protobuf.Timestamp updated_at = 12;
+  bool tls = 13; // Https enforced for this portal, cleartext requests redirect
 }
 
 // Fields to create a portal, hostname or port required
@@ -55,6 +56,7 @@ message CreatePortalRequest {
   bool allow_push = 6;
   bool require_auth = 7;
   int32 port = 8;
+  bool tls = 9;
 }
 
 // The newly created portal
@@ -113,6 +115,7 @@ message UpdatePortalRequest {
   optional bool require_auth = 9;
   optional bool enabled = 10;
   optional int32 port = 11;
+  optional bool tls = 12;
 }
 
 // The updated portal

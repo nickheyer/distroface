@@ -37,6 +37,12 @@ func (res *Resolver) Middleware(primaryHostname string, next http.Handler) http.
 		}
 		r = r.WithContext(WithPortal(r.Context(), p))
 
+		// Https enforced portals bounce cleartext to the same address
+		if p.TLS && requestScheme(r) != "https" {
+			http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusFound)
+			return
+		}
+
 		// SSO state cookies only work on the primary origin, bounce through it
 		if r.URL.Path == oidcLoginPath && primaryHostname != "" {
 			origin := requestScheme(r) + "://" + r.Host

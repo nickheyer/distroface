@@ -2,7 +2,13 @@ package portal
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -432,6 +438,92 @@ func freePort(t *testing.T) int {
 	port := ln.Addr().(*net.TCPAddr).Port
 	ln.Close()
 	return port
+}
+
+// Minimal self signed server config for listener tests
+func selfSignedTLSConfig(t *testing.T) *tls.Config {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	tmpl := x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.IPv4(127, 0, 0, 1)},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &tmpl, &tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	cert := tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	return &tls.Config{Certificates: []tls.Certificate{cert}}
+}
+
+// Both schemes on one shared port, tls enforced per hostname
+func TestManagerReconcileTLS(t *testing.T) {
+	store := newTestStore(t)
+	res := NewResolver(store, logger.New())
+	m := NewManager(res, "127.0.0.1", logger.New())
+	m.SetHandler(res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "portal-surface")
+	})))
+	t.Cleanup(m.Close)
+
+	port := freePort(t)
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "secure", Hostname: "secure.example.com", Port: port,
+		MapUnqualified: true, Rules: "[]", AllowPush: true, TLS: true, Enabled: true,
+	})
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "plain", Hostname: "plain.example.com", Port: port,
+		MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
+	})
+
+	m.SetTLSConfig(selfSignedTLSConfig(t))
+	if err := m.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	get := func(scheme, host string) *http.Response {
+		t.Helper()
+		client := &http.Client{
+			Transport:     &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+		req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s://127.0.0.1:%d/", scheme, port), nil)
+		if err != nil {
+			t.Fatalf("NewRequest: %v", err)
+		}
+		req.Host = fmt.Sprintf("%s:%d", host, port)
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("%s to %s failed: %v", scheme, host, err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+
+	// Https and cleartext coexist on the same port
+	if resp := get("https", "secure.example.com"); resp.StatusCode != http.StatusOK {
+		t.Errorf("https on tls portal: got %d, want 200", resp.StatusCode)
+	}
+	if resp := get("http", "plain.example.com"); resp.StatusCode != http.StatusOK {
+		t.Errorf("http on plain portal: got %d, want 200", resp.StatusCode)
+	}
+
+	// Cleartext to the tls portal bounces to https on the same address
+	resp := get("http", "secure.example.com")
+	wantLoc := fmt.Sprintf("https://secure.example.com:%d/", port)
+	if resp.StatusCode != http.StatusFound || resp.Header.Get("Location") != wantLoc {
+		t.Errorf("http on tls portal: got %d %q, want 302 %q", resp.StatusCode, resp.Header.Get("Location"), wantLoc)
+	}
+
+	// Https also works for the plain portal, just not required
+	if resp := get("https", "plain.example.com"); resp.StatusCode != http.StatusOK {
+		t.Errorf("https on plain portal: got %d, want 200", resp.StatusCode)
+	}
 }
 
 func TestManagerReconcile(t *testing.T) {
