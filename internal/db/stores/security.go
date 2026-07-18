@@ -223,15 +223,16 @@ var AuditQuery = pages.Spec{
 	Text: []string{"action", "actor", "resource"},
 }
 
-// Newest first
-func (s *Store) ListAuditEvents(ctx context.Context, q pages.Query, limit, offset int) ([]*db.AuditEvent, int64, error) {
+var AuditSortColumns = map[string]bool{"created_at": true}
+
+func (s *Store) ListAuditEvents(ctx context.Context, q pages.Query, orderBy string, limit, offset int) ([]*db.AuditEvent, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.AuditEvent{}).Scopes(AuditQuery.Scope(q))
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var events []*db.AuditEvent
-	err := tx.Order("created_at DESC").Limit(limit).Offset(offset).Find(&events).Error
+	err := tx.Order(orderBy).Limit(limit).Offset(offset).Find(&events).Error
 	return events, total, err
 }
 

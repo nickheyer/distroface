@@ -50,9 +50,9 @@ message GetStorageUsageResponse {
   int64 registry_bytes = 1;
   // artifact_bytes is unique artifact blob bytes on disk (deduplicated).
   int64 artifact_bytes = 2;
-  // registry_namespaces breaks registry usage down per namespace.
+  // registry_namespaces is the five largest namespaces by usage.
   // Layers shared across namespaces are counted in each, so entries can sum above registry_bytes.
   repeated StorageUsageEntry registry_namespaces = 3;
-  // artifact_repos breaks artifact usage down per artifact repository.
+  // artifact_repos is the five largest artifact repositories by usage.
   repeated StorageUsageEntry artifact_repos = 4;
 }

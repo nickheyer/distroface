@@ -8,10 +8,9 @@
 	import {
 		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 	} from '$lib/components/ui/table';
-	import DataPagination from '$lib/components/data-pagination.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { ScrollText, RefreshCw } from '@lucide/svelte';
+	import { ScrollText, RefreshCw, ArrowUp, ArrowDown, Loader2 } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -23,6 +22,9 @@
 	let events = $state<AuditEvent[]>([]);
 	let loading = $state(true);
 	let loaded = $state(false);
+	let loadingMore = $state(false);
+	let sortDesc = $state(true);
+	let tableWrap = $state<HTMLDivElement | null>(null);
 	const pager = new Pager(50);
 	const filter = new QueryFilter([
 		{ key: 'action', label: 'Action' },
@@ -32,14 +34,18 @@
 		{ key: 'source_ip', label: 'Source IP' }
 	]);
 
+	function pageRequest() {
+		return pager.request(filter.request(), `created_at ${sortDesc ? 'desc' : 'asc'}`);
+	}
+
 	async function loadEvents() {
 		loading = true;
+		pager.reset();
 		try {
-			const resp = await rpcClient.audit.listAuditEvents({
-				page: pager.request(filter.request())
-			});
+			const resp = await rpcClient.audit.listAuditEvents({ page: pageRequest() });
 			events = resp.events;
 			pager.apply(resp.page);
+			tableWrap?.querySelector('[data-slot=table-container]')?.scrollTo({ top: 0 });
 		} catch {
 			// error interceptor
 		} finally {
@@ -48,8 +54,32 @@
 		}
 	}
 
+	async function loadMore() {
+		if (loading || loadingMore || !pager.next()) return;
+		loadingMore = true;
+		try {
+			const resp = await rpcClient.audit.listAuditEvents({ page: pageRequest() });
+			events = [...events, ...resp.events];
+			pager.apply(resp.page);
+		} catch {
+			// Error interceptor, back a page so scrolling retries
+			pager.prev();
+		} finally {
+			loadingMore = false;
+		}
+	}
+
+	function onTableScroll(e: Event) {
+		const el = e.target as HTMLElement;
+		if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) loadMore();
+	}
+
+	function toggleSort() {
+		sortDesc = !sortDesc;
+		loadEvents();
+	}
+
 	function filterChanged() {
-		pager.reset();
 		loadEvents();
 	}
 
@@ -111,11 +141,30 @@
 			icon={ScrollText}
 		/>
 	{:else}
-		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
+		<div
+			bind:this={tableWrap}
+			onscrollcapture={onTableScroll}
+			class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}
+				[&_[data-slot=table-container]]:max-h-[65vh] [&_[data-slot=table-container]]:overflow-y-auto"
+		>
 			<Table>
-				<TableHeader>
+				<TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur">
 					<TableRow class="bg-muted/30 hover:bg-muted/30">
-						<TableHead class="th">Time</TableHead>
+						<TableHead class="th">
+							<button
+								type="button"
+								class="flex items-center gap-1 hover:text-foreground transition-colors"
+								title={sortDesc ? 'Newest first, click for oldest first' : 'Oldest first, click for newest first'}
+								onclick={toggleSort}
+							>
+								Time
+								{#if sortDesc}
+									<ArrowDown class="h-3 w-3" />
+								{:else}
+									<ArrowUp class="h-3 w-3" />
+								{/if}
+							</button>
+						</TableHead>
 						<TableHead class="th">Actor</TableHead>
 						<TableHead class="th">Action</TableHead>
 						<TableHead class="th">Outcome</TableHead>
@@ -161,14 +210,18 @@
 							</TableCell>
 						</TableRow>
 					{/each}
+					{#if loadingMore}
+						<TableRow class="hover:bg-transparent">
+							<TableCell colspan={6} class="py-3 px-3">
+								<div class="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+									<Loader2 class="h-3.5 w-3.5 animate-spin" />
+									Loading more events...
+								</div>
+							</TableCell>
+						</TableRow>
+					{/if}
 				</TableBody>
 			</Table>
 		</div>
-
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) loadEvents(); }}
-			onNext={() => { if (pager.next()) loadEvents(); }}
-		/>
 	{/if}
 </div>

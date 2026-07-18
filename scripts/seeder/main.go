@@ -522,7 +522,7 @@ func (s *seeder) createUser(ctx context.Context, i int) (userRef, error) {
 		return s.client.users.AdminCreateUser(ctx, connect.NewRequest(&v1.AdminCreateUserRequest{
 			Username:    username,
 			Password:    password,
-			Email:       username + "@seed.invalid",
+			Email:       username + "@seed-distroface.localdomain",
 			DisplayName: fmt.Sprintf("Seed User %d", i),
 			RoleIds:     roleIDs,
 		}))
@@ -598,7 +598,7 @@ func (s *seeder) ensurePushPortals(ctx context.Context) error {
 	}
 	for k, port := range s.cfg.portalPorts {
 		org := s.orgs[k%len(s.orgs)]
-		hostname := fmt.Sprintf("%s-push-%s-%d.portal.invalid", s.cfg.NamePrefix, s.runID, k)
+		hostname := fmt.Sprintf("%s-push-%s-%d.seed-distroface.localdomain", s.cfg.NamePrefix, s.runID, k)
 		req := &v1.CreatePortalRequest{
 			OrgId:       org.id,
 			Name:        fmt.Sprintf("%s-push-%s-%d", s.cfg.NamePrefix, s.runID, k),
@@ -819,7 +819,7 @@ func (s *seeder) createPortal(ctx context.Context, i int) error {
 	}
 	ports := s.cfg.portalPorts
 	slot := i % (len(ports) + 1)
-	hostname := fmt.Sprintf("%s-%s-%d.portal.invalid", s.cfg.NamePrefix, s.runID, i)
+	hostname := fmt.Sprintf("%s-%s-%d.seed-distroface.localdomain", s.cfg.NamePrefix, s.runID, i)
 	switch {
 	case slot == 0:
 		req.Hostname = hostname

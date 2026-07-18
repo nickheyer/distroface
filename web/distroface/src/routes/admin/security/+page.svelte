@@ -305,20 +305,30 @@
 						</table>
 					</div>
 					<p class="text-[13px] text-muted-foreground">
-						TLS is configured in the server config file and cannot be changed here. Certificates
-						cover the main server and every portal listener - SNI picks the right one per hostname.
+						TLS termination is set in the server config at startup and cannot be toggled at
+						runtime.
+						{#if status.acmeEnabled}
+							Certificates can - the challenge listener answers ACME challenges live, so issuing
+							or renewing a certificate from this page never needs a restart.
+						{/if}
+						The main server and every portal listener share one certificate store - SNI picks the
+						right certificate per hostname.
 					</p>
 				{:else if status.acmeEnabled}
 					<p class="text-[13px] text-muted-foreground">
-						Connections are served in cleartext, but ACME pre-provisioning is active - certificates
-						for registered domains are issued and renewed in the background, so enabling
-						<code class="code-inline">tls</code> in the server config later needs only a restart.
+						The main server is serving cleartext, and switching it to TLS requires enabling
+						<code class="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">tls</code> in the server
+						config and a restart. ACME is active though - the challenge listener answers challenges
+						at runtime, so certificates for registered domains can be issued and renewed from this
+						page now and are ready the moment TLS termination is turned on.
 					</p>
 				{:else}
 					<p class="text-[13px] text-muted-foreground">
 						Connections are served in cleartext - terminate HTTPS at a reverse proxy, or enable
-						<code class="code-inline">tls</code> in the server config for in-app termination with
-						automatic ACME certificates. Domains registered below are kept for pre-provisioning.
+						<code class="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">tls</code> and
+						<code class="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">acme</code> in the
+						server config for in-app termination with automatic certificates. Domains registered
+						below are kept until issuance is possible.
 					</p>
 				{/if}
 			</div>

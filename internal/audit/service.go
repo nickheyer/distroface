@@ -29,7 +29,8 @@ func (s *Service) ListAuditEvents(ctx context.Context, req *connect.Request[v1.L
 	if err := stores.AuditQuery.Validate(q); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	events, total, err := s.store.ListAuditEvents(ctx, q, limit, offset)
+	orderBy := pages.OrderBy(req.Msg.Page, stores.AuditSortColumns, "created_at DESC")
+	events, total, err := s.store.ListAuditEvents(ctx, q, orderBy, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}

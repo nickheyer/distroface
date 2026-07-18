@@ -89,7 +89,7 @@ func (s *ConfigurationService) GetStorageUsage(ctx context.Context, req *connect
 			Name: r.Name, Bytes: st.Size, Count: int32(st.Count),
 		})
 	}
-	sortUsageEntries(resp.ArtifactRepos)
+	resp.ArtifactRepos = largestUsageEntries(resp.ArtifactRepos)
 
 	return connect.NewResponse(resp), nil
 }
@@ -181,17 +181,23 @@ func registryUsage(root string) (int64, []*v1.StorageUsageEntry, error) {
 		}
 		entries = append(entries, &v1.StorageUsageEntry{Name: ns, Bytes: bytes, Count: u.repos})
 	}
-	sortUsageEntries(entries)
-	return total, entries, nil
+	return total, largestUsageEntries(entries), nil
 }
 
-func sortUsageEntries(entries []*v1.StorageUsageEntry) {
+const maxUsageEntries = 5
+
+// Biggest first, truncated for the dashboard card
+func largestUsageEntries(entries []*v1.StorageUsageEntry) []*v1.StorageUsageEntry {
 	sort.Slice(entries, func(i, j int) bool {
 		if entries[i].Bytes != entries[j].Bytes {
 			return entries[i].Bytes > entries[j].Bytes
 		}
 		return entries[i].Name < entries[j].Name
 	})
+	if len(entries) > maxUsageEntries {
+		entries = entries[:maxUsageEntries]
+	}
+	return entries
 }
 
 // Marshals the config struct
