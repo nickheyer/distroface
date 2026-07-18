@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -23,6 +22,8 @@ type Event struct {
 	Outcome  string
 	Detail   string
 	SourceIP string
+	Actor    string
+	ActorID  string
 }
 
 // Writes security events to the db, nil recorder drops everything
@@ -35,7 +36,7 @@ func NewRecorder(store *stores.Store, log *logger.Logger) *Recorder {
 	return &Recorder{store: store, log: log}
 }
 
-// Actor comes from the auth context, failures only log
+// Write failures only log, callers never see them
 func (r *Recorder) Record(ctx context.Context, ev Event) {
 	if r == nil {
 		return
@@ -46,10 +47,8 @@ func (r *Recorder) Record(ctx context.Context, ev Event) {
 		Outcome:  ev.Outcome,
 		Detail:   ev.Detail,
 		SourceIP: ev.SourceIP,
-	}
-	if user := auth.UserFromContext(ctx); user != nil {
-		record.Actor = user.Username
-		record.ActorID = user.ID
+		Actor:    ev.Actor,
+		ActorID:  ev.ActorID,
 	}
 	// Context may already be canceled, the write should still land
 	if err := r.store.CreateAuditEvent(context.WithoutCancel(ctx), record); err != nil {

@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"net"
 
 	"github.com/distribution/distribution/v3"
 	"github.com/distribution/distribution/v3/notifications"
@@ -11,6 +12,7 @@ import (
 	"github.com/opencontainers/go-digest"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 
+	"github.com/nickheyer/distroface/internal/audit"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/webhook"
@@ -24,14 +26,16 @@ var listenerDeps struct {
 	store      *stores.Store
 	log        *logger.Logger
 	dispatcher *webhook.Dispatcher
+	recorder   *audit.Recorder
 }
 
 // RegisterListenerMiddleware stores the dependencies needed by the
 // repository middleware listener. Must be called before handlers.NewApp.
-func RegisterListenerMiddleware(store *stores.Store, log *logger.Logger, dispatcher *webhook.Dispatcher) {
+func RegisterListenerMiddleware(store *stores.Store, log *logger.Logger, dispatcher *webhook.Dispatcher, recorder *audit.Recorder) {
 	listenerDeps.store = store
 	listenerDeps.log = log
 	listenerDeps.dispatcher = dispatcher
+	listenerDeps.recorder = recorder
 }
 
 func init() {
@@ -43,6 +47,7 @@ func init() {
 			store:      listenerDeps.store,
 			log:        listenerDeps.log,
 			dispatcher: listenerDeps.dispatcher,
+			recorder:   listenerDeps.recorder,
 			ctx:        ctx,
 		}
 		wrapped, _ := notifications.Listen(repo, nil, listener)
@@ -56,6 +61,7 @@ type registryListener struct {
 	store      *stores.Store
 	log        *logger.Logger
 	dispatcher *webhook.Dispatcher
+	recorder   *audit.Recorder
 	ctx        context.Context
 }
 
@@ -111,11 +117,12 @@ func (l *registryListener) ManifestPushed(repo reference.Named, m distribution.M
 		l.log.Error("listener: failed to increment push count for %s/%s: %v", namespace, name, err)
 	}
 
+	tag := utils.TagFromOptions(options)
+	_, dgst := utils.ExtractRef(repo, m)
 	if l.dispatcher != nil {
-		tag := utils.TagFromOptions(options)
-		_, dgst := utils.ExtractRef(repo, m)
 		l.dispatcher.Dispatch(l.ctx, "push", namespace, name, tag, dgst)
 	}
+	l.audit("push", namespace, name, tag, dgst)
 	return nil
 }
 
@@ -129,21 +136,24 @@ func (l *registryListener) ManifestPulled(repo reference.Named, m distribution.M
 		l.log.Error("listener: failed to increment pull count for %s/%s: %v", namespace, name, err)
 	}
 
+	tag := utils.TagFromOptions(options)
+	_, dgst := utils.ExtractRef(repo, m)
 	if l.dispatcher != nil {
-		tag := utils.TagFromOptions(options)
-		_, dgst := utils.ExtractRef(repo, m)
 		l.dispatcher.Dispatch(l.ctx, "pull", namespace, name, tag, dgst)
 	}
+	l.audit("pull", namespace, name, tag, dgst)
 	return nil
 }
 
 func (l *registryListener) ManifestDeleted(repo reference.Named, dgst digest.Digest) error {
-	if l.dispatcher != nil {
-		namespace, name := utils.SplitRepoName(repo.Name())
-		if namespace != "" && name != "" {
-			l.dispatcher.Dispatch(l.ctx, "delete", namespace, name, "", dgst.String())
-		}
+	namespace, name := utils.SplitRepoName(repo.Name())
+	if namespace == "" || name == "" {
+		return nil
 	}
+	if l.dispatcher != nil {
+		l.dispatcher.Dispatch(l.ctx, "delete", namespace, name, "", dgst.String())
+	}
+	l.audit("delete", namespace, name, "", dgst.String())
 	return nil
 }
 
@@ -164,15 +174,44 @@ func (l *registryListener) BlobDeleted(_ reference.Named, _ digest.Digest) error
 }
 
 func (l *registryListener) TagDeleted(repo reference.Named, tag string) error {
-	if l.dispatcher != nil {
-		namespace, name := utils.SplitRepoName(repo.Name())
-		if namespace != "" && name != "" {
-			l.dispatcher.Dispatch(l.ctx, "delete", namespace, name, tag, "")
-		}
+	namespace, name := utils.SplitRepoName(repo.Name())
+	if namespace == "" || name == "" {
+		return nil
 	}
+	if l.dispatcher != nil {
+		l.dispatcher.Dispatch(l.ctx, "delete", namespace, name, tag, "")
+	}
+	l.audit("delete", namespace, name, tag, "")
 	return nil
 }
 
 func (l *registryListener) RepoDeleted(_ reference.Named) error {
 	return nil
+}
+
+// Actor and source come from the distribution request context
+func (l *registryListener) audit(action, namespace, name, tag, dgst string) {
+	if l.recorder == nil {
+		return
+	}
+	ref := namespace + "/" + name
+	if tag != "" {
+		ref += ":" + tag
+	}
+	if dgst != "" {
+		ref += "@" + dgst
+	}
+	actor, _ := l.ctx.Value("auth.user.name").(string)
+	addr, _ := l.ctx.Value("http.request.remoteaddr").(string)
+	if host, _, err := net.SplitHostPort(addr); err == nil {
+		addr = host
+	}
+	l.recorder.Record(l.ctx, audit.Event{
+		Action:   "Registry/" + action,
+		Resource: "registry",
+		Outcome:  audit.OutcomeSuccess,
+		Detail:   ref,
+		SourceIP: addr,
+		Actor:    actor,
+	})
 }

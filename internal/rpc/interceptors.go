@@ -157,13 +157,17 @@ func (s *Server) recordAuthDenial(ctx context.Context, req connect.AnyRequest, d
 	if !ok {
 		return
 	}
-	s.AuditRecorder.Record(ctx, audit.Event{
+	ev := audit.Event{
 		Action:   procedureAction(procedure),
 		Resource: resource,
 		Outcome:  audit.OutcomeDenied,
 		Detail:   detail,
 		SourceIP: admin.ClientIP(req.Peer().Addr, req.Header()),
-	})
+	}
+	if user := auth.UserFromContext(ctx); user != nil {
+		ev.Actor, ev.ActorID = user.Username, user.ID
+	}
+	s.AuditRecorder.Record(ctx, ev)
 }
 
 func (s *Server) auditInterceptor(recorder *audit.Recorder) connect.UnaryInterceptorFunc {
@@ -185,6 +189,9 @@ func (s *Server) auditInterceptor(recorder *audit.Recorder) connect.UnaryInterce
 				Resource: resource,
 				Outcome:  audit.OutcomeSuccess,
 				SourceIP: admin.ClientIP(req.Peer().Addr, req.Header()),
+			}
+			if user := auth.UserFromContext(ctx); user != nil {
+				ev.Actor, ev.ActorID = user.Username, user.ID
 			}
 			if err != nil {
 				switch connect.CodeOf(err) {

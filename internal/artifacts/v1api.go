@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/distroface/internal/admin"
+	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -29,13 +30,14 @@ type V1API struct {
 	enforcer *rbac.Enforcer
 	access   *Access
 	limiter  *admin.Limiter // Failed login lockout, nil disables
+	recorder *audit.Recorder
 	log      *logger.Logger
 	routes   []v1Route
 }
 
 var v1RepoNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 
-func NewV1API(store *stores.Store, manager *Manager, authMgr *auth.Manager, enforcer *rbac.Enforcer, limiter *admin.Limiter, log *logger.Logger) *V1API {
+func NewV1API(store *stores.Store, manager *Manager, authMgr *auth.Manager, enforcer *rbac.Enforcer, limiter *admin.Limiter, recorder *audit.Recorder, log *logger.Logger) *V1API {
 	a := &V1API{
 		store:    store,
 		manager:  manager,
@@ -43,6 +45,7 @@ func NewV1API(store *stores.Store, manager *Manager, authMgr *auth.Manager, enfo
 		enforcer: enforcer,
 		access:   NewAccess(store, enforcer),
 		limiter:  limiter,
+		recorder: recorder,
 		log:      log,
 	}
 	a.buildRoutes()
@@ -67,29 +70,30 @@ type v1Route struct {
 	method  string
 	pattern *regexp.Regexp
 	vars    []string
+	audit   string
 	handler func(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string)
 }
 
 // V1 registration order is load bearing, keep it
 func (a *V1API) buildRoutes() {
-	add := func(method, pattern string, vars []string, h func(http.ResponseWriter, *http.Request, *auth.AuthenticatedUser, map[string]string)) {
-		a.routes = append(a.routes, v1Route{method: method, pattern: regexp.MustCompile(pattern), vars: vars, handler: h})
+	add := func(method, pattern string, vars []string, auditAction string, h func(http.ResponseWriter, *http.Request, *auth.AuthenticatedUser, map[string]string)) {
+		a.routes = append(a.routes, v1Route{method: method, pattern: regexp.MustCompile(pattern), vars: vars, audit: auditAction, handler: h})
 	}
 
-	add(http.MethodPost, `^/api/v1/artifacts/repos$`, nil, a.handleCreateRepo)
-	add(http.MethodGet, `^/api/v1/artifacts/repos$`, nil, a.handleListRepos)
-	add(http.MethodDelete, `^/api/v1/artifacts/repos/([^/]+)$`, []string{"repo"}, a.handleDeleteRepo)
-	add(http.MethodPost, `^/api/v1/artifacts/([^/]+)/upload$`, []string{"repo"}, a.handleInitiateUpload)
-	add(http.MethodPatch, `^/api/v1/artifacts/([^/]+)/upload/([^/]+)$`, []string{"repo", "uuid"}, a.handleUploadChunk)
-	add(http.MethodPut, `^/api/v1/artifacts/([^/]+)/upload/([^/]+)$`, []string{"repo", "uuid"}, a.handleCompleteUpload)
-	add(http.MethodGet, `^/api/v1/artifacts/([^/]+)/([^/]+)/(.*)$`, []string{"repo", "version", "path"}, a.handleDownload)
-	add(http.MethodGet, `^/api/v1/artifacts/([^/]+)/query$`, []string{"repo"}, a.handleQuery)
-	add(http.MethodDelete, `^/api/v1/artifacts/([^/]+)/([^/]+)/(.*)$`, []string{"repo", "version", "path"}, a.handleDeleteArtifact)
-	add(http.MethodGet, `^/api/v1/artifacts/([^/]+)/versions$`, []string{"repo"}, a.handleListVersions)
-	add(http.MethodPut, `^/api/v1/artifacts/([^/]+)/([^/]+)/metadata$`, []string{"repo", "id"}, a.handleUpdateMetadata)
-	add(http.MethodPut, `^/api/v1/artifacts/([^/]+)/([^/]+)/properties$`, []string{"repo", "id"}, a.handleUpdateProperties)
-	add(http.MethodGet, `^/api/v1/artifacts/search$`, nil, a.handleSearch)
-	add(http.MethodPut, `^/api/v1/artifacts/([^/]+)/([^/]+)/rename$`, []string{"repo", "id"}, a.handleRename)
+	add(http.MethodPost, `^/api/v1/artifacts/repos$`, nil, "V1Artifacts/CreateRepo", a.handleCreateRepo)
+	add(http.MethodGet, `^/api/v1/artifacts/repos$`, nil, "", a.handleListRepos)
+	add(http.MethodDelete, `^/api/v1/artifacts/repos/([^/]+)$`, []string{"repo"}, "V1Artifacts/DeleteRepo", a.handleDeleteRepo)
+	add(http.MethodPost, `^/api/v1/artifacts/([^/]+)/upload$`, []string{"repo"}, "", a.handleInitiateUpload)
+	add(http.MethodPatch, `^/api/v1/artifacts/([^/]+)/upload/([^/]+)$`, []string{"repo", "uuid"}, "", a.handleUploadChunk)
+	add(http.MethodPut, `^/api/v1/artifacts/([^/]+)/upload/([^/]+)$`, []string{"repo", "uuid"}, "V1Artifacts/CompleteUpload", a.handleCompleteUpload)
+	add(http.MethodGet, `^/api/v1/artifacts/([^/]+)/([^/]+)/(.*)$`, []string{"repo", "version", "path"}, "", a.handleDownload)
+	add(http.MethodGet, `^/api/v1/artifacts/([^/]+)/query$`, []string{"repo"}, "", a.handleQuery)
+	add(http.MethodDelete, `^/api/v1/artifacts/([^/]+)/([^/]+)/(.*)$`, []string{"repo", "version", "path"}, "V1Artifacts/DeleteArtifact", a.handleDeleteArtifact)
+	add(http.MethodGet, `^/api/v1/artifacts/([^/]+)/versions$`, []string{"repo"}, "", a.handleListVersions)
+	add(http.MethodPut, `^/api/v1/artifacts/([^/]+)/([^/]+)/metadata$`, []string{"repo", "id"}, "V1Artifacts/UpdateMetadata", a.handleUpdateMetadata)
+	add(http.MethodPut, `^/api/v1/artifacts/([^/]+)/([^/]+)/properties$`, []string{"repo", "id"}, "V1Artifacts/UpdateProperties", a.handleUpdateProperties)
+	add(http.MethodGet, `^/api/v1/artifacts/search$`, nil, "", a.handleSearch)
+	add(http.MethodPut, `^/api/v1/artifacts/([^/]+)/([^/]+)/rename$`, []string{"repo", "id"}, "V1Artifacts/RenameArtifact", a.handleRename)
 }
 
 func (a *V1API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -113,11 +117,6 @@ func (a *V1API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		user, ok := a.resolveUser(w, r)
-		if !ok {
-			return
-		}
-
 		vars := make(map[string]string, len(route.vars)+1)
 		for i, name := range route.vars {
 			vars[name] = m[i+1]
@@ -125,7 +124,20 @@ func (a *V1API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if forcedNS != "" {
 			vars["namespace"] = forcedNS
 		}
-		route.handler(w, r, user, vars)
+
+		var rec *statusRecorder
+		if a.recorder != nil && route.audit != "" {
+			rec = &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+			w = rec
+		}
+
+		user, ok := a.resolveUser(w, r)
+		if ok {
+			route.handler(w, r, user, vars)
+		}
+		if rec != nil {
+			a.auditRoute(r, route.audit, user, vars, rec.status)
+		}
 		return
 	}
 	if pathMatched {
@@ -133,6 +145,75 @@ func (a *V1API) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.NotFound(w, r)
+}
+
+// ── Audit ────────────────────────────────────────────────────────────────
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusRecorder) WriteHeader(code int) {
+	w.status = code
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func outcomeForStatus(status int) string {
+	switch {
+	case status < 400:
+		return audit.OutcomeSuccess
+	case status == http.StatusUnauthorized || status == http.StatusForbidden:
+		return audit.OutcomeDenied
+	default:
+		return audit.OutcomeError
+	}
+}
+
+// Mutations mirror the rpc audit policy, reads skip
+func (a *V1API) auditRoute(r *http.Request, action string, user *auth.AuthenticatedUser, vars map[string]string, status int) {
+	ev := audit.Event{
+		Action:   action,
+		Resource: rbac.ResourceArtifacts,
+		Outcome:  outcomeForStatus(status),
+		Detail:   a.auditDetail(user, vars),
+		SourceIP: admin.ClientIP(r.RemoteAddr, r.Header),
+	}
+	if user != nil {
+		ev.Actor, ev.ActorID = user.Username, user.ID
+	}
+	a.recorder.Record(r.Context(), ev)
+}
+
+// Shares the auth resource with rpc logins
+func (a *V1API) auditLogin(r *http.Request, username, userID, outcome string) {
+	a.recorder.Record(r.Context(), audit.Event{
+		Action:   "V1Auth/Login",
+		Resource: "auth",
+		Outcome:  outcome,
+		Detail:   username,
+		SourceIP: admin.ClientIP(r.RemoteAddr, r.Header),
+		Actor:    username,
+		ActorID:  userID,
+	})
+}
+
+// Object reference from route vars, body only routes stay empty
+func (a *V1API) auditDetail(user *auth.AuthenticatedUser, vars map[string]string) string {
+	repo := vars["repo"]
+	if repo == "" {
+		return ""
+	}
+	detail := repo
+	if ns := a.repoNS(user, vars); ns != "" {
+		detail = ns + "/" + repo
+	}
+	if version := vars["version"]; version != "" {
+		detail += " " + version + "/" + vars["path"]
+	} else if id := vars["id"]; id != "" {
+		detail += " " + id
+	}
+	return detail
 }
 
 // ── Auth ─────────────────────────────────────────────────────────────────
@@ -189,12 +270,14 @@ func (a *V1API) handleLogin(w http.ResponseWriter, r *http.Request) {
 		if a.limiter != nil {
 			a.limiter.Record(clientIP)
 		}
+		a.auditLogin(r, req.Username, "", audit.OutcomeDenied)
 		http.Error(w, "INVALID CREDENTIALS", http.StatusUnauthorized)
 		return
 	}
 	if a.limiter != nil {
 		a.limiter.Reset(clientIP)
 	}
+	a.auditLogin(r, user.Username, user.ID, audit.OutcomeSuccess)
 
 	writeJSON(w, http.StatusOK, v1AuthResponse{
 		Token:     token,

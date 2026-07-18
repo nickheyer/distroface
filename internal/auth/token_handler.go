@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/distroface/internal/admin"
+	"github.com/nickheyer/distroface/internal/audit"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
@@ -30,6 +31,7 @@ type TokenHandler struct {
 	enforcer     *rbac.Enforcer
 	policy       RegistryAccessPolicy
 	authLimiter  *admin.Limiter // Failed-credential lockout per client IP, nil disables
+	recorder     *audit.Recorder
 	log          *logger.Logger
 }
 
@@ -41,7 +43,7 @@ type tokenResponse struct {
 }
 
 // Makes docker token endpoint nil args disable extras
-func NewTokenHandler(ts *TokenService, store *stores.Store, manager *Manager, enforcer *rbac.Enforcer, policy RegistryAccessPolicy, authLimiter *admin.Limiter, log *logger.Logger) *TokenHandler {
+func NewTokenHandler(ts *TokenService, store *stores.Store, manager *Manager, enforcer *rbac.Enforcer, policy RegistryAccessPolicy, authLimiter *admin.Limiter, recorder *audit.Recorder, log *logger.Logger) *TokenHandler {
 	return &TokenHandler{
 		tokenService: ts,
 		store:        store,
@@ -49,6 +51,7 @@ func NewTokenHandler(ts *TokenService, store *stores.Store, manager *Manager, en
 		enforcer:     enforcer,
 		policy:       policy,
 		authLimiter:  authLimiter,
+		recorder:     recorder,
 		log:          log,
 	}
 }
@@ -78,6 +81,7 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			user, err := h.authManager.ValidateAPIToken(r.Context(), password)
 			if err != nil {
 				h.recordAuthFailure(clientIP)
+				h.auditLogin(r, nil, username, clientIP, audit.OutcomeDenied)
 				w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -93,6 +97,7 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if u == nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
 				h.recordAuthFailure(clientIP)
+				h.auditLogin(r, nil, username, clientIP, audit.OutcomeDenied)
 				w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -117,6 +122,10 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if h.authLimiter != nil {
 			h.authLimiter.Reset(clientIP)
+		}
+		// Scopeless credentialed request is the docker login ping
+		if scopeStr == "" {
+			h.auditLogin(r, authUser, authUser.Username, clientIP, audit.OutcomeSuccess)
 		}
 	}
 
@@ -166,6 +175,22 @@ func (h *TokenHandler) recordAuthFailure(clientIP string) {
 	if h.authLimiter != nil {
 		h.authLimiter.Record(clientIP)
 	}
+}
+
+// Successful logins and denied credentials, per pull token grants skip
+func (h *TokenHandler) auditLogin(r *http.Request, user *AuthenticatedUser, username, clientIP, outcome string) {
+	ev := audit.Event{
+		Action:   "Registry/login",
+		Resource: "auth",
+		Outcome:  outcome,
+		Detail:   username,
+		SourceIP: clientIP,
+		Actor:    username,
+	}
+	if user != nil {
+		ev.Actor, ev.ActorID = user.Username, user.ID
+	}
+	h.recorder.Record(r.Context(), ev)
 }
 
 func (h *TokenHandler) resolveAccess(r *http.Request, user *AuthenticatedUser, scopeStr string) []*ResourceActions {

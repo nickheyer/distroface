@@ -144,7 +144,17 @@ func New() (*App, error) {
 
 	dispatcher := webhook.NewDispatcher(store, registryLog, cfg.Webhooks.AllowPrivateNetworks)
 
-	registry.RegisterListenerMiddleware(store, registryLog, dispatcher)
+	// Audit trail, nil recorder disables recording entirely
+	var auditRecorder *audit.Recorder
+	var auditService *audit.Service
+	if cfg.Security.Audit.Enabled {
+		auditRecorder = audit.NewRecorder(store, log)
+		auditRecorder.ScheduleRetention(context.Background(), cfg.Security.Audit.RetentionDays)
+		auditService = audit.NewService(store, log)
+		log.Info("Audit trail enabled (retention %dd)", cfg.Security.Audit.RetentionDays)
+	}
+
+	registry.RegisterListenerMiddleware(store, registryLog, dispatcher, auditRecorder)
 
 	registryCfg := registry.BuildConfig(cfg.Registry.StoragePath, tokenService.CertPath(), cfg.Server.Host, cfg.Server.Port)
 	registryApp := handlers.NewApp(context.Background(), registryCfg)
@@ -171,7 +181,7 @@ func New() (*App, error) {
 		anonPullLimiter = admin.NewLimiter(cfg.RateLimit.AnonPullPerMinute, time.Minute)
 	}
 
-	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, authLimiter, registryLog)
+	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, authLimiter, auditRecorder, registryLog)
 
 	registryHandler := registry.PullRateLimit(registryApp, tokenService, pullLimiter, anonPullLimiter, registryLog)
 
@@ -182,7 +192,7 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("initializing artifact storage: %w", err)
 	}
 	artifactManager := artifacts.NewManager(store, blobStore, cfg.Artifacts, log)
-	artifactV1Facade := artifacts.NewV1API(store, artifactManager, authManager, enforcer, authLimiter, log)
+	artifactV1Facade := artifacts.NewV1API(store, artifactManager, authManager, enforcer, authLimiter, auditRecorder, log)
 
 	// Portal listeners serve the whole app on their own ports
 	portalProxies := portal.NewManager(portalResolver, cfg.Server.Host, registryLog)
@@ -209,16 +219,6 @@ func New() (*App, error) {
 		}
 	}
 	certService := certs.NewService(store, enforcer, certEngine, cfg, log)
-
-	// Audit trail, nil recorder disables recording entirely
-	var auditRecorder *audit.Recorder
-	var auditService *audit.Service
-	if cfg.Security.Audit.Enabled {
-		auditRecorder = audit.NewRecorder(store, log)
-		auditRecorder.ScheduleRetention(context.Background(), cfg.Security.Audit.RetentionDays)
-		auditService = audit.NewService(store, log)
-		log.Info("Audit trail enabled (retention %dd)", cfg.Security.Audit.RetentionDays)
-	}
 
 	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, portalResolver, log)
 
