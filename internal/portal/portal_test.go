@@ -240,9 +240,10 @@ func TestMiddlewareRouteShapes(t *testing.T) {
 	}
 
 	// Control plane listings pick up the org namespace
-	var gotNS string
+	var gotNS, gotRepo string
 	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotNS = r.URL.Query().Get("namespace")
+		gotRepo = r.URL.Query().Get("repo")
 	}))
 	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/repos?namespace=elsewhere", "acme.example.com", 0))
 	if gotNS != "acme" {
@@ -251,6 +252,64 @@ func TestMiddlewareRouteShapes(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/search", "acme.example.com", 0))
 	if gotNS != "acme" {
 		t.Errorf("search namespace = %q, want acme", gotNS)
+	}
+
+	// Repo lookups map like the data plane on a mapping portal
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/search?repo=myrepo", "acme.example.com", 0))
+	if gotNS != "acme" || gotRepo != "myrepo" {
+		t.Errorf("mapped search = ns %q repo %q, want acme/myrepo", gotNS, gotRepo)
+	}
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/search?repo=acme/myrepo", "acme.example.com", 0))
+	if gotNS != "acme" || gotRepo != "myrepo" {
+		t.Errorf("qualified search = ns %q repo %q, want acme/myrepo", gotNS, gotRepo)
+	}
+}
+
+func TestMiddlewareSearchUnmappedPortal(t *testing.T) {
+	store := newTestStore(t)
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "plain", Hostname: "plain.example.com", MapUnqualified: false, Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	res := NewResolver(store, logger.New())
+
+	var gotNS, gotRepo string
+	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotNS = r.URL.Query().Get("namespace")
+		gotRepo = r.URL.Query().Get("repo")
+	}))
+
+	// Unmapped repo lookups stay caller scoped, matching where uploads land
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/search?repo=ci-cache", "plain.example.com", 0))
+	if gotNS != "" || gotRepo != "ci-cache" {
+		t.Errorf("unmapped search = ns %q repo %q, want empty ns and ci-cache", gotNS, gotRepo)
+	}
+
+	// Browsing without a repo still scopes to the org viewport
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/search", "plain.example.com", 0))
+	if gotNS != "acme" {
+		t.Errorf("repo-less search namespace = %q, want acme", gotNS)
+	}
+}
+
+func TestScopeRepoRef(t *testing.T) {
+	mapping := WithPortal(context.Background(), &Portal{OrgName: "acme", MapUnqualified: true})
+	plain := WithPortal(context.Background(), &Portal{OrgName: "acme"})
+
+	cases := []struct {
+		ctx              context.Context
+		ns, name         string
+		wantNS, wantName string
+	}{
+		{context.Background(), "", "repo", "", "repo"},
+		{mapping, "", "repo", "acme", "repo"},
+		{mapping, "team", "repo", "team", "repo"},
+		{plain, "", "repo", "", "repo"},
+	}
+	for _, c := range cases {
+		ns, name := ScopeRepoRef(c.ctx, c.ns, c.name)
+		if ns != c.wantNS || name != c.wantName {
+			t.Errorf("ScopeRepoRef(%q, %q) = %q/%q, want %q/%q", c.ns, c.name, ns, name, c.wantNS, c.wantName)
+		}
 	}
 }
 

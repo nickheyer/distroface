@@ -47,11 +47,10 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *con
 	}
 
 	msg := req.Msg
-	if !artifactRepoNamePattern.MatchString(msg.Name) {
+	ns, name := repoRef(ctx, user, msg.Namespace, msg.Name)
+	if !artifactRepoNamePattern.MatchString(name) {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repository name"))
 	}
-
-	ns, name := repoRef(user, msg.Namespace, msg.Name)
 	if !s.access.CanCreateInNamespace(ctx, user, ns) {
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("cannot create repository in namespace %q", ns))
 	}
@@ -454,8 +453,9 @@ func (s *ArtifactService) DeleteArtifact(ctx context.Context, req *connect.Reque
 
 // ── Access helpers ───────────────────────────────────────────────────────
 
-// Empty namespace defaults to the caller username
-func repoRef(user *auth.AuthenticatedUser, namespace, name string) (string, string) {
+// Portal mapping first, then empty namespace defaults to caller username
+func repoRef(ctx context.Context, user *auth.AuthenticatedUser, namespace, name string) (string, string) {
+	namespace, name = portal.ScopeRepoRef(ctx, namespace, name)
 	if namespace == "" && user != nil {
 		namespace = user.Username
 	}
@@ -467,7 +467,7 @@ func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.Authentica
 	if name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repository name is required"))
 	}
-	ns, name := repoRef(user, namespace, name)
+	ns, name := repoRef(ctx, user, namespace, name)
 	repo, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -498,7 +498,7 @@ func (s *ArtifactService) mutableRepo(ctx context.Context, user *auth.Authentica
 	if name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repository name is required"))
 	}
-	ns, name := repoRef(user, namespace, name)
+	ns, name := repoRef(ctx, user, namespace, name)
 	repo, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)

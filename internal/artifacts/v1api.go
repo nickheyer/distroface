@@ -17,6 +17,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
@@ -348,6 +349,7 @@ func (a *V1API) handleCreateRepo(w http.ResponseWriter, r *http.Request, user *a
 		http.Error(w, "INVALID REQUEST", http.StatusBadRequest)
 		return
 	}
+	req.Namespace, req.Name = portal.ScopeRepoRef(r.Context(), req.Namespace, req.Name)
 	if !v1RepoNamePattern.MatchString(req.Name) {
 		http.Error(w, "INVALID REPOSITORY NAME", http.StatusBadRequest)
 		return

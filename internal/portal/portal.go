@@ -60,3 +60,15 @@ func ScopeNamespace(ctx context.Context, namespace string) string {
 	}
 	return namespace
 }
+
+// Unqualified repo refs resolve like the data plane
+func ScopeRepoRef(ctx context.Context, namespace, name string) (string, string) {
+	p := FromContext(ctx)
+	if p == nil || namespace != "" {
+		return namespace, name
+	}
+	if mapped := p.MapName(name); strings.HasPrefix(mapped, p.OrgName+"/") {
+		return p.OrgName, strings.TrimPrefix(mapped, p.OrgName+"/")
+	}
+	return namespace, name
+}

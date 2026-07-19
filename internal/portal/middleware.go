@@ -74,10 +74,17 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			// Control plane listings scope to the org
+			// Listings scope to the org, repo lookups resolve like the data plane
 			if r.URL.Path == "/api/v1/artifacts/repos" || r.URL.Path == "/api/v1/artifacts/search" {
 				q := r.URL.Query()
-				q.Set("namespace", p.OrgName)
+				if repoName := q.Get("repo"); repoName != "" {
+					if mapped := p.MapName(repoName); strings.HasPrefix(mapped, p.OrgName+"/") {
+						q.Set("namespace", p.OrgName)
+						q.Set("repo", strings.TrimPrefix(mapped, p.OrgName+"/"))
+					}
+				} else {
+					q.Set("namespace", p.OrgName)
+				}
 				r.URL.RawQuery = q.Encode()
 			}
 			if match := artifactRoutePattern.FindStringSubmatch(r.URL.Path); match != nil {
