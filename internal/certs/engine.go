@@ -57,6 +57,7 @@ type Engine struct {
 	certCache map[string]*cachedKeyPair    // Parsed uploads keyed by scope target
 	leaves    map[string]*tls.Certificate  // Org ca minted leaves keyed org plus host
 	challenge *http.Server
+	ready     readyCache
 }
 
 type cachedKeyPair struct {
@@ -105,6 +106,7 @@ func (e *Engine) Invalidate(ctx context.Context) {
 	e.certCache = map[string]*cachedKeyPair{}
 	e.leaves = map[string]*tls.Certificate{}
 	e.mu.Unlock()
+	e.ready.clear()
 	e.ReconcileChallengeServer()
 }
 

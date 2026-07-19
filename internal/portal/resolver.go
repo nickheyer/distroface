@@ -20,6 +20,9 @@ type Resolver struct {
 	store *stores.Store
 	log   *logger.Logger
 
+	// Gates https enforcement on actual cert availability
+	certReady func(ctx context.Context, p *Portal, host string) bool
+
 	mu      sync.RWMutex
 	entries map[string]*Portal // Keyed "port|host", catch-alls use empty host
 	hosts   map[string]bool
@@ -28,6 +31,19 @@ type Resolver struct {
 
 func NewResolver(store *stores.Store, log *logger.Logger) *Resolver {
 	return &Resolver{store: store, log: log}
+}
+
+// SetCertReady installs the readiness check used before tls redirects
+func (res *Resolver) SetCertReady(fn func(ctx context.Context, p *Portal, host string) bool) {
+	res.certReady = fn
+}
+
+// Enforcement waits until the portal can actually serve tls
+func (res *Resolver) tlsEnforceable(r *http.Request, p *Portal) bool {
+	if res.certReady == nil {
+		return true
+	}
+	return res.certReady(r.Context(), p, r.Host)
 }
 
 // Drops the lookup table, next request rebuilds it

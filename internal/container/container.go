@@ -204,6 +204,9 @@ func New() (*App, error) {
 		return fail("initializing tls engine", err)
 	}
 	resolver.Subscribe(func() { certEngine.Invalidate(context.Background()) })
+	portalResolver.SetCertReady(func(ctx context.Context, p *portal.Portal, host string) bool {
+		return certEngine.PortalCertReady(ctx, p.CertSource, p.OrgID, p.ID, host)
+	})
 
 	mainPort, err := strconv.Atoi(cfg.Server.Port)
 	if err != nil {
@@ -252,6 +255,7 @@ func New() (*App, error) {
 		WebhookDispatcher:   dispatcher,
 		PortalResolver:      portalResolver,
 		PortalService:       portalService,
+		CertEngine:          certEngine,
 		AuthLimiter:         authLimiter,
 		ArtifactManager:     artifactManager,
 		ArtifactV1Facade:    artifactV1Facade,

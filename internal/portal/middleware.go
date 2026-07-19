@@ -37,8 +37,8 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 		}
 		r = r.WithContext(WithPortal(r.Context(), p))
 
-		// Https enforced portals bounce cleartext to the same address
-		if p.TLS && requestScheme(r) != "https" {
+		// Https enforced portals bounce cleartext once a cert can serve
+		if p.TLS && requestScheme(r) != "https" && res.tlsEnforceable(r, p) {
 			http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusFound)
 			return
 		}

@@ -42,6 +42,7 @@ type ServerDeps struct {
 	WebhookDispatcher   *webhook.Dispatcher
 	PortalResolver      *portal.Resolver
 	PortalService       *portal.Service
+	CertEngine          *certs.Engine
 	AuthLimiter         *admin.Limiter // Lockout limiter nil disables
 	ArtifactManager     *artifacts.Manager
 	ArtifactV1Facade    *artifacts.V1API
@@ -213,7 +214,8 @@ func (s *Server) primaryHostname() string {
 	return s.Resolver.System(context.Background()).GetServer().GetPublicHostname()
 }
 
-// Cleartext app requests redirect when https only mode is on
+// Cleartext app requests redirect when https only mode is on,
+// enforcement waits until a certificate is actually servable
 func (s *Server) httpsOnlyRedirect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Portals enforce their own scheme in portal middleware
@@ -223,6 +225,10 @@ func (s *Server) httpsOnlyRedirect(next http.Handler) http.Handler {
 		}
 		sys := s.Resolver.System(r.Context())
 		if sys.GetTls().GetMode() != v1.TLSMode_TLS_MODE_HTTPS_ONLY {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if s.CertEngine != nil && !s.CertEngine.AppCertReady(r.Context()) {
 			next.ServeHTTP(w, r)
 			return
 		}
