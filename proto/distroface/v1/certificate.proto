@@ -11,8 +11,6 @@ option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;dis
 // Manages tls certificate domains and acme issuance, system admins manage
 // system scope, org admins manage domains matching their portal hostnames
 service CertificateService {
-  // Reports whether tls/acme is active and how it is configured
-  rpc GetTLSStatus(GetTLSStatusRequest) returns (GetTLSStatusResponse) {}
   // Lists registered domains, org scoped when org_id is set
   rpc ListCertificateDomains(ListCertificateDomainsRequest) returns (ListCertificateDomainsResponse) {}
   // Registers a domain as allowed to receive certificates
@@ -23,10 +21,8 @@ service CertificateService {
   rpc BulkRemoveCertificateDomains(BulkRemoveCertificateDomainsRequest) returns (BulkRemoveCertificateDomainsResponse) {}
   // Marks an org scoped domain as allowed to issue, system admin only
   rpc ApproveCertificateDomain(ApproveCertificateDomainRequest) returns (ApproveCertificateDomainResponse) {}
-  // Requests immediate issuance for a registered domain, blocks until done
+  // Requests immediate issuance for a target, blocks until done
   rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse) {}
-  // Updates runtime acme settings, applied live, system admin only
-  rpc UpdateACMESettings(UpdateACMESettingsRequest) returns (UpdateACMESettingsResponse) {}
   // Uploads pem tls material for the app, an org, an org ca, or a portal
   rpc UploadTLSCertificate(UploadTLSCertificateRequest) returns (UploadTLSCertificateResponse) {}
   // Removes uploaded tls material
@@ -105,27 +101,6 @@ message CertificateDomain {
   string approved_by = 10;
 }
 
-// Empty
-message GetTLSStatusRequest {}
-
-// Effective tls configuration, secrets excluded
-message GetTLSStatusResponse {
-  bool tls_enabled = 1;
-  bool acme_enabled = 2;
-  string acme_email = 3;
-  string acme_directory = 4; // Empty means lets encrypt production
-  bool manual_cert = 5;
-  repeated string config_domains = 6;
-  string primary_hostname = 7;
-  CertificateInfo primary_cert = 8;
-  TLSMaterialInfo app_cert = 9; // Uploaded app certificate, null when none
-  string acme_http_port = 10; // Cleartext challenge port from config, empty disables http-01
-  CertSource primary_source = 11; // config, manual, or acme
-  repeated string hostname_blacklist = 12; // Blocked hostname patterns, exact or *.suffix
-  bool require_hostname_approval = 13; // Org hostnames need admin approval when true
-  TLSMaterialInfo app_ca = 14; // Instance root ca, cert_pem populated for download
-}
-
 // Parsed details of uploaded pem material, keys never leave the server
 message TLSMaterialInfo {
   string subject = 1;
@@ -137,22 +112,6 @@ message TLSMaterialInfo {
   string created_by = 7;
   google.protobuf.Timestamp updated_at = 8;
   string cert_pem = 9; // Public chain only, set on org ca reads for download
-}
-
-// Unset fields keep their current value
-message UpdateACMESettingsRequest {
-  optional bool enabled = 1;
-  optional string email = 2;
-  optional string directory_url = 3;
-  CertSource primary_source = 4; // config, manual, or acme, unspecified keeps
-  optional bool require_hostname_approval = 5;
-  repeated string hostname_blacklist = 6; // Applied only when set_blacklist is true
-  bool set_blacklist = 7;
-}
-
-// Status after the update
-message UpdateACMESettingsResponse {
-  GetTLSStatusResponse status = 1;
 }
 
 // Scopes app and app_ca need a system admin, org scopes need an org admin
@@ -238,8 +197,6 @@ message GetCertStatusResponse {
   CertSource source = 1; // Portal cert source, or the app primary source
   CertState state = 2;
   repeated string problems = 3; // Human readable blockers, empty when ready
-  string acme_directory = 4; // Effective directory after tier inheritance
-  string acme_email = 5; // Effective email after tier inheritance
   TLSMaterialInfo serving_cert = 6; // Stored material details when the source uses uploads
   CertificateInfo acme_cert = 7; // Cached acme cert details when the source is acme
 }
@@ -269,19 +226,17 @@ message AddCertificateDomainResponse {
   CertificateDomain domain = 1;
 }
 
-// Org id required for org scoped domains
+// Caller must administer the owning org or the system
 message RemoveCertificateDomainRequest {
   string id = 1;
-  string org_id = 2;
 }
 
 // Empty
 message RemoveCertificateDomainResponse {}
 
-// Domain ids to remove, org id required for org scoped domains
+// Caller must administer each domain's owning org or the system
 message BulkRemoveCertificateDomainsRequest {
   repeated string ids = 1;
-  string org_id = 2;
 }
 
 // Per domain failures, removed count covers the rest
@@ -300,10 +255,13 @@ message ApproveCertificateDomainResponse {
   CertificateDomain domain = 1;
 }
 
-// Domain must already be registered or statically allowed
+// Unset target issues for the primary hostname
 message IssueCertificateRequest {
-  string domain = 1;
-  string org_id = 2;
+  // What the certificate is issued for
+  oneof target {
+    string domain_id = 1; // A registered certificate domain
+    string portal_id = 2; // The portal's current hostname
+  }
 }
 
 // Certificate details after issuance

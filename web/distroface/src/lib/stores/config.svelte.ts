@@ -1,30 +1,34 @@
 import { rpcClient } from '$lib/api/rpc-client';
-import { toJson, type JsonValue } from '@bufbuild/protobuf';
-import { ValueSchema, type Value } from '@bufbuild/protobuf/wkt';
+import { TLSMode, type Settings } from '$lib/proto/distroface/v1/settings_pb';
 
+const FALLBACK_HOSTNAME = 'localhost:8080';
+
+// Effective system settings, public subset before sign-in
 class ConfigStore {
-	entries = $state<Record<string, JsonValue>>({});
+	settings = $state<Settings | undefined>();
 
 	async init() {
 		try {
-			const resp = await rpcClient.configuration.getConfiguration({});
-			for (const entry of resp.entries) {
-				// ConfigEntry[]
-				if (entry.value) {
-					this.store(entry.key, entry.value); // Store as union type
-				}
-			}
+			const resp = await rpcClient.settings.getEffectiveSettings({});
+			this.settings = resp.settings;
 		} catch {
 			// nada on failure
 		}
 	}
 
-	store(key: string, value: Value) {
-		this.entries[key] = toJson(ValueSchema, value);
+	get publicHostname(): string {
+		return this.settings?.server?.publicHostname || FALLBACK_HOSTNAME;
 	}
 
-	get<T>(key: string, fallback?: T): JsonValue | T {
-		return this.entries[key] ?? (fallback as T);
+	// Port embedded in the public hostname, zero when absent
+	get mainPort(): number {
+		const idx = this.publicHostname.lastIndexOf(':');
+		const tail = idx > -1 ? this.publicHostname.slice(idx + 1) : '';
+		return /^\d+$/.test(tail) ? Number(tail) : 0;
+	}
+
+	get httpsOnly(): boolean {
+		return this.settings?.tls?.mode === TLSMode.TLS_MODE_HTTPS_ONLY;
 	}
 }
 

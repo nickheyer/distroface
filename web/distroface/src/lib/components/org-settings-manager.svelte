@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -9,27 +9,31 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
 	import { Package, Save, Undo2 } from '@lucide/svelte';
+	import { orgScope, patchSettings, systemScope, tierOf } from '$lib/settings-utils';
+	import { SettingsTier, type FieldProvenance, type Settings } from '$lib/proto/distroface/v1/settings_pb';
 
 	let { orgId }: { orgId: string } = $props();
 
-	// Override keys mirrored in internal/artifacts/manager.go
-	const KEYS = {
+	const PATHS = {
 		retentionEnabled: 'artifacts.retention.enabled',
 		maxVersions: 'artifacts.retention.max_versions',
 		maxAgeDays: 'artifacts.retention.max_age_days',
-		maxTotalSize: 'artifacts.retention.max_total_size',
+		maxTotalSize: 'artifacts.retention.max_total_size_bytes',
 		excludeLatest: 'artifacts.retention.exclude_latest',
 		maxFileSizeMb: 'artifacts.max_file_size_mb',
 		privateByDefault: 'artifacts.private_by_default'
 	} as const;
+	const ALL_PATHS = Object.values(PATHS);
 
 	let loading = $state(true);
 	let saving = $state(false);
 	let resetting = $state(false);
-	let defaults = $state<Record<string, string>>({});
-	let overriddenKeys = $state<Set<string>>(new Set());
+	let prov = $state<FieldProvenance[]>([]);
+	let inherited = $state<Settings | null>(null);
 
-	const customTag = (key: string) => (overriddenKeys.has(key) ? 'Custom' : undefined);
+	const overridden = (path: string) => tierOf(prov, path) === SettingsTier.ORG;
+	const customTag = (path: string) => (overridden(path) ? 'Custom' : undefined);
+	const overrideCount = $derived(ALL_PATHS.filter(overridden).length);
 
 	let retentionEnabled = $state(false);
 	let maxVersions = $state(0);
@@ -39,20 +43,26 @@
 	let maxFileSizeMb = $state(0);
 	let privateByDefault = $state(false);
 
+	function seed(eff: Settings) {
+		retentionEnabled = eff.artifacts?.retention?.enabled ?? false;
+		maxVersions = eff.artifacts?.retention?.maxVersions ?? 0;
+		maxAgeDays = eff.artifacts?.retention?.maxAgeDays ?? 0;
+		maxTotalSizeMb = Math.round(Number(eff.artifacts?.retention?.maxTotalSizeBytes ?? 0n) / (1024 * 1024));
+		excludeLatest = eff.artifacts?.retention?.excludeLatest ?? true;
+		maxFileSizeMb = Number(eff.artifacts?.maxFileSizeMb ?? 0n);
+		privateByDefault = eff.artifacts?.privateByDefault ?? false;
+	}
+
 	async function load() {
 		loading = true;
 		try {
-			const resp = await rpcClient.organization.getOrgSettings({ orgId });
-			defaults = resp.defaults;
-			overriddenKeys = new Set(Object.keys(resp.overrides));
-			const val = (key: string) => resp.overrides[key] ?? resp.defaults[key] ?? '';
-			retentionEnabled = val(KEYS.retentionEnabled) === 'true';
-			maxVersions = Number(val(KEYS.maxVersions)) || 0;
-			maxAgeDays = Number(val(KEYS.maxAgeDays)) || 0;
-			maxTotalSizeMb = Math.round((Number(val(KEYS.maxTotalSize)) || 0) / (1024 * 1024));
-			excludeLatest = val(KEYS.excludeLatest) === 'true';
-			maxFileSizeMb = Number(val(KEYS.maxFileSizeMb)) || 0;
-			privateByDefault = val(KEYS.privateByDefault) === 'true';
+			const [org, sys] = await Promise.all([
+				rpcClient.settings.getEffectiveSettings({ scope: orgScope(orgId) }, silentCallOptions),
+				rpcClient.settings.getEffectiveSettings({ scope: systemScope }, silentCallOptions)
+			]);
+			prov = org.provenance;
+			inherited = sys.settings ?? null;
+			if (org.settings) seed(org.settings);
 		} catch {
 			toast.error('Failed to load organization settings');
 		} finally {
@@ -60,31 +70,48 @@
 		}
 	}
 
+	// Values matching the instance tier clear back to inherit
 	async function save() {
 		saving = true;
 		try {
-			const values: Record<string, string> = {
-				[KEYS.retentionEnabled]: String(retentionEnabled),
-				[KEYS.maxVersions]: String(Math.max(0, Math.round(maxVersions))),
-				[KEYS.maxAgeDays]: String(Math.max(0, Math.round(maxAgeDays))),
-				[KEYS.maxTotalSize]: String(Math.max(0, Math.round(maxTotalSizeMb)) * 1024 * 1024),
-				[KEYS.excludeLatest]: String(excludeLatest),
-				[KEYS.maxFileSizeMb]: String(Math.max(0, Math.round(maxFileSizeMb))),
-				[KEYS.privateByDefault]: String(privateByDefault)
-			};
-			// Only values differing from defaults are stored as overrides
-			const set: Record<string, string> = {};
-			const reset: string[] = [];
-			for (const [key, value] of Object.entries(values)) {
-				if (value !== (defaults[key] ?? '')) {
-					set[key] = value;
-				} else if (overriddenKeys.has(key)) {
-					reset.push(key);
+			const inh = inherited;
+			const form = {
+				[PATHS.retentionEnabled]: retentionEnabled,
+				[PATHS.maxVersions]: Math.max(0, Math.round(maxVersions)),
+				[PATHS.maxAgeDays]: Math.max(0, Math.round(maxAgeDays)),
+				[PATHS.maxTotalSize]: Math.max(0, Math.round(maxTotalSizeMb)) * 1024 * 1024,
+				[PATHS.excludeLatest]: excludeLatest,
+				[PATHS.maxFileSizeMb]: Math.max(0, Math.round(maxFileSizeMb)),
+				[PATHS.privateByDefault]: privateByDefault
+			} as const;
+			const base = {
+				[PATHS.retentionEnabled]: inh?.artifacts?.retention?.enabled ?? false,
+				[PATHS.maxVersions]: inh?.artifacts?.retention?.maxVersions ?? 0,
+				[PATHS.maxAgeDays]: inh?.artifacts?.retention?.maxAgeDays ?? 0,
+				[PATHS.maxTotalSize]: Number(inh?.artifacts?.retention?.maxTotalSizeBytes ?? 0n),
+				[PATHS.excludeLatest]: inh?.artifacts?.retention?.excludeLatest ?? true,
+				[PATHS.maxFileSizeMb]: Number(inh?.artifacts?.maxFileSizeMb ?? 0n),
+				[PATHS.privateByDefault]: inh?.artifacts?.privateByDefault ?? false
+			} as const;
+
+			const keep = ALL_PATHS.filter((p) => form[p] !== base[p]);
+			const patch = {
+				artifacts: {
+					...(keep.includes(PATHS.maxFileSizeMb) ? { maxFileSizeMb: BigInt(form[PATHS.maxFileSizeMb]) } : {}),
+					...(keep.includes(PATHS.privateByDefault) ? { privateByDefault: form[PATHS.privateByDefault] } : {}),
+					retention: {
+						...(keep.includes(PATHS.retentionEnabled) ? { enabled: form[PATHS.retentionEnabled] } : {}),
+						...(keep.includes(PATHS.maxVersions) ? { maxVersions: form[PATHS.maxVersions] } : {}),
+						...(keep.includes(PATHS.maxAgeDays) ? { maxAgeDays: form[PATHS.maxAgeDays] } : {}),
+						...(keep.includes(PATHS.maxTotalSize) ? { maxTotalSizeBytes: BigInt(form[PATHS.maxTotalSize]) } : {}),
+						...(keep.includes(PATHS.excludeLatest) ? { excludeLatest: form[PATHS.excludeLatest] } : {})
+					}
 				}
-			}
-			await rpcClient.organization.updateOrgSettings({ orgId, set, reset });
+			};
+			const res = await patchSettings(orgScope(orgId), patch, ALL_PATHS);
+			prov = res.provenance;
+			if (res.effective) seed(res.effective);
 			toast.success('Settings saved');
-			await load();
 		} catch {
 			// Error interceptor already toasted
 		} finally {
@@ -95,9 +122,10 @@
 	async function resetAll() {
 		resetting = true;
 		try {
-			await rpcClient.organization.updateOrgSettings({ orgId, reset: Object.values(KEYS) });
+			const res = await patchSettings(orgScope(orgId), {}, ALL_PATHS);
+			prov = res.provenance;
+			if (res.effective) seed(res.effective);
 			toast.success('Reset to instance defaults');
-			await load();
 		} catch {
 			// Error interceptor already toasted
 		} finally {
@@ -119,31 +147,31 @@
 		<div class="space-y-5">
 			<div class="space-y-3">
 				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Uploads</p>
-				<FormField label="Private by default" tag={customTag(KEYS.privateByDefault)} help="New artifact repositories created under this org start private." horizontal>
+				<FormField label="Private by default" tag={customTag(PATHS.privateByDefault)} help="New artifact repositories created under this org start private." horizontal>
 					<Switch bind:checked={privateByDefault} />
 				</FormField>
-				<FormField label="Max upload size (MB)" id="art-max-file" tag={customTag(KEYS.maxFileSizeMb)} help="Largest single artifact allowed; 0 means unlimited.">
+				<FormField label="Max upload size (MB)" id="art-max-file" tag={customTag(PATHS.maxFileSizeMb)} help="Largest single artifact allowed; 0 means unlimited.">
 					<Input id="art-max-file" type="number" bind:value={maxFileSizeMb} min={0} class="w-36" />
 				</FormField>
 			</div>
 
 			<div class="space-y-3 pt-4 border-t border-border/40">
 				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Retention</p>
-				<FormField label="Enable retention" tag={customTag(KEYS.retentionEnabled)} help="Automatically prune old artifacts on upload and on the scheduled reaper." horizontal>
+				<FormField label="Enable retention" tag={customTag(PATHS.retentionEnabled)} help="Automatically prune old artifacts on upload and on the scheduled reaper." horizontal>
 					<Switch bind:checked={retentionEnabled} />
 				</FormField>
 				{#if retentionEnabled}
 					<div class="space-y-3 pl-3 border-l-2 border-border/40">
-						<FormField label="Max versions per path" id="art-max-versions" tag={customTag(KEYS.maxVersions)} help="Newest versions kept per artifact path; 0 means unlimited.">
+						<FormField label="Max versions per path" id="art-max-versions" tag={customTag(PATHS.maxVersions)} help="Newest versions kept per artifact path; 0 means unlimited.">
 							<Input id="art-max-versions" type="number" bind:value={maxVersions} min={0} class="w-36" />
 						</FormField>
-						<FormField label="Max age (days)" id="art-max-age" tag={customTag(KEYS.maxAgeDays)} help="Prune artifacts older than this; 0 disables age pruning.">
+						<FormField label="Max age (days)" id="art-max-age" tag={customTag(PATHS.maxAgeDays)} help="Prune artifacts older than this; 0 disables age pruning.">
 							<Input id="art-max-age" type="number" bind:value={maxAgeDays} min={0} class="w-36" />
 						</FormField>
-						<FormField label="Max total size (MB)" id="art-max-total" tag={customTag(KEYS.maxTotalSize)} help="Cap on summed artifact size per repo; 0 means unlimited.">
+						<FormField label="Max total size (MB)" id="art-max-total" tag={customTag(PATHS.maxTotalSize)} help="Cap on summed artifact size per repo; 0 means unlimited.">
 							<Input id="art-max-total" type="number" bind:value={maxTotalSizeMb} min={0} class="w-36" />
 						</FormField>
-						<FormField label="Keep latest" tag={customTag(KEYS.excludeLatest)} help="Never prune the newest artifact of a path, even over limits." horizontal>
+						<FormField label="Keep latest" tag={customTag(PATHS.excludeLatest)} help="Never prune the newest artifact of a path, even over limits." horizontal>
 							<Switch bind:checked={excludeLatest} />
 						</FormField>
 					</div>
@@ -151,7 +179,7 @@
 			</div>
 		</div>
 		{#snippet footer()}
-			{#if overriddenKeys.size > 0}
+			{#if overrideCount > 0}
 				<Button variant="ghost" onclick={resetAll} disabled={resetting || saving} class="gap-2 mr-auto text-muted-foreground">
 					<Undo2 class="h-4 w-4" />
 					{resetting ? 'Resetting...' : 'Reset to defaults'}

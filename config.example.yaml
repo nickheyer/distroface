@@ -1,9 +1,11 @@
-# Distroface Config File
+# Distroface boot config.
+# Only process wiring lives here. Every tunable (auth, tls mode, acme,
+# artifacts, gc, rate limits, webhooks, security, hostname) is a runtime
+# setting managed in the app and stored in the database.
 
 server:
   port: "8080"
   host: "0.0.0.0"
-  hostname: "localhost:8080"
   read_timeout: 15
   write_timeout: 15
   idle_timeout: 60
@@ -11,76 +13,37 @@ server:
   # Defaults to loopback plus private ranges, set [] to trust none.
   # trusted_proxies: ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
 
-# In-app TLS. Off by default (terminate at your proxy instead).
-# The same certificates cover the main server and every portal listener,
-# SNI picks the right cert per hostname.
-# tls:
-#   enabled: true
-#   # Manual certificate (also acts as fallback when acme declines a host)
-#   # cert_file: "/etc/distroface/tls/fullchain.pem"
-#   # key_file: "/etc/distroface/tls/privkey.pem"
-#   acme:
-#     enabled: true
-#     email: "admin@example.com"       # Expiry notices from the CA
-#     # directory_url: ""              # Empty means Let's Encrypt production
-#     domains:                         # Statically allowed hostnames
-#       - "registry.example.com"
-#     http_port: "80"                  # Cleartext listener for http-01 + redirect, "" disables
-#     redirect_http: true
-# Notes:
-# - The primary server hostname is allowed automatically when it is a
-#   public dns name. Additional domains (including org portal hostnames)
-#   are managed at runtime via the CertificateService API.
-# - Issuance requires the CA to reach this host on port 80 (http-01)
-#   or 443 (tls-alpn-01).
-
-# Security hardening
-security:
-  headers:
-    enabled: true              # Response security headers on every route
-    hsts: false                # Force HSTS even without in-app tls (behind a proxy)
-    hsts_max_age: 31536000
-    # content_security_policy: ""   # Override the built in policy
-  audit:
-    enabled: true              # DB audit trail of logins and admin mutations
-    retention_days: 90         # Zero keeps history forever
-
-# Storage configuration
 storage:
   data_dir: "./data"
 
-# Database configuration
 database:
   # path: "./data/distroface.db"    # Derived from storage.data_dir when unset
   max_connections: 25
   max_idle_conns: 5
   conn_max_lifetime: 300
 
-# Registry configuration
 registry:
   # storage_path: "./data/registry"   # Derived from storage.data_dir when unset
 
-# Auth configuration
-auth:
-  session_timeout: 86400      # 24 hours in seconds
-  token_expiry: 900           # 15 minutes for registry tokens
-  anonymous_access: false
-  # jwt_secret: ""              # Generated and persisted when unset
-  local:
-    enabled: true
-    allow_registration: true
-  # oidc:
-  #   enabled: true
-  #   issuer_uri: "https://idp.example.com/realms/main"
-  #   client_id: "distroface"
-  #   client_secret: "..."
-  #   redirect_url: "https://registry.example.com/api/v1/auth/oidc/callback"
-  #   role_claim: "roles"        # Claim mapped to distroface roles
-  #   role_mapping:              # Idp role value -> distroface role
-  #     registry-admins: admin
-  #   group_claim: "groups"      # Claim listing idp groups
-  #   group_org_mapping:         # Idp group -> org membership
-  #     platform-team: platform
+artifacts:
+  # storage_path: "./data/artifacts"  # Derived from storage.data_dir when unset
+
+logging:
+  enabled: true
+  # dir: "./data/logs"          # Derived from storage.data_dir when unset
+  max_size: 10
+  max_backups: 5
+  max_age: 30
+  compress: true
+
+# On disk certificate pair, served when tls.primary_source is CERT_SOURCE_CONFIG
+# tls:
+#   cert_file: "/etc/distroface/tls/fullchain.pem"
+#   key_file: "/etc/distroface/tls/privkey.pem"
+
+# Secret material only, generated and persisted when unset
+# auth:
+#   jwt_secret: ""
 
 # Startup seeding, entries are created once and never updated
 # bootstrap:
@@ -89,56 +52,37 @@ auth:
 #       password: "changeme"        # Required
 #       email: "admin@example.com"  # Optional
 #       roles: ["admin"]            # System roles, default roles when omitted
-#     - username: "dev"
-#       password: "changeme"
 #   orgs:
 #     - name: "platform"
 #       display_name: "Platform Team"  # Defaults to name
-#       description: ""
 #       members:
 #         - username: "admin"
 #           role: "owner"           # owner, admin, or member (default)
-#         - username: "dev"
 
-# Artifact repositories
-artifacts:
-  # storage_path: "./data/artifacts"  # Derived from storage.data_dir when unset
-  max_file_size_mb: 10240     # Zero means unlimited
-  v1_compat: true             # Serve the v1 facade for old dfcli and ci
-  stale_upload_cleanup_hours: 24  # Abandoned upload sessions swept after this
-  retention:
-    enabled: false
-    max_versions: 5           # Newest versions kept per path zero means unlimited
-    max_age_days: 0           # Age based pruning in days zero disables
-    max_total_size: 0         # Total bytes kept per repo zero means unlimited
-    exclude_latest: true      # Never age-prune the newest artifact of a path
-  reaper:
-    enabled: false            # Scheduled retention sweep across all repos
-    interval_hours: 24
+# Runtime settings seeded into the database on FIRST boot only.
+# Same schema as the SettingsService api (protojson field names, enum names
+# spelled out). After first boot the app manages these live, this block is
+# ignored. DISTROFACE_SETTINGS_JSON env replaces this block when set.
+# settings:
+#   server:
+#     public_hostname: "registry.example.com"
+#   tls:
+#     mode: "TLS_MODE_HTTPS_ONLY"          # TLS_MODE_DUAL serves both schemes
+#     primary_source: "CERT_SOURCE_ACME"   # CONFIG, MANUAL, ACME, or APP_CA
+#   acme:
+#     enabled: true
+#     email: "admin@example.com"
+#     directory_url: ""                    # Empty means lets encrypt production
+#     challenge_port: "80"                 # Empty disables http-01
+#   auth:
+#     local_enabled: true
+#     local_allow_registration: false
 
-# Registry garbage collection
-gc:
-  enabled: false          # Scheduled mark and sweep
-  interval_hours: 24
-  remove_untagged: false  # Scheduled runs also drop untagged manifests
-
-# Webhook delivery
-webhooks:
-  # Private lan targets blocked unless this turned on
-  allow_private_networks: false
-
-# Rate limiting
-rate_limit:
-  auth_failure_limit: 10     # Failed tries per ip before lockout zero disables
-  auth_failure_window: 300   # Lockout window in seconds
-  pull_per_minute: 0         # Pulls per user per minute zero means unlimited
-  anon_pull_per_minute: 0    # Anon pulls per ip per minute zero means unlimited
-
-# Logging configuration
-logging:
-  enabled: true
-  # dir: "./data/logs"          # Derived from storage.data_dir when unset
-  max_size: 10
-  max_backups: 5
-  max_age: 30
-  compress: true
+# Operator pinned settings. Always win over the database and the ui,
+# rendered as locked fields in the app. DISTROFACE_OVERRIDES_JSON env
+# replaces this block when set.
+# overrides:
+#   acme:
+#     directory_url: "https://step-ca.internal/acme/acme/directory"
+#   portals:
+#     require_hostname_approval: true

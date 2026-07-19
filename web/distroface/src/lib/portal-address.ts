@@ -4,11 +4,17 @@ import { CertSource } from '$lib/proto/distroface/v1/certificate_pb';
 // Lowercase host, no port
 export const hostnamePattern = /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$/;
 
-// Configured app host and port, server.hostname may embed its own port
+// Configured app host and port, the hostname may embed its own port
 export function appHostPort(): { host: string; port: string } {
-	const hostname = String(configStore.get('server.hostname', '') ?? '');
-	const [host, inlinePort] = hostname.split(':');
-	let port = inlinePort || String(configStore.get('server.port', '') ?? '');
+	const hostname = configStore.publicHostname;
+	const idx = hostname.lastIndexOf(':');
+	const tail = idx > -1 ? hostname.slice(idx + 1) : '';
+	let host = hostname;
+	let port = '';
+	if (/^\d+$/.test(tail)) {
+		host = hostname.slice(0, idx);
+		port = tail;
+	}
 	if (port === '80' || port === '443') port = '';
 	return { host: host || 'localhost', port };
 }

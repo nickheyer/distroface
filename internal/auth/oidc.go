@@ -6,93 +6,131 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/pkg/config"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"golang.org/x/oauth2"
 )
 
 // OIDCHandler implements OIDC-based authentication flows.
 type OIDCHandler struct {
-	manager      *Manager
-	store        *stores.Store
-	config       *config.OIDCConfig
-	policy       RegistryAccessPolicy // Validates portal return origins, nil disables
+	manager *Manager
+	store   *stores.Store
+	res     *settings.Resolver
+	policy  RegistryAccessPolicy // Validates portal return origins, nil disables
+	log     *logger.Logger
+
+	mu     sync.Mutex
+	client *oidcClient
+}
+
+// Discovered provider bundle rebuilt when settings change
+type oidcClient struct {
+	fingerprint  string
 	provider     *oidc.Provider
 	verifier     *oidc.IDTokenVerifier
 	oauth2Config *oauth2.Config
 	httpClient   *http.Client
-	log          *logger.Logger
 }
 
-// NewOIDCHandler creates a new OIDC handler. If OIDC is disabled in config,
-// The handler is returned with a nil provider (IsEnabled() returns false).
-func NewOIDCHandler(manager *Manager, store *stores.Store, cfg *config.OIDCConfig, policy RegistryAccessPolicy, log *logger.Logger) *OIDCHandler {
-	h := &OIDCHandler{
+func NewOIDCHandler(manager *Manager, store *stores.Store, res *settings.Resolver, policy RegistryAccessPolicy, log *logger.Logger) *OIDCHandler {
+	return &OIDCHandler{
 		manager: manager,
 		store:   store,
-		config:  cfg,
+		res:     res,
 		policy:  policy,
 		log:     log,
 	}
+}
 
-	if !cfg.Enabled {
-		return h
+// Live effective oidc settings
+func (h *OIDCHandler) oidcSettings(ctx context.Context) *v1.OIDCSettings {
+	return h.res.System(ctx).GetAuth().GetOidc()
+}
+
+// IsEnabled reads the live toggle, discovery happens on demand
+func (h *OIDCHandler) IsEnabled() bool {
+	cfg := h.oidcSettings(context.Background())
+	return cfg.GetEnabled() && cfg.GetIssuerUri() != ""
+}
+
+// Config identity that forces a provider rebuild on change
+func oidcFingerprint(cfg *v1.OIDCSettings) string {
+	scopes := append([]string{}, cfg.GetScopes()...)
+	sort.Strings(scopes)
+	return strings.Join([]string{
+		cfg.GetIssuerUri(), cfg.GetClientId(), cfg.GetClientSecret(),
+		cfg.GetRedirectUrl(), fmt.Sprint(cfg.GetSkipTlsVerify()), strings.Join(scopes, ","),
+	}, "|")
+}
+
+// Cached provider bundle, discovered lazily and rebuilt on drift
+func (h *OIDCHandler) getClient(ctx context.Context) (*oidcClient, error) {
+	cfg := h.oidcSettings(ctx)
+	if !cfg.GetEnabled() || cfg.GetIssuerUri() == "" {
+		return nil, fmt.Errorf("oidc is not enabled")
+	}
+	fp := oidcFingerprint(cfg)
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.client != nil && h.client.fingerprint == fp {
+		return h.client, nil
 	}
 
-	ctx := context.Background()
-	if cfg.SkipTLSVerify {
-		h.httpClient = &http.Client{
+	c := &oidcClient{fingerprint: fp}
+	discoverCtx := context.Background()
+	if cfg.GetSkipTlsVerify() {
+		c.httpClient = &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
 			},
 		}
-		ctx = oidc.ClientContext(ctx, h.httpClient)
+		discoverCtx = oidc.ClientContext(discoverCtx, c.httpClient)
 	}
 
-	provider, err := oidc.NewProvider(ctx, cfg.IssuerURI)
+	provider, err := oidc.NewProvider(discoverCtx, cfg.GetIssuerUri())
 	if err != nil {
-		log.Error("OIDC: failed to discover provider at %s: %v", cfg.IssuerURI, err)
-		return h
+		return nil, fmt.Errorf("oidc discovery failed for %s: %w", cfg.GetIssuerUri(), err)
 	}
+	c.provider = provider
+	c.verifier = provider.Verifier(&oidc.Config{ClientID: cfg.GetClientId()})
 
-	h.provider = provider
-	h.verifier = provider.Verifier(&oidc.Config{ClientID: cfg.ClientID})
-
-	scopes := cfg.Scopes
+	scopes := cfg.GetScopes()
 	if len(scopes) == 0 {
 		scopes = []string{oidc.ScopeOpenID, "profile", "email"}
 	}
-
-	h.oauth2Config = &oauth2.Config{
-		ClientID:     cfg.ClientID,
-		ClientSecret: cfg.ClientSecret,
-		RedirectURL:  cfg.RedirectURL,
+	c.oauth2Config = &oauth2.Config{
+		ClientID:     cfg.GetClientId(),
+		ClientSecret: cfg.GetClientSecret(),
+		RedirectURL:  cfg.GetRedirectUrl(),
 		Endpoint:     provider.Endpoint(),
 		Scopes:       scopes,
 	}
 
-	log.Info("OIDC handler initialized (issuer: %s)", cfg.IssuerURI)
-	return h
-}
-
-// IsEnabled returns true if OIDC is configured and the provider was discovered.
-func (h *OIDCHandler) IsEnabled() bool {
-	return h.config.Enabled && h.provider != nil
+	h.client = c
+	h.log.Info("OIDC handler initialized (issuer: %s)", cfg.GetIssuerUri())
+	return c, nil
 }
 
 // HandleLogin redirects the user to the OIDC provider's authorization endpoint.
 func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
-	if !h.IsEnabled() {
-		http.Error(w, "OIDC is not enabled", http.StatusBadRequest)
+	client, err := h.getClient(r.Context())
+	if err != nil {
+		h.log.Error("OIDC: %v", err)
+		http.Error(w, "OIDC is not available", http.StatusBadRequest)
 		return
 	}
 
@@ -125,7 +163,7 @@ func (h *OIDCHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	http.Redirect(w, r, h.oauth2Config.AuthCodeURL(state), http.StatusFound)
+	http.Redirect(w, r, client.oauth2Config.AuthCodeURL(state), http.StatusFound)
 }
 
 // Direct tls or a forwarded https hop upstream
@@ -152,8 +190,10 @@ func (h *OIDCHandler) validReturnOrigin(returnTo string) string {
 // HandleCallback processes the OIDC callback, verifies the ID token,
 // Finds or creates the user, maps roles, creates a session, and redirects.
 func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
-	if !h.IsEnabled() {
-		http.Error(w, "OIDC is not enabled", http.StatusBadRequest)
+	client, err := h.getClient(r.Context())
+	if err != nil {
+		h.log.Error("OIDC: %v", err)
+		http.Error(w, "OIDC is not available", http.StatusBadRequest)
 		return
 	}
 
@@ -174,10 +214,10 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Exchange code for token
 	ctx := r.Context()
-	if h.httpClient != nil {
-		ctx = oidc.ClientContext(ctx, h.httpClient)
+	if client.httpClient != nil {
+		ctx = oidc.ClientContext(ctx, client.httpClient)
 	}
-	oauth2Token, err := h.oauth2Config.Exchange(ctx, r.URL.Query().Get("code"))
+	oauth2Token, err := client.oauth2Config.Exchange(ctx, r.URL.Query().Get("code"))
 	if err != nil {
 		h.log.Error("OIDC: code exchange failed: %v", err)
 		http.Error(w, "code exchange failed", http.StatusInternalServerError)
@@ -190,7 +230,7 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no id_token in response", http.StatusInternalServerError)
 		return
 	}
-	idToken, err := h.verifier.Verify(ctx, rawIDToken)
+	idToken, err := client.verifier.Verify(ctx, rawIDToken)
 	if err != nil {
 		h.log.Error("OIDC: token verification failed: %v", err)
 		http.Error(w, "token verification failed", http.StatusInternalServerError)
@@ -206,8 +246,8 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch UserInfo for additional claims
-	tokenSource := h.oauth2Config.TokenSource(ctx, oauth2Token)
-	userInfo, err := h.provider.UserInfo(ctx, tokenSource)
+	tokenSource := client.oauth2Config.TokenSource(ctx, oauth2Token)
+	userInfo, err := client.provider.UserInfo(ctx, tokenSource)
 	if err == nil {
 		var uiClaims map[string]any
 		if err := userInfo.Claims(&uiClaims); err == nil {
@@ -247,7 +287,7 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Get roles and create session
 	roleNames, _ := h.store.GetUserRoleNames(ctx, user.ID)
-	expiresAt := time.Now().Add(time.Duration(h.manager.config.SessionTimeout) * time.Second)
+	expiresAt := time.Now().Add(h.manager.sessionTimeout(ctx))
 	token, err := h.manager.generateJWT(user.ID, user.Username, roleNames, expiresAt)
 	if err != nil {
 		h.log.Error("OIDC: JWT generation failed: %v", err)
@@ -312,7 +352,7 @@ func (h *OIDCHandler) findOrCreateOIDCUser(ctx context.Context, sub, username, e
 		Email:        emailPtr,
 		AuthProvider: "oidc",
 		OIDCSubject:  sub,
-		OIDCIssuer:   h.config.IssuerURI,
+		OIDCIssuer:   h.oidcSettings(ctx).GetIssuerUri(),
 		IsActive:     true,
 	}
 
@@ -353,16 +393,17 @@ func claimStrings(v any) []string {
 
 // Sync oidc claim roles add new drop revoked
 func (h *OIDCHandler) mapClaimsToRoles(ctx context.Context, userID string, claims map[string]any) {
-	if h.config.RoleClaim == "" {
+	cfg := h.oidcSettings(ctx)
+	if cfg.GetRoleClaim() == "" {
 		return
 	}
 
-	claimValues := claimStrings(claims[h.config.RoleClaim])
+	claimValues := claimStrings(claims[cfg.GetRoleClaim()])
 
 	desired := make(map[string]bool)
 	for _, cv := range claimValues {
-		if len(h.config.RoleMapping) > 0 {
-			if localRole, ok := h.config.RoleMapping[cv]; ok {
+		if len(cfg.GetRoleMapping()) > 0 {
+			if localRole, ok := cfg.GetRoleMapping()[cv]; ok {
 				desired[localRole] = true
 			}
 		} else {
@@ -392,18 +433,19 @@ func (h *OIDCHandler) mapClaimsToRoles(ctx context.Context, userID string, claim
 
 // Sync oidc group claims to org memberships add new drop revoked
 func (h *OIDCHandler) mapGroupsToOrgs(ctx context.Context, userID string, claims map[string]any) {
-	if len(h.config.GroupOrgMapping) == 0 {
+	cfg := h.oidcSettings(ctx)
+	if len(cfg.GetGroupOrgMapping()) == 0 {
 		return
 	}
 
-	groupClaim := h.config.GroupClaim
+	groupClaim := cfg.GetGroupClaim()
 	if groupClaim == "" {
 		groupClaim = "groups"
 	}
 
 	desired := make(map[string]bool)
 	for _, group := range claimStrings(claims[groupClaim]) {
-		if orgName, ok := h.config.GroupOrgMapping[group]; ok {
+		if orgName, ok := cfg.GetGroupOrgMapping()[group]; ok {
 			desired[orgName] = true
 		}
 	}

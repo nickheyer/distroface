@@ -19,28 +19,38 @@
 	import { Act, errText } from '$lib/act.svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime } from '$lib/utils';
-	import { certHealth, certBadgeClass, certDate, certSourceLabels } from '$lib/cert-utils';
+	import { downloadBlob } from '$lib/download';
+	import { certBadgeClass, certDate, certHealth, certSourceLabels, certStateBadge } from '$lib/cert-utils';
+	import { isLocked, patchSettings, systemScope, type SettingsPatch } from '$lib/settings-utils';
+	import { TLSMode, type FieldProvenance, type Settings } from '$lib/proto/distroface/v1/settings_pb';
 	import {
 		CertSource, TLSScope,
-		type GetTLSStatusResponse, type CertificateDomain
+		type CertificateDomain, type GetCertStatusResponse, type GetTLSMaterialResponse
 	} from '$lib/proto/distroface/v1/certificate_pb';
 
-	let status = $state<GetTLSStatusResponse | null>(null);
+	let eff = $state<Settings | null>(null);
+	let prov = $state<FieldProvenance[]>([]);
+	let certStatus = $state<GetCertStatusResponse | null>(null);
+	let material = $state<GetTLSMaterialResponse | null>(null);
 	let pending = $state<CertificateDomain[]>([]);
 	let loading = $state(true);
 	let loadError = $state('');
 
+	let tlsMode = $state<TLSMode>(TLSMode.TLS_MODE_DUAL);
 	let primarySource = $state<CertSource>(CertSource.CONFIG);
 	let acmeEnabled = $state(false);
 	let acmeEmail = $state('');
 	let acmeDirectory = $state('');
+	let challengePort = $state('');
 	let requireApproval = $state(false);
 	let blacklistText = $state('');
 
+	const modeAct = new Act();
 	const primaryAct = new Act();
 	const acmeSwitchAct = new Act();
 	const acmeDirAct = new Act();
 	const acmeEmailAct = new Act();
+	const acmePortAct = new Act();
 	const approvalSwitchAct = new Act();
 	const blacklistAct = new Act();
 	const appCertAct = new Act();
@@ -54,23 +64,37 @@
 	let uploadScope = $state<TLSScope>(TLSScope.TLS_SCOPE_APP);
 
 	const sourceOptions = [CertSource.CONFIG, CertSource.MANUAL, CertSource.APP_CA, CertSource.ACME];
+	const modeOptions: { value: TLSMode; label: string; help: string }[] = [
+		{ value: TLSMode.TLS_MODE_DUAL, label: 'TLS and cleartext', help: 'Handshakes serve TLS, plain HTTP still answers' },
+		{ value: TLSMode.TLS_MODE_HTTPS_ONLY, label: 'HTTPS only', help: 'Cleartext requests redirect to HTTPS' },
+		{ value: TLSMode.TLS_MODE_CLEARTEXT, label: 'Cleartext only', help: 'Never terminate TLS in app' }
+	];
 	const blacklistPlaceholder = 'internal.corp\n*.example.org';
 
-	let primaryHealth = $derived(certHealth(status?.primaryCert));
+	const primaryHostname = $derived(eff?.server?.publicHostname ?? '');
+	const primaryHealth = $derived(certHealth(certStatus?.acmeCert));
+	const primaryBadge = $derived(certStateBadge(certStatus?.state));
 
 	const acmeSwitchHelp = $derived(
-		status?.acmeHttpPort
-			? `Challenges answer on http port ${status.acmeHttpPort}`
+		challengePort
+			? `Challenges answer on http port ${challengePort}`
 			: 'Challenges use tls-alpn-01 on port 443'
 	);
 
-	function seedForms(resp: GetTLSStatusResponse) {
-		primarySource = resp.primarySource || CertSource.CONFIG;
-		acmeEnabled = resp.acmeEnabled;
-		acmeEmail = resp.acmeEmail;
-		acmeDirectory = resp.acmeDirectory;
-		requireApproval = resp.requireHostnameApproval;
-		blacklistText = resp.hostnameBlacklist.join('\n');
+	// Pinned fields render disabled with a lock hint
+	const locked = (path: string) => isLocked(prov, path);
+	const lockHint = (path: string, help: string) =>
+		locked(path) ? 'Pinned by the config file' : help;
+
+	function seedForms(s: Settings) {
+		tlsMode = s.tls?.mode ?? TLSMode.TLS_MODE_DUAL;
+		primarySource = s.tls?.primarySource || CertSource.CONFIG;
+		acmeEnabled = s.acme?.enabled ?? false;
+		acmeEmail = s.acme?.email ?? '';
+		acmeDirectory = s.acme?.directoryUrl ?? '';
+		challengePort = s.acme?.challengePort ?? '';
+		requireApproval = s.portals?.requireHostnameApproval ?? false;
+		blacklistText = (s.portals?.hostnameBlacklist ?? []).join('\n');
 	}
 
 	async function loadPending() {
@@ -85,14 +109,24 @@
 		}
 	}
 
+	async function loadStatus() {
+		try {
+			certStatus = await rpcClient.certificate.getCertStatus({}, silentCallOptions);
+		} catch {
+			// Badge hides without status
+		}
+	}
+
 	async function load() {
 		loading = true;
 		loadError = '';
 		try {
-			const resp = await rpcClient.certificate.getTLSStatus({}, silentCallOptions);
-			status = resp;
-			seedForms(resp);
-			await loadPending();
+			const resp = await rpcClient.settings.getEffectiveSettings({ scope: systemScope }, silentCallOptions);
+			eff = resp.settings ?? null;
+			prov = resp.provenance;
+			if (eff) seedForms(eff);
+			material = await rpcClient.certificate.getTLSMaterial({}, silentCallOptions);
+			await Promise.all([loadStatus(), loadPending()]);
 		} catch (err) {
 			loadError = errText(err);
 		} finally {
@@ -101,53 +135,63 @@
 	}
 
 	// Settings apply on interaction, a failed patch reverts the control
-	async function apply(act: Act, patch: Parameters<typeof rpcClient.certificate.updateACMESettings>[0]) {
+	async function apply(act: Act, settings: SettingsPatch, paths: string[]) {
 		const ok = await act.run(async () => {
-			const resp = await rpcClient.certificate.updateACMESettings(patch, silentCallOptions);
-			if (resp.status) {
-				status = resp.status;
-				seedForms(resp.status);
+			const res = await patchSettings(systemScope, settings, paths);
+			if (res.effective) {
+				eff = res.effective;
+				prov = res.provenance;
+				seedForms(res.effective);
 			}
+			await loadStatus();
 		});
-		if (!ok && status) seedForms(status);
+		if (!ok && eff) seedForms(eff);
+	}
+
+	function setTlsMode(v: TLSMode) {
+		tlsMode = v;
+		apply(modeAct, { tls: { mode: v } }, ['tls.mode']);
 	}
 
 	function setPrimarySource(v: CertSource) {
 		primarySource = v;
-		apply(primaryAct, { primarySource: v });
+		apply(primaryAct, { tls: { primarySource: v } }, ['tls.primary_source']);
 	}
 
 	function setAcmeEnabled(v: boolean) {
 		acmeEnabled = v;
-		apply(acmeSwitchAct, { enabled: v });
+		apply(acmeSwitchAct, { acme: { enabled: v } }, ['acme.enabled']);
 	}
 
 	function commitAcmeDirectory() {
-		if (acmeDirectory.trim() === (status?.acmeDirectory ?? '')) return;
-		apply(acmeDirAct, { directoryUrl: acmeDirectory.trim() });
+		if (acmeDirectory.trim() === (eff?.acme?.directoryUrl ?? '')) return;
+		apply(acmeDirAct, { acme: { directoryUrl: acmeDirectory.trim() } }, ['acme.directory_url']);
 	}
 
 	function commitAcmeEmail() {
-		if (acmeEmail.trim() === (status?.acmeEmail ?? '')) return;
-		apply(acmeEmailAct, { email: acmeEmail.trim() });
+		if (acmeEmail.trim() === (eff?.acme?.email ?? '')) return;
+		apply(acmeEmailAct, { acme: { email: acmeEmail.trim() } }, ['acme.email']);
+	}
+
+	function commitChallengePort() {
+		if (challengePort.trim() === (eff?.acme?.challengePort ?? '')) return;
+		apply(acmePortAct, { acme: { challengePort: challengePort.trim() } }, ['acme.challenge_port']);
 	}
 
 	function setRequireApproval(v: boolean) {
 		requireApproval = v;
-		apply(approvalSwitchAct, { requireHostnameApproval: v });
+		apply(approvalSwitchAct, { portals: { requireHostnameApproval: v } }, ['portals.require_hostname_approval']);
 	}
 
 	function commitBlacklist() {
 		const patterns = blacklistText.split('\n').map((s) => s.trim()).filter(Boolean);
-		if (patterns.join('\n') === (status?.hostnameBlacklist ?? []).join('\n')) return;
-		apply(blacklistAct, { hostnameBlacklist: patterns, setBlacklist: true });
+		if (patterns.join('\n') === (eff?.portals?.hostnameBlacklist ?? []).join('\n')) return;
+		apply(blacklistAct, { portals: { hostnameBlacklist: patterns } }, ['portals.hostname_blacklist']);
 	}
 
 	function issueApp() {
-		if (!status?.primaryHostname) return;
-		const domain = status.primaryHostname;
 		issueAppAct.run(async () => {
-			await rpcClient.certificate.issueCertificate({ domain }, silentCallOptions);
+			await rpcClient.certificate.issueCertificate({}, silentCallOptions);
 			await load();
 		});
 	}
@@ -198,14 +242,7 @@
 	}
 
 	function downloadAppCA() {
-		if (!status?.appCa?.certPem) return;
-		const blob = new Blob([status.appCa.certPem], { type: 'application/x-pem-file' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = 'distroface-root-ca.pem';
-		a.click();
-		URL.revokeObjectURL(url);
+		if (material?.appCa?.certPem) downloadBlob(material.appCa.certPem, 'distroface-root-ca.pem');
 	}
 
 	function removeAppCA() {
@@ -233,19 +270,19 @@
 		<p class="text-sm text-destructive">{loadError}</p>
 		<Button variant="outline" size="sm" onclick={load}>Retry</Button>
 	</div>
-{:else if status}
+{:else if eff}
 	<div class="space-y-6">
 		<!-- Root of trust first, everything below can chain to it -->
 		<FormCard title="Instance CA" description="Signs server certificates and organization CAs">
 			<CertMaterialRow
 				title="Root certificate"
 				empty="Generate or upload a root"
-				material={status.appCa}
+				material={material?.appCa}
 				busy={appCaAct.busy}
 				error={appCaAct.error}
 				onGenerate={generateAppCA}
 				onUpload={() => openUpload(TLSScope.TLS_SCOPE_APP_CA)}
-				onDownload={status.appCa ? downloadAppCA : undefined}
+				onDownload={material?.appCa ? downloadAppCA : undefined}
 				onRemove={removeAppCA}
 			/>
 		</FormCard>
@@ -256,18 +293,22 @@
 				<FormField
 					label="Automatic issuance"
 					horizontal
-					help={acmeSwitchHelp}
+					help={lockHint('acme.enabled', acmeSwitchHelp)}
 					tag={acmeSwitchAct.tag}
 					error={acmeSwitchAct.error}
 				>
-					<Switch checked={acmeEnabled} disabled={acmeSwitchAct.busy} onCheckedChange={setAcmeEnabled} />
+					<Switch
+						checked={acmeEnabled}
+						disabled={acmeSwitchAct.busy || locked('acme.enabled')}
+						onCheckedChange={setAcmeEnabled}
+					/>
 				</FormField>
 				{#if acmeEnabled}
-					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+					<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
 						<FormField
 							label="Account email"
 							id="acme-email"
-							help="Receives expiry notices from the CA"
+							help={lockHint('acme.email', 'Receives expiry notices from the CA')}
 							tag={acmeEmailAct.tag}
 							error={acmeEmailAct.error}
 						>
@@ -275,7 +316,7 @@
 								id="acme-email"
 								bind:value={acmeEmail}
 								placeholder="admin@example.com"
-								disabled={acmeEmailAct.busy}
+								disabled={acmeEmailAct.busy || locked('acme.email')}
 								onblur={commitAcmeEmail}
 								onkeydown={(e) => { if (e.key === 'Enter') commitAcmeEmail(); }}
 							/>
@@ -283,7 +324,7 @@
 						<FormField
 							label="Directory URL"
 							id="acme-dir"
-							help="Empty uses Lets Encrypt production"
+							help={lockHint('acme.directory_url', 'Empty uses Lets Encrypt production')}
 							tag={acmeDirAct.tag}
 							error={acmeDirAct.error}
 						>
@@ -292,9 +333,26 @@
 								bind:value={acmeDirectory}
 								class="font-mono text-xs"
 								placeholder="https://acme-v02.api.letsencrypt.org/directory"
-								disabled={acmeDirAct.busy}
+								disabled={acmeDirAct.busy || locked('acme.directory_url')}
 								onblur={commitAcmeDirectory}
 								onkeydown={(e) => { if (e.key === 'Enter') commitAcmeDirectory(); }}
+							/>
+						</FormField>
+						<FormField
+							label="Challenge port"
+							id="acme-port"
+							help={lockHint('acme.challenge_port', 'Cleartext http-01 listener, empty disables')}
+							tag={acmePortAct.tag}
+							error={acmePortAct.error}
+						>
+							<Input
+								id="acme-port"
+								bind:value={challengePort}
+								class="font-mono text-xs w-28"
+								placeholder="80"
+								disabled={acmePortAct.busy || locked('acme.challenge_port')}
+								onblur={commitChallengePort}
+								onkeydown={(e) => { if (e.key === 'Enter') commitChallengePort(); }}
 							/>
 						</FormField>
 					</div>
@@ -307,29 +365,54 @@
 			<div class="space-y-3">
 				<div class="flex items-center justify-between gap-4 rounded-lg border border-border/60 px-4 py-3.5">
 					<div class="flex items-center gap-2 min-w-0 flex-wrap">
-						<span class="status-dot {status.tlsEnabled ? 'status-dot-active' : 'status-dot-inactive'}"></span>
-						<span class="text-sm font-medium">
-							{status.tlsEnabled ? 'TLS only listener' : 'Serves TLS and cleartext'}
-						</span>
-						<code class="text-xs bg-muted px-2 py-1 rounded font-mono">{status.primaryHostname || '-'}</code>
+						<code class="text-xs bg-muted px-2 py-1 rounded font-mono">{primaryHostname || '-'}</code>
+						{#if certStatus?.problems?.length}
+							<span class="text-xs text-destructive">{certStatus.problems[0]}</span>
+						{/if}
 					</div>
 					{#if primaryHealth.issued}
-						<Badge variant="outline" class="text-xs shrink-0 {certBadgeClass(primaryHealth.tone)}" title={certDate(status.primaryCert)}>
+						<Badge variant="outline" class="text-xs shrink-0 {certBadgeClass(primaryHealth.tone)}" title={certDate(certStatus?.acmeCert)}>
 							{primaryHealth.label}
 						</Badge>
+					{:else if primaryBadge}
+						<Badge variant="outline" class="text-xs shrink-0 {primaryBadge.cls}">{primaryBadge.label}</Badge>
 					{/if}
 				</div>
 
 				<FormField
+					label="Listener mode"
+					help={lockHint('tls.mode', 'Applies live to the primary hostname')}
+					tag={modeAct.tag}
+					error={modeAct.error}
+				>
+					<RadioGroup.Root
+						value={String(tlsMode)}
+						onValueChange={(v) => setTlsMode(Number(v) as TLSMode)}
+						disabled={modeAct.busy || locked('tls.mode')}
+						class="gap-0 divide-y divide-border/40"
+					>
+						{#each modeOptions as option (option.value)}
+							<div class="py-2.5 first:pt-1 last:pb-1">
+								<label class="flex items-center gap-2.5 cursor-pointer" for="mode-{option.value}">
+									<RadioGroup.Item value={String(option.value)} id="mode-{option.value}" />
+									<span class="text-sm">{option.label}</span>
+									<span class="text-xs text-muted-foreground">{option.help}</span>
+								</label>
+							</div>
+						{/each}
+					</RadioGroup.Root>
+				</FormField>
+
+				<FormField
 					label="Certificate source"
-					help="Where the served certificate comes from"
+					help={lockHint('tls.primary_source', 'Where the served certificate comes from')}
 					tag={primaryAct.tag}
 					error={primaryAct.error}
 				>
 					<RadioGroup.Root
 						value={String(primarySource)}
 						onValueChange={(v) => setPrimarySource(Number(v) as CertSource)}
-						disabled={primaryAct.busy}
+						disabled={primaryAct.busy || locked('tls.primary_source')}
 						class="gap-0 divide-y divide-border/40"
 					>
 						{#each sourceOptions as option (option)}
@@ -340,19 +423,17 @@
 								</label>
 								{#if primarySource === option}
 									<div class="mt-2 ml-7">
-										{#if option === CertSource.CONFIG && !status.manualCert}
-											<p class="text-[13px] text-destructive">Config has no cert_file pair so TLS fails</p>
-										{:else if option === CertSource.MANUAL}
+										{#if option === CertSource.MANUAL}
 											<CertMaterialRow
 												title="Server certificate"
-												empty="PEM pair covering {status.primaryHostname || 'the primary hostname'}"
-												material={status.appCert}
+												empty="PEM pair covering {primaryHostname || 'the primary hostname'}"
+												material={material?.appCert}
 												busy={appCertAct.busy}
 												error={appCertAct.error}
 												onUpload={() => openUpload(TLSScope.TLS_SCOPE_APP)}
 												onRemove={removeAppCert}
 											/>
-										{:else if option === CertSource.APP_CA && !status.appCa}
+										{:else if option === CertSource.APP_CA && !material?.appCa}
 											<p class="text-[13px] text-amber-600 dark:text-amber-400">Generate the instance CA above first</p>
 										{:else if option === CertSource.ACME}
 											{#if !acmeEnabled}
@@ -362,7 +443,7 @@
 														variant="outline"
 														size="sm"
 														class="h-7"
-														disabled={acmeSwitchAct.busy}
+														disabled={acmeSwitchAct.busy || locked('acme.enabled')}
 														onclick={() => setAcmeEnabled(true)}
 													>
 														{#if acmeSwitchAct.busy}
@@ -413,11 +494,15 @@
 				<FormField
 					label="Require approval"
 					horizontal
-					help="New portal hostnames wait for an admin"
+					help={lockHint('portals.require_hostname_approval', 'New portal hostnames wait for an admin')}
 					tag={approvalSwitchAct.tag}
 					error={approvalSwitchAct.error}
 				>
-					<Switch checked={requireApproval} disabled={approvalSwitchAct.busy} onCheckedChange={setRequireApproval} />
+					<Switch
+						checked={requireApproval}
+						disabled={approvalSwitchAct.busy || locked('portals.require_hostname_approval')}
+						onCheckedChange={setRequireApproval}
+					/>
 				</FormField>
 
 				{#if pending.length > 0}
@@ -474,7 +559,7 @@
 				<FormField
 					label="Blocked patterns"
 					id="hostname-blacklist"
-					help="One pattern per line"
+					help={lockHint('portals.hostname_blacklist', 'One pattern per line')}
 					tag={blacklistAct.tag}
 					error={blacklistAct.error}
 				>
@@ -484,7 +569,7 @@
 						class="font-mono text-xs"
 						rows={3}
 						placeholder={blacklistPlaceholder}
-						disabled={blacklistAct.busy}
+						disabled={blacklistAct.busy || locked('portals.hostname_blacklist')}
 						onblur={commitBlacklist}
 					/>
 				</FormField>

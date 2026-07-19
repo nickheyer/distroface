@@ -1,6 +1,10 @@
 package db
 
-import "time"
+import (
+	"time"
+
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+)
 
 // Organization role constants
 const (
@@ -43,16 +47,16 @@ type UserRole struct {
 	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
 }
 
-type SystemSetting struct {
+type SystemSetting struct { // Internal state like the jwt secret, never user config
 	Key   string `gorm:"primaryKey"`
 	Value string `gorm:"not null"`
 }
 
-type OrgSetting struct { // Per-org key value overrides for global config defaults
-	OrgID string        `json:"org_id" gorm:"primaryKey;column:org_id"`
-	Key   string        `json:"key" gorm:"primaryKey;column:key"`
-	Value string        `json:"value" gorm:"not null"`
-	Org   *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+type SettingsRow struct { // One protojson settings document per scope tier
+	ScopeType int32     `gorm:"primaryKey;column:scope_type"`
+	ScopeID   string    `gorm:"primaryKey;default:'';column:scope_id"`
+	Value     string    `gorm:"type:text;not null"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
 }
 
 type Session struct {
@@ -168,66 +172,24 @@ type RegistryPortal struct { // Alternate org-owned registry host and/or proxy p
 	Rules          string        `json:"rules" gorm:"not null;default:'[]'"` // JSON array of {pattern, replace}
 	AllowPush      bool          `json:"allow_push" gorm:"not null"`
 	RequireAuth    bool          `json:"require_auth" gorm:"not null"`
-	TLS            bool          `json:"tls" gorm:"not null;default:false;column:tls"`                            // Https enforced for this portal, cleartext requests redirect
-	CertSource     string        `json:"cert_source" gorm:"not null;default:'none';column:cert_source"`           // One of none, acme, org_ca, org_cert, manual
-	ACMEEmail      string        `json:"acme_email" gorm:"not null;default:'';column:acme_email"`                 // Per portal acme account override
-	ACMEDirectory  string        `json:"acme_directory_url" gorm:"not null;default:'';column:acme_directory_url"` // Per portal acme directory override
+	TLS            bool          `json:"tls" gorm:"not null;default:false;column:tls"`             // Https enforced for this portal, cleartext requests redirect
+	CertSource     v1.CertSource `json:"cert_source" gorm:"not null;default:1;column:cert_source"` // How the serving certificate materializes
 	Enabled        bool          `json:"enabled" gorm:"not null"`
 	CreatedAt      time.Time     `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt      time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
 	Org            *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 }
 
-const (
-	CertSourceNone    = "none"
-	CertSourceACME    = "acme"
-	CertSourceOrgCA   = "org_ca"
-	CertSourceOrgCert = "org_cert"
-	CertSourceManual  = "manual"
-)
-
-const (
-	TLSCertScopeApp    = "app"
-	TLSCertScopeAppCA  = "app_ca"
-	TLSCertScopeOrg    = "org"
-	TLSCertScopeOrgCA  = "org_ca"
-	TLSCertScopePortal = "portal"
-)
-
-// How the primary hostname's certificate materializes
-const (
-	PrimarySourceConfig = "config"
-	PrimarySourceManual = "manual"
-	PrimarySourceACME   = "acme"
-	PrimarySourceAppCA  = "app_ca"
-)
-
-// System setting keys, db values override the config file
-const (
-	SettingACMEEnabled       = "tls.acme.enabled"
-	SettingACMEEmail         = "tls.acme.email"
-	SettingACMEDirectory     = "tls.acme.directory_url"
-	SettingPrimarySource     = "tls.primary_source"
-	SettingHostnameBlacklist = "portals.hostname_blacklist"
-	SettingRequireApproval   = "portals.require_hostname_approval"
-)
-
-// Org setting keys, unset means inherit the app tier
-const (
-	OrgSettingACMEEmail     = "tls.acme.email"
-	OrgSettingACMEDirectory = "tls.acme.directory_url"
-)
-
 type TLSCertificate struct { // Uploaded pem material, keys never leave the db
-	ID        string    `json:"id" gorm:"primaryKey"`
-	Scope     string    `json:"scope" gorm:"not null;uniqueIndex:idx_tls_cert_target"`
-	OrgID     string    `json:"org_id" gorm:"not null;default:'';uniqueIndex:idx_tls_cert_target;column:org_id"`
-	PortalID  string    `json:"portal_id" gorm:"not null;default:'';uniqueIndex:idx_tls_cert_target;column:portal_id"`
-	CertPEM   string    `json:"-" gorm:"type:text;not null;column:cert_pem"`
-	KeyPEM    string    `json:"-" gorm:"type:text;not null;column:key_pem"`
-	CreatedBy string    `json:"created_by" gorm:"column:created_by"`
-	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+	ID        string      `json:"id" gorm:"primaryKey"`
+	Scope     v1.TLSScope `json:"scope" gorm:"not null;uniqueIndex:idx_tls_cert_target"`
+	OrgID     string      `json:"org_id" gorm:"not null;default:'';uniqueIndex:idx_tls_cert_target;column:org_id"`
+	PortalID  string      `json:"portal_id" gorm:"not null;default:'';uniqueIndex:idx_tls_cert_target;column:portal_id"`
+	CertPEM   string      `json:"-" gorm:"type:text;not null;column:cert_pem"`
+	KeyPEM    string      `json:"-" gorm:"type:text;not null;column:key_pem"`
+	CreatedBy string      `json:"created_by" gorm:"column:created_by"`
+	CreatedAt time.Time   `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time   `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v1 parity
@@ -268,22 +230,16 @@ type ArtifactProperty struct {
 	Artifact   *Artifact `json:"-" gorm:"foreignKey:ArtifactID;constraint:OnDelete:CASCADE"`
 }
 
-// Certificate domain scope constants
-const (
-	CertDomainScopeSystem = "system"
-	CertDomainScopeOrg    = "org"
-)
-
 type CertificateDomain struct { // Allowlist and approval entry for a portal hostname
-	ID         string        `json:"id" gorm:"primaryKey"`
-	Domain     string        `json:"domain" gorm:"not null;uniqueIndex"`
-	Scope      string        `json:"scope" gorm:"not null;default:'system'"`
-	OrgID      *string       `json:"org_id" gorm:"index;column:org_id"`
-	Approved   bool          `json:"approved" gorm:"not null;default:false"`
-	ApprovedBy string        `json:"approved_by" gorm:"column:approved_by"`
-	CreatedBy  string        `json:"created_by" gorm:"not null;column:created_by"`
-	CreatedAt  time.Time     `json:"created_at" gorm:"autoCreateTime"`
-	Org        *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+	ID         string                    `json:"id" gorm:"primaryKey"`
+	Domain     string                    `json:"domain" gorm:"not null;uniqueIndex"`
+	Scope      v1.CertificateDomainScope `json:"scope" gorm:"not null;default:1"`
+	OrgID      *string                   `json:"org_id" gorm:"index;column:org_id"`
+	Approved   bool                      `json:"approved" gorm:"not null;default:false"`
+	ApprovedBy string                    `json:"approved_by" gorm:"column:approved_by"`
+	CreatedBy  string                    `json:"created_by" gorm:"not null;column:created_by"`
+	CreatedAt  time.Time                 `json:"created_at" gorm:"autoCreateTime"`
+	Org        *Organization             `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 }
 
 type ACMECacheEntry struct { // Autocert cache row holding certs and account state

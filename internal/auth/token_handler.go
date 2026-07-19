@@ -158,7 +158,7 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	resp := tokenResponse{
 		Token:       tokenStr,
 		AccessToken: tokenStr,
-		ExpiresIn:   int(h.tokenService.expiry / time.Second),
+		ExpiresIn:   int(h.tokenService.expiry() / time.Second),
 		IssuedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 

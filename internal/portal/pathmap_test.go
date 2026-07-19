@@ -4,9 +4,10 @@ import (
 	"testing"
 
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
-func newTestMapper(t *testing.T, rules []MappingRule) *pathMapper {
+func newTestMapper(t *testing.T, rules []*v1.PortalRule) *pathMapper {
 	t.Helper()
 	m, err := newPathMapper(rules, logger.New())
 	if err != nil {
@@ -20,24 +21,24 @@ func TestNewPathMapper(t *testing.T) {
 		t.Error("expected nil mapper for empty rules")
 	}
 
-	_, err := newPathMapper([]MappingRule{{Pattern: `(`, Replace: `x`}}, logger.New())
+	_, err := newPathMapper([]*v1.PortalRule{{Pattern: `(`, Replace: `x`}}, logger.New())
 	if err == nil {
 		t.Error("expected error for invalid regex")
 	}
 
-	_, err = newPathMapper([]MappingRule{{Pattern: ``, Replace: `x`}}, logger.New())
+	_, err = newPathMapper([]*v1.PortalRule{{Pattern: ``, Replace: `x`}}, logger.New())
 	if err == nil {
 		t.Error("expected error for empty pattern")
 	}
 
-	_, err = newPathMapper([]MappingRule{{Pattern: `x`, Replace: ``}}, logger.New())
+	_, err = newPathMapper([]*v1.PortalRule{{Pattern: `x`, Replace: ``}}, logger.New())
 	if err == nil {
 		t.Error("expected error for empty replace")
 	}
 }
 
 func TestMapName(t *testing.T) {
-	m := newTestMapper(t, []MappingRule{
+	m := newTestMapper(t, []*v1.PortalRule{
 		{Pattern: `[^/]+`, Replace: `acme/${0}`},
 		{Pattern: `old-team/(.+)`, Replace: `acme/$1`},
 	})
@@ -61,7 +62,7 @@ func TestMapName(t *testing.T) {
 
 func TestMapNameAnchored(t *testing.T) {
 	// Substring matches must not apply, rules are anchored to the full name
-	m := newTestMapper(t, []MappingRule{{Pattern: `old`, Replace: `new`}})
+	m := newTestMapper(t, []*v1.PortalRule{{Pattern: `old`, Replace: `new`}})
 	if got := m.MapName("old-team/thing"); got != "old-team/thing" {
 		t.Errorf("substring pattern applied: got %q", got)
 	}
@@ -71,7 +72,7 @@ func TestMapNameAnchored(t *testing.T) {
 }
 
 func TestMapNameFirstMatchWins(t *testing.T) {
-	m := newTestMapper(t, []MappingRule{
+	m := newTestMapper(t, []*v1.PortalRule{
 		{Pattern: `app(.*)`, Replace: `first/app$1`},
 		{Pattern: `[^/]+`, Replace: `second/${0}`},
 	})
@@ -84,7 +85,7 @@ func TestMapNameFirstMatchWins(t *testing.T) {
 }
 
 func TestMapNameRejectsInvalidResult(t *testing.T) {
-	m := newTestMapper(t, []MappingRule{
+	m := newTestMapper(t, []*v1.PortalRule{
 		{Pattern: `bad`, Replace: `/leading-slash`},
 		{Pattern: `worse`, Replace: `double//slash`},
 	})

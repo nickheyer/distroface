@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,7 +16,8 @@ import (
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
-	"github.com/nickheyer/distroface/pkg/config"
+	"github.com/nickheyer/distroface/internal/settings"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -28,35 +28,26 @@ var (
 	ErrSessionExpired       = errors.New("session expired")
 	ErrLocalAuthDisabled    = errors.New("local authentication is disabled")
 	ErrRegistrationDisabled = errors.New("registration is disabled")
-	ErrSessionTimeoutMin    = errors.New("session timeout must be at least 300 seconds (5 minutes)")
 	ErrAPITokenExpired      = errors.New("api token has expired")
 	ErrAPITokenNotFound     = errors.New("api token not found")
-)
-
-// Auth override setting keys
-const (
-	settingLocalEnabled      = "auth.local.enabled"
-	settingAllowRegistration = "auth.local.allow_registration"
-	settingAnonymousAccess   = "auth.anonymous_access"
-	settingSessionTimeout    = "auth.session_timeout"
 )
 
 type Manager struct {
 	store     *stores.Store
 	enforcer  *rbac.Enforcer
-	config    *config.AuthConfig
+	res       *settings.Resolver
 	jwtSecret []byte
 }
 
 const jwtSecretSettingKey = "jwt_secret"
 
-func NewManager(store *stores.Store, enforcer *rbac.Enforcer, cfg *config.AuthConfig) (*Manager, error) {
+func NewManager(store *stores.Store, enforcer *rbac.Enforcer, jwtSecret string, res *settings.Resolver) (*Manager, error) {
 	ctx := context.Background()
 	var secret []byte
 
 	// Priority: config value -> DB-stored value -> generate + persist to DB
-	if cfg.JWTSecret != "" {
-		secret = []byte(cfg.JWTSecret)
+	if jwtSecret != "" {
+		secret = []byte(jwtSecret)
 	} else {
 		stored, err := store.GetSystemSetting(ctx, jwtSecretSettingKey)
 		if err == nil && stored != "" {
@@ -76,20 +67,25 @@ func NewManager(store *stores.Store, enforcer *rbac.Enforcer, cfg *config.AuthCo
 		}
 	}
 
-	m := &Manager{
+	return &Manager{
 		store:     store,
 		enforcer:  enforcer,
-		config:    cfg,
+		res:       res,
 		jwtSecret: secret,
-	}
+	}, nil
+}
 
-	m.loadSettingOverrides(ctx)
+// Live effective auth settings
+func (m *Manager) auth(ctx context.Context) *v1.AuthSettings {
+	return m.res.System(ctx).GetAuth()
+}
 
-	return m, nil
+func (m *Manager) sessionTimeout(ctx context.Context) time.Duration {
+	return time.Duration(m.auth(ctx).GetSessionTimeoutSeconds()) * time.Second
 }
 
 func (m *Manager) Login(ctx context.Context, username, password string) (*db.User, []string, string, time.Time, error) {
-	if !m.config.Local.Enabled {
+	if !m.auth(ctx).GetLocalEnabled() {
 		return nil, nil, "", time.Time{}, ErrLocalAuthDisabled
 	}
 
@@ -115,7 +111,7 @@ func (m *Manager) Login(ctx context.Context, username, password string) (*db.Use
 		return nil, nil, "", time.Time{}, fmt.Errorf("failed to get user roles: %w", err)
 	}
 
-	expiresAt := time.Now().Add(time.Duration(m.config.SessionTimeout) * time.Second)
+	expiresAt := time.Now().Add(m.sessionTimeout(ctx))
 	token, err := m.generateJWT(user.ID, user.Username, roleNames, expiresAt)
 	if err != nil {
 		return nil, nil, "", time.Time{}, err
@@ -201,7 +197,7 @@ func (m *Manager) IssueSession(ctx context.Context, userID string) (string, time
 		return "", time.Time{}, err
 	}
 
-	expiresAt := time.Now().Add(time.Duration(m.config.SessionTimeout) * time.Second)
+	expiresAt := time.Now().Add(m.sessionTimeout(ctx))
 	token, err := m.generateJWT(user.ID, user.Username, roleNames, expiresAt)
 	if err != nil {
 		return "", time.Time{}, err
@@ -317,89 +313,29 @@ func (m *Manager) AnonymousUser() *AuthenticatedUser {
 }
 
 func (m *Manager) IsAnonymousAccessEnabled() bool {
-	return m.config.AnonymousAccess
+	return m.auth(context.Background()).GetAnonymousAccess()
 }
 
 func (m *Manager) IsAnyAuthEnabled() bool {
-	return m.config.Local.Enabled || m.config.OIDC.Enabled
+	a := m.auth(context.Background())
+	return a.GetLocalEnabled() || a.GetOidc().GetEnabled()
 }
 
 func (m *Manager) IsLocalAuthEnabled() bool {
-	return m.config.Local.Enabled
+	return m.auth(context.Background()).GetLocalEnabled()
 }
 
 func (m *Manager) IsRegistrationAllowed() bool {
-	return m.config.Local.Enabled && m.config.Local.AllowRegistration
+	a := m.auth(context.Background())
+	return a.GetLocalEnabled() && a.GetLocalAllowRegistration()
 }
 
-func (m *Manager) GetConfig() *config.AuthConfig {
-	return m.config
+func (m *Manager) Settings() *settings.Resolver {
+	return m.res
 }
 
 func (m *Manager) GetStore() *stores.Store {
 	return m.store
-}
-
-// loadSettingOverrides reads SystemSetting overrides from the DB and applies
-// them to the in-memory config, so DB values take precedence over config.yaml.
-func (m *Manager) loadSettingOverrides(ctx context.Context) {
-	if v, err := m.store.GetSystemSetting(ctx, settingLocalEnabled); err == nil {
-		if b, err := strconv.ParseBool(v); err == nil {
-			m.config.Local.Enabled = b
-		}
-	}
-	if v, err := m.store.GetSystemSetting(ctx, settingAllowRegistration); err == nil {
-		if b, err := strconv.ParseBool(v); err == nil {
-			m.config.Local.AllowRegistration = b
-		}
-	}
-	if v, err := m.store.GetSystemSetting(ctx, settingAnonymousAccess); err == nil {
-		if b, err := strconv.ParseBool(v); err == nil {
-			m.config.AnonymousAccess = b
-		}
-	}
-	if v, err := m.store.GetSystemSetting(ctx, settingSessionTimeout); err == nil {
-		if i, err := strconv.Atoi(v); err == nil && i > 0 {
-			m.config.SessionTimeout = i
-		}
-	}
-}
-
-// UpdateSettings updates mutable auth settings. Only non-nil parameters are applied.
-func (m *Manager) UpdateSettings(ctx context.Context, localEnabled, allowReg, anonAccess *bool, sessionTimeout *int32) error {
-	if sessionTimeout != nil && *sessionTimeout < 300 {
-		return ErrSessionTimeoutMin
-	}
-
-	if localEnabled != nil {
-		if err := m.store.SetSystemSetting(ctx, settingLocalEnabled, strconv.FormatBool(*localEnabled)); err != nil {
-			return fmt.Errorf("failed to save local auth setting: %w", err)
-		}
-		m.config.Local.Enabled = *localEnabled
-	}
-
-	if allowReg != nil {
-		if err := m.store.SetSystemSetting(ctx, settingAllowRegistration, strconv.FormatBool(*allowReg)); err != nil {
-			return fmt.Errorf("failed to save registration setting: %w", err)
-		}
-		m.config.Local.AllowRegistration = *allowReg
-	}
-
-	if anonAccess != nil {
-		if err := m.store.SetSystemSetting(ctx, settingAnonymousAccess, strconv.FormatBool(*anonAccess)); err != nil {
-			return fmt.Errorf("failed to save anonymous access setting: %w", err)
-		}
-		m.config.AnonymousAccess = *anonAccess
-	}
-
-	if sessionTimeout != nil {
-		if err := m.store.SetSystemSetting(ctx, settingSessionTimeout, strconv.Itoa(int(*sessionTimeout))); err != nil {
-			return fmt.Errorf("failed to save session timeout setting: %w", err)
-		}
-		m.config.SessionTimeout = int(*sessionTimeout)
-	}
-
-	return nil
 }
 
 // GenerateAPIToken creates a new API token for a user. Plaintext is returned, SHA-256 hash is stored.

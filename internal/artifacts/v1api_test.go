@@ -20,8 +20,10 @@ import (
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
-	"github.com/nickheyer/distroface/pkg/config"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1proto "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // Golden tests lock exact v1 shapes and quirks
@@ -31,6 +33,7 @@ type testEnv struct {
 	store    *stores.Store
 	authMgr  *auth.Manager
 	enforcer *rbac.Enforcer
+	res      *settings.Resolver
 	manager  *Manager
 	blobs    *BlobStore
 	v1       *V1API
@@ -38,7 +41,7 @@ type testEnv struct {
 	blobRoot string
 }
 
-func newTestEnv(t *testing.T, retention config.ArtifactRetentionConfig) *testEnv {
+func newTestEnv(t *testing.T, retention *v1proto.ArtifactRetentionSettings) *testEnv {
 	t.Helper()
 	dir := t.TempDir()
 
@@ -56,11 +59,16 @@ func newTestEnv(t *testing.T, retention config.ArtifactRetentionConfig) *testEnv
 		t.Fatalf("SeedDefaultPolicies: %v", err)
 	}
 
-	authCfg := &config.AuthConfig{
-		SessionTimeout: 3600,
-		Local:          config.LocalConfig{Enabled: true, AllowRegistration: true},
+	res := settings.NewResolver(store, nil)
+	seed := &v1proto.Settings{Artifacts: &v1proto.ArtifactSettings{
+		MaxFileSizeMb: proto.Int64(10),
+		Retention:     retention,
+	}}
+	if err := res.SeedSystem(context.Background(), seed); err != nil {
+		t.Fatalf("SeedSystem: %v", err)
 	}
-	authMgr, err := auth.NewManager(store, enforcer, authCfg)
+
+	authMgr, err := auth.NewManager(store, enforcer, "", res)
 	if err != nil {
 		t.Fatalf("auth.NewManager: %v", err)
 	}
@@ -72,18 +80,14 @@ func newTestEnv(t *testing.T, retention config.ArtifactRetentionConfig) *testEnv
 	}
 
 	log := logger.New()
-	manager := NewManager(store, blobs, config.ArtifactsConfig{
-		StoragePath:   blobRoot,
-		MaxFileSizeMB: 10,
-		Retention:     retention,
-	}, log)
+	manager := NewManager(store, blobs, res, log)
 
 	mux := http.NewServeMux()
 	v1 := NewV1API(store, manager, authMgr, enforcer, nil, nil, log)
 	v1.RegisterAuth(mux)
 	v1.RegisterArtifacts(mux)
 
-	return &testEnv{t: t, store: store, authMgr: authMgr, enforcer: enforcer, manager: manager, blobs: blobs, v1: v1, mux: mux, blobRoot: blobRoot}
+	return &testEnv{t: t, store: store, authMgr: authMgr, enforcer: enforcer, res: res, manager: manager, blobs: blobs, v1: v1, mux: mux, blobRoot: blobRoot}
 }
 
 // Local user with roles, returns session token
@@ -152,7 +156,7 @@ func (e *testEnv) uploadArtifact(token, repo, version, path, content string, pro
 }
 
 func TestV1LoginAndRefresh(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e := newTestEnv(t, nil)
 	e.newUser("alice", "user")
 
 	rec := e.doJSON(http.MethodPost, "/api/v1/auth/login", "", map[string]string{"username": "alice", "password": "hunter22"})
@@ -218,7 +222,7 @@ func TestV1LoginAndRefresh(t *testing.T) {
 }
 
 func TestV1RepoLifecycle(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e := newTestEnv(t, nil)
 	token := e.newUser("alice", "user")
 
 	rec := e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", token, map[string]any{"name": "myrepo", "description": "test", "private": false})
@@ -256,7 +260,7 @@ func TestV1RepoLifecycle(t *testing.T) {
 }
 
 func TestV1UploadDownloadFlow(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e := newTestEnv(t, nil)
 	token := e.newUser("alice", "user")
 	e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", token, map[string]any{"name": "myrepo"})
 
@@ -369,7 +373,7 @@ func TestV1UploadDownloadFlow(t *testing.T) {
 }
 
 func TestV1SearchQuirks(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e := newTestEnv(t, nil)
 	token := e.newUser("alice", "user")
 	e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", token, map[string]any{"name": "myrepo"})
 	e.uploadArtifact(token, "myrepo", "1.0.0", "a.txt", "aaa", map[string]string{"build": "1"})
@@ -409,7 +413,7 @@ func TestV1SearchQuirks(t *testing.T) {
 	}
 
 	// Empty search must serialize results as [] not null
-	e2 := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e2 := newTestEnv(t, nil)
 	token2 := e2.newUser("bob", "user")
 	rec = e2.do(http.MethodGet, "/api/v1/artifacts/search", token2, nil)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"results":[]`) {
@@ -418,7 +422,7 @@ func TestV1SearchQuirks(t *testing.T) {
 }
 
 func TestV1PropertiesMetadataRename(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e := newTestEnv(t, nil)
 	token := e.newUser("alice", "user")
 	e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", token, map[string]any{"name": "myrepo"})
 	e.uploadArtifact(token, "myrepo", "1.0.0", "dir/old.txt", "content", map[string]string{"build": "1", "keep": "no"})
@@ -474,7 +478,7 @@ func TestV1PropertiesMetadataRename(t *testing.T) {
 
 // Regression for the v1 orphaned rows leak
 func TestV1DeleteAndCascade(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e := newTestEnv(t, nil)
 	token := e.newUser("alice", "user")
 	e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", token, map[string]any{"name": "myrepo"})
 
@@ -520,7 +524,7 @@ func TestV1DeleteAndCascade(t *testing.T) {
 }
 
 func TestV1ReplaceAndRetention(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{Enabled: true, MaxVersions: 2})
+	e := newTestEnv(t, &v1proto.ArtifactRetentionSettings{Enabled: proto.Bool(true), MaxVersions: proto.Int32(2)})
 	token := e.newUser("alice", "user")
 	e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", token, map[string]any{"name": "myrepo"})
 
@@ -558,7 +562,7 @@ func TestV1ReplaceAndRetention(t *testing.T) {
 }
 
 func TestV1PropertyVariantIdentity(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e := newTestEnv(t, nil)
 	token := e.newUser("alice", "user")
 	e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", token, map[string]any{"name": "myrepo"})
 
@@ -617,7 +621,7 @@ func TestV1PropertyVariantIdentity(t *testing.T) {
 }
 
 func TestV1AccessControl(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e := newTestEnv(t, nil)
 	owner := e.newUser("alice", "user")
 	other := e.newUser("bob", "user")
 
@@ -707,7 +711,7 @@ func (e *testEnv) blobFiles() []string {
 
 // Org namespace repos follow membership for access
 func TestV1OrgNamespaceAccess(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{})
+	e := newTestEnv(t, nil)
 	ctx := context.Background()
 
 	owner := e.newUser("orgowner", "user")

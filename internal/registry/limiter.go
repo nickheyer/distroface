@@ -44,7 +44,7 @@ func PullRateLimit(next http.Handler, verifier SubjectVerifier, userLimiter, ano
 				key = "user:" + sub
 			}
 		}
-		if limiter == nil {
+		if limiter == nil || limiter.Limit() <= 0 {
 			next.ServeHTTP(w, r)
 			return
 		}

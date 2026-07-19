@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/pkg/pages"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -55,11 +56,11 @@ var CertDomainsQuery = pages.Spec{
 }
 
 // Returns a page of domains preloaded with their owning org,
-// empty scope lists both scopes
-func (s *Store) ListCertificateDomains(ctx context.Context, q pages.Query, scope string, pendingOnly bool, limit, offset int) ([]*db.CertificateDomain, int64, error) {
+// unspecified scope lists both scopes
+func (s *Store) ListCertificateDomains(ctx context.Context, q pages.Query, scope v1.CertificateDomainScope, pendingOnly bool, limit, offset int) ([]*db.CertificateDomain, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.CertificateDomain{}).Scopes(CertDomainsQuery.Scope(q))
-	if scope != "" {
-		tx = tx.Where("scope = ?", scope)
+	if scope != v1.CertificateDomainScope_CERTIFICATE_DOMAIN_SCOPE_UNSPECIFIED {
+		tx = tx.Where("scope = ?", int32(scope))
 	}
 	if pendingOnly {
 		tx = tx.Where("approved = ?", false)
@@ -122,7 +123,7 @@ func (s *Store) DeleteCertificateDomains(ctx context.Context, ids []string) erro
 // ── Uploaded TLS material operations ─────────────────────────────────────
 
 // Nil when no material stored for the target
-func (s *Store) GetTLSCertificate(ctx context.Context, scope, orgID, portalID string) (*db.TLSCertificate, error) {
+func (s *Store) GetTLSCertificate(ctx context.Context, scope v1.TLSScope, orgID, portalID string) (*db.TLSCertificate, error) {
 	var cert db.TLSCertificate
 	err := s.db.WithContext(ctx).
 		First(&cert, "scope = ? AND org_id = ? AND portal_id = ?", scope, orgID, portalID).Error
@@ -152,7 +153,7 @@ func (s *Store) SaveTLSCertificate(ctx context.Context, cert *db.TLSCertificate)
 	return s.db.WithContext(ctx).Create(cert).Error
 }
 
-func (s *Store) DeleteTLSCertificate(ctx context.Context, scope, orgID, portalID string) error {
+func (s *Store) DeleteTLSCertificate(ctx context.Context, scope v1.TLSScope, orgID, portalID string) error {
 	return s.db.WithContext(ctx).
 		Delete(&db.TLSCertificate{}, "scope = ? AND org_id = ? AND portal_id = ?", scope, orgID, portalID).Error
 }

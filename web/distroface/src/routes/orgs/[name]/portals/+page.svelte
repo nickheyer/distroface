@@ -31,7 +31,7 @@
 	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
 	const orgName = $derived(page.params.name ?? '');
 	const orgId = $derived(ctx.org?.id ?? '');
-	const mainPort = $derived(Number(configStore.get('server.port', 0)) || 0);
+	const mainPort = $derived(configStore.mainPort);
 
 	let portals = $state<RegistryPortal[]>([]);
 	let loading = $state(true);

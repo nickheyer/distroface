@@ -46,8 +46,6 @@ message RegistryPortal {
   google.protobuf.Timestamp updated_at = 12;
   bool tls = 13; // Https enforced for this portal, cleartext requests redirect
   CertSource cert_source = 14;
-  string acme_email = 15; // Per portal acme account email override
-  string acme_directory_url = 16; // Per portal acme directory override
   CertState cert_state = 17; // Computed serving state
   string cert_detail = 18; // Computed, first blocker when not ready
 }
@@ -63,9 +61,7 @@ message CreatePortalRequest {
   bool require_auth = 7;
   int32 port = 8;
   bool tls = 9;
-  CertSource cert_source = 10; // UNSPECIFIED IS THE SAME AS NO CERT YOU IDIOT
-  string acme_email = 11;
-  string acme_directory_url = 12;
+  CertSource cert_source = 10; // Unspecified behaves as none
 }
 
 // The newly created portal
@@ -127,8 +123,6 @@ message UpdatePortalRequest {
   optional int32 port = 11;
   optional bool tls = 12;
   CertSource cert_source = 13; // Unspecified keeps the current source
-  optional string acme_email = 14;
-  optional string acme_directory_url = 15;
 }
 
 // The updated portal

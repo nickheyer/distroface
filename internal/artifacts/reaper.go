@@ -26,18 +26,18 @@ type ReapRun struct {
 
 // Reaper applies retention policies across every repo on a schedule
 type Reaper struct {
-	mgr      *Manager
-	store    *stores.Store
-	staleAge time.Duration
-	log      *logger.Logger
+	mgr   *Manager
+	store *stores.Store
+	log   *logger.Logger
 
 	mu      sync.Mutex
 	running bool
 	last    *ReapRun
+	lastRun time.Time
 }
 
-func NewReaper(mgr *Manager, store *stores.Store, staleAge time.Duration, log *logger.Logger) *Reaper {
-	return &Reaper{mgr: mgr, store: store, staleAge: staleAge, log: log}
+func NewReaper(mgr *Manager, store *stores.Store, log *logger.Logger) *Reaper {
+	return &Reaper{mgr: mgr, store: store, log: log}
 }
 
 // Start begins a background sweep rejecting overlap
@@ -54,16 +54,33 @@ func (r *Reaper) Start() error {
 	return nil
 }
 
-// Schedule triggers sweeps on an interval until ctx ends
-func (r *Reaper) Schedule(ctx context.Context, interval time.Duration) {
+// Schedule sweeps when live settings say a run is due
+func (r *Reaper) Schedule(ctx context.Context) {
 	go func() {
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
+				cfg := r.mgr.res.System(ctx).GetArtifacts().GetReaper()
+				if !cfg.GetEnabled() {
+					continue
+				}
+				interval := time.Duration(cfg.GetIntervalHours()) * time.Hour
+				if interval <= 0 {
+					interval = 24 * time.Hour
+				}
+				r.mu.Lock()
+				due := time.Since(r.lastRun) >= interval
+				if due {
+					r.lastRun = time.Now()
+				}
+				r.mu.Unlock()
+				if !due {
+					continue
+				}
 				if err := r.Start(); err != nil {
 					r.log.Warn("Scheduled artifact reap skipped: %v", err)
 				}
@@ -110,8 +127,8 @@ func (r *Reaper) sweep() {
 		offset += reaperPageSize
 	}
 
-	if r.staleAge > 0 {
-		if removed, err := r.mgr.Blobs().CleanStaleUploads(r.staleAge); err != nil {
+	if staleAge := r.mgr.StaleUploadAge(ctx); staleAge > 0 {
+		if removed, err := r.mgr.Blobs().CleanStaleUploads(staleAge); err != nil {
 			r.log.Error("Artifact reaper stale upload cleanup: %v", err)
 		} else {
 			run.StaleUploadsRemoved = removed

@@ -57,7 +57,7 @@
 	];
 
 	const registryHost = $derived(
-		portalStore.host(configStore.get('server.hostname', 'localhost:8080') as string)
+		portalStore.host(configStore.publicHostname)
 	);
 	const dockerLoginExample = $derived(
 		`docker login ${registryHost} \\\n  -u ${authStore.user?.username} \\\n  -p ${newPlaintextToken ?? 'YOUR_TOKEN'}`

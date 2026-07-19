@@ -19,9 +19,11 @@ import (
 
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/pkg/config"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"golang.org/x/crypto/acme/autocert"
+	"google.golang.org/protobuf/proto"
 )
 
 func newTestStore(t *testing.T) *stores.Store {
@@ -34,20 +36,40 @@ func newTestStore(t *testing.T) *stores.Store {
 	return store
 }
 
-func testConfig() *config.Config {
-	cfg := &config.Config{}
-	cfg.Server.Hostname = "registry.example.com:443"
-	cfg.TLS.Enabled = true
-	cfg.TLS.ACME.Enabled = true
-	cfg.TLS.ACME.Domains = []string{"static.example.com"}
-	cfg.TLS.ACME.RedirectHTTP = true
-	return cfg
+func seedSystem(t *testing.T, res *settings.Resolver, patch *v1.Settings, paths ...string) {
+	t.Helper()
+	if _, err := res.Update(context.Background(),
+		v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "", patch, paths); err != nil {
+		t.Fatalf("seed settings: %v", err)
+	}
 }
 
-func newTestEngine(t *testing.T, cfg *config.Config, store *stores.Store) *Engine {
+// Default test tier, public acme capable hostname
+func newTestResolver(t *testing.T, store *stores.Store) *settings.Resolver {
+	t.Helper()
+	res := settings.NewResolver(store, nil)
+	seedSystem(t, res, &v1.Settings{
+		Server: &v1.ServerSettings{PublicHostname: proto.String("registry.example.com:443")},
+		Acme:   &v1.ACMESettings{Enabled: proto.Bool(true)},
+	}, "server.public_hostname", "acme.enabled")
+	return res
+}
+
+// Store backed stand in for the portal resolver's cached lookup
+type storeLookup struct{ store *stores.Store }
+
+func (s storeLookup) ResolveForTLS(host string, port int) (TLSPortal, bool) {
+	p, err := s.store.GetPortalForHost(context.Background(), host, port)
+	if err != nil || p == nil {
+		return TLSPortal{}, false
+	}
+	return TLSPortal{ID: p.ID, OrgID: p.OrgID, Source: p.CertSource, CatchAll: p.Hostname == ""}, true
+}
+
+func newTestEngine(t *testing.T, store *stores.Store, res *settings.Resolver, certFile, keyFile string) *Engine {
 	t.Helper()
 	log := logger.NewWithConfig(&logger.Config{Enabled: false})
-	e, err := NewEngine(cfg, store, log)
+	e, err := NewEngine(store, res, storeLookup{store: store}, certFile, keyFile, "127.0.0.1", log)
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
@@ -85,22 +107,30 @@ func selfSignedPEM(t *testing.T, domain string, notAfter time.Time) []byte {
 
 func TestHostPolicy(t *testing.T) {
 	store := newTestStore(t)
-	cfg := testConfig()
-	e := newTestEngine(t, cfg, store)
+	res := newTestResolver(t, store)
+	e := newTestEngine(t, store, res, "", "")
 	ctx := context.Background()
 
 	orgID := "org-1"
 	if err := store.CreateOrganization(ctx, &storage.Organization{ID: orgID, Name: "acme", CreatedBy: "nick"}); err != nil {
 		t.Fatal(err)
 	}
+	// Instance registrations replace the old static config domains
 	if err := store.CreateCertificateDomain(ctx, &storage.CertificateDomain{
-		Domain: "portal.example.com", Scope: storage.CertDomainScopeOrg, OrgID: &orgID, CreatedBy: "nick",
-		Approved: true, ApprovedBy: "admin",
+		Domain: "static.example.com", Scope: v1.CertificateDomainScope_CERTIFICATE_DOMAIN_SCOPE_SYSTEM,
+		CreatedBy: "nick", Approved: true, ApprovedBy: "admin",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.CreateCertificateDomain(ctx, &storage.CertificateDomain{
-		Domain: "pending.example.com", Scope: storage.CertDomainScopeOrg, OrgID: &orgID, CreatedBy: "nick",
+		Domain: "portal.example.com", Scope: v1.CertificateDomainScope_CERTIFICATE_DOMAIN_SCOPE_ORG,
+		OrgID: &orgID, CreatedBy: "nick", Approved: true, ApprovedBy: "admin",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateCertificateDomain(ctx, &storage.CertificateDomain{
+		Domain: "pending.example.com", Scope: v1.CertificateDomainScope_CERTIFICATE_DOMAIN_SCOPE_ORG,
+		OrgID: &orgID, CreatedBy: "nick",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +139,7 @@ func TestHostPolicy(t *testing.T) {
 		host  string
 		allow bool
 	}{
-		{"static.example.com", true},         // Config domain
+		{"static.example.com", true},         // Instance registration
 		{"STATIC.example.com", true},         // Case insensitive
 		{"registry.example.com", true},       // Primary hostname sans port
 		{"portal.example.com", true},         // DB registered and approved
@@ -128,9 +158,9 @@ func TestHostPolicy(t *testing.T) {
 	}
 
 	// Approval toggle gates unapproved entries only
-	if err := store.SetSystemSetting(ctx, storage.SettingRequireApproval, "true"); err != nil {
-		t.Fatal(err)
-	}
+	seedSystem(t, res, &v1.Settings{
+		Portals: &v1.PortalPolicySettings{RequireHostnameApproval: proto.Bool(true)},
+	}, "portals.require_hostname_approval")
 	if err := e.hostPolicy(ctx, "pending.example.com"); err == nil {
 		t.Error("unapproved entry must be denied once approval is required")
 	}
@@ -141,8 +171,8 @@ func TestHostPolicy(t *testing.T) {
 
 func TestHostnamePolicyGates(t *testing.T) {
 	store := newTestStore(t)
-	cfg := testConfig()
-	p := NewHostnamePolicy(cfg, store)
+	res := newTestResolver(t, store)
+	p := NewHostnamePolicy(store, res)
 	ctx := context.Background()
 
 	orgA := &storage.Organization{Name: "a", CreatedBy: "t"}
@@ -154,10 +184,9 @@ func TestHostnamePolicyGates(t *testing.T) {
 	}
 
 	// Blacklist blocks exact matches and wildcard suffixes
-	if err := store.SetSystemSetting(ctx, storage.SettingHostnameBlacklist,
-		`["blocked.io", "*.corp.internal"]`); err != nil {
-		t.Fatal(err)
-	}
+	seedSystem(t, res, &v1.Settings{
+		Portals: &v1.PortalPolicySettings{HostnameBlacklist: []string{"blocked.io", "*.corp.internal"}},
+	}, "portals.hostname_blacklist")
 	if err := p.AllowedClaim(ctx, "blocked.io", orgA.ID); err == nil {
 		t.Error("exact blacklist match must deny")
 	}
@@ -173,7 +202,8 @@ func TestHostnamePolicyGates(t *testing.T) {
 
 	// Cross org claims fail loudly
 	if err := store.CreateCertificateDomain(ctx, &storage.CertificateDomain{
-		Domain: "claimed.example.org", Scope: storage.CertDomainScopeOrg, OrgID: &orgA.ID, CreatedBy: "t",
+		Domain: "claimed.example.org", Scope: v1.CertificateDomainScope_CERTIFICATE_DOMAIN_SCOPE_ORG,
+		OrgID: &orgA.ID, CreatedBy: "t",
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -187,9 +217,12 @@ func TestHostnamePolicyGates(t *testing.T) {
 
 func TestHostPolicySkipsUnissuablePrimary(t *testing.T) {
 	store := newTestStore(t)
-	cfg := testConfig()
-	cfg.Server.Hostname = "localhost:8080"
-	e := newTestEngine(t, cfg, store)
+	res := settings.NewResolver(store, nil)
+	seedSystem(t, res, &v1.Settings{
+		Server: &v1.ServerSettings{PublicHostname: proto.String("localhost:8080")},
+		Acme:   &v1.ACMESettings{Enabled: proto.Bool(true)},
+	}, "server.public_hostname", "acme.enabled")
+	e := newTestEngine(t, store, res, "", "")
 	if err := e.hostPolicy(context.Background(), "localhost"); err == nil {
 		t.Error("localhost primary hostname should not be issuable")
 	}
@@ -223,7 +256,7 @@ func TestDBCacheRoundTrip(t *testing.T) {
 
 func TestCertificateInfo(t *testing.T) {
 	store := newTestStore(t)
-	e := newTestEngine(t, testConfig(), store)
+	e := newTestEngine(t, store, newTestResolver(t, store), "", "")
 	ctx := context.Background()
 
 	expiry := time.Now().Add(60 * 24 * time.Hour).Truncate(time.Second)
@@ -235,24 +268,24 @@ func TestCertificateInfo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.Issued {
+	if !info.GetIssued() {
 		t.Fatal("expected issued cert")
 	}
 	if info.Issuer != "test-ca" && info.Issuer != "portal.example.com" {
 		t.Errorf("unexpected issuer %q", info.Issuer)
 	}
-	if len(info.SANs) != 1 || info.SANs[0] != "portal.example.com" {
-		t.Errorf("unexpected sans %v", info.SANs)
+	if len(info.Sans) != 1 || info.Sans[0] != "portal.example.com" {
+		t.Errorf("unexpected sans %v", info.Sans)
 	}
-	if !info.NotAfter.Equal(expiry) && info.NotAfter.Unix() != expiry.Unix() {
-		t.Errorf("NotAfter = %v, want %v", info.NotAfter, expiry)
+	if info.NotAfter.AsTime().Unix() != expiry.Unix() {
+		t.Errorf("NotAfter = %v, want %v", info.NotAfter.AsTime(), expiry)
 	}
 
 	missing, err := e.CertificateInfo(ctx, "nocert.example.com")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if missing.Issued {
+	if missing.GetIssued() {
 		t.Error("expected unissued for uncached domain")
 	}
 }
@@ -286,13 +319,10 @@ func TestManualFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg := testConfig()
-	cfg.TLS.ACME.Enabled = false
-	cfg.TLS.CertFile = certFile
-	cfg.TLS.KeyFile = keyFile
-	e := newTestEngine(t, cfg, store)
+	res := settings.NewResolver(store, nil)
+	e := newTestEngine(t, store, res, certFile, keyFile)
 
-	if !e.ManualCertLoaded() || e.ACMEEnabled() {
+	if !e.ManualCertLoaded() || e.ACMEEnabled(context.Background()) {
 		t.Fatal("expected manual only engine")
 	}
 	cert, err := e.getCertificate(&tls.ClientHelloInfo{ServerName: "anything.example.com"})
@@ -336,9 +366,11 @@ func leafOf(t *testing.T, cert *tls.Certificate) *x509.Certificate {
 
 func TestGetCertificateSources(t *testing.T) {
 	store := newTestStore(t)
-	cfg := testConfig()
-	cfg.TLS.ACME.Enabled = false
-	e := newTestEngine(t, cfg, store)
+	res := settings.NewResolver(store, nil)
+	seedSystem(t, res, &v1.Settings{
+		Server: &v1.ServerSettings{PublicHostname: proto.String("registry.example.com:443")},
+	}, "server.public_hostname")
+	e := newTestEngine(t, store, res, "", "")
 	ctx := context.Background()
 
 	org := &storage.Organization{Name: "acme", CreatedBy: "t"}
@@ -349,14 +381,14 @@ func TestGetCertificateSources(t *testing.T) {
 	// Manual source serves the portal's uploaded pair
 	manualPortal := &storage.RegistryPortal{
 		OrgID: org.ID, Name: "m", Hostname: "manual.acme.io", Rules: "[]",
-		CertSource: storage.CertSourceManual, Enabled: true,
+		CertSource: v1.CertSource_CERT_SOURCE_MANUAL, Enabled: true,
 	}
 	if err := store.CreateRegistryPortal(ctx, manualPortal); err != nil {
 		t.Fatal(err)
 	}
 	certPEM, keyPEM := pemPair(t, "manual.acme.io")
 	if err := store.SaveTLSCertificate(ctx, &storage.TLSCertificate{
-		Scope: storage.TLSCertScopePortal, OrgID: org.ID, PortalID: manualPortal.ID,
+		Scope: v1.TLSScope_TLS_SCOPE_PORTAL, OrgID: org.ID, PortalID: manualPortal.ID,
 		CertPEM: certPEM, KeyPEM: keyPEM,
 	}); err != nil {
 		t.Fatal(err)
@@ -372,7 +404,7 @@ func TestGetCertificateSources(t *testing.T) {
 	// Org ca source mints a leaf signed by the org's ca
 	caPortal := &storage.RegistryPortal{
 		OrgID: org.ID, Name: "c", Hostname: "internal.acme.io", Rules: "[]",
-		CertSource: storage.CertSourceOrgCA, Enabled: true,
+		CertSource: v1.CertSource_CERT_SOURCE_ORG_CA, Enabled: true,
 	}
 	if err := store.CreateRegistryPortal(ctx, caPortal); err != nil {
 		t.Fatal(err)
@@ -382,7 +414,7 @@ func TestGetCertificateSources(t *testing.T) {
 		t.Fatalf("GenerateCA: %v", err)
 	}
 	if err := store.SaveTLSCertificate(ctx, &storage.TLSCertificate{
-		Scope: storage.TLSCertScopeOrgCA, OrgID: org.ID, CertPEM: caCertPEM, KeyPEM: caKeyPEM,
+		Scope: v1.TLSScope_TLS_SCOPE_ORG_CA, OrgID: org.ID, CertPEM: caCertPEM, KeyPEM: caKeyPEM,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -405,14 +437,14 @@ func TestGetCertificateSources(t *testing.T) {
 	// Org cert source serves the org's uploaded wildcard
 	orgCertPortal := &storage.RegistryPortal{
 		OrgID: org.ID, Name: "w", Hostname: "wild.acme.io", Rules: "[]",
-		CertSource: storage.CertSourceOrgCert, Enabled: true,
+		CertSource: v1.CertSource_CERT_SOURCE_ORG_CERT, Enabled: true,
 	}
 	if err := store.CreateRegistryPortal(ctx, orgCertPortal); err != nil {
 		t.Fatal(err)
 	}
 	orgCertPEM, orgKeyPEM := pemPair(t, "wild.acme.io")
 	if err := store.SaveTLSCertificate(ctx, &storage.TLSCertificate{
-		Scope: storage.TLSCertScopeOrg, OrgID: org.ID, CertPEM: orgCertPEM, KeyPEM: orgKeyPEM,
+		Scope: v1.TLSScope_TLS_SCOPE_ORG, OrgID: org.ID, CertPEM: orgCertPEM, KeyPEM: orgKeyPEM,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +459,7 @@ func TestGetCertificateSources(t *testing.T) {
 	// Source none serves nothing even with material around
 	nonePortal := &storage.RegistryPortal{
 		OrgID: org.ID, Name: "n", Hostname: "plain.acme.io", Rules: "[]",
-		CertSource: storage.CertSourceNone, Enabled: true,
+		CertSource: v1.CertSource_CERT_SOURCE_NONE, Enabled: true,
 	}
 	if err := store.CreateRegistryPortal(ctx, nonePortal); err != nil {
 		t.Fatal(err)
@@ -444,13 +476,13 @@ func TestGetCertificateSources(t *testing.T) {
 	// Primary source manual serves the uploaded app cert for unmatched sni
 	appCertPEM, appKeyPEM := pemPair(t, "fallback.example.com")
 	if err := store.SaveTLSCertificate(ctx, &storage.TLSCertificate{
-		Scope: storage.TLSCertScopeApp, CertPEM: appCertPEM, KeyPEM: appKeyPEM,
+		Scope: v1.TLSScope_TLS_SCOPE_APP, CertPEM: appCertPEM, KeyPEM: appKeyPEM,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetSystemSetting(ctx, storage.SettingPrimarySource, storage.PrimarySourceManual); err != nil {
-		t.Fatal(err)
-	}
+	seedSystem(t, res, &v1.Settings{
+		Tls: &v1.TLSSettings{PrimarySource: v1.CertSource_CERT_SOURCE_MANUAL.Enum()},
+	}, "tls.primary_source")
 	e.Invalidate(ctx)
 	cert, err = e.getCertificate(&tls.ClientHelloInfo{ServerName: "unknown.example.com"})
 	if err != nil {
@@ -472,9 +504,7 @@ func TestICAChain(t *testing.T) {
 	}
 
 	store := newTestStore(t)
-	cfg := testConfig()
-	cfg.TLS.ACME.Enabled = false
-	e := newTestEngine(t, cfg, store)
+	e := newTestEngine(t, store, newTestResolver(t, store), "", "")
 	ctx := context.Background()
 
 	org := &storage.Organization{Name: "acme", CreatedBy: "t"}
@@ -482,13 +512,13 @@ func TestICAChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.SaveTLSCertificate(ctx, &storage.TLSCertificate{
-		Scope: storage.TLSCertScopeOrgCA, OrgID: org.ID, CertPEM: icaCert, KeyPEM: icaKey,
+		Scope: v1.TLSScope_TLS_SCOPE_ORG_CA, OrgID: org.ID, CertPEM: icaCert, KeyPEM: icaKey,
 	}); err != nil {
 		t.Fatal(err)
 	}
 	portal := &storage.RegistryPortal{
 		OrgID: org.ID, Name: "i", Hostname: "ica.acme.io", Rules: "[]",
-		CertSource: storage.CertSourceOrgCA, Enabled: true,
+		CertSource: v1.CertSource_CERT_SOURCE_ORG_CA, Enabled: true,
 	}
 	if err := store.CreateRegistryPortal(ctx, portal); err != nil {
 		t.Fatal(err)
@@ -529,29 +559,28 @@ func TestICAChain(t *testing.T) {
 
 func TestRuntimeACMESettings(t *testing.T) {
 	store := newTestStore(t)
-	cfg := testConfig()
-	cfg.TLS.ACME.Enabled = false
-	e := newTestEngine(t, cfg, store)
+	res := settings.NewResolver(store, nil)
+	e := newTestEngine(t, store, res, "", "")
 	ctx := context.Background()
 
-	if e.ACMEEnabled() {
+	if e.ACMEEnabled(ctx) {
 		t.Fatal("acme must start disabled")
 	}
-	if err := store.SetSystemSetting(ctx, storage.SettingACMEEnabled, "true"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetSystemSetting(ctx, storage.SettingACMEEmail, "ops@acme.io"); err != nil {
-		t.Fatal(err)
-	}
-	e.Invalidate(ctx)
-	if !e.ACMEEnabled() || e.EffectiveACME().Email != "ops@acme.io" {
-		t.Fatalf("runtime settings not applied: %+v", e.EffectiveACME())
+	seedSystem(t, res, &v1.Settings{
+		Acme: &v1.ACMESettings{Enabled: proto.Bool(true), Email: proto.String("ops@acme.io")},
+	}, "acme.enabled", "acme.email")
+	if !e.ACMEEnabled(ctx) || res.System(ctx).GetAcme().GetEmail() != "ops@acme.io" {
+		t.Fatal("runtime settings not applied")
 	}
 }
 
 func TestHTTPChallengeHandlerRedirects(t *testing.T) {
 	store := newTestStore(t)
-	e := newTestEngine(t, testConfig(), store)
+	res := newTestResolver(t, store)
+	seedSystem(t, res, &v1.Settings{
+		Tls: &v1.TLSSettings{Mode: v1.TLSMode_TLS_MODE_HTTPS_ONLY.Enum()},
+	}, "tls.mode")
+	e := newTestEngine(t, store, res, "", "")
 
 	req := httptest.NewRequest(http.MethodGet, "http://portal.example.com/v2/", nil)
 	rec := httptest.NewRecorder()
@@ -566,9 +595,9 @@ func TestHTTPChallengeHandlerRedirects(t *testing.T) {
 }
 
 func TestHTTPChallengeHandlerNoRedirectWithoutTLSServing(t *testing.T) {
-	cfg := testConfig()
-	cfg.TLS.Enabled = false
-	e := newTestEngine(t, cfg, newTestStore(t))
+	store := newTestStore(t)
+	// Dual mode keeps cleartext legal so nothing redirects
+	e := newTestEngine(t, store, newTestResolver(t, store), "", "")
 
 	req := httptest.NewRequest(http.MethodGet, "http://portal.example.com/v2/", nil)
 	rec := httptest.NewRecorder()
@@ -597,9 +626,12 @@ func TestIssuableHost(t *testing.T) {
 
 func TestAppCASource(t *testing.T) {
 	store := newTestStore(t)
-	cfg := testConfig()
-	cfg.TLS.ACME.Enabled = false
-	e := newTestEngine(t, cfg, store)
+	res := settings.NewResolver(store, nil)
+	seedSystem(t, res, &v1.Settings{
+		Server: &v1.ServerSettings{PublicHostname: proto.String("registry.example.com:443")},
+		Tls:    &v1.TLSSettings{PrimarySource: v1.CertSource_CERT_SOURCE_APP_CA.Enum()},
+	}, "server.public_hostname", "tls.primary_source")
+	e := newTestEngine(t, store, res, "", "")
 	ctx := context.Background()
 
 	caPEM, caKey, err := GenerateCA("instance root")
@@ -607,14 +639,10 @@ func TestAppCASource(t *testing.T) {
 		t.Fatalf("GenerateCA: %v", err)
 	}
 	if err := store.SaveTLSCertificate(ctx, &storage.TLSCertificate{
-		Scope: storage.TLSCertScopeAppCA, CertPEM: caPEM, KeyPEM: caKey,
+		Scope: v1.TLSScope_TLS_SCOPE_APP_CA, CertPEM: caPEM, KeyPEM: caKey,
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetSystemSetting(ctx, storage.SettingPrimarySource, storage.PrimarySourceAppCA); err != nil {
-		t.Fatal(err)
-	}
-	e.Invalidate(ctx)
 
 	pool := x509.NewCertPool()
 	if !pool.AppendCertsFromPEM([]byte(caPEM)) {

@@ -7,181 +7,171 @@ import (
 	"time"
 
 	storage "github.com/nickheyer/distroface/internal/db"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const (
-	CertStateReady   = "ready"
-	CertStatePending = "pending"
-	CertStateError   = "error"
-	CertStateNone    = "none"
-)
-
-// Resolved certificate state for one serving identity, store reads only
-type Status struct {
-	Source    string
-	State     string
-	Problems  []string
-	Directory string
-	Email     string
-	Material  *storage.TLSCertificate
-	ACMEInfo  *CertInfo
+func problem(st *v1.GetCertStatusResponse, state v1.CertState, format string, args ...any) {
+	st.State = state
+	st.Problems = append(st.Problems, fmt.Sprintf(format, args...))
 }
 
-func (s *Status) problem(format string, args ...any) {
-	s.Problems = append(s.Problems, fmt.Sprintf(format, args...))
+// Parsed public details of stored pem material, key never included
+func materialInfo(record *storage.TLSCertificate, includePEM bool) *v1.TLSMaterialInfo {
+	if record == nil {
+		return nil
+	}
+	info := &v1.TLSMaterialInfo{
+		CreatedBy: record.CreatedBy,
+		UpdatedAt: timestamppb.New(record.UpdatedAt),
+	}
+	if leaf := firstCertificate([]byte(record.CertPEM)); leaf != nil {
+		info.Subject = leaf.Subject.CommonName
+		info.Issuer = leaf.Issuer.CommonName
+		info.NotBefore = timestamppb.New(leaf.NotBefore)
+		info.NotAfter = timestamppb.New(leaf.NotAfter)
+		info.Sans = leaf.DNSNames
+		info.IsCa = leaf.IsCA
+	}
+	if includePEM {
+		info.CertPem = record.CertPEM
+	}
+	return info
 }
 
 // Uploaded material must exist, parse, cover the host, and be current
-func (e *Engine) checkMaterial(ctx context.Context, st *Status, scope, orgID, portalID, host, missing string) {
+func (e *Engine) checkMaterial(ctx context.Context, st *v1.GetCertStatusResponse, scope v1.TLSScope, orgID, portalID, host, missing string) {
 	row, err := e.store.GetTLSCertificate(ctx, scope, orgID, portalID)
 	if err != nil || row == nil {
-		st.State = CertStateError
-		st.problem("%s", missing)
+		problem(st, v1.CertState_CERT_STATE_ERROR, "%s", missing)
 		return
 	}
-	st.Material = row
+	st.ServingCert = materialInfo(row, false)
 	leaf := firstCertificate([]byte(row.CertPEM))
 	if leaf == nil {
-		st.State = CertStateError
-		st.problem("stored certificate does not parse")
+		problem(st, v1.CertState_CERT_STATE_ERROR, "stored certificate does not parse")
 		return
 	}
 	if time.Now().After(leaf.NotAfter) {
-		st.State = CertStateError
-		st.problem("certificate expired %s", leaf.NotAfter.Format("2006-01-02"))
+		problem(st, v1.CertState_CERT_STATE_ERROR, "certificate expired %s", leaf.NotAfter.Format("2006-01-02"))
 		return
 	}
 	if host != "" && !leaf.IsCA {
 		if err := leaf.VerifyHostname(host); err != nil {
-			st.State = CertStateError
-			st.problem("certificate does not cover %q", host)
+			problem(st, v1.CertState_CERT_STATE_ERROR, "certificate does not cover %q", host)
 			return
 		}
 	}
-	st.State = CertStateReady
+	st.State = v1.CertState_CERT_STATE_READY
 }
 
 // Signing ca material only needs to exist, parse as a ca, and be current
-func (e *Engine) checkCA(ctx context.Context, st *Status, scope, orgID, missing string) *x509.Certificate {
+func (e *Engine) checkCA(ctx context.Context, st *v1.GetCertStatusResponse, scope v1.TLSScope, orgID, missing string) {
 	row, err := e.store.GetTLSCertificate(ctx, scope, orgID, "")
 	if err != nil || row == nil {
-		st.State = CertStateError
-		st.problem("%s", missing)
-		return nil
+		problem(st, v1.CertState_CERT_STATE_ERROR, "%s", missing)
+		return
 	}
-	st.Material = row
+	st.ServingCert = materialInfo(row, false)
 	leaf := firstCertificate([]byte(row.CertPEM))
 	if leaf == nil || !leaf.IsCA {
-		st.State = CertStateError
-		st.problem("stored ca material is not a ca certificate")
-		return nil
+		problem(st, v1.CertState_CERT_STATE_ERROR, "stored ca material is not a ca certificate")
+		return
 	}
 	if time.Now().After(leaf.NotAfter) {
-		st.State = CertStateError
-		st.problem("ca expired %s", leaf.NotAfter.Format("2006-01-02"))
-		return nil
+		problem(st, v1.CertState_CERT_STATE_ERROR, "ca expired %s", leaf.NotAfter.Format("2006-01-02"))
+		return
 	}
-	st.State = CertStateReady
-	return leaf
+	st.State = v1.CertState_CERT_STATE_READY
 }
 
-func (e *Engine) checkACME(ctx context.Context, st *Status, host, orgID string) {
-	if !e.ACMEEnabled() {
-		st.State = CertStateError
-		st.problem("acme is disabled at the app tier")
+func (e *Engine) checkACME(ctx context.Context, st *v1.GetCertStatusResponse, host, orgID string) {
+	if !e.ACMEEnabled(ctx) {
+		problem(st, v1.CertState_CERT_STATE_ERROR, "acme is disabled at the app tier")
 		return
 	}
 	if !issuableHost(host) {
-		st.State = CertStateError
-		st.problem("hostname %q is not publicly issuable", host)
+		problem(st, v1.CertState_CERT_STATE_ERROR, "hostname %q is not publicly issuable", host)
 		return
 	}
 	if err := e.policy.Allowed(ctx, host, orgID); err != nil {
-		st.State = CertStateError
+		state := v1.CertState_CERT_STATE_ERROR
 		// A registered entry awaiting approval reads as pending, not broken
 		if e.policy.RequireApproval(ctx) {
 			if d, derr := e.store.GetCertificateDomainByName(ctx, host); derr == nil && d != nil && !d.Approved {
-				st.State = CertStatePending
+				state = v1.CertState_CERT_STATE_PENDING
 			}
 		}
-		st.problem("%s", err.Error())
+		problem(st, state, "%s", err.Error())
 		return
 	}
 	info, err := e.CertificateInfo(ctx, host)
-	if err == nil && info != nil {
-		st.ACMEInfo = info
+	if err == nil && info.GetIssued() {
+		st.AcmeCert = info
 	}
-	if info == nil || !info.Issued {
-		st.State = CertStatePending
-		st.problem("certificate not yet issued")
+	if !info.GetIssued() {
+		problem(st, v1.CertState_CERT_STATE_PENDING, "certificate not yet issued")
 		return
 	}
-	if time.Now().After(info.NotAfter) {
-		st.State = CertStatePending
-		st.problem("certificate expired, renewal happens on the next handshake")
+	if time.Now().After(info.NotAfter.AsTime()) {
+		problem(st, v1.CertState_CERT_STATE_PENDING, "certificate expired, renewal happens on the next handshake")
 		return
 	}
-	st.State = CertStateReady
+	st.State = v1.CertState_CERT_STATE_READY
 }
 
 // What the engine would serve for this portal right now
-func (e *Engine) PortalStatus(ctx context.Context, p *storage.RegistryPortal) *Status {
-	st := &Status{Source: p.CertSource}
-	st.Directory, st.Email = e.resolveACMEAccount(ctx, p)
+func (e *Engine) PortalStatus(ctx context.Context, p *storage.RegistryPortal) *v1.GetCertStatusResponse {
+	st := &v1.GetCertStatusResponse{Source: p.CertSource}
 	host := bareHost(p.Hostname)
 
 	switch p.CertSource {
-	case storage.CertSourceNone, "":
-		st.Source = storage.CertSourceNone
-		st.State = CertStateNone
-	case storage.CertSourceManual:
-		e.checkMaterial(ctx, st, storage.TLSCertScopePortal, p.OrgID, p.ID, host,
+	case v1.CertSource_CERT_SOURCE_NONE, v1.CertSource_CERT_SOURCE_UNSPECIFIED:
+		st.Source = v1.CertSource_CERT_SOURCE_NONE
+		st.State = v1.CertState_CERT_STATE_NONE
+	case v1.CertSource_CERT_SOURCE_MANUAL:
+		e.checkMaterial(ctx, st, v1.TLSScope_TLS_SCOPE_PORTAL, p.OrgID, p.ID, host,
 			"no certificate uploaded for this portal")
-	case storage.CertSourceOrgCert:
-		e.checkMaterial(ctx, st, storage.TLSCertScopeOrg, p.OrgID, "", host,
+	case v1.CertSource_CERT_SOURCE_ORG_CERT:
+		e.checkMaterial(ctx, st, v1.TLSScope_TLS_SCOPE_ORG, p.OrgID, "", host,
 			"organization has no uploaded certificate")
-	case storage.CertSourceOrgCA:
-		e.checkCA(ctx, st, storage.TLSCertScopeOrgCA, p.OrgID,
+	case v1.CertSource_CERT_SOURCE_ORG_CA:
+		e.checkCA(ctx, st, v1.TLSScope_TLS_SCOPE_ORG_CA, p.OrgID,
 			"organization has no signing ca")
-	case storage.CertSourceACME:
+	case v1.CertSource_CERT_SOURCE_ACME:
 		e.checkACME(ctx, st, host, p.OrgID)
 	default:
-		st.State = CertStateError
-		st.problem("unknown certificate source %q", p.CertSource)
+		problem(st, v1.CertState_CERT_STATE_ERROR, "unknown certificate source %v", p.CertSource)
 	}
 	return st
 }
 
 // What the primary hostname serves right now
-func (e *Engine) AppStatus(ctx context.Context) *Status {
-	st := &Status{Source: e.PrimarySource()}
-	eff := e.EffectiveACME()
-	st.Directory, st.Email = eff.DirectoryURL, eff.Email
-	host := bareHost(e.cfg.Server.Hostname)
+func (e *Engine) AppStatus(ctx context.Context) *v1.GetCertStatusResponse {
+	st := &v1.GetCertStatusResponse{Source: e.PrimarySource(ctx)}
+	host := e.primaryHost(ctx)
 
 	switch st.Source {
-	case storage.PrimarySourceManual:
-		e.checkMaterial(ctx, st, storage.TLSCertScopeApp, "", "", host,
+	case v1.CertSource_CERT_SOURCE_MANUAL:
+		e.checkMaterial(ctx, st, v1.TLSScope_TLS_SCOPE_APP, "", "", host,
 			"no app certificate uploaded")
-	case storage.PrimarySourceACME:
+	case v1.CertSource_CERT_SOURCE_ACME:
 		e.checkACME(ctx, st, host, "")
-	case storage.PrimarySourceAppCA:
-		e.checkCA(ctx, st, storage.TLSCertScopeAppCA, "",
+	case v1.CertSource_CERT_SOURCE_APP_CA:
+		e.checkCA(ctx, st, v1.TLSScope_TLS_SCOPE_APP_CA, "",
 			"no instance ca generated or uploaded")
 	default:
-		st.Source = storage.PrimarySourceConfig
+		st.Source = v1.CertSource_CERT_SOURCE_CONFIG
 		if e.configCert == nil {
-			st.State = CertStateNone
-			st.problem("no cert_file/key_file pair in the config")
+			problem(st, v1.CertState_CERT_STATE_NONE, "no cert_file/key_file pair in the config")
 			return st
 		}
 		leaf, err := x509.ParseCertificate(e.configCert.Certificate[0])
 		if err == nil && time.Now().After(leaf.NotAfter) {
-			st.State = CertStateError
-			st.problem("config certificate expired %s", leaf.NotAfter.Format("2006-01-02"))
+			problem(st, v1.CertState_CERT_STATE_ERROR, "config certificate expired %s", leaf.NotAfter.Format("2006-01-02"))
 			return st
 		}
-		st.State = CertStateReady
+		st.State = v1.CertState_CERT_STATE_READY
 	}
 	return st
 }

@@ -14,32 +14,45 @@ import (
 	"math/big"
 	"net"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/pkg/config"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"golang.org/x/crypto/acme"
 	"golang.org/x/crypto/acme/autocert"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// Narrow portal identity for sni certificate resolution
+type TLSPortal struct {
+	ID       string
+	OrgID    string
+	Source   v1.CertSource
+	CatchAll bool
+}
+
+// Cached hostname to portal resolution the tls layer queries
+type PortalLookup interface {
+	ResolveForTLS(host string, port int) (TLSPortal, bool)
+}
 
 // Terminates tls for primary server + portal listeners, every serving
 // identity has one explicit certificate source, nothing falls back
 type Engine struct {
-	cfg    *config.Config
-	store  *stores.Store
-	log    *logger.Logger
-	policy *HostnamePolicy
+	store    *stores.Store
+	res      *settings.Resolver
+	portals  PortalLookup
+	log      *logger.Logger
+	policy   *HostnamePolicy
+	bindHost string
 
 	configCert *tls.Certificate // From cert_file/key_file at startup
 
 	mu        sync.Mutex
-	acme      config.ACMEConfig            // Effective settings, db over config
-	primary   string                       // Primary hostname cert source
 	managers  map[string]*autocert.Manager // Keyed directory plus email
 	certCache map[string]*cachedKeyPair    // Parsed uploads keyed by scope target
 	leaves    map[string]*tls.Certificate  // Org ca minted leaves keyed org plus host
@@ -51,24 +64,25 @@ type cachedKeyPair struct {
 	updatedAt time.Time
 }
 
-func NewEngine(cfg *config.Config, store *stores.Store, log *logger.Logger) (*Engine, error) {
+func NewEngine(store *stores.Store, res *settings.Resolver, portals PortalLookup, certFile, keyFile, bindHost string, log *logger.Logger) (*Engine, error) {
 	e := &Engine{
-		cfg:       cfg,
 		store:     store,
+		res:       res,
+		portals:   portals,
 		log:       log,
-		policy:    NewHostnamePolicy(cfg, store),
+		policy:    NewHostnamePolicy(store, res),
+		bindHost:  bindHost,
 		managers:  map[string]*autocert.Manager{},
 		certCache: map[string]*cachedKeyPair{},
 		leaves:    map[string]*tls.Certificate{},
 	}
-	if cfg.TLS.CertFile != "" || cfg.TLS.KeyFile != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertFile, cfg.TLS.KeyFile)
+	if certFile != "" || keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
 			return nil, fmt.Errorf("loading manual tls keypair: %w", err)
 		}
 		e.configCert = &cert
 	}
-	e.reloadSettings(context.Background())
 	return e, nil
 }
 
@@ -76,40 +90,17 @@ func (e *Engine) Policy() *HostnamePolicy {
 	return e.policy
 }
 
-// Db values win over the config file acme block
-func (e *Engine) reloadSettings(ctx context.Context) {
-	eff := e.cfg.TLS.ACME
-	if v, err := e.store.GetSystemSetting(ctx, storage.SettingACMEEnabled); err == nil {
-		if b, err := strconv.ParseBool(v); err == nil {
-			eff.Enabled = b
-		}
-	}
-	if v, err := e.store.GetSystemSetting(ctx, storage.SettingACMEEmail); err == nil {
-		eff.Email = v
-	}
-	if v, err := e.store.GetSystemSetting(ctx, storage.SettingACMEDirectory); err == nil {
-		eff.DirectoryURL = v
-	}
-	primary := storage.PrimarySourceConfig
-	if v, err := e.store.GetSystemSetting(ctx, storage.SettingPrimarySource); err == nil && v != "" {
-		primary = v
-	}
-	e.mu.Lock()
-	e.acme = eff
-	e.primary = primary
-	e.mu.Unlock()
+// Bare primary hostname from live settings
+func (e *Engine) primaryHost(ctx context.Context) string {
+	return bareHost(e.res.System(ctx).GetServer().GetPublicHostname())
 }
 
-// Where the primary hostname's certificate comes from
-func (e *Engine) PrimarySource() string {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.primary
+func (e *Engine) PrimarySource(ctx context.Context) v1.CertSource {
+	return e.res.System(ctx).GetTls().GetPrimarySource()
 }
 
 // Applies setting and material changes without a restart
 func (e *Engine) Invalidate(ctx context.Context) {
-	e.reloadSettings(ctx)
 	e.mu.Lock()
 	e.certCache = map[string]*cachedKeyPair{}
 	e.leaves = map[string]*tls.Certificate{}
@@ -117,17 +108,8 @@ func (e *Engine) Invalidate(ctx context.Context) {
 	e.ReconcileChallengeServer()
 }
 
-func (e *Engine) ACMEEnabled() bool {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.acme.Enabled
-}
-
-// Effective acme settings after db overrides
-func (e *Engine) EffectiveACME() config.ACMEConfig {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	return e.acme
+func (e *Engine) ACMEEnabled(ctx context.Context) bool {
+	return e.res.System(ctx).GetAcme().GetEnabled()
 }
 
 // Config file pair only, uploads are reported separately
@@ -156,17 +138,12 @@ func issuableHost(host string) bool {
 // random sni probes never reach the acme client, policy gates on top
 func (e *Engine) hostPolicy(ctx context.Context, host string) error {
 	host = bareHost(host)
-	for _, d := range e.cfg.TLS.ACME.Domains {
-		if bareHost(d) == host {
-			return nil
-		}
-	}
-	if primary := bareHost(e.cfg.Server.Hostname); primary == host && issuableHost(host) {
+	if primary := e.primaryHost(ctx); primary == host && issuableHost(host) {
 		return nil
 	}
 	if portals, err := e.store.ListPortalsByHostname(ctx, host); err == nil {
 		for _, p := range portals {
-			if p.CertSource == storage.CertSourceACME {
+			if p.CertSource == v1.CertSource_CERT_SOURCE_ACME {
 				return e.policy.Allowed(ctx, host, p.OrgID)
 			}
 		}
@@ -206,44 +183,23 @@ func (e *Engine) managerFor(directory, email string) *autocert.Manager {
 	return m
 }
 
-// Client for the effective settings, nil when acme is off
-func (e *Engine) defaultManager() *autocert.Manager {
-	eff := e.EffectiveACME()
-	if !eff.Enabled {
+// Client for the system tier account, nil when acme is off
+func (e *Engine) defaultManager(ctx context.Context) *autocert.Manager {
+	eff := e.res.System(ctx).GetAcme()
+	if !eff.GetEnabled() {
 		return nil
 	}
-	return e.managerFor(eff.DirectoryURL, eff.Email)
+	return e.managerFor(eff.GetDirectoryUrl(), eff.GetEmail())
 }
 
-// Directory and email for a portal, portal over org over app tier
-func (e *Engine) resolveACMEAccount(ctx context.Context, p *storage.RegistryPortal) (directory, email string) {
-	eff := e.EffectiveACME()
-	directory, email = eff.DirectoryURL, eff.Email
-	if p == nil {
-		return
-	}
-	if v, ok, err := e.store.GetOrgSetting(ctx, p.OrgID, storage.OrgSettingACMEDirectory); err == nil && ok && v != "" {
-		directory = v
-	}
-	if v, ok, err := e.store.GetOrgSetting(ctx, p.OrgID, storage.OrgSettingACMEEmail); err == nil && ok && v != "" {
-		email = v
-	}
-	if p.ACMEDirectory != "" {
-		directory = p.ACMEDirectory
-	}
-	if p.ACMEEmail != "" {
-		email = p.ACMEEmail
-	}
-	return
-}
-
-// App level enabled is the kill switch for every tier
-func (e *Engine) portalManager(ctx context.Context, p *storage.RegistryPortal) *autocert.Manager {
-	if !e.ACMEEnabled() {
+// Account resolution rides the settings tier chain, enabled stays
+// a system only kill switch
+func (e *Engine) portalManager(ctx context.Context, portalID string) *autocert.Manager {
+	eff := e.res.Portal(ctx, portalID).GetAcme()
+	if !eff.GetEnabled() {
 		return nil
 	}
-	dir, email := e.resolveACMEAccount(ctx, p)
-	return e.managerFor(dir, email)
+	return e.managerFor(eff.GetDirectoryUrl(), eff.GetEmail())
 }
 
 // Shared server config, sni picks the right cert per hostname
@@ -269,28 +225,30 @@ func (e *Engine) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 		}
 	}
 
-	var portal *storage.RegistryPortal
-	if host != "" {
-		portal, _ = e.store.GetPortalForHost(ctx, host, port)
+	var portal *TLSPortal
+	if host != "" && e.portals != nil {
+		if p, ok := e.portals.ResolveForTLS(host, port); ok {
+			portal = &p
+		}
 	}
 	// A port only portal never hijacks the primary hostname's cert
-	if portal != nil && portal.Hostname == "" && host == bareHost(e.cfg.Server.Hostname) {
+	if portal != nil && portal.CatchAll && host == e.primaryHost(ctx) {
 		portal = nil
 	}
 	if portal == nil {
 		return e.appCertificate(ctx, hello, host)
 	}
 
-	switch portal.CertSource {
-	case storage.CertSourceACME:
-		if m := e.portalManager(ctx, portal); m != nil {
+	switch portal.Source {
+	case v1.CertSource_CERT_SOURCE_ACME:
+		if m := e.portalManager(ctx, portal.ID); m != nil {
 			return m.GetCertificate(hello)
 		}
 		return nil, fmt.Errorf("acme is disabled, no certificate for portal host %q", host)
-	case storage.CertSourceOrgCA:
-		return e.caLeaf(ctx, storage.TLSCertScopeOrgCA, portal.OrgID, host)
-	case storage.CertSourceOrgCert:
-		cert, err := e.storedCert(ctx, storage.TLSCertScopeOrg, portal.OrgID, "")
+	case v1.CertSource_CERT_SOURCE_ORG_CA:
+		return e.caLeaf(ctx, v1.TLSScope_TLS_SCOPE_ORG_CA, portal.OrgID, host)
+	case v1.CertSource_CERT_SOURCE_ORG_CERT:
+		cert, err := e.storedCert(ctx, v1.TLSScope_TLS_SCOPE_ORG, portal.OrgID, "")
 		if err != nil {
 			return nil, err
 		}
@@ -298,8 +256,8 @@ func (e *Engine) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 			return nil, fmt.Errorf("organization has no uploaded certificate for portal host %q", host)
 		}
 		return cert, nil
-	case storage.CertSourceManual:
-		cert, err := e.storedCert(ctx, storage.TLSCertScopePortal, portal.OrgID, portal.ID)
+	case v1.CertSource_CERT_SOURCE_MANUAL:
+		cert, err := e.storedCert(ctx, v1.TLSScope_TLS_SCOPE_PORTAL, portal.OrgID, portal.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -313,9 +271,9 @@ func (e *Engine) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 
 // Primary hostname and unmatched sni serve the app tier source
 func (e *Engine) appCertificate(ctx context.Context, hello *tls.ClientHelloInfo, host string) (*tls.Certificate, error) {
-	switch e.PrimarySource() {
-	case storage.PrimarySourceManual:
-		cert, err := e.storedCert(ctx, storage.TLSCertScopeApp, "", "")
+	switch e.PrimarySource(ctx) {
+	case v1.CertSource_CERT_SOURCE_MANUAL:
+		cert, err := e.storedCert(ctx, v1.TLSScope_TLS_SCOPE_APP, "", "")
 		if err != nil {
 			return nil, err
 		}
@@ -323,13 +281,13 @@ func (e *Engine) appCertificate(ctx context.Context, hello *tls.ClientHelloInfo,
 			return nil, fmt.Errorf("no uploaded app certificate for %q", host)
 		}
 		return cert, nil
-	case storage.PrimarySourceACME:
-		if m := e.defaultManager(); m != nil {
+	case v1.CertSource_CERT_SOURCE_ACME:
+		if m := e.defaultManager(ctx); m != nil {
 			return m.GetCertificate(hello)
 		}
 		return nil, fmt.Errorf("acme is disabled, no app certificate for %q", host)
-	case storage.PrimarySourceAppCA:
-		return e.caLeaf(ctx, storage.TLSCertScopeAppCA, "", bareHost(e.cfg.Server.Hostname))
+	case v1.CertSource_CERT_SOURCE_APP_CA:
+		return e.caLeaf(ctx, v1.TLSScope_TLS_SCOPE_APP_CA, "", e.primaryHost(ctx))
 	}
 	if e.configCert != nil {
 		return e.configCert, nil
@@ -338,12 +296,12 @@ func (e *Engine) appCertificate(ctx context.Context, hello *tls.ClientHelloInfo,
 }
 
 // Parsed uploaded material, nil when none stored for the target
-func (e *Engine) storedCert(ctx context.Context, scope, orgID, portalID string) (*tls.Certificate, error) {
+func (e *Engine) storedCert(ctx context.Context, scope v1.TLSScope, orgID, portalID string) (*tls.Certificate, error) {
 	row, err := e.store.GetTLSCertificate(ctx, scope, orgID, portalID)
 	if err != nil || row == nil {
 		return nil, err
 	}
-	key := scope + "|" + orgID + "|" + portalID
+	key := fmt.Sprintf("%d|%s|%s", scope, orgID, portalID)
 	e.mu.Lock()
 	if c, ok := e.certCache[key]; ok && c.updatedAt.Equal(row.UpdatedAt) {
 		e.mu.Unlock()
@@ -353,7 +311,7 @@ func (e *Engine) storedCert(ctx context.Context, scope, orgID, portalID string) 
 
 	pair, err := tls.X509KeyPair([]byte(row.CertPEM), []byte(row.KeyPEM))
 	if err != nil {
-		return nil, fmt.Errorf("stored %s certificate invalid: %w", scope, err)
+		return nil, fmt.Errorf("stored %v certificate invalid: %w", scope, err)
 	}
 	e.mu.Lock()
 	e.certCache[key] = &cachedKeyPair{cert: &pair, updatedAt: row.UpdatedAt}
@@ -362,8 +320,8 @@ func (e *Engine) storedCert(ctx context.Context, scope, orgID, portalID string) 
 }
 
 // Short lived leaf for host minted from a stored signing ca
-func (e *Engine) caLeaf(ctx context.Context, scope, orgID, host string) (*tls.Certificate, error) {
-	key := scope + "|" + orgID + "|" + host
+func (e *Engine) caLeaf(ctx context.Context, scope v1.TLSScope, orgID, host string) (*tls.Certificate, error) {
+	key := fmt.Sprintf("%d|%s|%s", scope, orgID, host)
 	e.mu.Lock()
 	if leaf, ok := e.leaves[key]; ok && leaf.Leaf != nil && time.Until(leaf.Leaf.NotAfter) > 7*24*time.Hour {
 		e.mu.Unlock()
@@ -376,7 +334,7 @@ func (e *Engine) caLeaf(ctx context.Context, scope, orgID, host string) (*tls.Ce
 		return nil, err
 	}
 	if caPair == nil {
-		return nil, fmt.Errorf("no %s signing ca for host %q", scope, host)
+		return nil, fmt.Errorf("no %v signing ca for host %q", scope, host)
 	}
 	caCert := caPair.Leaf
 	if caCert == nil {
@@ -389,7 +347,7 @@ func (e *Engine) caLeaf(ctx context.Context, scope, orgID, host string) (*tls.Ce
 	if err != nil {
 		return nil, err
 	}
-	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	serial, err := randomSerial()
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +384,7 @@ func (e *Engine) caLeaf(ctx context.Context, scope, orgID, host string) (*tls.Ce
 	e.mu.Lock()
 	e.leaves[key] = cert
 	e.mu.Unlock()
-	e.log.Info("minted %s leaf for %s", scope, host)
+	e.log.Info("minted %v leaf for %s", scope, host)
 	return cert, nil
 }
 
@@ -533,43 +491,56 @@ func IssueICA(rootCertPEM, rootKeyPEM, commonName string) (certPEM, keyPEM strin
 
 // Handler for the cleartext port, answers http-01 then redirects
 func (e *Engine) HTTPChallengeHandler() http.Handler {
-	var fallback http.Handler
-	if e.cfg.TLS.Enabled && e.cfg.TLS.ACME.RedirectHTTP {
-		fallback = nil // Autocert default redirects to https
-	} else {
-		fallback = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.Error(w, "https required", http.StatusForbidden)
-		})
-	}
+	forbid := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "https required", http.StatusForbidden)
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if m := e.defaultManager(); m != nil {
+		ctx := r.Context()
+		sys := e.res.System(ctx)
+		redirect := sys.GetAcme().GetRedirectHttp() &&
+			sys.GetTls().GetMode() == v1.TLSMode_TLS_MODE_HTTPS_ONLY
+		var fallback http.Handler
+		if !redirect {
+			fallback = forbid
+		}
+		if m := e.defaultManager(ctx); m != nil {
 			m.HTTPHandler(fallback).ServeHTTP(w, r)
 			return
 		}
-		if fallback == nil {
+		if redirect {
 			target := "https://" + bareHost(r.Host) + r.URL.RequestURI()
 			http.Redirect(w, r, target, http.StatusFound)
 			return
 		}
-		fallback.ServeHTTP(w, r)
+		forbid.ServeHTTP(w, r)
 	})
 }
 
 // Starts or stops the cleartext challenge listener to match settings
 func (e *Engine) ReconcileChallengeServer() {
-	port := e.cfg.TLS.ACME.HTTPPort
+	acmeEff := e.res.System(context.Background()).GetAcme()
+	port := acmeEff.GetChallengePort()
+	want := acmeEff.GetEnabled() && port != ""
+
 	e.mu.Lock()
 	running := e.challenge
-	enabled := e.acme.Enabled
 	e.mu.Unlock()
 
-	want := enabled && port != ""
+	// A port change needs a stop then start
+	if running != nil && want && running.Addr != net.JoinHostPort(e.bindHost, port) {
+		_ = running.Close()
+		e.mu.Lock()
+		e.challenge = nil
+		e.mu.Unlock()
+		running = nil
+	}
+
 	if want && running == nil {
 		srv := &http.Server{
-			Addr:              net.JoinHostPort(e.cfg.Server.Host, port),
+			Addr:              net.JoinHostPort(e.bindHost, port),
 			Handler:           e.HTTPChallengeHandler(),
 			ReadHeaderTimeout: 10 * time.Second,
-			IdleTimeout:       time.Duration(e.cfg.Server.IdleTimeout) * time.Second,
+			IdleTimeout:       60 * time.Second,
 		}
 		e.mu.Lock()
 		e.challenge = srv
@@ -613,17 +584,17 @@ func syntheticHello(domain string) *tls.ClientHelloInfo {
 }
 
 // Blocks until issued or failed, autocert caps this at five minutes
-func (e *Engine) EnsureCertificate(ctx context.Context, domain string) (*CertInfo, error) {
+func (e *Engine) EnsureCertificate(ctx context.Context, domain string) (*v1.CertificateInfo, error) {
 	domain = bareHost(domain)
 	if !issuableHost(domain) {
 		return nil, fmt.Errorf("domain %q is not a publicly issuable hostname", domain)
 	}
-	manager := e.defaultManager()
+	manager := e.defaultManager(ctx)
 	// An acme sourced portal issues through its resolved account
 	if portals, err := e.store.ListPortalsByHostname(ctx, domain); err == nil {
 		for _, p := range portals {
-			if p.CertSource == storage.CertSourceACME {
-				manager = e.portalManager(ctx, p)
+			if p.CertSource == v1.CertSource_CERT_SOURCE_ACME {
+				manager = e.portalManager(ctx, p.ID)
 				break
 			}
 		}
@@ -637,19 +608,10 @@ func (e *Engine) EnsureCertificate(ctx context.Context, domain string) (*CertInf
 	return e.CertificateInfo(ctx, domain)
 }
 
-type CertInfo struct {
-	Domain    string
-	Issued    bool
-	Issuer    string
-	NotBefore time.Time
-	NotAfter  time.Time
-	SANs      []string
-}
-
 // Reads the cached chain without triggering issuance
-func (e *Engine) CertificateInfo(ctx context.Context, domain string) (*CertInfo, error) {
+func (e *Engine) CertificateInfo(ctx context.Context, domain string) (*v1.CertificateInfo, error) {
 	domain = bareHost(domain)
-	info := &CertInfo{Domain: domain}
+	info := &v1.CertificateInfo{}
 	if e.store == nil {
 		return info, nil
 	}
@@ -666,25 +628,32 @@ func (e *Engine) CertificateInfo(ctx context.Context, domain string) (*CertInfo,
 	if leaf == nil {
 		return info, nil
 	}
-	info.Issued = true
-	info.Issuer = leaf.Issuer.CommonName
-	info.NotBefore = leaf.NotBefore
-	info.NotAfter = leaf.NotAfter
-	info.SANs = leaf.DNSNames
-	return info, nil
+	return certInfoFromLeaf(leaf), nil
+}
+
+// Issued details from a parsed leaf
+func certInfoFromLeaf(leaf *x509.Certificate) *v1.CertificateInfo {
+	return &v1.CertificateInfo{
+		Issued:    true,
+		Issuer:    leaf.Issuer.CommonName,
+		NotBefore: timestamppb.New(leaf.NotBefore),
+		NotAfter:  timestamppb.New(leaf.NotAfter),
+		Sans:      leaf.DNSNames,
+	}
 }
 
 // Certificate a handshake for host would observe, resolved like sni
 // routing, nil when nothing would serve
-func (e *Engine) ServingCertInfo(ctx context.Context, host string) *CertInfo {
+func (e *Engine) ServingCertInfo(ctx context.Context, host string) *v1.CertificateInfo {
 	host = bareHost(host)
 	if host == "" || e.store == nil {
 		return nil
 	}
-	var st *Status
+	var st *v1.GetCertStatusResponse
 	if portals, err := e.store.ListPortalsByHostname(ctx, host); err == nil {
 		for _, p := range portals {
-			if !p.Enabled || p.CertSource == storage.CertSourceNone || p.CertSource == "" {
+			if !p.Enabled || p.CertSource == v1.CertSource_CERT_SOURCE_NONE ||
+				p.CertSource == v1.CertSource_CERT_SOURCE_UNSPECIFIED {
 				continue
 			}
 			st = e.PortalStatus(ctx, p)
@@ -698,38 +667,28 @@ func (e *Engine) ServingCertInfo(ctx context.Context, host string) *CertInfo {
 }
 
 // Observable cert details behind a resolved status, any source
-func (e *Engine) statusCertInfo(st *Status) *CertInfo {
-	if st.ACMEInfo != nil && st.ACMEInfo.Issued {
-		return st.ACMEInfo
+func (e *Engine) statusCertInfo(st *v1.GetCertStatusResponse) *v1.CertificateInfo {
+	if st.AcmeCert.GetIssued() {
+		return st.AcmeCert
 	}
-	if st.Material != nil {
-		leaf := firstCertificate([]byte(st.Material.CertPEM))
-		if leaf == nil {
-			return nil
-		}
-		info := &CertInfo{
+	if m := st.ServingCert; m != nil && m.NotAfter != nil {
+		info := &v1.CertificateInfo{
 			Issued:    true,
-			Issuer:    leaf.Issuer.CommonName,
-			NotBefore: leaf.NotBefore,
-			NotAfter:  leaf.NotAfter,
-			SANs:      leaf.DNSNames,
+			Issuer:    m.Issuer,
+			NotBefore: m.NotBefore,
+			NotAfter:  m.NotAfter,
+			Sans:      m.Sans,
 		}
 		// Ca material signs on demand leaves, report the signer not its issuer
-		if leaf.IsCA {
-			info.Issuer = leaf.Subject.CommonName
-			info.SANs = nil
+		if m.IsCa {
+			info.Issuer = m.Subject
+			info.Sans = nil
 		}
 		return info
 	}
-	if st.Source == storage.PrimarySourceConfig && e.configCert != nil {
+	if st.Source == v1.CertSource_CERT_SOURCE_CONFIG && e.configCert != nil {
 		if leaf, err := x509.ParseCertificate(e.configCert.Certificate[0]); err == nil {
-			return &CertInfo{
-				Issued:    true,
-				Issuer:    leaf.Issuer.CommonName,
-				NotBefore: leaf.NotBefore,
-				NotAfter:  leaf.NotAfter,
-				SANs:      leaf.DNSNames,
-			}
+			return certInfoFromLeaf(leaf)
 		}
 	}
 	return nil

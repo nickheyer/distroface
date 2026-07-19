@@ -3,18 +3,23 @@ package portal
 import (
 	"context"
 	"strings"
+
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
 // Request-ready view of one org portal
 type Portal struct {
 	ID             string
 	Name           string
+	OrgID          string
 	OrgName        string
 	OrgDisplayName string
 	MapUnqualified bool
 	AllowPush      bool
 	RequireAuth    bool
 	TLS            bool
+	CertSource     v1.CertSource
+	CatchAll       bool
 	rules          *pathMapper
 }
 

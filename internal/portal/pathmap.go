@@ -6,13 +6,8 @@ import (
 	"strings"
 
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
-
-// Rewrites a repository name
-type MappingRule struct {
-	Pattern string `json:"pattern"` // Regex, anchored to the full name
-	Replace string `json:"replace"` // Supports go regexp expansion ($1, ${0}, ${name})
-}
 
 type mappingRule struct {
 	pattern *regexp.Regexp
@@ -26,7 +21,7 @@ type pathMapper struct {
 }
 
 // Compiles mapping rules, nil when no rules are given
-func newPathMapper(rules []MappingRule, log *logger.Logger) (*pathMapper, error) {
+func newPathMapper(rules []*v1.PortalRule, log *logger.Logger) (*pathMapper, error) {
 	if len(rules) == 0 {
 		return nil, nil
 	}
@@ -46,7 +41,7 @@ func newPathMapper(rules []MappingRule, log *logger.Logger) (*pathMapper, error)
 }
 
 // Validates that rules compile
-func ValidateRules(rules []MappingRule, log *logger.Logger) error {
+func ValidateRules(rules []*v1.PortalRule, log *logger.Logger) error {
 	_, err := newPathMapper(rules, log)
 	return err
 }

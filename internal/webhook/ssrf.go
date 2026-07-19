@@ -9,7 +9,7 @@ import (
 )
 
 // Vet ips at dial time so dns tricks fail
-func newSafeTransport(allowPrivate bool) http.RoundTripper {
+func newSafeTransport(allowPrivate func() bool) http.RoundTripper {
 	dialer := &net.Dialer{
 		Timeout:   requestTimeout,
 		KeepAlive: 30 * time.Second,
@@ -22,7 +22,7 @@ func newSafeTransport(allowPrivate bool) http.RoundTripper {
 			if ip == nil {
 				return fmt.Errorf("webhook: dial address %q is not an IP", host)
 			}
-			return checkWebhookIP(ip, allowPrivate)
+			return checkWebhookIP(ip, allowPrivate())
 		},
 	}
 

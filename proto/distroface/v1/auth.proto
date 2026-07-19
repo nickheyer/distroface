@@ -24,10 +24,6 @@ service AuthService {
   rpc GetAuthStatus(GetAuthStatusRequest) returns (GetAuthStatusResponse) {}
   // GetOIDCLoginURL returns the OIDC provider redirect URL (public).
   rpc GetOIDCLoginURL(GetOIDCLoginURLRequest) returns (GetOIDCLoginURLResponse) {}
-  // GetAuthConfig returns full auth settings (admin).
-  rpc GetAuthConfig(GetAuthConfigRequest) returns (GetAuthConfigResponse) {}
-  // UpdateAuthSettings updates auth settings (admin).
-  rpc UpdateAuthSettings(UpdateAuthSettingsRequest) returns (UpdateAuthSettingsResponse) {}
   // CreateInvite creates a registration invite code (admin).
   rpc CreateInvite(CreateInviteRequest) returns (CreateInviteResponse) {}
   // ListInvites returns all registration invites (admin).
@@ -113,37 +109,6 @@ message GetOIDCLoginURLRequest {}
 // GetOIDCLoginURLResponse returns the OIDC redirect URL.
 message GetOIDCLoginURLResponse {
   string redirect_url = 1;
-}
-
-// GetAuthConfigRequest is empty.
-message GetAuthConfigRequest {}
-
-// GetAuthConfigResponse returns the full auth configuration.
-message GetAuthConfigResponse {
-  bool local_enabled = 1;
-  bool registration_enabled = 2;
-  bool anonymous_access = 3;
-  int32 session_timeout = 4;
-  bool oidc_enabled = 5;
-  string oidc_issuer_uri = 6;
-  string oidc_client_id = 7;
-  string oidc_redirect_url = 8;
-  repeated string oidc_scopes = 9;
-  string oidc_role_claim = 10;
-  bool first_user_setup = 11;
-}
-
-// UpdateAuthSettingsRequest allows toggling auth settings.
-message UpdateAuthSettingsRequest {
-  optional bool local_enabled = 1;
-  optional bool registration_enabled = 2;
-  optional bool anonymous_access = 3;
-  optional int32 session_timeout = 4;
-}
-
-// UpdateAuthSettingsResponse returns the updated configuration.
-message UpdateAuthSettingsResponse {
-  GetAuthConfigResponse config = 1;
 }
 
 // CreateInviteRequest contains the fields to create a registration invite.

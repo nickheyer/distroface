@@ -12,6 +12,26 @@ service GCService {
   rpc RunGC(RunGCRequest) returns (RunGCResponse) {}
   // GetGCStatus returns whether GC is running and the last run's result (admin).
   rpc GetGCStatus(GetGCStatusRequest) returns (GetGCStatusResponse) {}
+  // Registry and artifact disk usage broken down per namespace and repo
+  rpc GetStorageUsage(GetStorageUsageRequest) returns (GetStorageUsageResponse) {}
+}
+
+// Empty
+message GetStorageUsageRequest {}
+
+// Disk usage attributed to one namespace or repo
+message StorageUsageEntry {
+  string name = 1;
+  int64 bytes = 2;
+  int32 count = 3; // Repos for registry entries, artifacts for repo entries
+}
+
+// Unique blob bytes deduplicated, entries can sum above the totals
+message GetStorageUsageResponse {
+  int64 registry_bytes = 1;
+  int64 artifact_bytes = 2;
+  repeated StorageUsageEntry registry_namespaces = 3; // Five largest
+  repeated StorageUsageEntry artifact_repos = 4; // Five largest
 }
 
 // RunGCRequest configures a garbage collection run.

@@ -17,6 +17,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
@@ -65,13 +66,16 @@ type Dispatcher struct {
 }
 
 // NewDispatcher creates a new webhook dispatcher.
-func NewDispatcher(store *stores.Store, log *logger.Logger, allowPrivateNetworks bool) *Dispatcher {
+func NewDispatcher(store *stores.Store, log *logger.Logger, res *settings.Resolver) *Dispatcher {
+	allowPrivate := func() bool {
+		return res.System(context.Background()).GetWebhooks().GetAllowPrivateNetworks()
+	}
 	return &Dispatcher{
 		store: store,
 		log:   log,
 		client: &http.Client{
 			Timeout:   requestTimeout,
-			Transport: newSafeTransport(allowPrivateNetworks),
+			Transport: newSafeTransport(allowPrivate),
 		},
 	}
 }

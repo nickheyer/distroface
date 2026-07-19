@@ -13,6 +13,7 @@ import (
 	regstorage "github.com/distribution/distribution/v3/registry/storage"
 	"github.com/distribution/distribution/v3/registry/storage/driver"
 	"github.com/distribution/distribution/v3/registry/storage/driver/filesystem"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
@@ -39,6 +40,7 @@ type Collector struct {
 	mu      sync.Mutex
 	running bool
 	last    *Run
+	lastDue time.Time
 }
 
 func NewCollector(storagePath string, log *logger.Logger) (*Collector, error) {
@@ -85,17 +87,34 @@ func (c *Collector) Status() (bool, *Run) {
 	return c.running, &last
 }
 
-// Schedule triggers full runs on an interval until ctx ends
-func (c *Collector) Schedule(ctx context.Context, interval time.Duration, removeUntagged bool) {
+// Schedule runs collections when live settings say one is due
+func (c *Collector) Schedule(ctx context.Context, res *settings.Resolver) {
 	go func() {
-		ticker := time.NewTicker(interval)
+		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := c.Start(false, removeUntagged); err != nil {
+				gc := res.System(ctx).GetGc()
+				if !gc.GetEnabled() {
+					continue
+				}
+				interval := time.Duration(gc.GetIntervalHours()) * time.Hour
+				if interval <= 0 {
+					interval = 24 * time.Hour
+				}
+				c.mu.Lock()
+				due := time.Since(c.lastDue) >= interval
+				if due {
+					c.lastDue = time.Now()
+				}
+				c.mu.Unlock()
+				if !due {
+					continue
+				}
+				if err := c.Start(false, gc.GetRemoveUntagged()); err != nil {
 					c.log.Warn("Scheduled GC skipped: %v", err)
 				}
 			}

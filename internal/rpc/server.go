@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -16,9 +17,10 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc/services"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/internal/webhook"
-	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"github.com/nickheyer/distroface/pkg/utils"
 	web "github.com/nickheyer/distroface/web/distroface"
@@ -27,25 +29,26 @@ import (
 )
 
 type ServerDeps struct {
-	Store             *stores.Store
-	Config            *config.Config
-	Log               *logger.Logger
-	RegistryHandler   http.Handler
-	RegistryAccess    *registry.RegistryAccess
-	TokenHandler      *auth.TokenHandler
-	AuthManager       *auth.Manager
-	Enforcer          *rbac.Enforcer
-	OIDCHandler       *auth.OIDCHandler
-	WebhookDispatcher *webhook.Dispatcher
-	PortalResolver    *portal.Resolver
-	PortalService     *portal.Service
-	AuthLimiter       *admin.Limiter // Lockout limiter nil disables
-	ArtifactManager   *artifacts.Manager
-	ArtifactV1Facade  *artifacts.V1API
-	GCCollector       *admin.Collector
-	CertService       *certs.Service  // Nil hides the certificate api
-	AuditRecorder     *audit.Recorder // Nil disables the audit trail
-	AuditService      *audit.Service
+	Store               *stores.Store
+	Resolver            *settings.Resolver
+	Log                 *logger.Logger
+	RegistryHandler     http.Handler
+	RegistryAccess      *registry.RegistryAccess
+	RegistryStoragePath string
+	TokenHandler        *auth.TokenHandler
+	AuthManager         *auth.Manager
+	Enforcer            *rbac.Enforcer
+	OIDCHandler         *auth.OIDCHandler
+	WebhookDispatcher   *webhook.Dispatcher
+	PortalResolver      *portal.Resolver
+	PortalService       *portal.Service
+	AuthLimiter         *admin.Limiter // Lockout limiter nil disables
+	ArtifactManager     *artifacts.Manager
+	ArtifactV1Facade    *artifacts.V1API
+	GCCollector         *admin.Collector
+	CertService         *certs.Service  // Nil hides the certificate api
+	AuditRecorder       *audit.Recorder // Nil disables the audit trail
+	AuditService        *audit.Service
 }
 
 type Server struct {
@@ -87,15 +90,24 @@ func (s *Server) setupHandler() {
 	}
 
 	// OIDC HTTP handlers (not Connect RPC - these are OAuth2 redirect flows)
-	if s.OIDCHandler != nil && s.OIDCHandler.IsEnabled() {
+	// Registered unconditionally, handlers self gate on runtime settings
+	if s.OIDCHandler != nil {
 		mux.HandleFunc("/api/v1/auth/oidc/login", s.OIDCHandler.HandleLogin)
 		mux.HandleFunc("/api/v1/auth/oidc/callback", s.OIDCHandler.HandleCallback)
 	}
 
-	// V1 artifact facade for old dfcli and ci
-	if s.ArtifactV1Facade != nil && s.Config.Artifacts.V1Compat {
-		s.ArtifactV1Facade.RegisterAuth(mux)
-		s.ArtifactV1Facade.RegisterArtifacts(mux)
+	// V1 artifact facade for old dfcli and ci, gated per request
+	if s.ArtifactV1Facade != nil {
+		v1mux := http.NewServeMux()
+		s.ArtifactV1Facade.RegisterAuth(v1mux)
+		s.ArtifactV1Facade.RegisterArtifacts(v1mux)
+		mux.Handle("/api/v1/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !s.Resolver.System(r.Context()).GetArtifacts().GetV1Compat() {
+				http.NotFound(w, r)
+				return
+			}
+			v1mux.ServeHTTP(w, r)
+		}))
 	}
 
 	// Register RPC services
@@ -103,7 +115,7 @@ func (s *Server) setupHandler() {
 	healthPath, healthHandler := distrofacev1connect.NewHealthServiceHandler(healthService, opts...)
 	mux.Handle(healthPath, healthHandler)
 
-	authService := services.NewAuthService(s.Store, s.Config, s.AuthManager, s.Enforcer, s.OIDCHandler, s.Log)
+	authService := services.NewAuthService(s.Store, s.AuthManager, s.Enforcer, s.OIDCHandler, s.Log)
 	authPath, authHandler := distrofacev1connect.NewAuthServiceHandler(authService, opts...)
 	mux.Handle(authPath, authHandler)
 
@@ -115,9 +127,9 @@ func (s *Server) setupHandler() {
 	repoPath, repoHandler := distrofacev1connect.NewRepositoryServiceHandler(repoService, opts...)
 	mux.Handle(repoPath, repoHandler)
 
-	configService := services.NewConfigurationService(s.Store, s.Config, s.Log)
-	configPath, configHandler := distrofacev1connect.NewConfigurationServiceHandler(configService, opts...)
-	mux.Handle(configPath, configHandler)
+	settingsService := services.NewSettingsService(s.Store, s.Resolver, s.Enforcer, s.Log)
+	settingsPath, settingsHandler := distrofacev1connect.NewSettingsServiceHandler(settingsService, opts...)
+	mux.Handle(settingsPath, settingsHandler)
 
 	roleService := services.NewRoleService(s.Store, s.Enforcer, s.Log)
 	rolePath, roleHandler := distrofacev1connect.NewRoleServiceHandler(roleService, opts...)
@@ -127,7 +139,7 @@ func (s *Server) setupHandler() {
 	tokenSvcPath, tokenSvcHandler := distrofacev1connect.NewTokenServiceHandler(tokenService, opts...)
 	mux.Handle(tokenSvcPath, tokenSvcHandler)
 
-	orgService := services.NewOrganizationService(s.Store, s.RegistryAccess, s.Enforcer, s.Config, s.Log)
+	orgService := services.NewOrganizationService(s.Store, s.RegistryAccess, s.Enforcer, s.Resolver, s.Log)
 	orgPath, orgHandler := distrofacev1connect.NewOrganizationServiceHandler(orgService, opts...)
 	mux.Handle(orgPath, orgHandler)
 
@@ -146,11 +158,10 @@ func (s *Server) setupHandler() {
 		mux.Handle(artifactPath, artifactHandler)
 	}
 
-	if s.GCCollector != nil {
-		gcService := services.NewGCService(s.GCCollector, s.Config, s.Log)
-		gcPath, gcHandler := distrofacev1connect.NewGCServiceHandler(gcService, opts...)
-		mux.Handle(gcPath, gcHandler)
-	}
+	// Registered even without a collector, it also serves storage usage
+	gcService := services.NewGCService(s.GCCollector, s.Store, s.RegistryStoragePath, s.Resolver, s.Log)
+	gcPath, gcHandler := distrofacev1connect.NewGCServiceHandler(gcService, opts...)
+	mux.Handle(gcPath, gcHandler)
 
 	if s.CertService != nil {
 		certPath, certHandler := distrofacev1connect.NewCertificateServiceHandler(s.CertService, opts...)
@@ -168,7 +179,7 @@ func (s *Server) setupHandler() {
 		distrofacev1connect.AuthServiceName,
 		distrofacev1connect.UserServiceName,
 		distrofacev1connect.RepositoryServiceName,
-		distrofacev1connect.ConfigurationServiceName,
+		distrofacev1connect.SettingsServiceName,
 		distrofacev1connect.RoleServiceName,
 		distrofacev1connect.TokenServiceName,
 		distrofacev1connect.OrganizationServiceName,
@@ -188,12 +199,39 @@ func (s *Server) setupHandler() {
 	s.setupFrontend(mux)
 
 	// Portal hosts get the whole app, org scoped by the resolved portal
-	var root http.Handler = mux
+	inner := s.httpsOnlyRedirect(mux)
+	var root http.Handler = inner
 	if s.PortalResolver != nil {
-		root = s.PortalResolver.Middleware(s.Config.Server.Hostname, mux)
+		root = s.PortalResolver.Middleware(s.primaryHostname, inner)
 	}
-	root = utils.Headers(s.Config.Security.Headers, s.Config.TLS.Enabled, root)
+	root = utils.Headers(s.Resolver, root)
 	s.handler = h2c.NewHandler(root, &http2.Server{})
+}
+
+// Live public hostname for portal aware middleware
+func (s *Server) primaryHostname() string {
+	return s.Resolver.System(context.Background()).GetServer().GetPublicHostname()
+}
+
+// Cleartext app requests redirect when https only mode is on
+func (s *Server) httpsOnlyRedirect(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Portals enforce their own scheme in portal middleware
+		if r.TLS != nil || portal.FromContext(r.Context()) != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		sys := s.Resolver.System(r.Context())
+		if sys.GetTls().GetMode() != v1.TLSMode_TLS_MODE_HTTPS_ONLY {
+			next.ServeHTTP(w, r)
+			return
+		}
+		host := sys.GetServer().GetPublicHostname()
+		if host == "" {
+			host = r.Host
+		}
+		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	})
 }
 
 func (s *Server) Handler() http.Handler {

@@ -230,7 +230,7 @@ func TestMiddlewareRouteShapes(t *testing.T) {
 
 	for _, c := range cases {
 		var got string
-		h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			got = r.URL.Path
 		}))
 		h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, c.path, "acme.example.com", 0))
@@ -241,7 +241,7 @@ func TestMiddlewareRouteShapes(t *testing.T) {
 
 	// Control plane listings pick up the org namespace
 	var gotNS string
-	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotNS = r.URL.Query().Get("namespace")
 	}))
 	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/repos?namespace=elsewhere", "acme.example.com", 0))
@@ -263,7 +263,7 @@ func TestMiddlewareInjectsContext(t *testing.T) {
 
 	var p *Portal
 	var scoped string
-	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p = FromContext(r.Context())
 		scoped = ScopeNamespace(r.Context(), "someone-else")
 	}))
@@ -294,7 +294,7 @@ func TestMiddlewareReadOnly(t *testing.T) {
 	res := NewResolver(store, logger.New())
 
 	nextCalled := false
-	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
 	}))
 
@@ -335,7 +335,7 @@ func TestMiddlewareRequireAuth(t *testing.T) {
 	res := NewResolver(store, logger.New())
 
 	nextCalled := false
-	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nextCalled = true
 	}))
 
@@ -375,7 +375,7 @@ func TestMiddlewareOIDCBounce(t *testing.T) {
 	})
 	res := NewResolver(store, logger.New())
 
-	h := res.Middleware("registry.example.com", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := res.Middleware(func() string { return "registry.example.com" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("bounced request must not reach the app")
 	}))
 
@@ -391,7 +391,7 @@ func TestMiddlewareOIDCBounce(t *testing.T) {
 
 	// Off portals the login route passes through untouched
 	passed := false
-	h = res.Middleware("registry.example.com", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h = res.Middleware(func() string { return "registry.example.com" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		passed = true
 	}))
 	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/auth/oidc/login", "registry.example.com", 0))
@@ -404,7 +404,7 @@ func TestRealmRewrite(t *testing.T) {
 	store := newTestStore(t)
 	res := NewResolver(store, logger.New())
 
-	h := res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Www-Authenticate", `Bearer realm="http://0.0.0.0:8080/auth/token",service="distroface-registry",scope="repository:acme/myimg:pull"`)
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -419,7 +419,7 @@ func TestRealmRewrite(t *testing.T) {
 		t.Errorf("realm rewrite:\n got %q\nwant %q", got, want)
 	}
 
-	h = res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h = res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	rec = httptest.NewRecorder()
@@ -466,7 +466,7 @@ func TestManagerReconcileTLS(t *testing.T) {
 	store := newTestStore(t)
 	res := NewResolver(store, logger.New())
 	m := NewManager(res, "127.0.0.1", logger.New())
-	m.SetHandler(res.Middleware("", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	m.SetHandler(res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "portal-surface")
 	})))
 	t.Cleanup(m.Close)

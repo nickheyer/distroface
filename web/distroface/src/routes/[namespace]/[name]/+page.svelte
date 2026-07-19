@@ -71,7 +71,7 @@
 	let starPending = $state(false);
 
 	const registryHost = $derived(
-		portalStore.host(configStore.get('server.hostname', 'localhost:8080') as string)
+		portalStore.host(configStore.publicHostname)
 	);
 
 	const namespaceHref = $derived(repo?.isOrgNamespace ? `orgs/${namespace}` : `${namespace}`);

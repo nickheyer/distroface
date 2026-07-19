@@ -8,9 +8,9 @@ import {
 import { createConnectTransport } from '@connectrpc/connect-web';
 import { HealthService } from '$lib/proto/distroface/v1/health_pb';
 import { AuthService } from '$lib/proto/distroface/v1/auth_pb';
+import { SettingsService } from '$lib/proto/distroface/v1/settings_pb';
 import { UserService } from '$lib/proto/distroface/v1/user_pb';
 import { RepositoryService } from '$lib/proto/distroface/v1/repository_pb';
-import { ConfigurationService } from '$lib/proto/distroface/v1/configuration_pb';
 import { TokenService } from '$lib/proto/distroface/v1/token_pb';
 import { OrganizationService } from '$lib/proto/distroface/v1/organization_pb';
 import { RoleService } from '$lib/proto/distroface/v1/role_pb';
@@ -71,7 +71,7 @@ export class RpcClient {
 	public readonly auth: Client<typeof AuthService>;
 	public readonly user: Client<typeof UserService>;
 	public readonly repository: Client<typeof RepositoryService>;
-	public readonly configuration: Client<typeof ConfigurationService>;
+	public readonly settings: Client<typeof SettingsService>;
 	public readonly token: Client<typeof TokenService>;
 	public readonly organization: Client<typeof OrganizationService>;
 	public readonly role: Client<typeof RoleService>;
@@ -87,7 +87,7 @@ export class RpcClient {
 		this.auth = createClient(AuthService, transport);
 		this.user = createClient(UserService, transport);
 		this.repository = createClient(RepositoryService, transport);
-		this.configuration = createClient(ConfigurationService, transport);
+		this.settings = createClient(SettingsService, transport);
 		this.token = createClient(TokenService, transport);
 		this.organization = createClient(OrganizationService, transport);
 		this.role = createClient(RoleService, transport);

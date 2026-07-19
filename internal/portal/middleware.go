@@ -23,7 +23,7 @@ const oidcLoginPath = "/api/v1/auth/oidc/login"
 // Serves the whole app per portal, resolves the portal into the request
 // context, enforces read-only and require-auth on the data planes, rewrites
 // repo names, and points 401 challenge realms at the requesting host
-func (res *Resolver) Middleware(primaryHostname string, next http.Handler) http.Handler {
+func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Docker bearer challenges must point at the host being asked
 		if strings.HasPrefix(r.URL.Path, "/v2/") {
@@ -44,7 +44,7 @@ func (res *Resolver) Middleware(primaryHostname string, next http.Handler) http.
 		}
 
 		// SSO state cookies only work on the primary origin, bounce through it
-		if r.URL.Path == oidcLoginPath && primaryHostname != "" {
+		if primaryHostname := primaryHost(); r.URL.Path == oidcLoginPath && primaryHostname != "" {
 			origin := requestScheme(r) + "://" + r.Host
 			target := requestScheme(r) + "://" + primaryHostname + oidcLoginPath + "?return_to=" + url.QueryEscape(origin)
 			http.Redirect(w, r, target, http.StatusFound)

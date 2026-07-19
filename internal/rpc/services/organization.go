@@ -3,17 +3,15 @@ package services
 import (
 	"context"
 	"fmt"
-	"strconv"
 
 	"connectrpc.com/connect"
-	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
-	"github.com/nickheyer/distroface/pkg/config"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -27,12 +25,12 @@ type OrganizationService struct {
 	store    *stores.Store
 	registry *registry.RegistryAccess
 	enforcer *rbac.Enforcer
-	config   *config.Config
+	res      *settings.Resolver
 	log      *logger.Logger
 }
 
-func NewOrganizationService(store *stores.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, cfg *config.Config, log *logger.Logger) *OrganizationService {
-	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, config: cfg, log: log}
+func NewOrganizationService(store *stores.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, res *settings.Resolver, log *logger.Logger) *OrganizationService {
+	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, res: res, log: log}
 }
 
 func (s *OrganizationService) CreateOrganization(ctx context.Context, req *connect.Request[v1.CreateOrganizationRequest]) (*connect.Response[v1.CreateOrganizationResponse], error) {
@@ -252,6 +250,9 @@ func (s *OrganizationService) DeleteOrganization(ctx context.Context, req *conne
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
+	// Drop the org's settings document with the org
+	_ = s.res.DeleteScope(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, org.ID)
+
 	// Best-effort cleanup of registry storage
 	if s.registry != nil {
 		_ = s.registry.DeleteNamespace(org.Name)
@@ -458,116 +459,6 @@ func (s *OrganizationService) UpdateOrgMemberRole(ctx context.Context, req *conn
 
 	return connect.NewResponse(&v1.UpdateOrgMemberRoleResponse{
 		Member: orgMemberToProto(member),
-	}), nil
-}
-
-// ── Org settings ─────────────────────────────────────────────────────────
-
-// Known override keys and their value validators
-var orgSettingValidators = map[string]func(string) bool{
-	artifacts.SettingRetentionEnabled:       isBoolValue,
-	artifacts.SettingRetentionMaxVersions:   isIntValue,
-	artifacts.SettingRetentionMaxAgeDays:    isIntValue,
-	artifacts.SettingRetentionMaxTotalSize:  isIntValue,
-	artifacts.SettingRetentionExcludeLatest: isBoolValue,
-	artifacts.SettingMaxFileSizeMB:          isIntValue,
-	artifacts.SettingPrivateByDefault:       isBoolValue,
-	storage.OrgSettingACMEEmail:             isAnyValue,
-	storage.OrgSettingACMEDirectory:         isAnyValue,
-}
-
-func isAnyValue(string) bool { return true }
-
-func isBoolValue(v string) bool {
-	_, err := strconv.ParseBool(v)
-	return err == nil
-}
-
-func isIntValue(v string) bool {
-	n, err := strconv.ParseInt(v, 10, 64)
-	return err == nil && n >= 0
-}
-
-// Instance level values every known key falls back to
-func (s *OrganizationService) orgSettingDefaults(ctx context.Context) map[string]string {
-	a := s.config.Artifacts
-	defaults := map[string]string{
-		artifacts.SettingRetentionEnabled:       strconv.FormatBool(a.Retention.Enabled),
-		artifacts.SettingRetentionMaxVersions:   strconv.Itoa(a.Retention.MaxVersions),
-		artifacts.SettingRetentionMaxAgeDays:    strconv.Itoa(a.Retention.MaxAgeDays),
-		artifacts.SettingRetentionMaxTotalSize:  strconv.FormatInt(a.Retention.MaxTotalSize, 10),
-		artifacts.SettingRetentionExcludeLatest: strconv.FormatBool(a.Retention.ExcludeLatest),
-		artifacts.SettingMaxFileSizeMB:          strconv.FormatInt(a.MaxFileSizeMB, 10),
-		artifacts.SettingPrivateByDefault:       "false",
-		storage.OrgSettingACMEEmail:             s.config.TLS.ACME.Email,
-		storage.OrgSettingACMEDirectory:         s.config.TLS.ACME.DirectoryURL,
-	}
-	// App tier acme values are runtime managed, db wins over config
-	if v, err := s.store.GetSystemSetting(ctx, storage.SettingACMEEmail); err == nil {
-		defaults[storage.OrgSettingACMEEmail] = v
-	}
-	if v, err := s.store.GetSystemSetting(ctx, storage.SettingACMEDirectory); err == nil {
-		defaults[storage.OrgSettingACMEDirectory] = v
-	}
-	return defaults
-}
-
-func (s *OrganizationService) GetOrgSettings(ctx context.Context, req *connect.Request[v1.GetOrgSettingsRequest]) (*connect.Response[v1.GetOrgSettingsResponse], error) {
-	user := auth.UserFromContext(ctx)
-	org, err := s.orgWithAccess(ctx, user, req.Msg.OrgId, false)
-	if err != nil {
-		return nil, err
-	}
-	overrides, err := s.store.ListOrgSettings(ctx, org.ID)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-	return connect.NewResponse(&v1.GetOrgSettingsResponse{
-		Overrides: overrides,
-		Defaults:  s.orgSettingDefaults(ctx),
-	}), nil
-}
-
-func (s *OrganizationService) UpdateOrgSettings(ctx context.Context, req *connect.Request[v1.UpdateOrgSettingsRequest]) (*connect.Response[v1.UpdateOrgSettingsResponse], error) {
-	user := auth.UserFromContext(ctx)
-	org, err := s.orgWithAccess(ctx, user, req.Msg.OrgId, true)
-	if err != nil {
-		return nil, err
-	}
-
-	for key, value := range req.Msg.Set {
-		valid, known := orgSettingValidators[key]
-		if !known {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown setting key %q", key))
-		}
-		if !valid(value) {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid value %q for setting %q", value, key))
-		}
-	}
-	for _, key := range req.Msg.Reset_ {
-		if _, known := orgSettingValidators[key]; !known {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("unknown setting key %q", key))
-		}
-	}
-
-	for key, value := range req.Msg.Set {
-		if err := s.store.SetOrgSetting(ctx, org.ID, key, value); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
-		}
-	}
-	for _, key := range req.Msg.Reset_ {
-		if err := s.store.DeleteOrgSetting(ctx, org.ID, key); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
-		}
-	}
-
-	overrides, err := s.store.ListOrgSettings(ctx, org.ID)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-	return connect.NewResponse(&v1.UpdateOrgSettingsResponse{
-		Overrides: overrides,
-		Defaults:  s.orgSettingDefaults(ctx),
 	}), nil
 }
 

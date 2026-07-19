@@ -6,15 +6,16 @@ import (
 	"testing"
 
 	storage "github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/pkg/config"
+	v1proto "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 // Total size cap prunes oldest unprotected artifacts, keeps newest
 func TestRetentionMaxTotalSize(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{
-		Enabled:       true,
-		MaxTotalSize:  10, // bytes
-		ExcludeLatest: true,
+	e := newTestEnv(t, &v1proto.ArtifactRetentionSettings{
+		Enabled:           proto.Bool(true),
+		MaxTotalSizeBytes: proto.Int64(10),
+		ExcludeLatest:     proto.Bool(true),
 	})
 	token := e.newUser("alice", "user")
 	e.doJSON("POST", "/api/v1/artifacts/repos", token, map[string]any{"name": "cap"})
@@ -50,11 +51,11 @@ func TestRetentionMaxTotalSize(t *testing.T) {
 	}
 }
 
-// Per-org OrgSetting overrides the global retention default
+// Org scoped settings override the system retention default
 func TestEffectiveRetentionOrgOverride(t *testing.T) {
-	e := newTestEnv(t, config.ArtifactRetentionConfig{
-		Enabled:     false, // global default off
-		MaxVersions: 5,
+	e := newTestEnv(t, &v1proto.ArtifactRetentionSettings{
+		Enabled:     proto.Bool(false),
+		MaxVersions: proto.Int32(5),
 	})
 	ctx := context.Background()
 
@@ -63,17 +64,21 @@ func TestEffectiveRetentionOrgOverride(t *testing.T) {
 		t.Fatalf("CreateOrganization: %v", err)
 	}
 
-	// Personal namespace resolves to the global default
+	// Personal namespace resolves to the system default
 	if p := e.manager.EffectiveRetention(ctx, "alice"); p.Enabled {
-		t.Fatal("personal namespace should inherit global (disabled) retention")
+		t.Fatal("personal namespace should inherit system (disabled) retention")
 	}
 
 	// Org overrides enable retention and tighten max_versions
-	if err := e.store.SetOrgSetting(ctx, org.ID, SettingRetentionEnabled, "true"); err != nil {
-		t.Fatalf("SetOrgSetting: %v", err)
-	}
-	if err := e.store.SetOrgSetting(ctx, org.ID, SettingRetentionMaxVersions, "2"); err != nil {
-		t.Fatalf("SetOrgSetting: %v", err)
+	patch := &v1proto.Settings{Artifacts: &v1proto.ArtifactSettings{
+		Retention: &v1proto.ArtifactRetentionSettings{
+			Enabled:     proto.Bool(true),
+			MaxVersions: proto.Int32(2),
+		},
+	}}
+	paths := []string{"artifacts.retention.enabled", "artifacts.retention.max_versions"}
+	if _, err := e.res.Update(ctx, v1proto.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, org.ID, patch, paths); err != nil {
+		t.Fatalf("settings update: %v", err)
 	}
 
 	p := e.manager.EffectiveRetention(ctx, "acme")

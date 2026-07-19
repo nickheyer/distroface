@@ -9,8 +9,10 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nickheyer/distroface/internal/certs"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
 // Resolves requests to per-org portals by listener port and Host header
@@ -20,6 +22,7 @@ type Resolver struct {
 
 	mu      sync.RWMutex
 	entries map[string]*Portal // Keyed "port|host", catch-alls use empty host
+	hosts   map[string]bool
 	loaded  bool
 }
 
@@ -31,6 +34,7 @@ func NewResolver(store *stores.Store, log *logger.Logger) *Resolver {
 func (res *Resolver) Invalidate() {
 	res.mu.Lock()
 	res.entries = nil
+	res.hosts = nil
 	res.loaded = false
 	res.mu.Unlock()
 }
@@ -59,24 +63,24 @@ func bareHost(host string) string {
 	return host
 }
 
-// Matches dedicated port + host, then the port catch-all, then host-only portals
-func (res *Resolver) Resolve(r *http.Request) *Portal {
-	if res == nil {
-		return nil
-	}
-	host := bareHost(r.Host)
-	port := listenerPort(r)
-
+func (res *Resolver) ensureLoaded() {
 	res.mu.RLock()
-	if !res.loaded {
-		res.mu.RUnlock()
-		res.mu.Lock()
-		if !res.loaded {
-			res.reloadLocked()
-		}
-		res.mu.Unlock()
-		res.mu.RLock()
+	loaded := res.loaded
+	res.mu.RUnlock()
+	if loaded {
+		return
 	}
+	res.mu.Lock()
+	if !res.loaded {
+		res.reloadLocked()
+	}
+	res.mu.Unlock()
+}
+
+// Matches dedicated port + host, then the port catch-all, then host-only portals
+func (res *Resolver) resolveHostPort(host string, port int) *Portal {
+	res.ensureLoaded()
+	res.mu.RLock()
 	defer res.mu.RUnlock()
 
 	if port > 0 {
@@ -93,6 +97,22 @@ func (res *Resolver) Resolve(r *http.Request) *Portal {
 	return nil
 }
 
+func (res *Resolver) Resolve(r *http.Request) *Portal {
+	if res == nil {
+		return nil
+	}
+	return res.resolveHostPort(bareHost(r.Host), listenerPort(r))
+}
+
+// The one hostname precedence implementation, shared with the tls layer
+func (res *Resolver) ResolveForTLS(host string, port int) (certs.TLSPortal, bool) {
+	p := res.resolveHostPort(bareHost(host), port)
+	if p == nil {
+		return certs.TLSPortal{}, false
+	}
+	return certs.TLSPortal{ID: p.ID, OrgID: p.OrgID, Source: p.CertSource, CatchAll: p.CatchAll}, true
+}
+
 func (res *Resolver) reloadLocked() {
 	portals, err := res.store.ListRegistryPortals(context.Background())
 	if err != nil {
@@ -102,6 +122,7 @@ func (res *Resolver) reloadLocked() {
 	}
 
 	entries := make(map[string]*Portal, len(portals))
+	hosts := map[string]bool{}
 	for _, p := range portals {
 		if !p.Enabled || p.Org == nil {
 			continue
@@ -109,12 +130,15 @@ func (res *Resolver) reloadLocked() {
 		entry := &Portal{
 			ID:             p.ID,
 			Name:           p.Name,
+			OrgID:          p.OrgID,
 			OrgName:        p.Org.Name,
 			OrgDisplayName: p.Org.DisplayName,
 			MapUnqualified: p.MapUnqualified,
 			AllowPush:      p.AllowPush,
 			RequireAuth:    p.RequireAuth,
 			TLS:            p.TLS,
+			CertSource:     p.CertSource,
+			CatchAll:       p.Hostname == "",
 		}
 		if rules, err := ParseRules(p.Rules); err != nil {
 			res.log.Error("portal %s (%s): stored rules invalid, custom rules disabled: %v", p.Name, p.Hostname, err)
@@ -126,9 +150,14 @@ func (res *Resolver) reloadLocked() {
 				entry.rules = mapper
 			}
 		}
-		entries[portalKey(p.Port, strings.ToLower(p.Hostname))] = entry
+		host := strings.ToLower(p.Hostname)
+		entries[portalKey(p.Port, host)] = entry
+		if host != "" {
+			hosts[host] = true
+		}
 	}
 	res.entries = entries
+	res.hosts = hosts
 	res.loaded = true
 }
 
@@ -150,11 +179,11 @@ func (res *Resolver) DesiredPorts() ([]int, error) {
 }
 
 // Decodes a portal's stored rules JSON
-func ParseRules(rulesJSON string) ([]MappingRule, error) {
+func ParseRules(rulesJSON string) ([]*v1.PortalRule, error) {
 	if rulesJSON == "" || rulesJSON == "[]" {
 		return nil, nil
 	}
-	var rules []MappingRule
+	var rules []*v1.PortalRule
 	if err := json.Unmarshal([]byte(rulesJSON), &rules); err != nil {
 		return nil, err
 	}
@@ -193,21 +222,8 @@ func (res *Resolver) IsPortalHost(host string) bool {
 	if host == "" {
 		return false
 	}
+	res.ensureLoaded()
 	res.mu.RLock()
-	if !res.loaded {
-		res.mu.RUnlock()
-		res.mu.Lock()
-		if !res.loaded {
-			res.reloadLocked()
-		}
-		res.mu.Unlock()
-		res.mu.RLock()
-	}
 	defer res.mu.RUnlock()
-	for key := range res.entries {
-		if strings.SplitN(key, "|", 2)[1] == host {
-			return true
-		}
-	}
-	return false
+	return res.hosts[host]
 }

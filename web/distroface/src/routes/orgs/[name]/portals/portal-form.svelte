@@ -16,6 +16,7 @@
 	import { Act } from '$lib/act.svelte';
 	import { effectiveAddress, placementError, portalScheme } from '$lib/portal-address';
 	import { certDate, certSourceLabels, certStateBadge, isIssuableHostname } from '$lib/cert-utils';
+	import { orgScope, patchSettings, portalScope } from '$lib/settings-utils';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { CertSource, TLSScope, type TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
 
@@ -32,9 +33,6 @@
 	} = $props();
 
 	type RuleDraft = { pattern: string; replace: string };
-
-	const ACME_EMAIL_KEY = 'tls.acme.email';
-	const ACME_DIR_KEY = 'tls.acme.directory_url';
 
 	// Draft snapshot on mount, parent keys this component per portal
 	/* svelte-ignore state_referenced_locally */
@@ -53,10 +51,10 @@
 	let tls = $state(portal?.tls ?? false);
 	/* svelte-ignore state_referenced_locally */
 	let certSource = $state<CertSource>(portal?.certSource || CertSource.NONE);
-	/* svelte-ignore state_referenced_locally */
-	let acmeEmail = $state(portal?.acmeEmail ?? '');
-	/* svelte-ignore state_referenced_locally */
-	let acmeDirectory = $state(portal?.acmeDirectoryUrl ?? '');
+	let acmeEmail = $state('');
+	let acmeDirectory = $state('');
+	let savedAcmeEmail = $state('');
+	let savedAcmeDir = $state('');
 	let provisionCert = $state(true);
 	let certPem = $state('');
 	let keyPem = $state('');
@@ -91,12 +89,31 @@
 
 	async function loadInherited() {
 		try {
-			const resp = await rpcClient.organization.getOrgSettings({ orgId }, silentCallOptions);
-			acmeDirInherited = resp.overrides[ACME_DIR_KEY] ?? resp.defaults[ACME_DIR_KEY] ?? '';
-			acmeEmailInherited = resp.overrides[ACME_EMAIL_KEY] ?? resp.defaults[ACME_EMAIL_KEY] ?? '';
+			if (portal) {
+				const stored = await rpcClient.settings.getSettings({ scope: portalScope(portal.id) }, silentCallOptions);
+				acmeEmail = stored.settings?.acme?.email ?? '';
+				acmeDirectory = stored.settings?.acme?.directoryUrl ?? '';
+				savedAcmeEmail = acmeEmail;
+				savedAcmeDir = acmeDirectory;
+			}
+			const eff = await rpcClient.settings.getEffectiveSettings({ scope: orgScope(orgId) }, silentCallOptions);
+			acmeDirInherited = eff.settings?.acme?.directoryUrl ?? '';
+			acmeEmailInherited = eff.settings?.acme?.email ?? '';
 		} catch {
 			// Placeholders stay generic
 		}
+	}
+
+	// Portal overrides live at the portal settings scope
+	async function saveAcme(portalId: string) {
+		const email = acmeEmail.trim();
+		const dir = acmeDirectory.trim();
+		if (email === savedAcmeEmail && dir === savedAcmeDir) return;
+		await patchSettings(portalScope(portalId), {
+			acme: { ...(email ? { email } : {}), ...(dir ? { directoryUrl: dir } : {}) }
+		}, ['acme.email', 'acme.directory_url']);
+		savedAcmeEmail = email;
+		savedAcmeDir = dir;
 	}
 
 	onMount(() => {
@@ -136,9 +153,12 @@
 	);
 
 	// Issuance failures surface as the portal's live cert state
-	async function provisionCertificate(domain: string) {
+	async function provisionCertificate(portalId: string) {
 		try {
-			await rpcClient.certificate.issueCertificate({ domain, orgId }, silentCallOptions);
+			await rpcClient.certificate.issueCertificate(
+				{ target: { case: 'portalId', value: portalId } },
+				silentCallOptions
+			);
 		} catch {
 			// Portal list shows the pending or error state
 		}
@@ -173,14 +193,13 @@
 			requireAuth,
 			tls,
 			certSource,
-			acmeEmail: acmeEmail.trim(),
-			acmeDirectoryUrl: acmeDirectory.trim(),
 			rules: cleanedRules
 		};
 		let redirected = false;
 		const ok = await submitAct.run(async () => {
 			if (portal) {
 				await rpcClient.portal.updatePortal({ ...common, id: portal.id, setRules: true }, silentCallOptions);
+				await saveAcme(portal.id);
 				if (certSource === CertSource.MANUAL && pemsFilled) {
 					await uploadPortalCert(portal.id);
 				}
@@ -188,7 +207,9 @@
 			}
 			const resp = await rpcClient.portal.createPortal(common, silentCallOptions);
 			const created = resp.portal;
-			if (created && certSource === CertSource.MANUAL && pemsFilled) {
+			if (!created) return;
+			await saveAcme(created.id);
+			if (certSource === CertSource.MANUAL && pemsFilled) {
 				try {
 					await uploadPortalCert(created.id);
 				} catch {
@@ -199,7 +220,7 @@
 				}
 			}
 			if (canProvision && provisionCert) {
-				await provisionCertificate(common.hostname);
+				await provisionCertificate(created.id);
 			}
 		});
 		if (ok && !redirected) goBack();

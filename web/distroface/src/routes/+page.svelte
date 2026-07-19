@@ -92,7 +92,7 @@
 						<p class="text-[13px] text-muted-foreground">Push your first image:</p>
 						<code class="code-inline block text-xs">
 							docker push {portalStore.host(
-								configStore.get('server.hostname', 'localhost:8080') as string
+								configStore.publicHostname
 							)}/{portalStore.imageRef(
 								portalStore.isPortal ? portalStore.orgName : (authStore.user?.username ?? ''),
 								'myimage'

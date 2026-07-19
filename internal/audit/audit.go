@@ -6,6 +6,7 @@ import (
 
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
 
@@ -26,19 +27,20 @@ type Event struct {
 	ActorID  string
 }
 
-// Writes security events to the db, nil recorder drops everything
+// Writes security events to the db, disabled settings drop everything
 type Recorder struct {
 	store *stores.Store
+	res   *settings.Resolver
 	log   *logger.Logger
 }
 
-func NewRecorder(store *stores.Store, log *logger.Logger) *Recorder {
-	return &Recorder{store: store, log: log}
+func NewRecorder(store *stores.Store, res *settings.Resolver, log *logger.Logger) *Recorder {
+	return &Recorder{store: store, res: res, log: log}
 }
 
 // Write failures only log, callers never see them
 func (r *Recorder) Record(ctx context.Context, ev Event) {
-	if r == nil {
+	if r == nil || !r.res.System(ctx).GetSecurity().GetAudit().GetEnabled() {
 		return
 	}
 	record := &storage.AuditEvent{
@@ -57,13 +59,17 @@ func (r *Recorder) Record(ctx context.Context, ev Event) {
 }
 
 // Prunes old events now and then daily until ctx ends
-func (r *Recorder) ScheduleRetention(ctx context.Context, retentionDays int) {
-	if r == nil || retentionDays <= 0 {
+func (r *Recorder) ScheduleRetention(ctx context.Context) {
+	if r == nil {
 		return
 	}
 	prune := func() {
+		days := int(r.res.System(ctx).GetSecurity().GetAudit().GetRetentionDays())
+		if days <= 0 {
+			return
+		}
 		// Store timestamps are utc, keep comparisons in the same zone
-		cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+		cutoff := time.Now().UTC().AddDate(0, 0, -days)
 		if n, err := r.store.DeleteAuditEventsBefore(ctx, cutoff); err != nil {
 			r.log.Error("audit retention prune failed: %v", err)
 		} else if n > 0 {

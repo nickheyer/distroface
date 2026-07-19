@@ -25,6 +25,8 @@
 	import { Act, errText } from '$lib/act.svelte';
 	import { Pager } from '$lib/pager.svelte';
 	import { QueryFilter } from '$lib/query.svelte';
+	import { downloadBlob } from '$lib/download';
+	import { orgScope, patchSettings, systemScope } from '$lib/settings-utils';
 	import { CertSource, CertState, TLSScope, type TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
@@ -32,9 +34,6 @@
 	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
 	const orgName = $derived(page.params.name ?? '');
 	const orgId = $derived(ctx.org?.id ?? '');
-
-	const ACME_EMAIL_KEY = 'tls.acme.email';
-	const ACME_DIR_KEY = 'tls.acme.directory_url';
 
 	let orgCA = $state<TLSMaterialInfo | null>(null);
 	let orgCert = $state<TLSMaterialInfo | null>(null);
@@ -56,7 +55,8 @@
 	let orgAcmeDir = $state('');
 	let savedAcmeEmail = $state('');
 	let savedAcmeDir = $state('');
-	let settingDefaults = $state<Record<string, string>>({});
+	let acmeEmailInherited = $state('');
+	let acmeDirInherited = $state('');
 
 	let portals = $state<RegistryPortal[]>([]);
 	let loading = $state(true);
@@ -82,12 +82,16 @@
 
 	async function loadOrgSettings() {
 		try {
-			const resp = await rpcClient.organization.getOrgSettings({ orgId }, silentCallOptions);
-			settingDefaults = resp.defaults;
-			orgAcmeEmail = resp.overrides[ACME_EMAIL_KEY] ?? '';
-			orgAcmeDir = resp.overrides[ACME_DIR_KEY] ?? '';
+			const [stored, sys] = await Promise.all([
+				rpcClient.settings.getSettings({ scope: orgScope(orgId) }, silentCallOptions),
+				rpcClient.settings.getEffectiveSettings({ scope: systemScope }, silentCallOptions)
+			]);
+			orgAcmeEmail = stored.settings?.acme?.email ?? '';
+			orgAcmeDir = stored.settings?.acme?.directoryUrl ?? '';
 			savedAcmeEmail = orgAcmeEmail;
 			savedAcmeDir = orgAcmeDir;
+			acmeEmailInherited = sys.settings?.acme?.email ?? '';
+			acmeDirInherited = sys.settings?.acme?.directoryUrl ?? '';
 		} catch {
 			// Fields keep their placeholders
 		}
@@ -108,19 +112,18 @@
 	});
 
 	// Overrides apply on blur, empty resets to the inherited value
-	function commitOrgSetting(act: Act, key: string, value: string, saved: string, onDone: (v: string) => void) {
+	function commitOrgSetting(act: Act, path: string, field: 'email' | 'directoryUrl', value: string, saved: string, onDone: (v: string) => void) {
 		if (value === saved) return;
 		act.run(async () => {
-			const req = value ? { orgId, set: { [key]: value } } : { orgId, reset: [key] };
-			await rpcClient.organization.updateOrgSettings(req, silentCallOptions);
+			await patchSettings(orgScope(orgId), value ? { acme: { [field]: value } } : {}, [path]);
 			onDone(value);
 		});
 	}
 
 	const commitAcmeDir = () =>
-		commitOrgSetting(dirAct, ACME_DIR_KEY, orgAcmeDir.trim(), savedAcmeDir, (v) => (savedAcmeDir = v));
+		commitOrgSetting(dirAct, 'acme.directory_url', 'directoryUrl', orgAcmeDir.trim(), savedAcmeDir, (v) => (savedAcmeDir = v));
 	const commitAcmeEmail = () =>
-		commitOrgSetting(emailAct, ACME_EMAIL_KEY, orgAcmeEmail.trim(), savedAcmeEmail, (v) => (savedAcmeEmail = v));
+		commitOrgSetting(emailAct, 'acme.email', 'email', orgAcmeEmail.trim(), savedAcmeEmail, (v) => (savedAcmeEmail = v));
 
 	function issueICA() {
 		caAct.run(async () => {
@@ -137,14 +140,7 @@
 	}
 
 	function downloadCA() {
-		if (!orgCA?.certPem) return;
-		const blob = new Blob([orgCA.certPem], { type: 'application/x-pem-file' });
-		const url = URL.createObjectURL(blob);
-		const a = document.createElement('a');
-		a.href = url;
-		a.download = `${orgName}-ca.pem`;
-		a.click();
-		URL.revokeObjectURL(url);
+		if (orgCA?.certPem) downloadBlob(orgCA.certPem, `${orgName}-ca.pem`);
 	}
 
 	async function confirmRemoveCA() {
@@ -196,7 +192,10 @@
 	async function renew(portal: RegistryPortal) {
 		busy = portal.id;
 		await renewAct.run(() =>
-			rpcClient.certificate.issueCertificate({ domain: portal.hostname, orgId }, silentCallOptions)
+			rpcClient.certificate.issueCertificate(
+				{ target: { case: 'portalId', value: portal.id } },
+				silentCallOptions
+			)
 		);
 		busy = null;
 		await load();
@@ -257,7 +256,7 @@
 					id="org-acme-dir"
 					bind:value={orgAcmeDir}
 					class="font-mono text-xs"
-					placeholder={settingDefaults[ACME_DIR_KEY] || 'inherited'}
+					placeholder={acmeDirInherited || 'inherited'}
 					disabled={dirAct.busy}
 					onblur={commitAcmeDir}
 					onkeydown={(e) => { if (e.key === 'Enter') commitAcmeDir(); }}
@@ -273,7 +272,7 @@
 				<Input
 					id="org-acme-email"
 					bind:value={orgAcmeEmail}
-					placeholder={settingDefaults[ACME_EMAIL_KEY] || 'inherited'}
+					placeholder={acmeEmailInherited || 'inherited'}
 					disabled={emailAct.busy}
 					onblur={commitAcmeEmail}
 					onkeydown={(e) => { if (e.key === 'Enter') commitAcmeEmail(); }}

@@ -15,7 +15,6 @@ import (
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
-	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -31,14 +30,13 @@ var usernameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{1,38}[a-z0-9]$`)
 type AuthService struct {
 	store       *stores.Store
 	log         *logger.Logger
-	config      *config.Config
 	authManager *auth.Manager
 	enforcer    *rbac.Enforcer
 	oidcHandler *auth.OIDCHandler
 }
 
-func NewAuthService(store *stores.Store, cfg *config.Config, manager *auth.Manager, enforcer *rbac.Enforcer, oidcHandler *auth.OIDCHandler, log *logger.Logger) *AuthService {
-	return &AuthService{store: store, config: cfg, authManager: manager, enforcer: enforcer, oidcHandler: oidcHandler, log: log}
+func NewAuthService(store *stores.Store, manager *auth.Manager, enforcer *rbac.Enforcer, oidcHandler *auth.OIDCHandler, log *logger.Logger) *AuthService {
+	return &AuthService{store: store, authManager: manager, enforcer: enforcer, oidcHandler: oidcHandler, log: log}
 }
 
 func (s *AuthService) Register(ctx context.Context, req *connect.Request[v1.RegisterRequest]) (*connect.Response[v1.RegisterResponse], error) {
@@ -258,12 +256,13 @@ func (s *AuthService) RefreshSession(ctx context.Context, req *connect.Request[v
 
 func (s *AuthService) GetAuthStatus(ctx context.Context, req *connect.Request[v1.GetAuthStatusRequest]) (*connect.Response[v1.GetAuthStatusResponse], error) {
 	count, _ := s.store.CountUsers(ctx)
+	authCfg := s.authManager.Settings().System(ctx).GetAuth()
 
 	return connect.NewResponse(&v1.GetAuthStatusResponse{
-		LocalEnabled:        s.authManager.IsLocalAuthEnabled(),
-		OidcEnabled:         s.authManager.GetConfig().OIDC.Enabled,
-		RegistrationEnabled: s.authManager.IsRegistrationAllowed(),
-		AnonymousAccess:     s.authManager.IsAnonymousAccessEnabled(),
+		LocalEnabled:        authCfg.GetLocalEnabled(),
+		OidcEnabled:         authCfg.GetOidc().GetEnabled(),
+		RegistrationEnabled: authCfg.GetLocalEnabled() && authCfg.GetLocalAllowRegistration(),
+		AnonymousAccess:     authCfg.GetAnonymousAccess(),
 		FirstUserSetup:      count == 0,
 	}), nil
 }
@@ -274,62 +273,6 @@ func (s *AuthService) GetOIDCLoginURL(ctx context.Context, req *connect.Request[
 	}
 	return connect.NewResponse(&v1.GetOIDCLoginURLResponse{
 		RedirectUrl: "/api/v1/auth/oidc/login",
-	}), nil
-}
-
-func (s *AuthService) GetAuthConfig(ctx context.Context, req *connect.Request[v1.GetAuthConfigRequest]) (*connect.Response[v1.GetAuthConfigResponse], error) {
-	return connect.NewResponse(s.buildAuthConfigResponse()), nil
-}
-
-func (s *AuthService) buildAuthConfigResponse() *v1.GetAuthConfigResponse {
-	cfg := s.authManager.GetConfig()
-	count, _ := s.store.CountUsers(context.Background())
-
-	resp := &v1.GetAuthConfigResponse{
-		LocalEnabled:        cfg.Local.Enabled,
-		RegistrationEnabled: cfg.Local.AllowRegistration,
-		AnonymousAccess:     cfg.AnonymousAccess,
-		SessionTimeout:      int32(cfg.SessionTimeout),
-		OidcEnabled:         cfg.OIDC.Enabled,
-		OidcIssuerUri:       cfg.OIDC.IssuerURI,
-		OidcClientId:        cfg.OIDC.ClientID,
-		OidcRedirectUrl:     cfg.OIDC.RedirectURL,
-		OidcScopes:          cfg.OIDC.Scopes,
-		OidcRoleClaim:       cfg.OIDC.RoleClaim,
-		FirstUserSetup:      count == 0,
-	}
-	return resp
-}
-
-func (s *AuthService) UpdateAuthSettings(ctx context.Context, req *connect.Request[v1.UpdateAuthSettingsRequest]) (*connect.Response[v1.UpdateAuthSettingsResponse], error) {
-	msg := req.Msg
-
-	var localEnabled, regEnabled, anonAccess *bool
-	var sessionTimeout *int32
-
-	if msg.LocalEnabled != nil {
-		v := *msg.LocalEnabled
-		localEnabled = &v
-	}
-	if msg.RegistrationEnabled != nil {
-		v := *msg.RegistrationEnabled
-		regEnabled = &v
-	}
-	if msg.AnonymousAccess != nil {
-		v := *msg.AnonymousAccess
-		anonAccess = &v
-	}
-	if msg.SessionTimeout != nil {
-		v := *msg.SessionTimeout
-		sessionTimeout = &v
-	}
-
-	if err := s.authManager.UpdateSettings(ctx, localEnabled, regEnabled, anonAccess, sessionTimeout); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
-	}
-
-	return connect.NewResponse(&v1.UpdateAuthSettingsResponse{
-		Config: s.buildAuthConfigResponse(),
 	}), nil
 }
 

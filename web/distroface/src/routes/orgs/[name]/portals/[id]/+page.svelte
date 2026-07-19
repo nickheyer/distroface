@@ -16,7 +16,7 @@
 	const orgName = $derived(page.params.name ?? '');
 	const orgId = $derived(ctx.org?.id ?? '');
 	const portalId = $derived(page.params.id ?? '');
-	const mainPort = $derived(Number(configStore.get('server.port', 0)) || 0);
+	const mainPort = $derived(configStore.mainPort);
 
 	let portal = $state<RegistryPortal | null>(null);
 	let loading = $state(true);

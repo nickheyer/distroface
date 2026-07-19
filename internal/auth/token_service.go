@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -17,6 +18,7 @@ import (
 	"github.com/go-jose/go-jose/v4"
 	josejwt "github.com/go-jose/go-jose/v4/jwt"
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/settings"
 )
 
 // TokenService manages ECDSA keys and signs Docker registry JWTs.
@@ -28,7 +30,7 @@ type TokenService struct {
 	keyID      string
 	issuer     string
 	service    string
-	expiry     time.Duration
+	res        *settings.Resolver
 }
 
 // ResourceActions matches the Distribution v3 token claim format.
@@ -51,7 +53,7 @@ type ClaimSet struct {
 }
 
 // NewTokenService initializes keys from disk or generates them, then returns a TokenService.
-func NewTokenService(dataDir, issuer, service string, expiry time.Duration) (*TokenService, error) {
+func NewTokenService(dataDir, issuer, service string, res *settings.Resolver) (*TokenService, error) {
 	keysDir := filepath.Join(dataDir, "keys")
 	if err := os.MkdirAll(keysDir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create keys directory: %w", err)
@@ -64,7 +66,7 @@ func NewTokenService(dataDir, issuer, service string, expiry time.Duration) (*To
 		certPath: certPath,
 		issuer:   issuer,
 		service:  service,
-		expiry:   expiry,
+		res:      res,
 	}
 
 	if err := ts.loadOrGenerate(keyPath, certPath); err != nil {
@@ -81,6 +83,11 @@ func (ts *TokenService) CertPath() string {
 	return ts.certPath
 }
 
+// Live registry token lifetime
+func (ts *TokenService) expiry() time.Duration {
+	return time.Duration(ts.res.System(context.Background()).GetAuth().GetTokenExpirySeconds()) * time.Second
+}
+
 // SignToken creates a signed JWT for the given subject and access claims.
 func (ts *TokenService) SignToken(subject string, access []*ResourceActions) (string, error) {
 	now := time.Now().UTC()
@@ -89,7 +96,7 @@ func (ts *TokenService) SignToken(subject string, access []*ResourceActions) (st
 		Issuer:     ts.issuer,
 		Subject:    subject,
 		Audience:   josejwt.Audience{ts.service},
-		Expiration: josejwt.NewNumericDate(now.Add(ts.expiry)),
+		Expiration: josejwt.NewNumericDate(now.Add(ts.expiry())),
 		NotBefore:  josejwt.NewNumericDate(now.Add(-10 * time.Second)),
 		IssuedAt:   josejwt.NewNumericDate(now),
 		JWTID:      uuid.New().String(),

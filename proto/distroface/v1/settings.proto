@@ -1,0 +1,225 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/certificate.proto";
+import "google/protobuf/field_mask.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// Runtime settings stored per scope, resolved portal over org over
+// system over config file over defaults, field presence drives inheritance
+service SettingsService {
+  // Stored values at one scope plus file locked field paths
+  rpc GetSettings(GetSettingsRequest) returns (GetSettingsResponse) {}
+  // Field masked patch of one scope, applied live
+  rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse) {}
+  // Fully resolved values for a scope with per field provenance
+  rpc GetEffectiveSettings(GetEffectiveSettingsRequest) returns (GetEffectiveSettingsResponse) {}
+}
+
+// Which tier a settings row belongs to
+enum SettingsScopeType {
+  SETTINGS_SCOPE_TYPE_UNSPECIFIED = 0;
+  SETTINGS_SCOPE_TYPE_SYSTEM = 1;
+  SETTINGS_SCOPE_TYPE_ORG = 2;
+  SETTINGS_SCOPE_TYPE_PORTAL = 3;
+}
+
+// System scope leaves scope_id empty
+message SettingsScope {
+  SettingsScopeType type = 1;
+  string scope_id = 2; // Org or portal id
+}
+
+// Where a resolved field value came from
+enum SettingsTier {
+  SETTINGS_TIER_UNSPECIFIED = 0;
+  SETTINGS_TIER_DEFAULT = 1; // Built in default
+  SETTINGS_TIER_FILE = 2; // Pinned by the config file, not editable
+  SETTINGS_TIER_SYSTEM = 3;
+  SETTINGS_TIER_ORG = 4;
+  SETTINGS_TIER_PORTAL = 5;
+}
+
+// Tier that supplied one resolved field
+message FieldProvenance {
+  string path = 1; // Proto field path like acme.email
+  SettingsTier tier = 2;
+}
+
+// Every runtime tunable, org scope accepts acme and artifacts,
+// portal scope accepts acme, system scope accepts everything
+message Settings {
+  ServerSettings server = 1;
+  AuthSettings auth = 2;
+  TLSSettings tls = 3;
+  ACMESettings acme = 4;
+  PortalPolicySettings portals = 5;
+  ArtifactSettings artifacts = 6;
+  GCSettings gc = 7;
+  RateLimitSettings rate_limit = 8;
+  WebhookSettings webhooks = 9;
+  SecuritySettings security = 10;
+}
+
+// Instance identity as clients reach it
+message ServerSettings {
+  optional string public_hostname = 1; // host or host:port
+}
+
+// Session, token, and provider toggles
+message AuthSettings {
+  optional int32 session_timeout_seconds = 1;
+  optional int32 token_expiry_seconds = 2;
+  optional bool anonymous_access = 3;
+  optional bool local_enabled = 4;
+  optional bool local_allow_registration = 5;
+  OIDCSettings oidc = 6;
+}
+
+// External identity provider wiring
+message OIDCSettings {
+  optional bool enabled = 1;
+  optional string issuer_uri = 2;
+  optional string client_id = 3;
+  optional string client_secret = 4; // Write only, reads redact
+  bool client_secret_set = 5; // Output only
+  optional string redirect_url = 6;
+  repeated string scopes = 7;
+  optional string role_claim = 8;
+  map<string, string> role_mapping = 9; // Idp role to system role
+  optional string group_claim = 10;
+  map<string, string> group_org_mapping = 11; // Idp group to org name
+  optional bool skip_tls_verify = 12;
+}
+
+// How the shared listeners treat cleartext
+enum TLSMode {
+  TLS_MODE_UNSPECIFIED = 0;
+  TLS_MODE_DUAL = 1; // Serve tls when a cert resolves, cleartext otherwise
+  TLS_MODE_HTTPS_ONLY = 2; // Cleartext on the primary host redirects to https
+  TLS_MODE_CLEARTEXT = 3; // Never terminate tls in app
+}
+
+// Primary hostname serving behavior
+message TLSSettings {
+  optional TLSMode mode = 1;
+  optional CertSource primary_source = 2; // config, manual, acme, or app_ca
+}
+
+// Acme issuance, org and portal scopes override email and directory
+message ACMESettings {
+  optional bool enabled = 1;
+  optional string email = 2;
+  optional string directory_url = 3; // Empty means lets encrypt production
+  optional string challenge_port = 4; // System only, empty disables http-01
+  optional bool redirect_http = 5; // System only, challenge listener redirects to https
+}
+
+// Instance rules for org claimed hostnames
+message PortalPolicySettings {
+  repeated string hostname_blacklist = 1; // Exact or *.suffix patterns
+  optional bool require_hostname_approval = 2;
+}
+
+// Artifact repo limits, org scope may override sizes and retention
+message ArtifactSettings {
+  optional int64 max_file_size_mb = 1; // Zero means unlimited
+  optional bool v1_compat = 2; // System only
+  optional int32 stale_upload_cleanup_hours = 3;
+  ArtifactRetentionSettings retention = 4;
+  ArtifactReaperSettings reaper = 5; // System only
+  optional bool private_by_default = 6; // New repos start private
+}
+
+// Version and age pruning bounds
+message ArtifactRetentionSettings {
+  optional bool enabled = 1;
+  optional int32 max_versions = 2; // Zero means unlimited
+  optional int32 max_age_days = 3; // Zero disables
+  optional int64 max_total_size_bytes = 4; // Zero means unlimited
+  optional bool exclude_latest = 5;
+}
+
+// Scheduled retention sweep
+message ArtifactReaperSettings {
+  optional bool enabled = 1;
+  optional int32 interval_hours = 2;
+}
+
+// Scheduled registry mark and sweep
+message GCSettings {
+  optional bool enabled = 1;
+  optional int32 interval_hours = 2;
+  optional bool remove_untagged = 3;
+}
+
+// Abuse throttles, zero disables each
+message RateLimitSettings {
+  optional int32 auth_failure_limit = 1;
+  optional int32 auth_failure_window_seconds = 2;
+  optional int32 pull_per_minute = 3;
+  optional int32 anon_pull_per_minute = 4;
+}
+
+// Delivery restrictions
+message WebhookSettings {
+  optional bool allow_private_networks = 1;
+}
+
+// Hardening toggles
+message SecuritySettings {
+  SecurityHeadersSettings headers = 1;
+  AuditSettings audit = 2;
+}
+
+// Response header policy
+message SecurityHeadersSettings {
+  optional bool enabled = 1;
+  optional bool hsts = 2;
+  optional int32 hsts_max_age_seconds = 3;
+  optional string content_security_policy = 4; // Empty keeps the built in policy
+}
+
+// Login and admin mutation trail
+message AuditSettings {
+  optional bool enabled = 1;
+  optional int32 retention_days = 2; // Zero keeps history forever
+}
+
+// Scope to read
+message GetSettingsRequest {
+  SettingsScope scope = 1;
+}
+
+// Only fields stored at the requested scope are present
+message GetSettingsResponse {
+  Settings settings = 1;
+  repeated string locked_paths = 2; // Field paths pinned by the config file
+}
+
+// Masked paths present in settings are set, absent ones are cleared
+message UpdateSettingsRequest {
+  SettingsScope scope = 1;
+  Settings settings = 2;
+  google.protobuf.FieldMask update_mask = 3;
+}
+
+// State after the update
+message UpdateSettingsResponse {
+  GetSettingsResponse stored = 1;
+  GetEffectiveSettingsResponse effective = 2;
+}
+
+// Scope to resolve
+message GetEffectiveSettingsRequest {
+  SettingsScope scope = 1;
+}
+
+// Every field resolved, secrets redacted, anonymous callers
+// receive only the public subset
+message GetEffectiveSettingsResponse {
+  Settings settings = 1;
+  repeated FieldProvenance provenance = 2;
+}

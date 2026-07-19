@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/distroface/internal/db"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -97,6 +98,31 @@ func (s *Store) Migrate() error {
 		s.db.Exec("DROP INDEX IF EXISTS uni_artifact_repositories_name")
 	}
 
+	// Enum columns move from legacy strings to proto numbers
+	if s.db.Migrator().HasTable("registry_portals") {
+		if err := s.db.Exec(`UPDATE registry_portals SET cert_source = CASE cert_source
+			WHEN 'none' THEN 1 WHEN 'config' THEN 2 WHEN 'manual' THEN 3 WHEN 'acme' THEN 4
+			WHEN 'org_ca' THEN 5 WHEN 'org_cert' THEN 6 WHEN 'app_ca' THEN 7 END
+			WHERE cert_source IN ('none','config','manual','acme','org_ca','org_cert','app_ca')`).Error; err != nil {
+			return fmt.Errorf("failed to migrate portal cert sources: %w", err)
+		}
+	}
+	if s.db.Migrator().HasTable("tls_certificates") {
+		if err := s.db.Exec(`UPDATE tls_certificates SET scope = CASE scope
+			WHEN 'app' THEN 1 WHEN 'app_ca' THEN 2 WHEN 'org' THEN 3
+			WHEN 'org_ca' THEN 4 WHEN 'portal' THEN 5 END
+			WHERE scope IN ('app','app_ca','org','org_ca','portal')`).Error; err != nil {
+			return fmt.Errorf("failed to migrate tls certificate scopes: %w", err)
+		}
+	}
+	if s.db.Migrator().HasTable("certificate_domains") {
+		if err := s.db.Exec(`UPDATE certificate_domains SET scope = CASE scope
+			WHEN 'system' THEN 1 WHEN 'org' THEN 2 END
+			WHERE scope IN ('system','org')`).Error; err != nil {
+			return fmt.Errorf("failed to migrate certificate domain scopes: %w", err)
+		}
+	}
+
 	if err := s.db.AutoMigrate(
 		&db.User{},
 		&db.Role{},
@@ -108,7 +134,7 @@ func (s *Store) Migrate() error {
 		&db.Repository{},
 		&db.Star{},
 		&db.SystemSetting{},
-		&db.OrgSetting{},
+		&db.SettingsRow{},
 		&db.RegistrationInvite{},
 		&db.Webhook{},
 		&db.WebhookDelivery{},
@@ -138,6 +164,10 @@ func (s *Store) Migrate() error {
 		return fmt.Errorf("failed to backfill artifact repo namespace: %w", err)
 	}
 
+	if err := s.migrateLegacySettings(); err != nil {
+		return fmt.Errorf("failed to migrate legacy settings: %w", err)
+	}
+
 	if err := s.backfillPortalCertSource(); err != nil {
 		return fmt.Errorf("failed to backfill portal cert source: %w", err)
 	}
@@ -162,12 +192,12 @@ func (s *Store) Migrate() error {
 // Pre explicit-source portals become manual when material exists, else none
 func (s *Store) backfillPortalCertSource() error {
 	if err := s.db.Exec(`UPDATE registry_portals SET cert_source = ?
-		WHERE cert_source = '' AND EXISTS (
+		WHERE cert_source IN ('', 0) AND EXISTS (
 			SELECT 1 FROM tls_certificates t
 			WHERE t.scope = ? AND t.portal_id = registry_portals.id)`,
-		db.CertSourceManual, db.TLSCertScopePortal).Error; err != nil {
+		int32(v1.CertSource_CERT_SOURCE_MANUAL), int32(v1.TLSScope_TLS_SCOPE_PORTAL)).Error; err != nil {
 		return err
 	}
-	return s.db.Exec(`UPDATE registry_portals SET cert_source = ? WHERE cert_source = ''`,
-		db.CertSourceNone).Error
+	return s.db.Exec(`UPDATE registry_portals SET cert_source = ? WHERE cert_source IN ('', 0)`,
+		int32(v1.CertSource_CERT_SOURCE_NONE)).Error
 }

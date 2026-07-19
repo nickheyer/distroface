@@ -12,18 +12,21 @@ import (
 // Counts events per key inside sliding window
 type Limiter struct {
 	mu     sync.Mutex
-	limit  int
-	window time.Duration
+	limits func() (int, time.Duration)
 	events map[string][]time.Time
 
 	lastPrune time.Time
 }
 
-// Make limiter with given limit and window
+// Make limiter with fixed limit and window
 func NewLimiter(limit int, window time.Duration) *Limiter {
+	return NewDynamicLimiter(func() (int, time.Duration) { return limit, window })
+}
+
+// Make limiter whose limits are read live, zero disables
+func NewDynamicLimiter(limits func() (int, time.Duration)) *Limiter {
 	return &Limiter{
-		limit:     limit,
-		window:    window,
+		limits:    limits,
 		events:    make(map[string][]time.Time),
 		lastPrune: time.Now(),
 	}
@@ -31,52 +34,65 @@ func NewLimiter(limit int, window time.Duration) *Limiter {
 
 // Max events per window
 func (l *Limiter) Limit() int {
-	return l.limit
+	limit, _ := l.limits()
+	return limit
 }
 
 // Count event and say if key within quota
 func (l *Limiter) Take(key string) (allowed bool, remaining int, resetAt time.Time) {
 	now := time.Now()
+	limit, window := l.limits()
+	if limit <= 0 {
+		return true, 0, now
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.pruneLocked(now)
+	l.pruneLocked(now, window)
 
-	kept := l.trimKeyLocked(key, now)
-	if len(kept) >= l.limit {
+	kept := l.trimKeyLocked(key, now, window)
+	if len(kept) >= limit {
 		l.events[key] = kept
-		return false, 0, kept[0].Add(l.window)
+		return false, 0, kept[0].Add(window)
 	}
 
 	kept = append(kept, now)
 	l.events[key] = kept
-	return true, l.limit - len(kept), kept[0].Add(l.window)
+	return true, limit - len(kept), kept[0].Add(window)
 }
 
 // Count failure without checking quota
 func (l *Limiter) Record(key string) {
 	now := time.Now()
+	limit, window := l.limits()
+	if limit <= 0 {
+		return
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.pruneLocked(now)
-	l.events[key] = append(l.trimKeyLocked(key, now), now)
+	l.pruneLocked(now, window)
+	l.events[key] = append(l.trimKeyLocked(key, now, window), now)
 }
 
 // Says if key hit limit inside window
 func (l *Limiter) Blocked(key string) bool {
 	now := time.Now()
+	limit, window := l.limits()
+	if limit <= 0 {
+		return false
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	kept := l.trimKeyLocked(key, now)
+	kept := l.trimKeyLocked(key, now, window)
 	if len(kept) == 0 {
 		delete(l.events, key)
 		return false
 	}
 	l.events[key] = kept
-	return len(kept) >= l.limit
+	return len(kept) >= limit
 }
 
 // Wipe events for key after good login
@@ -87,8 +103,8 @@ func (l *Limiter) Reset(key string) {
 }
 
 // Drop old events for one key
-func (l *Limiter) trimKeyLocked(key string, now time.Time) []time.Time {
-	cutoff := now.Add(-l.window)
+func (l *Limiter) trimKeyLocked(key string, now time.Time, window time.Duration) []time.Time {
+	cutoff := now.Add(-window)
 	events := l.events[key]
 	start := 0
 	for start < len(events) && events[start].Before(cutoff) {
@@ -98,12 +114,12 @@ func (l *Limiter) trimKeyLocked(key string, now time.Time) []time.Time {
 }
 
 // Drop dead keys so map cannot grow forever
-func (l *Limiter) pruneLocked(now time.Time) {
-	if now.Sub(l.lastPrune) < l.window {
+func (l *Limiter) pruneLocked(now time.Time, window time.Duration) {
+	if now.Sub(l.lastPrune) < window {
 		return
 	}
 	l.lastPrune = now
-	cutoff := now.Add(-l.window)
+	cutoff := now.Add(-window)
 	for key, events := range l.events {
 		if len(events) == 0 || events[len(events)-1].Before(cutoff) {
 			delete(l.events, key)

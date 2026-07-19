@@ -9,7 +9,7 @@
 	import { relativeTime, formatBytes } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import type { User, Repository } from '$lib/proto/distroface/v1/types_pb';
-	import type { GetStorageUsageResponse } from '$lib/proto/distroface/v1/configuration_pb';
+	import type { GetStorageUsageResponse } from '$lib/proto/distroface/v1/gc_pb';
 
 	let loading = $state(true);
 	let userCount = $state(0);
@@ -54,7 +54,7 @@
 				rpcClient.repository.listRepositories({ page: { pageSize: 5 } }, silentCallOptions),
 				rpcClient.organization.listOrganizations({ page: { pageSize: 1 } }, silentCallOptions),
 				rpcClient.role.listRoles({ page: { pageSize: 1 } }, silentCallOptions),
-				rpcClient.auth.getAuthConfig({}, silentCallOptions)
+				rpcClient.auth.getAuthStatus({}, silentCallOptions)
 			]);
 
 			userCount = Number(usersResp.page?.totalCount ?? 0n);
@@ -76,7 +76,7 @@
 		}
 
 		try {
-			storageUsage = await rpcClient.configuration.getStorageUsage({}, silentCallOptions);
+			storageUsage = await rpcClient.gc.getStorageUsage({}, silentCallOptions);
 		} catch {
 			// storage scan is best-effort
 		}

@@ -21,8 +21,9 @@ var PublicProcedures = map[string]bool{
 	distrofacev1connect.AuthServiceLoginProcedure:                     true,
 	distrofacev1connect.AuthServiceGetAuthStatusProcedure:             true,
 	distrofacev1connect.AuthServiceGetOIDCLoginURLProcedure:           true,
-	distrofacev1connect.HealthServiceHealthCheckProcedure:             true,
-	distrofacev1connect.ConfigurationServiceGetConfigurationProcedure: true,
+	distrofacev1connect.HealthServiceHealthCheckProcedure: true,
+	// Anonymous callers receive the redacted public subset only
+	distrofacev1connect.SettingsServiceGetEffectiveSettingsProcedure: true,
 	// Public repo browsing (visibility filtering handled in service)
 	distrofacev1connect.RepositoryServiceGetRepositoryProcedure:    true,
 	distrofacev1connect.RepositoryServiceListRepositoriesProcedure: true,
@@ -54,6 +55,15 @@ var AuthenticatedOnlyProcedures = map[string]bool{
 
 	// Org slug resolution, object scoped read enforced in-service
 	distrofacev1connect.OrganizationServiceGetOrganizationProcedure: true,
+
+	// Settings scope permissions enforced in-service per tier
+	distrofacev1connect.SettingsServiceGetSettingsProcedure:    true,
+	distrofacev1connect.SettingsServiceUpdateSettingsProcedure: true,
+
+	// Target org derived from the row in-service
+	distrofacev1connect.CertificateServiceRemoveCertificateDomainProcedure:      true,
+	distrofacev1connect.CertificateServiceBulkRemoveCertificateDomainsProcedure: true,
+	distrofacev1connect.CertificateServiceIssueCertificateProcedure:             true,
 }
 
 // ProcedurePermissions maps each RPC procedure path to the resource and action
@@ -84,17 +94,13 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.RoleServiceUnassignRoleProcedure:         {Resource: ResourceRoles, Action: ActionDelete},
 	distrofacev1connect.RoleServiceGetUserRolesProcedure:         {Resource: ResourceRoles, Action: ActionRead},
 
-	// ── ConfigurationService (admin) ──────────────────────────────────
-	distrofacev1connect.ConfigurationServiceGetStorageUsageProcedure: {Resource: ResourceSettings, Action: ActionRead},
-
 	// ── GCService (admin) ─────────────────────────────────────────────
-	distrofacev1connect.GCServiceRunGCProcedure:       {Resource: ResourceSettings, Action: ActionUpdate},
-	distrofacev1connect.GCServiceGetGCStatusProcedure: {Resource: ResourceSettings, Action: ActionRead},
+	distrofacev1connect.GCServiceRunGCProcedure:           {Resource: ResourceSettings, Action: ActionUpdate},
+	distrofacev1connect.GCServiceGetGCStatusProcedure:     {Resource: ResourceSettings, Action: ActionRead},
+	distrofacev1connect.GCServiceGetStorageUsageProcedure: {Resource: ResourceSettings, Action: ActionRead},
 
 	// ── AuthService (admin) ───────────────────────────────────────────
-	distrofacev1connect.AuthServiceGetAuthConfigProcedure:      {Resource: ResourceSettings, Action: ActionRead},
-	distrofacev1connect.AuthServiceUpdateAuthSettingsProcedure: {Resource: ResourceSettings, Action: ActionUpdate},
-	distrofacev1connect.AuthServiceCreateInviteProcedure:       {Resource: ResourceSettings, Action: ActionCreate},
+	distrofacev1connect.AuthServiceCreateInviteProcedure: {Resource: ResourceSettings, Action: ActionCreate},
 	distrofacev1connect.AuthServiceListInvitesProcedure:        {Resource: ResourceSettings, Action: ActionRead},
 	distrofacev1connect.AuthServiceGetInviteProcedure:          {Resource: ResourceSettings, Action: ActionRead},
 	distrofacev1connect.AuthServiceDeleteInviteProcedure:       {Resource: ResourceSettings, Action: ActionDelete},
@@ -114,8 +120,6 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.OrganizationServiceAddOrgMemberProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 	distrofacev1connect.OrganizationServiceRemoveOrgMemberProcedure:      {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 	distrofacev1connect.OrganizationServiceUpdateOrgMemberRoleProcedure:  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
-	distrofacev1connect.OrganizationServiceGetOrgSettingsProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
-	distrofacev1connect.OrganizationServiceUpdateOrgSettingsProcedure:    {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 	distrofacev1connect.OrganizationServiceTransferOrgOwnershipProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 
 	// ── PortalService (org-scoped; owner/admin checks in-service) ──────
@@ -126,15 +130,10 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.PortalServiceDeletePortalProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 
 	// ── CertificateService (system or org scope, checks in-service) ────
-	distrofacev1connect.CertificateServiceGetTLSStatusProcedure:                 {Resource: ResourceSettings, Action: ActionRead},
-	distrofacev1connect.CertificateServiceListCertificateDomainsProcedure:       {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceAddCertificateDomainProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceRemoveCertificateDomainProcedure:      {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceBulkRemoveCertificateDomainsProcedure: {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceApproveCertificateDomainProcedure:     {Resource: ResourceSettings, Action: ActionManage},
-	distrofacev1connect.CertificateServiceIssueCertificateProcedure:             {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceUpdateACMESettingsProcedure:           {Resource: ResourceSettings, Action: ActionManage},
-	distrofacev1connect.CertificateServiceUploadTLSCertificateProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceListCertificateDomainsProcedure:   {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceAddCertificateDomainProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceApproveCertificateDomainProcedure: {Resource: ResourceSettings, Action: ActionManage},
+	distrofacev1connect.CertificateServiceUploadTLSCertificateProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 	distrofacev1connect.CertificateServiceDeleteTLSCertificateProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 	distrofacev1connect.CertificateServiceGetTLSMaterialProcedure:               {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
 	distrofacev1connect.CertificateServiceGenerateOrgCAProcedure:                {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},

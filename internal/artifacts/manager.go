@@ -8,25 +8,14 @@ import (
 	"os"
 	"path"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
-	"github.com/nickheyer/distroface/pkg/config"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
-)
-
-// Per-org OrgSetting keys mirroring the global artifacts config
-const (
-	SettingRetentionEnabled       = "artifacts.retention.enabled"
-	SettingRetentionMaxVersions   = "artifacts.retention.max_versions"
-	SettingRetentionMaxAgeDays    = "artifacts.retention.max_age_days"
-	SettingRetentionMaxTotalSize  = "artifacts.retention.max_total_size"
-	SettingRetentionExcludeLatest = "artifacts.retention.exclude_latest"
-	SettingMaxFileSizeMB          = "artifacts.max_file_size_mb"
-	SettingPrivateByDefault       = "artifacts.private_by_default"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
 // Resolved retention rules for a single repo
@@ -47,12 +36,22 @@ var ErrUploadNotFound = errors.New("upload session not found")
 type Manager struct {
 	store *stores.Store
 	blobs *BlobStore
-	cfg   config.ArtifactsConfig
+	res   *settings.Resolver
 	log   *logger.Logger
 }
 
-func NewManager(store *stores.Store, blobs *BlobStore, cfg config.ArtifactsConfig, log *logger.Logger) *Manager {
-	return &Manager{store: store, blobs: blobs, cfg: cfg, log: log}
+func NewManager(store *stores.Store, blobs *BlobStore, res *settings.Resolver, log *logger.Logger) *Manager {
+	return &Manager{store: store, blobs: blobs, res: res, log: log}
+}
+
+// Effective artifact settings for an org namespace or the system
+func (m *Manager) artifactSettings(ctx context.Context, namespace string) *v1.ArtifactSettings {
+	if namespace != "" {
+		if org, err := m.store.GetOrganization(ctx, namespace); err == nil && org != nil {
+			return m.res.Org(ctx, org.ID).GetArtifacts()
+		}
+	}
+	return m.res.System(ctx).GetArtifacts()
 }
 
 func (m *Manager) Blobs() *BlobStore { return m.blobs }
@@ -195,43 +194,19 @@ func (m *Manager) DeleteRepository(ctx context.Context, repo *storage.ArtifactRe
 
 // Resolves the effective retention policy for a namespace
 func (m *Manager) EffectiveRetention(ctx context.Context, namespace string) RetentionPolicy {
-	p := RetentionPolicy{
-		Enabled:       m.cfg.Retention.Enabled,
-		MaxVersions:   m.cfg.Retention.MaxVersions,
-		MaxAgeDays:    m.cfg.Retention.MaxAgeDays,
-		MaxTotalSize:  m.cfg.Retention.MaxTotalSize,
-		ExcludeLatest: m.cfg.Retention.ExcludeLatest,
+	r := m.artifactSettings(ctx, namespace).GetRetention()
+	return RetentionPolicy{
+		Enabled:       r.GetEnabled(),
+		MaxVersions:   int(r.GetMaxVersions()),
+		MaxAgeDays:    int(r.GetMaxAgeDays()),
+		MaxTotalSize:  r.GetMaxTotalSizeBytes(),
+		ExcludeLatest: r.GetExcludeLatest(),
 	}
-	kv := m.orgSettings(ctx, namespace)
-	if kv == nil {
-		return p
-	}
-	if v, ok := kv[SettingRetentionEnabled]; ok {
-		p.Enabled = parseBool(v, p.Enabled)
-	}
-	if v, ok := kv[SettingRetentionMaxVersions]; ok {
-		p.MaxVersions = int(parseInt64(v, int64(p.MaxVersions)))
-	}
-	if v, ok := kv[SettingRetentionMaxAgeDays]; ok {
-		p.MaxAgeDays = int(parseInt64(v, int64(p.MaxAgeDays)))
-	}
-	if v, ok := kv[SettingRetentionMaxTotalSize]; ok {
-		p.MaxTotalSize = parseInt64(v, p.MaxTotalSize)
-	}
-	if v, ok := kv[SettingRetentionExcludeLatest]; ok {
-		p.ExcludeLatest = parseBool(v, p.ExcludeLatest)
-	}
-	return p
 }
 
 // Effective max upload size in bytes zero means unlimited
 func (m *Manager) EffectiveMaxFileSizeBytes(ctx context.Context, namespace string) int64 {
-	mb := m.cfg.MaxFileSizeMB
-	if kv := m.orgSettings(ctx, namespace); kv != nil {
-		if v, ok := kv[SettingMaxFileSizeMB]; ok {
-			mb = parseInt64(v, mb)
-		}
-	}
+	mb := m.artifactSettings(ctx, namespace).GetMaxFileSizeMb()
 	if mb <= 0 {
 		return 0
 	}
@@ -240,42 +215,13 @@ func (m *Manager) EffectiveMaxFileSizeBytes(ctx context.Context, namespace strin
 
 // Effective private-by-default for new repos in a namespace
 func (m *Manager) EffectivePrivateByDefault(ctx context.Context, namespace string) bool {
-	if kv := m.orgSettings(ctx, namespace); kv != nil {
-		if v, ok := kv[SettingPrivateByDefault]; ok {
-			return parseBool(v, false)
-		}
-	}
-	return false
+	return m.artifactSettings(ctx, namespace).GetPrivateByDefault()
 }
 
-// Loads org overrides for a namespace, nil when not an org
-func (m *Manager) orgSettings(ctx context.Context, namespace string) map[string]string {
-	if namespace == "" {
-		return nil
-	}
-	org, err := m.store.GetOrganization(ctx, namespace)
-	if err != nil || org == nil {
-		return nil
-	}
-	kv, err := m.store.ListOrgSettings(ctx, org.ID)
-	if err != nil {
-		return nil
-	}
-	return kv
-}
-
-func parseBool(v string, def bool) bool {
-	if b, err := strconv.ParseBool(v); err == nil {
-		return b
-	}
-	return def
-}
-
-func parseInt64(v string, def int64) int64 {
-	if n, err := strconv.ParseInt(v, 10, 64); err == nil {
-		return n
-	}
-	return def
+// Abandoned upload age before sweep zero disables
+func (m *Manager) StaleUploadAge(ctx context.Context) time.Duration {
+	hours := m.res.System(ctx).GetArtifacts().GetStaleUploadCleanupHours()
+	return time.Duration(hours) * time.Hour
 }
 
 // Resolves the effective policy then prunes the repo

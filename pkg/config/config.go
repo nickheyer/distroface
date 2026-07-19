@@ -1,148 +1,113 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/spf13/viper"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
+// Boot wiring only, everything tunable lives in runtime settings.
+// The settings block seeds the db once, overrides pins fields forever
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server" json:"server"`
-	Database  DatabaseConfig  `mapstructure:"database" json:"database"`
-	Storage   StorageConfig   `mapstructure:"storage" json:"storage"`
-	Logging   LoggingConfig   `mapstructure:"logging" json:"logging"`
-	Registry  RegistryConfig  `mapstructure:"registry" json:"registry"`
-	Auth      AuthConfig      `mapstructure:"auth" json:"auth"`
-	Webhooks  WebhookConfig   `mapstructure:"webhooks" json:"webhooks"`
-	RateLimit RateLimitConfig `mapstructure:"rate_limit" json:"rate_limit"`
-	Artifacts ArtifactsConfig `mapstructure:"artifacts" json:"artifacts"`
-	GC        GCConfig        `mapstructure:"gc" json:"gc"`
-	Bootstrap BootstrapConfig `mapstructure:"bootstrap" json:"bootstrap"`
-	TLS       TLSConfig       `mapstructure:"tls" json:"tls"`
-	Security  SecurityConfig  `mapstructure:"security" json:"security"`
+	Server    ServerConfig    `mapstructure:"server"`
+	Database  DatabaseConfig  `mapstructure:"database"`
+	Storage   StorageConfig   `mapstructure:"storage"`
+	Logging   LoggingConfig   `mapstructure:"logging"`
+	Registry  RegistryConfig  `mapstructure:"registry"`
+	Artifacts ArtifactsConfig `mapstructure:"artifacts"`
+	TLS       TLSConfig       `mapstructure:"tls"`
+	Auth      AuthConfig      `mapstructure:"auth"`
+	Bootstrap BootstrapConfig `mapstructure:"bootstrap"`
+
+	// Runtime settings seeded on first boot
+	Settings *v1.Settings `mapstructure:"-"`
+	// Runtime settings pinned by the operator, never editable in app
+	Overrides *v1.Settings `mapstructure:"-"`
+	// Legacy static acme domains seeded as approved system rows
+	LegacyACMEDomains []string `mapstructure:"-"`
 }
 
-// In-app https, off means cleartext behind an external terminator
+type ServerConfig struct {
+	Port           string   `mapstructure:"port"`
+	Host           string   `mapstructure:"host"`
+	ReadTimeout    int      `mapstructure:"read_timeout"`
+	WriteTimeout   int      `mapstructure:"write_timeout"`
+	IdleTimeout    int      `mapstructure:"idle_timeout"`
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
+}
+
+// On disk certificate pair served for CERT_SOURCE_CONFIG
 type TLSConfig struct {
-	Enabled  bool       `mapstructure:"enabled" json:"enabled"`
-	CertFile string     `mapstructure:"cert_file" json:"cert_file"`
-	KeyFile  string     `mapstructure:"key_file" json:"key_file"`
-	ACME     ACMEConfig `mapstructure:"acme" json:"acme"`
+	CertFile string `mapstructure:"cert_file"`
+	KeyFile  string `mapstructure:"key_file"`
 }
 
-type ACMEConfig struct {
-	Enabled      bool     `mapstructure:"enabled" json:"enabled"`
-	Email        string   `mapstructure:"email" json:"email"`
-	DirectoryURL string   `mapstructure:"directory_url" json:"directory_url"`
-	Domains      []string `mapstructure:"domains" json:"domains"`
-	HTTPPort     string   `mapstructure:"http_port" json:"http_port"`
-	RedirectHTTP bool     `mapstructure:"redirect_http" json:"redirect_http"`
+// Secret material only, toggles are runtime settings
+type AuthConfig struct {
+	JWTSecret string `mapstructure:"jwt_secret"`
 }
 
-type SecurityConfig struct {
-	Headers SecurityHeadersConfig `mapstructure:"headers" json:"headers"`
-	Audit   AuditConfig           `mapstructure:"audit" json:"audit"`
+type DatabaseConfig struct {
+	Path            string `mapstructure:"path"`
+	MaxConnections  int    `mapstructure:"max_connections"`
+	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
+	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"`
 }
 
-type SecurityHeadersConfig struct {
-	Enabled bool `mapstructure:"enabled" json:"enabled"`
-	// Adds strict transport security, defaults on when tls is enabled
-	HSTS       bool `mapstructure:"hsts" json:"hsts"`
-	HSTSMaxAge int  `mapstructure:"hsts_max_age" json:"hsts_max_age"`
-	// Overrides the default policy, empty keeps the built in one
-	ContentSecurityPolicy string `mapstructure:"content_security_policy" json:"content_security_policy"`
+type StorageConfig struct {
+	DataDir string `mapstructure:"data_dir"`
 }
 
-type AuditConfig struct {
-	Enabled bool `mapstructure:"enabled" json:"enabled"`
-	// Days of audit history kept zero keeps forever
-	RetentionDays int `mapstructure:"retention_days" json:"retention_days"`
+type RegistryConfig struct {
+	StoragePath string `mapstructure:"storage_path"`
+}
+
+type ArtifactsConfig struct {
+	StoragePath string `mapstructure:"storage_path"`
+}
+
+type LoggingConfig struct {
+	Enabled       bool   `mapstructure:"enabled"`
+	Dir           string `mapstructure:"dir"`
+	DefaultModule string `mapstructure:"default_module"`
+	MaxSize       int    `mapstructure:"max_size"`
+	MaxBackups    int    `mapstructure:"max_backups"`
+	MaxAge        int    `mapstructure:"max_age"`
+	Compress      bool   `mapstructure:"compress"`
 }
 
 // Seeds entities at startup skipping ones that exist
 type BootstrapConfig struct {
-	Users []BootstrapUser `mapstructure:"users" json:"users"`
-	Orgs  []BootstrapOrg  `mapstructure:"orgs" json:"orgs"`
+	Users []BootstrapUser `mapstructure:"users"`
+	Orgs  []BootstrapOrg  `mapstructure:"orgs"`
 }
 
 type BootstrapUser struct {
-	Username string `mapstructure:"username" json:"username"`
-	Password string `mapstructure:"password" json:"-"`
-	Email    string `mapstructure:"email" json:"email"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+	Email    string `mapstructure:"email"`
 	// System roles granted default roles when empty
-	Roles []string `mapstructure:"roles" json:"roles"`
+	Roles []string `mapstructure:"roles"`
 }
 
 type BootstrapOrg struct {
-	Name        string               `mapstructure:"name" json:"name"`
-	DisplayName string               `mapstructure:"display_name" json:"display_name"`
-	Description string               `mapstructure:"description" json:"description"`
-	Members     []BootstrapOrgMember `mapstructure:"members" json:"members"`
+	Name        string               `mapstructure:"name"`
+	DisplayName string               `mapstructure:"display_name"`
+	Description string               `mapstructure:"description"`
+	Members     []BootstrapOrgMember `mapstructure:"members"`
 }
 
 type BootstrapOrgMember struct {
-	Username string `mapstructure:"username" json:"username"`
+	Username string `mapstructure:"username"`
 	// Owner admin or member defaults to member
-	Role string `mapstructure:"role" json:"role"`
-}
-
-type GCConfig struct {
-	// Scheduled registry collection off by default
-	Enabled bool `mapstructure:"enabled" json:"enabled"`
-	// Hours between scheduled runs
-	IntervalHours int `mapstructure:"interval_hours" json:"interval_hours"`
-	// Scheduled runs also delete untagged manifests
-	RemoveUntagged bool `mapstructure:"remove_untagged" json:"remove_untagged"`
-}
-
-type ArtifactsConfig struct {
-	StoragePath string `mapstructure:"storage_path" json:"storage_path"`
-	// Max artifact size in MB zero means unlimited
-	MaxFileSizeMB int64 `mapstructure:"max_file_size_mb" json:"max_file_size_mb"`
-	// Serve the v1 facade for old dfcli and ci
-	V1Compat  bool                    `mapstructure:"v1_compat" json:"v1_compat"`
-	Retention ArtifactRetentionConfig `mapstructure:"retention" json:"retention"`
-	Reaper    ArtifactReaperConfig    `mapstructure:"reaper" json:"reaper"`
-	// Hours before an abandoned upload session is swept
-	StaleUploadCleanupHours int `mapstructure:"stale_upload_cleanup_hours" json:"stale_upload_cleanup_hours"`
-}
-
-type ArtifactRetentionConfig struct {
-	Enabled bool `mapstructure:"enabled" json:"enabled"`
-	// Newest versions kept per artifact path zero means unlimited
-	MaxVersions int `mapstructure:"max_versions" json:"max_versions"`
-	// Age based pruning in days zero disables
-	MaxAgeDays int `mapstructure:"max_age_days" json:"max_age_days"`
-	// Total bytes kept per repo zero means unlimited
-	MaxTotalSize int64 `mapstructure:"max_total_size" json:"max_total_size"`
-	// Never age-prune the newest artifact of a path
-	ExcludeLatest bool `mapstructure:"exclude_latest" json:"exclude_latest"`
-}
-
-type ArtifactReaperConfig struct {
-	// Scheduled retention sweep off by default
-	Enabled bool `mapstructure:"enabled" json:"enabled"`
-	// Hours between scheduled sweeps
-	IntervalHours int `mapstructure:"interval_hours" json:"interval_hours"`
-}
-
-type WebhookConfig struct {
-	// Lets webhooks reach private lan addresses when true
-	AllowPrivateNetworks bool `mapstructure:"allow_private_networks" json:"allow_private_networks"`
-}
-
-type RateLimitConfig struct {
-	// Failed tries before lockout zero disables
-	AuthFailureLimit int `mapstructure:"auth_failure_limit" json:"auth_failure_limit"`
-	// Failure window in seconds
-	AuthFailureWindow int `mapstructure:"auth_failure_window" json:"auth_failure_window"`
-	// Pulls per user per minute zero means unlimited
-	PullPerMinute int `mapstructure:"pull_per_minute" json:"pull_per_minute"`
-	// Anon pulls per ip per minute zero means unlimited
-	AnonPullPerMinute int `mapstructure:"anon_pull_per_minute" json:"anon_pull_per_minute"`
+	Role string `mapstructure:"role"`
 }
 
 type MigrateConfig struct {
@@ -158,69 +123,6 @@ type MigrateConfig struct {
 	DryRun      bool   // Print planned actions without writing
 	Jobs        int    // Concurrent repo pushes
 	Verbose     bool
-}
-
-type ServerConfig struct {
-	Port           string   `mapstructure:"port" json:"port"`
-	Host           string   `mapstructure:"host" json:"host"`
-	Hostname       string   `mapstructure:"hostname" json:"hostname"`
-	ReadTimeout    int      `mapstructure:"read_timeout" json:"read_timeout"`
-	WriteTimeout   int      `mapstructure:"write_timeout" json:"write_timeout"`
-	IdleTimeout    int      `mapstructure:"idle_timeout" json:"idle_timeout"`
-	TrustedProxies []string `mapstructure:"trusted_proxies" json:"trusted_proxies"`
-}
-
-type DatabaseConfig struct {
-	Path            string `mapstructure:"path" json:"path"`
-	MaxConnections  int    `mapstructure:"max_connections" json:"max_connections"`
-	MaxIdleConns    int    `mapstructure:"max_idle_conns" json:"max_idle_conns"`
-	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime" json:"conn_max_lifetime"`
-}
-
-type StorageConfig struct {
-	DataDir string `mapstructure:"data_dir" json:"data_dir"`
-}
-
-type RegistryConfig struct {
-	StoragePath string `mapstructure:"storage_path" json:"storage_path"`
-}
-
-type AuthConfig struct {
-	SessionTimeout  int         `mapstructure:"session_timeout" json:"session_timeout"`
-	TokenExpiry     int         `mapstructure:"token_expiry" json:"token_expiry"`
-	JWTSecret       string      `mapstructure:"jwt_secret" json:"-"`
-	AnonymousAccess bool        `mapstructure:"anonymous_access" json:"anonymous_access"`
-	Local           LocalConfig `mapstructure:"local" json:"local"`
-	OIDC            OIDCConfig  `mapstructure:"oidc" json:"oidc"`
-}
-
-type LocalConfig struct {
-	Enabled           bool `mapstructure:"enabled" json:"enabled"`
-	AllowRegistration bool `mapstructure:"allow_registration" json:"allow_registration"`
-}
-
-type OIDCConfig struct {
-	Enabled         bool              `mapstructure:"enabled" json:"enabled"`
-	IssuerURI       string            `mapstructure:"issuer_uri" json:"issuer_uri"`
-	ClientID        string            `mapstructure:"client_id" json:"client_id"`
-	ClientSecret    string            `mapstructure:"client_secret" json:"-"`
-	RedirectURL     string            `mapstructure:"redirect_url" json:"redirect_url"`
-	Scopes          []string          `mapstructure:"scopes" json:"scopes"`
-	RoleClaim       string            `mapstructure:"role_claim" json:"role_claim"`
-	RoleMapping     map[string]string `mapstructure:"role_mapping" json:"role_mapping"`
-	GroupClaim      string            `mapstructure:"group_claim" json:"group_claim"`
-	GroupOrgMapping map[string]string `mapstructure:"group_org_mapping" json:"group_org_mapping"`
-	SkipTLSVerify   bool              `mapstructure:"skip_tls_verify" json:"skip_tls_verify"`
-}
-
-type LoggingConfig struct {
-	Enabled       bool   `mapstructure:"enabled" json:"enabled"`
-	Dir           string `mapstructure:"dir" json:"dir"`
-	DefaultModule string `mapstructure:"default_module" json:"default_module"`
-	MaxSize       int    `mapstructure:"max_size" json:"max_size"`
-	MaxBackups    int    `mapstructure:"max_backups" json:"max_backups"`
-	MaxAge        int    `mapstructure:"max_age" json:"max_age"`
-	Compress      bool   `mapstructure:"compress" json:"compress"`
 }
 
 func Load(configPath string) (*Config, error) {
@@ -251,6 +153,8 @@ func Load(configPath string) (*Config, error) {
 	_ = v.BindEnv("artifacts.storage_path")
 	_ = v.BindEnv("logging.dir")
 	_ = v.BindEnv("auth.jwt_secret")
+	_ = v.BindEnv("tls.cert_file")
+	_ = v.BindEnv("tls.key_file")
 
 	if err := v.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
@@ -263,6 +167,15 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
 	}
 
+	var err error
+	if cfg.Settings, err = settingsBlock(v, "settings", "DISTROFACE_SETTINGS_JSON"); err != nil {
+		return nil, err
+	}
+	if cfg.Overrides, err = settingsBlock(v, "overrides", "DISTROFACE_OVERRIDES_JSON"); err != nil {
+		return nil, err
+	}
+	applyLegacySettings(v, &cfg)
+
 	applyEnvBootstrapUser(&cfg)
 	applyDerivedPaths(&cfg)
 
@@ -271,6 +184,92 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// Parses one yaml block or env json payload as a settings document
+func settingsBlock(v *viper.Viper, key, envKey string) (*v1.Settings, error) {
+	var data []byte
+	if env := os.Getenv(envKey); env != "" {
+		data = []byte(env)
+	} else if raw := v.Get(key); raw != nil {
+		var err error
+		if data, err = json.Marshal(raw); err != nil {
+			return nil, fmt.Errorf("invalid %s block: %w", key, err)
+		}
+	} else {
+		return nil, nil
+	}
+	out := &v1.Settings{}
+	if err := protojson.Unmarshal(data, out); err != nil {
+		return nil, fmt.Errorf("invalid %s block: %w", key, err)
+	}
+	return out, nil
+}
+
+// Retired yaml keys folded into the settings seed with a warning
+func applyLegacySettings(v *viper.Viper, cfg *Config) {
+	seed := cfg.Settings
+	ensure := func() *v1.Settings {
+		if seed == nil {
+			seed = &v1.Settings{}
+			cfg.Settings = seed
+		}
+		return seed
+	}
+
+	if host := v.GetString("server.hostname"); host != "" {
+		s := ensure()
+		if s.GetServer().GetPublicHostname() == "" {
+			if s.Server == nil {
+				s.Server = &v1.ServerSettings{}
+			}
+			s.Server.PublicHostname = proto.String(host)
+		}
+	}
+	if v.IsSet("tls.enabled") && v.GetBool("tls.enabled") {
+		s := ensure()
+		if s.GetTls().GetMode() == v1.TLSMode_TLS_MODE_UNSPECIFIED {
+			if s.Tls == nil {
+				s.Tls = &v1.TLSSettings{}
+			}
+			s.Tls.Mode = v1.TLSMode_TLS_MODE_HTTPS_ONLY.Enum()
+		}
+	}
+	if v.IsSet("tls.acme") {
+		s := ensure()
+		if s.Acme == nil {
+			s.Acme = &v1.ACMESettings{}
+		}
+		a := s.Acme
+		if a.Enabled == nil && v.IsSet("tls.acme.enabled") {
+			a.Enabled = proto.Bool(v.GetBool("tls.acme.enabled"))
+		}
+		if a.Email == nil && v.GetString("tls.acme.email") != "" {
+			a.Email = proto.String(v.GetString("tls.acme.email"))
+		}
+		if a.DirectoryUrl == nil && v.GetString("tls.acme.directory_url") != "" {
+			a.DirectoryUrl = proto.String(v.GetString("tls.acme.directory_url"))
+		}
+		if a.ChallengePort == nil && v.IsSet("tls.acme.http_port") {
+			a.ChallengePort = proto.String(v.GetString("tls.acme.http_port"))
+		}
+		if a.RedirectHttp == nil && v.IsSet("tls.acme.redirect_http") {
+			a.RedirectHttp = proto.Bool(v.GetBool("tls.acme.redirect_http"))
+		}
+		cfg.LegacyACMEDomains = v.GetStringSlice("tls.acme.domains")
+	}
+
+	for _, key := range []string{
+		"auth.session_timeout", "auth.token_expiry", "auth.anonymous_access",
+		"auth.local", "auth.oidc", "gc", "rate_limit", "webhooks", "security",
+		"artifacts.max_file_size_mb", "artifacts.v1_compat", "artifacts.retention",
+		"artifacts.reaper", "artifacts.stale_upload_cleanup_hours",
+	} {
+		if v.IsSet(key) {
+			fmt.Fprintf(os.Stderr,
+				"WARNING: config key %q is now a runtime setting, move it to the settings or overrides block\n", key)
+		}
+	}
 }
 
 // Appends one env defined bootstrap user
@@ -302,7 +301,6 @@ func applyEnvBootstrapUser(cfg *Config) {
 func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.port", "8080")
 	v.SetDefault("server.host", "0.0.0.0")
-	v.SetDefault("server.hostname", "localhost:8080")
 	v.SetDefault("server.read_timeout", 15)
 	v.SetDefault("server.write_timeout", 15)
 	v.SetDefault("server.idle_timeout", 60)
@@ -310,65 +308,11 @@ func setDefaults(v *viper.Viper) {
 		"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7",
 	})
 
-	v.SetDefault("tls.enabled", false)
-	v.SetDefault("tls.cert_file", "")
-	v.SetDefault("tls.key_file", "")
-	v.SetDefault("tls.acme.enabled", false)
-	v.SetDefault("tls.acme.email", "")
-	v.SetDefault("tls.acme.directory_url", "")
-	v.SetDefault("tls.acme.domains", []string{})
-	v.SetDefault("tls.acme.http_port", "80")
-	v.SetDefault("tls.acme.redirect_http", true)
-
-	v.SetDefault("security.headers.enabled", true)
-	v.SetDefault("security.headers.hsts", false)
-	v.SetDefault("security.headers.hsts_max_age", 31536000)
-	v.SetDefault("security.headers.content_security_policy", "")
-	v.SetDefault("security.audit.enabled", true)
-	v.SetDefault("security.audit.retention_days", 90)
-
 	v.SetDefault("database.max_connections", 25)
 	v.SetDefault("database.max_idle_conns", 5)
 	v.SetDefault("database.conn_max_lifetime", 300)
 
 	v.SetDefault("storage.data_dir", "./data")
-
-	v.SetDefault("auth.session_timeout", 86400)
-	v.SetDefault("auth.token_expiry", 900)
-	v.SetDefault("auth.anonymous_access", false)
-	v.SetDefault("auth.local.enabled", true)
-	v.SetDefault("auth.local.allow_registration", true)
-	v.SetDefault("auth.oidc.enabled", false)
-	v.SetDefault("auth.oidc.issuer_uri", "")
-	v.SetDefault("auth.oidc.client_id", "")
-	v.SetDefault("auth.oidc.client_secret", "")
-	v.SetDefault("auth.oidc.redirect_url", "")
-	v.SetDefault("auth.oidc.scopes", []string{})
-	v.SetDefault("auth.oidc.role_claim", "")
-	v.SetDefault("auth.oidc.group_claim", "groups")
-	v.SetDefault("auth.oidc.skip_tls_verify", false)
-
-	v.SetDefault("webhooks.allow_private_networks", false)
-
-	v.SetDefault("artifacts.max_file_size_mb", 10240)
-	v.SetDefault("artifacts.v1_compat", true)
-	v.SetDefault("artifacts.retention.enabled", false)
-	v.SetDefault("artifacts.retention.max_versions", 5)
-	v.SetDefault("artifacts.retention.max_age_days", 0)
-	v.SetDefault("artifacts.retention.max_total_size", 0)
-	v.SetDefault("artifacts.retention.exclude_latest", true)
-	v.SetDefault("artifacts.reaper.enabled", false)
-	v.SetDefault("artifacts.reaper.interval_hours", 24)
-	v.SetDefault("artifacts.stale_upload_cleanup_hours", 24)
-
-	v.SetDefault("gc.enabled", false)
-	v.SetDefault("gc.interval_hours", 24)
-	v.SetDefault("gc.remove_untagged", false)
-
-	v.SetDefault("rate_limit.auth_failure_limit", 10)
-	v.SetDefault("rate_limit.auth_failure_window", 300)
-	v.SetDefault("rate_limit.pull_per_minute", 0)
-	v.SetDefault("rate_limit.anon_pull_per_minute", 0)
 
 	v.SetDefault("logging.enabled", true)
 	v.SetDefault("logging.default_module", "distroface-app")

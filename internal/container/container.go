@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
+	"sync"
 	"syscall"
 	"time"
 
@@ -16,14 +18,17 @@ import (
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/certs"
+	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/sirupsen/logrus"
 )
 
@@ -32,6 +37,7 @@ type App struct {
 	Config         *config.Config
 	Log            *logger.Logger
 	Store          *stores.Store
+	Resolver       *settings.Resolver
 	TokenService   *auth.TokenService
 	AuthManager    *auth.Manager
 	Enforcer       *rbac.Enforcer
@@ -41,9 +47,11 @@ type App struct {
 	Server         *http.Server
 }
 
-// New builds the entire application: config, logger, store, token service,
-// RBAC enforcer, auth manager, registry handler, RPC server, and HTTP server.
+// New builds the entire application: config, logger, store, settings
+// resolver, RBAC enforcer, auth manager, registry handler, and HTTP server.
 func New() (*App, error) {
+	ctx := context.Background()
+
 	cfg, err := config.Load(".")
 	if err != nil {
 		return nil, fmt.Errorf("loading configuration: %w", err)
@@ -78,56 +86,55 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("initializing storage: %w", err)
 	}
 
-	// Initialize Casbin RBAC enforcer
+	fail := func(step string, err error) (*App, error) {
+		store.Close()
+		log.Close()
+		return nil, fmt.Errorf("%s: %w", step, err)
+	}
+
+	// Typed runtime settings, file seeds once and pins forever
+	resolver := settings.NewResolver(store, cfg.Overrides)
+	if err := resolver.SeedSystem(ctx, cfg.Settings); err != nil {
+		return fail("seeding settings", err)
+	}
+	if locked := resolver.LockedPaths(); len(locked) > 0 {
+		log.Info("Settings pinned by config file: %v", locked)
+	}
+
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("initializing RBAC enforcer: %w", err)
+		return fail("initializing RBAC enforcer", err)
 	}
-	if err := enforcer.SeedDefaultPolicies(cfg.Auth.AnonymousAccess); err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("seeding RBAC policies: %w", err)
+	anonymous := resolver.System(ctx).GetAuth().GetAnonymousAccess()
+	if err := enforcer.SeedDefaultPolicies(anonymous); err != nil {
+		return fail("seeding RBAC policies", err)
 	}
+	subscribeAnonymousReseed(resolver, enforcer, anonymous, log)
 	log.Info("RBAC enforcer initialized")
 
-	// Initialize Auth Manager (HS256 JWT for web sessions + API tokens)
-	authManager, err := auth.NewManager(store, enforcer, &cfg.Auth)
+	authManager, err := auth.NewManager(store, enforcer, cfg.Auth.JWTSecret, resolver)
 	if err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("initializing auth manager: %w", err)
+		return fail("initializing auth manager", err)
 	}
-	log.Info("Auth manager initialized")
-
 	if !authManager.IsAnyAuthEnabled() {
 		log.Warn("SECURITY: no auth provider is enabled. Every request runs as admin, do not expose this instance")
 	}
 
 	if err := admin.SetTrustedProxies(cfg.Server.TrustedProxies); err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("configuring trusted proxies: %w", err)
+		return fail("configuring trusted proxies", err)
 	}
 
-	if err := Run(context.Background(), cfg.Bootstrap, store, authManager, log); err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("bootstrap seeding: %w", err)
+	if err := Run(ctx, cfg.Bootstrap, store, authManager, log); err != nil {
+		return fail("bootstrap seeding", err)
 	}
 
-	// Initialize Token Service (ECDSA keys for Docker registry JWTs - separate from HS256 sessions)
-	tokenExpiry := time.Duration(cfg.Auth.TokenExpiry) * time.Second
-	tokenService, err := auth.NewTokenService(cfg.Storage.DataDir, "distroface", "distroface-registry", tokenExpiry)
+	// ECDSA keys for registry JWTs, separate from HS256 sessions
+	tokenService, err := auth.NewTokenService(cfg.Storage.DataDir, "distroface", "distroface-registry", resolver)
 	if err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("initializing token service: %w", err)
+		return fail("initializing token service", err)
 	}
 	log.Info("Token service initialized (cert: %s)", tokenService.CertPath())
 
-	// Create logger module for registry, set logrus out to reg logger
 	registryLog := log.Module("distroface-registry")
 	logrus.SetOutput(registryLog)
 	logrus.SetLevel(logrus.InfoLevel)
@@ -137,61 +144,52 @@ func New() (*App, error) {
 	})
 
 	if err := os.MkdirAll(cfg.Registry.StoragePath, 0755); err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("creating registry storage directory: %w", err)
+		return fail("creating registry storage directory", err)
 	}
 
-	dispatcher := webhook.NewDispatcher(store, registryLog, cfg.Webhooks.AllowPrivateNetworks)
+	dispatcher := webhook.NewDispatcher(store, registryLog, resolver)
 
-	// Audit trail, nil recorder disables recording entirely
-	var auditRecorder *audit.Recorder
-	var auditService *audit.Service
-	if cfg.Security.Audit.Enabled {
-		auditRecorder = audit.NewRecorder(store, log)
-		auditRecorder.ScheduleRetention(context.Background(), cfg.Security.Audit.RetentionDays)
-		auditService = audit.NewService(store, log)
-		log.Info("Audit trail enabled (retention %dd)", cfg.Security.Audit.RetentionDays)
-	}
+	// Recorder self gates on the live audit setting
+	auditRecorder := audit.NewRecorder(store, resolver, log)
+	auditRecorder.ScheduleRetention(ctx)
+	auditService := audit.NewService(store, log)
 
 	registry.RegisterListenerMiddleware(store, registryLog, dispatcher, auditRecorder)
 
 	registryCfg := registry.BuildConfig(cfg.Registry.StoragePath, tokenService.CertPath(), cfg.Server.Host, cfg.Server.Port)
-	registryApp := handlers.NewApp(context.Background(), registryCfg)
+	registryApp := handlers.NewApp(ctx, registryCfg)
 	registryLog.Info("Distribution v3 initialized")
 
 	registryAccess, err := registry.NewRegistryAccess(cfg.Registry.StoragePath)
 	if err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("initializing registry access: %w", err)
+		return fail("initializing registry access", err)
 	}
 
 	portalResolver := portal.NewResolver(store, registryLog)
 
-	// Rate limiters nil means tier off
-	var authLimiter, pullLimiter, anonPullLimiter *admin.Limiter
-	if cfg.RateLimit.AuthFailureLimit > 0 && cfg.RateLimit.AuthFailureWindow > 0 {
-		authLimiter = admin.NewLimiter(cfg.RateLimit.AuthFailureLimit, time.Duration(cfg.RateLimit.AuthFailureWindow)*time.Second)
+	// Limits read live, zero disables at call time
+	rateLimits := func() *v1.RateLimitSettings {
+		return resolver.System(context.Background()).GetRateLimit()
 	}
-	if cfg.RateLimit.PullPerMinute > 0 {
-		pullLimiter = admin.NewLimiter(cfg.RateLimit.PullPerMinute, time.Minute)
-	}
-	if cfg.RateLimit.AnonPullPerMinute > 0 {
-		anonPullLimiter = admin.NewLimiter(cfg.RateLimit.AnonPullPerMinute, time.Minute)
-	}
+	authLimiter := admin.NewDynamicLimiter(func() (int, time.Duration) {
+		rl := rateLimits()
+		return int(rl.GetAuthFailureLimit()), time.Duration(rl.GetAuthFailureWindowSeconds()) * time.Second
+	})
+	pullLimiter := admin.NewDynamicLimiter(func() (int, time.Duration) {
+		return int(rateLimits().GetPullPerMinute()), time.Minute
+	})
+	anonPullLimiter := admin.NewDynamicLimiter(func() (int, time.Duration) {
+		return int(rateLimits().GetAnonPullPerMinute()), time.Minute
+	})
 
 	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, authLimiter, auditRecorder, registryLog)
-
 	registryHandler := registry.PullRateLimit(registryApp, tokenService, pullLimiter, anonPullLimiter, registryLog)
 
 	blobStore, err := artifacts.NewBlobStore(cfg.Artifacts.StoragePath)
 	if err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("initializing artifact storage: %w", err)
+		return fail("initializing artifact storage", err)
 	}
-	artifactManager := artifacts.NewManager(store, blobStore, cfg.Artifacts, log)
+	artifactManager := artifacts.NewManager(store, blobStore, resolver, log)
 	artifactV1Facade := artifacts.NewV1API(store, artifactManager, authManager, enforcer, authLimiter, auditRecorder, log)
 
 	// Portal listeners serve the whole app on their own ports
@@ -200,72 +198,72 @@ func New() (*App, error) {
 		ReadHeader: time.Duration(cfg.Server.ReadTimeout) * time.Second,
 		Idle:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
 	})
-	// Cert material and acme settings are runtime managed, primary tls only stays a startup choice
-	certEngine, err := certs.NewEngine(cfg, store, log)
+
+	certEngine, err := certs.NewEngine(store, resolver, portalResolver, cfg.TLS.CertFile, cfg.TLS.KeyFile, cfg.Server.Host, log)
 	if err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("initializing tls engine: %w", err)
+		return fail("initializing tls engine", err)
 	}
-	portalService := portal.NewService(store, enforcer, portalProxies, certEngine, cfg, log)
+	resolver.Subscribe(func() { certEngine.Invalidate(context.Background()) })
 
-	// Portals decide https themselves, independent of the primary's tls
+	mainPort, err := strconv.Atoi(cfg.Server.Port)
+	if err != nil {
+		return fail("parsing server port", err)
+	}
+	portalService := portal.NewService(store, enforcer, portalProxies, certEngine, resolver, mainPort, log)
+
+	// Portals decide https themselves, independent of the primary's mode
 	portalProxies.SetTLSConfig(certEngine.TLSConfig())
-	log.Info("TLS engine ready (primary_tls=%v acme=%v config_cert=%v)",
-		cfg.TLS.Enabled, certEngine.ACMEEnabled(), certEngine.ManualCertLoaded())
-	certService := certs.NewService(store, enforcer, certEngine, cfg, log)
+	log.Info("TLS engine ready (mode=%v acme=%v)",
+		resolver.System(ctx).GetTls().GetMode(), certEngine.ACMEEnabled(ctx))
+	certService := certs.NewService(store, enforcer, certEngine, resolver, log)
 
-	oidcHandler := auth.NewOIDCHandler(authManager, store, &cfg.Auth.OIDC, portalResolver, log)
+	oidcHandler := auth.NewOIDCHandler(authManager, store, resolver, portalResolver, log)
 
 	gcCollector, err := admin.NewCollector(cfg.Registry.StoragePath, registryLog)
 	if err != nil {
-		store.Close()
-		log.Close()
-		return nil, fmt.Errorf("initializing garbage collector: %w", err)
+		return fail("initializing garbage collector", err)
 	}
-	if cfg.GC.Enabled && cfg.GC.IntervalHours > 0 {
-		gcCollector.Schedule(context.Background(), time.Duration(cfg.GC.IntervalHours)*time.Hour, cfg.GC.RemoveUntagged)
-		log.Info("Scheduled registry GC every %dh (remove_untagged=%v)", cfg.GC.IntervalHours, cfg.GC.RemoveUntagged)
-	}
+	gcCollector.Schedule(ctx, resolver)
 
-	staleAge := time.Duration(cfg.Artifacts.StaleUploadCleanupHours) * time.Hour
-	if removed, err := blobStore.CleanStaleUploads(staleAge); err != nil {
+	if removed, err := blobStore.CleanStaleUploads(artifactManager.StaleUploadAge(ctx)); err != nil {
 		log.Error("cleaning stale artifact uploads: %v", err)
 	} else if removed > 0 {
 		log.Info("Cleaned %d stale artifact upload sessions", removed)
 	}
 
-	artifactReaper := artifacts.NewReaper(artifactManager, store, staleAge, log)
-	if cfg.Artifacts.Reaper.Enabled && cfg.Artifacts.Reaper.IntervalHours > 0 {
-		artifactReaper.Schedule(context.Background(), time.Duration(cfg.Artifacts.Reaper.IntervalHours)*time.Hour)
-		log.Info("Scheduled artifact reaper every %dh", cfg.Artifacts.Reaper.IntervalHours)
+	artifactReaper := artifacts.NewReaper(artifactManager, store, log)
+	artifactReaper.Schedule(ctx)
+
+	if err := seedLegacyACMEDomains(ctx, cfg.LegacyACMEDomains, store, log); err != nil {
+		return fail("seeding legacy acme domains", err)
 	}
 
 	rpcServer := rpc.NewServer(rpc.ServerDeps{
-		Store:             store,
-		Config:            cfg,
-		Log:               log,
-		RegistryHandler:   registryHandler,
-		RegistryAccess:    registryAccess,
-		TokenHandler:      tokenHandler,
-		AuthManager:       authManager,
-		Enforcer:          enforcer,
-		OIDCHandler:       oidcHandler,
-		WebhookDispatcher: dispatcher,
-		PortalResolver:    portalResolver,
-		PortalService:     portalService,
-		AuthLimiter:       authLimiter,
-		ArtifactManager:   artifactManager,
-		ArtifactV1Facade:  artifactV1Facade,
-		GCCollector:       gcCollector,
-		CertService:       certService,
-		AuditRecorder:     auditRecorder,
-		AuditService:      auditService,
+		Store:               store,
+		Resolver:            resolver,
+		Log:                 log,
+		RegistryHandler:     registryHandler,
+		RegistryAccess:      registryAccess,
+		RegistryStoragePath: cfg.Registry.StoragePath,
+		TokenHandler:        tokenHandler,
+		AuthManager:         authManager,
+		Enforcer:            enforcer,
+		OIDCHandler:         oidcHandler,
+		WebhookDispatcher:   dispatcher,
+		PortalResolver:      portalResolver,
+		PortalService:       portalService,
+		AuthLimiter:         authLimiter,
+		ArtifactManager:     artifactManager,
+		ArtifactV1Facade:    artifactV1Facade,
+		GCCollector:         gcCollector,
+		CertService:         certService,
+		AuditRecorder:       auditRecorder,
+		AuditService:        auditService,
 	})
 
 	// Portal listeners reuse the fully built app handler
 	portalProxies.SetHandler(rpcServer.Handler())
-	if err := portalProxies.Reconcile(context.Background()); err != nil {
+	if err := portalProxies.Reconcile(ctx); err != nil {
 		registryLog.Error("portal proxy startup: %v", err)
 	}
 
@@ -276,14 +274,11 @@ func New() (*App, error) {
 		IdleTimeout:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
 	}
 
-	if cfg.TLS.Enabled {
-		srv.TLSConfig = certEngine.TLSConfig()
-	}
-
 	return &App{
 		Config:         cfg,
 		Log:            log,
 		Store:          store,
+		Resolver:       resolver,
 		TokenService:   tokenService,
 		AuthManager:    authManager,
 		Enforcer:       enforcer,
@@ -294,17 +289,51 @@ func New() (*App, error) {
 	}, nil
 }
 
+// Reseeds the anonymous policy tier when the toggle flips
+func subscribeAnonymousReseed(resolver *settings.Resolver, enforcer *rbac.Enforcer, initial bool, log *logger.Logger) {
+	var mu sync.Mutex
+	last := initial
+	resolver.Subscribe(func() {
+		current := resolver.System(context.Background()).GetAuth().GetAnonymousAccess()
+		mu.Lock()
+		defer mu.Unlock()
+		if current == last {
+			return
+		}
+		last = current
+		if err := enforcer.SeedDefaultPolicies(current); err != nil {
+			log.Error("reseeding anonymous policies: %v", err)
+		}
+	})
+}
+
+// Seeds retired static acme domains as approved system rows
+func seedLegacyACMEDomains(ctx context.Context, domains []string, store *stores.Store, log *logger.Logger) error {
+	for _, domain := range domains {
+		existing, err := store.GetCertificateDomainByName(ctx, domain)
+		if err != nil {
+			return err
+		}
+		if existing != nil {
+			continue
+		}
+		row := &db.CertificateDomain{
+			Domain:    domain,
+			Scope:     v1.CertificateDomainScope_CERTIFICATE_DOMAIN_SCOPE_SYSTEM,
+			Approved:  true,
+			CreatedBy: "config",
+		}
+		if err := store.CreateCertificateDomain(ctx, row); err != nil {
+			return err
+		}
+		log.Info("Seeded legacy acme domain %s as system scope", domain)
+	}
+	return nil
+}
+
 // Starts listening and blocks until a SIGINT/SIGTERM is received then shuts down
 func (a *App) Start() error {
 	go func() {
-		if a.Server.TLSConfig != nil {
-			a.Log.Info("Starting Distroface with TLS on %s", a.Server.Addr)
-			if err := a.Server.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
-				a.Log.Fatal("Failed to start server: %v", err)
-			}
-			return
-		}
-		// Portal hostnames on the app port may serve https, the app itself stays cleartext
 		ln, err := net.Listen("tcp", a.Server.Addr)
 		if err != nil {
 			a.Log.Fatal("Failed to start server: %v", err)
