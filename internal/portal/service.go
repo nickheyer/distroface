@@ -250,17 +250,18 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 	}
 
 	portal := &storage.RegistryPortal{
-		OrgID:          org.ID,
-		Name:           msg.Name,
-		Hostname:       hostname,
-		Port:           port,
-		MapUnqualified: msg.MapUnqualified,
-		Rules:          rulesJSON,
-		AllowPush:      msg.AllowPush,
-		RequireAuth:    msg.RequireAuth,
-		TLS:            msg.Tls,
-		CertSource:     certSource,
-		Enabled:        true,
+		OrgID:           org.ID,
+		Name:            msg.Name,
+		Hostname:        hostname,
+		Port:            port,
+		MapUnqualified:  msg.MapUnqualified,
+		Rules:           rulesJSON,
+		AllowPush:       msg.AllowPush,
+		RequireAuth:     msg.RequireAuth,
+		TLS:             msg.Tls,
+		CertSource:      certSource,
+		HidePrimaryLink: msg.HidePrimaryLink,
+		Enabled:         true,
 	}
 	if err := s.store.CreateRegistryPortal(ctx, portal); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -376,6 +377,9 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 	if msg.RequireAuth != nil {
 		portal.RequireAuth = *msg.RequireAuth
 	}
+	if msg.HidePrimaryLink != nil {
+		portal.HidePrimaryLink = *msg.HidePrimaryLink
+	}
 	if msg.Tls != nil {
 		portal.TLS = *msg.Tls
 	}
@@ -444,15 +448,16 @@ func (s *Service) ResolvePortal(ctx context.Context, _ *connect.Request[v1.Resol
 		}), nil
 	}
 	return connect.NewResponse(&v1.ResolvePortalResponse{
-		IsPortal:       true,
-		OrgName:        p.OrgName,
-		OrgDisplayName: p.OrgDisplayName,
-		PortalName:     p.Name,
-		AllowPush:      p.AllowPush,
-		RequireAuth:    p.RequireAuth,
-		MapUnqualified: p.MapUnqualified,
-		PrimaryHost:    s.res.System(ctx).GetServer().GetPublicHostname(),
-		PrimaryScheme:  s.primaryScheme(ctx),
+		IsPortal:        true,
+		OrgName:         p.OrgName,
+		OrgDisplayName:  p.OrgDisplayName,
+		PortalName:      p.Name,
+		AllowPush:       p.AllowPush,
+		RequireAuth:     p.RequireAuth,
+		MapUnqualified:  p.MapUnqualified,
+		PrimaryHost:     s.res.System(ctx).GetServer().GetPublicHostname(),
+		PrimaryScheme:   s.primaryScheme(ctx),
+		HidePrimaryLink: p.HidePrimaryLink,
 	}), nil
 }
 
@@ -476,19 +481,20 @@ func (s *Service) reconcile(ctx context.Context) {
 
 func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {
 	proto := &v1.RegistryPortal{
-		Id:             p.ID,
-		OrgId:          p.OrgID,
-		Name:           p.Name,
-		Hostname:       p.Hostname,
-		Port:           int32(p.Port),
-		MapUnqualified: p.MapUnqualified,
-		AllowPush:      p.AllowPush,
-		RequireAuth:    p.RequireAuth,
-		Tls:            p.TLS,
-		CertSource:     p.CertSource,
-		Enabled:        p.Enabled,
-		CreatedAt:      timestamppb.New(p.CreatedAt),
-		UpdatedAt:      timestamppb.New(p.UpdatedAt),
+		Id:              p.ID,
+		OrgId:           p.OrgID,
+		Name:            p.Name,
+		Hostname:        p.Hostname,
+		Port:            int32(p.Port),
+		MapUnqualified:  p.MapUnqualified,
+		AllowPush:       p.AllowPush,
+		RequireAuth:     p.RequireAuth,
+		Tls:             p.TLS,
+		CertSource:      p.CertSource,
+		HidePrimaryLink: p.HidePrimaryLink,
+		Enabled:         p.Enabled,
+		CreatedAt:       timestamppb.New(p.CreatedAt),
+		UpdatedAt:       timestamppb.New(p.UpdatedAt),
 	}
 	if rules, err := ParseRules(p.Rules); err == nil {
 		proto.Rules = rules

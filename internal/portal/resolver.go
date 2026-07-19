@@ -11,14 +11,16 @@ import (
 
 	"github.com/nickheyer/distroface/internal/certs"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
 // Resolves requests to per-org portals by listener port and Host header
 type Resolver struct {
-	store *stores.Store
-	log   *logger.Logger
+	store    *stores.Store
+	settings *settings.Resolver
+	log      *logger.Logger
 
 	// Gates https enforcement on actual cert availability
 	certReady func(ctx context.Context, p *Portal, host string) bool
@@ -29,8 +31,8 @@ type Resolver struct {
 	loaded  bool
 }
 
-func NewResolver(store *stores.Store, log *logger.Logger) *Resolver {
-	return &Resolver{store: store, log: log}
+func NewResolver(store *stores.Store, res *settings.Resolver, log *logger.Logger) *Resolver {
+	return &Resolver{store: store, settings: res, log: log}
 }
 
 // SetCertReady installs the readiness check used before tls redirects
@@ -144,17 +146,21 @@ func (res *Resolver) reloadLocked() {
 			continue
 		}
 		entry := &Portal{
-			ID:             p.ID,
-			Name:           p.Name,
-			OrgID:          p.OrgID,
-			OrgName:        p.Org.Name,
-			OrgDisplayName: p.Org.DisplayName,
-			MapUnqualified: p.MapUnqualified,
-			AllowPush:      p.AllowPush,
-			RequireAuth:    p.RequireAuth,
-			TLS:            p.TLS,
-			CertSource:     p.CertSource,
-			CatchAll:       p.Hostname == "",
+			ID:              p.ID,
+			Name:            p.Name,
+			OrgID:           p.OrgID,
+			OrgName:         p.Org.Name,
+			OrgDisplayName:  p.Org.DisplayName,
+			MapUnqualified:  p.MapUnqualified,
+			AllowPush:       p.AllowPush,
+			RequireAuth:     p.RequireAuth,
+			TLS:             p.TLS,
+			CertSource:      p.CertSource,
+			CatchAll:        p.Hostname == "",
+			HidePrimaryLink: p.HidePrimaryLink,
+		}
+		if res.settings != nil {
+			entry.Isolated = res.settings.Org(context.Background(), p.OrgID).GetPortals().GetIsolated()
 		}
 		if rules, err := ParseRules(p.Rules); err != nil {
 			res.log.Error("portal %s (%s): stored rules invalid, custom rules disabled: %v", p.Name, p.Hostname, err)
@@ -228,6 +234,14 @@ func (res *Resolver) AllowAnonymous(r *http.Request) bool {
 func (res *Resolver) AllowPush(r *http.Request) bool {
 	if p := res.Resolve(r); p != nil {
 		return p.AllowPush
+	}
+	return true
+}
+
+// Check if the mapped repo may serve through the request's host
+func (res *Resolver) AllowRepo(r *http.Request, name string) bool {
+	if p := res.Resolve(r); p != nil {
+		return p.InScope(name)
 	}
 	return true
 }

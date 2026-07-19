@@ -24,6 +24,7 @@ var scopeAllowed = map[v1.SettingsScopeType][]string{
 		"artifacts.stale_upload_cleanup_hours",
 		"artifacts.private_by_default",
 		"artifacts.retention",
+		"portals.isolated",
 	},
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: {
 		"acme.email",

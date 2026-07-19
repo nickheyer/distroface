@@ -8,7 +8,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
-	import { Package, Save, Undo2 } from '@lucide/svelte';
+	import { Globe, Package, Save, Undo2 } from '@lucide/svelte';
+	import { Act } from '$lib/act.svelte';
 	import { orgScope, patchSettings, systemScope, tierOf } from '$lib/settings-utils';
 	import { SettingsTier, type FieldProvenance, type Settings } from '$lib/proto/distroface/v1/settings_pb';
 
@@ -21,9 +22,11 @@
 		maxTotalSize: 'artifacts.retention.max_total_size_bytes',
 		excludeLatest: 'artifacts.retention.exclude_latest',
 		maxFileSizeMb: 'artifacts.max_file_size_mb',
-		privateByDefault: 'artifacts.private_by_default'
+		privateByDefault: 'artifacts.private_by_default',
+		portalsIsolated: 'portals.isolated'
 	} as const;
-	const ALL_PATHS = Object.values(PATHS);
+	// The isolation toggle applies on interaction, the save flow skips it
+	const ALL_PATHS = Object.values(PATHS).filter((p) => p !== PATHS.portalsIsolated);
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -42,6 +45,8 @@
 	let excludeLatest = $state(true);
 	let maxFileSizeMb = $state(0);
 	let privateByDefault = $state(false);
+	let portalsIsolated = $state(false);
+	const isolatedAct = new Act();
 
 	function seed(eff: Settings) {
 		retentionEnabled = eff.artifacts?.retention?.enabled ?? false;
@@ -51,6 +56,23 @@
 		excludeLatest = eff.artifacts?.retention?.excludeLatest ?? true;
 		maxFileSizeMb = Number(eff.artifacts?.maxFileSizeMb ?? 0n);
 		privateByDefault = eff.artifacts?.privateByDefault ?? false;
+		portalsIsolated = eff.portals?.isolated ?? false;
+	}
+
+	// Applies live, values matching the instance tier clear back to inherit
+	async function applyIsolated(v: boolean) {
+		portalsIsolated = v;
+		const inheritedIsolated = inherited?.portals?.isolated ?? false;
+		const ok = await isolatedAct.run(async () => {
+			const res = await patchSettings(
+				orgScope(orgId),
+				v === inheritedIsolated ? {} : { portals: { isolated: v } },
+				['portals.isolated']
+			);
+			prov = res.provenance;
+			if (res.effective) seed(res.effective);
+		});
+		if (!ok) portalsIsolated = !v;
 	}
 
 	async function load() {
@@ -139,6 +161,26 @@
 {#if loading}
 	<Skeleton class="h-72 w-full rounded-xl" />
 {:else}
+	<FormCard
+		title="Portals"
+		description="How this organization's registry portals expose content. Applies live to every portal."
+		icon={Globe}
+	>
+		<FormField
+			label="Isolate portals"
+			horizontal
+			tag={isolatedAct.tag ?? customTag(PATHS.portalsIsolated)}
+			error={isolatedAct.error}
+			help="Portals answer only for content in this organization's namespace, everything else responds not found. Off keeps the instance-wide fall-through for unmapped names."
+		>
+			<Switch
+				checked={portalsIsolated}
+				disabled={isolatedAct.busy}
+				onCheckedChange={applyIsolated}
+			/>
+		</FormField>
+	</FormCard>
+
 	<FormCard
 		title="Artifacts"
 		description="Retention and upload limits for this organization's artifact repositories. Values differing from the instance defaults are stored as overrides."

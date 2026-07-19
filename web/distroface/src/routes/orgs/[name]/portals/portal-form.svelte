@@ -50,6 +50,8 @@
 	/* svelte-ignore state_referenced_locally */
 	let requireAuth = $state(portal?.requireAuth ?? false);
 	/* svelte-ignore state_referenced_locally */
+	let showExitLink = $state(!(portal?.hidePrimaryLink ?? false));
+	/* svelte-ignore state_referenced_locally */
 	let tls = $state(portal?.tls ?? false);
 	/* svelte-ignore state_referenced_locally */
 	let certSource = $state<CertSource>(portal?.certSource || CertSource.NONE);
@@ -220,6 +222,7 @@
 			mapUnqualified,
 			allowPush,
 			requireAuth,
+			hidePrimaryLink: !showExitLink,
 			tls,
 			certSource,
 			rules: cleanedRules
@@ -431,6 +434,10 @@
 
 				<FormField label="Require sign-in" horizontal help="On refuses anonymous pulls.">
 					<Switch bind:checked={requireAuth} />
+				</FormField>
+
+				<FormField label="Exit link" horizontal help="Off removes the portal UI's link back to the primary UI.">
+					<Switch bind:checked={showExitLink} />
 				</FormField>
 			</div>
 		</FormCard>

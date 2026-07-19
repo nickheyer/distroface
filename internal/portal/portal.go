@@ -9,18 +9,20 @@ import (
 
 // Request-ready view of one org portal
 type Portal struct {
-	ID             string
-	Name           string
-	OrgID          string
-	OrgName        string
-	OrgDisplayName string
-	MapUnqualified bool
-	AllowPush      bool
-	RequireAuth    bool
-	TLS            bool
-	CertSource     v1.CertSource
-	CatchAll       bool
-	rules          *pathMapper
+	ID              string
+	Name            string
+	OrgID           string
+	OrgName         string
+	OrgDisplayName  string
+	MapUnqualified  bool
+	AllowPush       bool
+	RequireAuth     bool
+	TLS             bool
+	CertSource      v1.CertSource
+	CatchAll        bool
+	Isolated        bool
+	HidePrimaryLink bool
+	rules           *pathMapper
 }
 
 // Resolves a requested repo name to its canonical path, custom rules run
@@ -39,6 +41,20 @@ func (p *Portal) MapName(name string) string {
 		return p.OrgName + "/" + name
 	}
 	return name
+}
+
+// InScope reports whether a canonical repo path may serve here
+func (p *Portal) InScope(name string) bool {
+	if !p.Isolated {
+		return true
+	}
+	return strings.HasPrefix(name, p.OrgName+"/")
+}
+
+// ForeignRef reports an isolated portal hiding this namespace
+func ForeignRef(ctx context.Context, namespace string) bool {
+	p := FromContext(ctx)
+	return p != nil && p.Isolated && namespace != p.OrgName
 }
 
 type ctxKey struct{}

@@ -165,7 +165,10 @@ func New() (*App, error) {
 		return fail("initializing registry access", err)
 	}
 
-	portalResolver := portal.NewResolver(store, registryLog)
+	portalResolver := portal.NewResolver(store, resolver, registryLog)
+
+	// Org isolation toggles must reach already cached portals
+	resolver.Subscribe(portalResolver.Invalidate)
 
 	// Limits read live, zero disables at call time
 	rateLimits := func() *v1.RateLimitSettings {

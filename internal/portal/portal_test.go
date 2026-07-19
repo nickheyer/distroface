@@ -18,7 +18,9 @@ import (
 
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
 func newTestStore(t *testing.T) *stores.Store {
@@ -72,7 +74,7 @@ func TestResolverMapName(t *testing.T) {
 		AllowPush:      true,
 		Enabled:        true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	cases := []struct {
 		host, name, want string
@@ -101,7 +103,7 @@ func TestResolverPortMatching(t *testing.T) {
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "hosted", Hostname: "vanity.example.com", Port: 9501, MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	// Catch-all matches any host on its port
 	r := portalRequest(http.MethodGet, "/", "whatever.example.com:9500", 9500)
@@ -138,7 +140,7 @@ func TestResolverAccessOptions(t *testing.T) {
 		Name: "ro", Hostname: "ro.example.com", Rules: "[]",
 		AllowPush: false, RequireAuth: true, Enabled: true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	ro := portalRequest(http.MethodGet, "/", "ro.example.com", 0)
 	other := portalRequest(http.MethodGet, "/", "other.example.com", 0)
@@ -165,7 +167,7 @@ func TestResolverDisabledAndInvalidate(t *testing.T) {
 	_, portal := createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "main", Hostname: "acme.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 	req := func() *http.Request { return portalRequest(http.MethodGet, "/", "acme.example.com", 0) }
 
 	if got := res.MapName(req(), "myimg"); got != "acme/myimg" {
@@ -192,7 +194,7 @@ func TestMiddlewareRouteShapes(t *testing.T) {
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "main", Hostname: "acme.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	cases := []struct {
 		path string
@@ -270,7 +272,7 @@ func TestMiddlewareSearchUnmappedPortal(t *testing.T) {
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "plain", Hostname: "plain.example.com", MapUnqualified: false, Rules: "[]", AllowPush: true, Enabled: true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	var gotNS, gotRepo string
 	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -318,7 +320,7 @@ func TestMiddlewareInjectsContext(t *testing.T) {
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "main", Hostname: "acme.example.com", Rules: "[]", AllowPush: true, Enabled: true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	var p *Portal
 	var scoped string
@@ -350,7 +352,7 @@ func TestMiddlewareReadOnly(t *testing.T) {
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "ro", Hostname: "ro.example.com", MapUnqualified: true, Rules: "[]", AllowPush: false, Enabled: true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	nextCalled := false
 	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -391,7 +393,7 @@ func TestMiddlewareRequireAuth(t *testing.T) {
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "auth", Hostname: "auth.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, RequireAuth: true, Enabled: true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	nextCalled := false
 	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -432,7 +434,7 @@ func TestMiddlewareOIDCBounce(t *testing.T) {
 	createTestPortal(t, store, &storage.RegistryPortal{
 		Name: "main", Hostname: "acme.example.com", Rules: "[]", AllowPush: true, Enabled: true,
 	})
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	h := res.Middleware(func() string { return "registry.example.com" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Error("bounced request must not reach the app")
@@ -461,7 +463,7 @@ func TestMiddlewareOIDCBounce(t *testing.T) {
 
 func TestRealmRewrite(t *testing.T) {
 	store := newTestStore(t)
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 
 	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Www-Authenticate", `Bearer realm="http://0.0.0.0:8080/auth/token",service="distroface-registry",scope="repository:acme/myimg:pull"`)
@@ -523,7 +525,7 @@ func selfSignedTLSConfig(t *testing.T) *tls.Config {
 // Both schemes on one shared port, tls enforced per hostname
 func TestManagerReconcileTLS(t *testing.T) {
 	store := newTestStore(t)
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 	m := NewManager(res, "127.0.0.1", logger.New())
 	m.SetHandler(res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "portal-surface")
@@ -587,7 +589,7 @@ func TestManagerReconcileTLS(t *testing.T) {
 
 func TestManagerReconcile(t *testing.T) {
 	store := newTestStore(t)
-	res := NewResolver(store, logger.New())
+	res := NewResolver(store, nil, logger.New())
 	m := NewManager(res, "127.0.0.1", logger.New())
 	m.SetHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, "portal-surface")
@@ -630,4 +632,121 @@ func TestManagerReconcile(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 	t.Error("listener still serving after portal delete")
+}
+
+func isolatedResolver(t *testing.T, store *stores.Store, orgID string) *Resolver {
+	t.Helper()
+	sr := settings.NewResolver(store, nil)
+	iso := true
+	_, err := sr.Update(context.Background(), v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, orgID, &v1.Settings{
+		Portals: &v1.PortalPolicySettings{Isolated: &iso},
+	}, []string{"portals.isolated"})
+	if err != nil {
+		t.Fatalf("settings update: %v", err)
+	}
+	return NewResolver(store, sr, logger.New())
+}
+
+func TestMiddlewareIsolated(t *testing.T) {
+	store := newTestStore(t)
+	org, _ := createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "main", Hostname: "acme.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "strict", Hostname: "strict.example.com", MapUnqualified: false, Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	res := isolatedResolver(t, store, org.ID)
+
+	cases := []struct {
+		host, path string
+		wantStatus int
+		wantPath   string
+	}{
+		// Names landing in the org still map and pass
+		{"acme.example.com", "/v2/myimg/manifests/v1", http.StatusOK, "/v2/acme/myimg/manifests/v1"},
+		{"acme.example.com", "/v2/acme/myimg/tags/list", http.StatusOK, "/v2/acme/myimg/tags/list"},
+		// Foreign repos answer as unknown
+		{"acme.example.com", "/v2/other/thing/manifests/latest", http.StatusNotFound, ""},
+		{"acme.example.com", "/v2/other/thing/blobs/sha256:abc", http.StatusNotFound, ""},
+		// Unmapped artifact repos vanish without map_unqualified
+		{"strict.example.com", "/api/v1/artifacts/foo/versions", http.StatusNotFound, ""},
+		{"strict.example.com", "/api/v1/artifacts/acme/foo/versions", http.StatusOK, "/api/v1/artifacts/_ns/acme/foo/versions"},
+		// Control plane keywords still pass to the facade
+		{"strict.example.com", "/api/v1/artifacts/repos", http.StatusOK, "/api/v1/artifacts/repos"},
+	}
+	for _, c := range cases {
+		var gotPath string
+		reached := false
+		h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			reached = true
+			gotPath = r.URL.Path
+		}))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, portalRequest(http.MethodGet, c.path, c.host, 0))
+		if c.wantStatus == http.StatusNotFound {
+			if reached {
+				t.Errorf("isolated %s %s reached backend at %q", c.host, c.path, gotPath)
+			}
+			if rec.Code != http.StatusNotFound {
+				t.Errorf("isolated %s %s status = %d, want 404", c.host, c.path, rec.Code)
+			}
+			continue
+		}
+		if !reached || gotPath != c.wantPath {
+			t.Errorf("isolated %s %s routed %q (reached %v), want %q", c.host, c.path, gotPath, reached, c.wantPath)
+		}
+	}
+
+	// Unmappable repo params collapse into the org scope
+	var gotNS, gotRepo string
+	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotNS = r.URL.Query().Get("namespace")
+		gotRepo = r.URL.Query().Get("repo")
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/search?repo=someone/foo", "strict.example.com", 0))
+	if gotNS != "acme" || gotRepo != "someone/foo" {
+		t.Errorf("isolated search = ns %q repo %q, want acme scope kept", gotNS, gotRepo)
+	}
+}
+
+func TestResolverAllowRepoIsolated(t *testing.T) {
+	store := newTestStore(t)
+	org, _ := createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "main", Hostname: "acme.example.com", MapUnqualified: true, Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	res := isolatedResolver(t, store, org.ID)
+
+	cases := []struct {
+		host, name string
+		want       bool
+	}{
+		{"acme.example.com", "acme/myimg", true},
+		{"acme.example.com", "other/thing", false},
+		{"acme.example.com", "myimg", false}, // token flow checks post-mapping names
+		{"elsewhere.example.com", "other/thing", true},
+	}
+	for _, c := range cases {
+		r := portalRequest(http.MethodGet, "/", c.host, 0)
+		if got := res.AllowRepo(r, c.name); got != c.want {
+			t.Errorf("AllowRepo(%s, %s) = %v, want %v", c.host, c.name, got, c.want)
+		}
+	}
+}
+
+func TestForeignRef(t *testing.T) {
+	iso := &Portal{OrgName: "acme", Isolated: true}
+	open := &Portal{OrgName: "acme"}
+
+	if !ForeignRef(WithPortal(context.Background(), iso), "other") {
+		t.Error("isolated portal must hide foreign namespaces")
+	}
+	if ForeignRef(WithPortal(context.Background(), iso), "acme") {
+		t.Error("isolated portal must serve its own org")
+	}
+	if ForeignRef(WithPortal(context.Background(), open), "other") {
+		t.Error("non-isolated portal keeps the fall-through")
+	}
+	if ForeignRef(context.Background(), "other") {
+		t.Error("no portal means no isolation")
+	}
 }

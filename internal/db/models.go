@@ -172,9 +172,10 @@ type RegistryPortal struct { // Alternate org-owned registry host and/or proxy p
 	Rules          string        `json:"rules" gorm:"not null;default:'[]'"` // JSON array of {pattern, replace}
 	AllowPush      bool          `json:"allow_push" gorm:"not null"`
 	RequireAuth    bool          `json:"require_auth" gorm:"not null"`
-	TLS            bool          `json:"tls" gorm:"not null;default:false;column:tls"`             // Https enforced for this portal, cleartext requests redirect
-	CertSource     v1.CertSource `json:"cert_source" gorm:"not null;default:1;column:cert_source"` // How the serving certificate materializes
-	Enabled        bool          `json:"enabled" gorm:"not null"`
+	TLS             bool          `json:"tls" gorm:"not null;default:false;column:tls"`             // Https enforced for this portal, cleartext requests redirect
+	CertSource      v1.CertSource `json:"cert_source" gorm:"not null;default:1;column:cert_source"` // How the serving certificate materializes
+	HidePrimaryLink bool          `json:"hide_primary_link" gorm:"not null;default:false;column:hide_primary_link"` // Portal UI drops the exit link
+	Enabled         bool          `json:"enabled" gorm:"not null"`
 	CreatedAt      time.Time     `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt      time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
 	Org            *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`

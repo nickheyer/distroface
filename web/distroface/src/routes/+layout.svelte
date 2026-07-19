@@ -176,7 +176,7 @@
 				<div class="flex items-center gap-1.5">
 					<span class="text-muted-foreground/60 text-[11px] hidden lg:inline mr-2">{__APP_VERSION__}</span>
 
-					{#if portalStore.isPortal && portalStore.primaryOrigin}
+					{#if portalStore.isPortal && portalStore.primaryOrigin && !portalStore.hidePrimaryLink}
 						<!-- eslint-disable svelte/no-navigation-without-resolve -->
 						<a
 							href={portalStore.primaryOrigin}

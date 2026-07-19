@@ -48,6 +48,7 @@ message RegistryPortal {
   CertSource cert_source = 14;
   CertState cert_state = 17; // Computed serving state
   string cert_detail = 18; // Computed, first blocker when not ready
+  bool hide_primary_link = 19; // Hide the portal UI's link back to the primary UI
 }
 
 // Fields to create a portal, hostname or port required
@@ -62,6 +63,7 @@ message CreatePortalRequest {
   int32 port = 8;
   bool tls = 9;
   CertSource cert_source = 10; // Unspecified behaves as none
+  bool hide_primary_link = 11;
 }
 
 // The newly created portal
@@ -83,6 +85,7 @@ message ResolvePortalResponse {
   bool require_auth = 6;
   bool map_unqualified = 7;
   string primary_host = 8;
+  bool hide_primary_link = 10; // Portal asks the UI to drop the exit link
 }
 
 // Identifies a single portal within an organization
@@ -123,6 +126,7 @@ message UpdatePortalRequest {
   optional int32 port = 11;
   optional bool tls = 12;
   CertSource cert_source = 13; // Unspecified keeps the current source
+  optional bool hide_primary_link = 14;
 }
 
 // The updated portal

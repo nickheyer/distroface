@@ -38,11 +38,18 @@
 	const anonymousAct = new Act();
 	const timeoutAct = new Act();
 	const oidcSwitchAct = new Act();
-	const oidcAct = new Act();
+	const issuerAct = new Act();
+	const clientIdAct = new Act();
+	const secretAct = new Act();
+	const redirectAct = new Act();
+	const roleClaimAct = new Act();
+	const groupClaimAct = new Act();
 
 	let canEdit = $derived(authStore.canUpdateSettings);
 
 	const locked = (path: string) => isLocked(prov, path);
+	const lockHelp = (path: string, help?: string) =>
+		locked(path) ? 'Pinned by the config file' : help;
 
 	function seedForm(s: Settings) {
 		localEnabled = s.auth?.localEnabled ?? true;
@@ -94,16 +101,16 @@
 	}
 
 	// Blur commit for one oidc text field
-	function commitOidc(path: string, value: string, current: string) {
+	function commitOidc(act: Act, path: string, value: string, current: string) {
 		if (value.trim() === current) return;
 		const field = path.split('.').pop() ?? '';
 		const camel = field.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-		apply(oidcAct, { auth: { oidc: { [camel]: value.trim() } } }, [path]);
+		apply(act, { auth: { oidc: { [camel]: value.trim() } } }, [path]);
 	}
 
 	function commitOidcSecret() {
 		if (oidcClientSecret.trim() === '') return;
-		apply(oidcAct, { auth: { oidc: { clientSecret: oidcClientSecret.trim() } } }, ['auth.oidc.client_secret']);
+		apply(secretAct, { auth: { oidc: { clientSecret: oidcClientSecret.trim() } } }, ['auth.oidc.client_secret']);
 	}
 
 	onMount(() => {
@@ -124,41 +131,48 @@
 	</div>
 {:else if eff}
 	<div class="space-y-6">
-		<FormCard title="Sign-in">
-			<div class="space-y-3">
-				<FormField
-					label="Local sign-in"
-					horizontal
-					help={locked('auth.local_enabled') ? 'Pinned by the config file' : undefined}
-					tag={localAct.tag}
-					error={localAct.error}
-				>
-					<Switch
-						checked={localEnabled}
-						disabled={!canEdit || localAct.busy || locked('auth.local_enabled')}
-						onCheckedChange={(v) => { localEnabled = v; apply(localAct, { auth: { localEnabled: v } }, ['auth.local_enabled']); }}
-					/>
-				</FormField>
-				{#if localEnabled}
+		<FormCard title="Sign-in" description="How people access this instance, changes apply live">
+			<div class="-my-3 divide-y divide-border/50">
+				<div>
 					<FormField
-						label="Open registration"
+						label="Local sign-in"
 						horizontal
-						help={locked('auth.local_allow_registration') ? 'Pinned by the config file' : 'Account creation without an invite'}
-						tag={registrationAct.tag}
-						error={registrationAct.error}
-						class="ml-7"
+						bordered={false}
+						help={lockHelp('auth.local_enabled', 'Username and password accounts')}
+						tag={localAct.tag}
+						error={localAct.error}
 					>
 						<Switch
-							checked={registrationEnabled}
-							disabled={!canEdit || registrationAct.busy || locked('auth.local_allow_registration')}
-							onCheckedChange={(v) => { registrationEnabled = v; apply(registrationAct, { auth: { localAllowRegistration: v } }, ['auth.local_allow_registration']); }}
+							checked={localEnabled}
+							disabled={!canEdit || localAct.busy || locked('auth.local_enabled')}
+							onCheckedChange={(v) => { localEnabled = v; apply(localAct, { auth: { localEnabled: v } }, ['auth.local_enabled']); }}
 						/>
 					</FormField>
-				{/if}
+					{#if localEnabled}
+						<div class="mb-3.5 ml-1 border-l-2 border-border/70 pl-4">
+							<FormField
+								label="Open registration"
+								horizontal
+								bordered={false}
+								class="py-0"
+								help={lockHelp('auth.local_allow_registration', 'Account creation without an invite')}
+								tag={registrationAct.tag}
+								error={registrationAct.error}
+							>
+								<Switch
+									checked={registrationEnabled}
+									disabled={!canEdit || registrationAct.busy || locked('auth.local_allow_registration')}
+									onCheckedChange={(v) => { registrationEnabled = v; apply(registrationAct, { auth: { localAllowRegistration: v } }, ['auth.local_allow_registration']); }}
+								/>
+							</FormField>
+						</div>
+					{/if}
+				</div>
 				<FormField
 					label="Anonymous access"
 					horizontal
-					help={locked('auth.anonymous_access') ? 'Pinned by the config file' : 'Browse public repos signed out'}
+					bordered={false}
+					help={lockHelp('auth.anonymous_access', 'Browse public repos signed out')}
 					tag={anonymousAct.tag}
 					error={anonymousAct.error}
 				>
@@ -172,6 +186,8 @@
 					label="Session timeout"
 					id="session-timeout"
 					horizontal
+					bordered={false}
+					help={lockHelp('auth.session_timeout_seconds', 'Idle time before sign-in expires')}
 					tag={timeoutAct.tag}
 					error={timeoutAct.error}
 				>
@@ -182,7 +198,7 @@
 							bind:value={timeoutMinutes}
 							min={5}
 							max={10080}
-							class="w-28"
+							class="w-24 text-right tabular-nums"
 							disabled={!canEdit || timeoutAct.busy || locked('auth.session_timeout_seconds')}
 							onblur={commitTimeout}
 							onkeydown={(e) => { if (e.key === 'Enter') commitTimeout(); }}
@@ -193,86 +209,126 @@
 			</div>
 		</FormCard>
 
-		<FormCard title="OIDC / SSO" description="External identity provider, applied live">
-			<div class="space-y-3">
-				<FormField
-					label="Enabled"
-					horizontal
-					help={locked('auth.oidc.enabled') ? 'Pinned by the config file' : undefined}
-					tag={oidcSwitchAct.tag}
-					error={oidcSwitchAct.error}
-				>
-					<Switch
-						checked={oidcEnabled}
-						disabled={!canEdit || oidcSwitchAct.busy || locked('auth.oidc.enabled')}
-						onCheckedChange={(v) => { oidcEnabled = v; apply(oidcSwitchAct, { auth: { oidc: { enabled: v } } }, ['auth.oidc.enabled']); }}
-					/>
-				</FormField>
-				{#if oidcEnabled}
-					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-						<FormField label="Issuer URI" id="oidc-issuer" tag={oidcAct.tag} error={oidcAct.error}>
-							<Input
-								id="oidc-issuer"
-								bind:value={oidcIssuer}
-								class="font-mono text-xs"
-								placeholder="https://idp.example.com/realms/main"
-								disabled={!canEdit || oidcAct.busy || locked('auth.oidc.issuer_uri')}
-								onblur={() => commitOidc('auth.oidc.issuer_uri', oidcIssuer, eff?.auth?.oidc?.issuerUri ?? '')}
-							/>
-						</FormField>
-						<FormField label="Client ID" id="oidc-client-id">
-							<Input
-								id="oidc-client-id"
-								bind:value={oidcClientId}
-								class="font-mono text-xs"
-								disabled={!canEdit || oidcAct.busy || locked('auth.oidc.client_id')}
-								onblur={() => commitOidc('auth.oidc.client_id', oidcClientId, eff?.auth?.oidc?.clientId ?? '')}
-							/>
-						</FormField>
-						<FormField
-							label="Client secret"
+		<FormCard title="OIDC / SSO" description="Single sign-on through an external identity provider">
+			<FormField
+				label="Enabled"
+				horizontal
+				bordered={false}
+				class="py-0"
+				help={lockHelp('auth.oidc.enabled')}
+				tag={oidcSwitchAct.tag}
+				error={oidcSwitchAct.error}
+			>
+				<Switch
+					checked={oidcEnabled}
+					disabled={!canEdit || oidcSwitchAct.busy || locked('auth.oidc.enabled')}
+					onCheckedChange={(v) => { oidcEnabled = v; apply(oidcSwitchAct, { auth: { oidc: { enabled: v } } }, ['auth.oidc.enabled']); }}
+				/>
+			</FormField>
+			{#if oidcEnabled}
+				<div class="mt-4 grid grid-cols-1 gap-x-6 gap-y-5 border-t border-border/50 pt-5 sm:grid-cols-2">
+					<FormField
+						label="Issuer URI"
+						id="oidc-issuer"
+						bordered={false}
+						class="sm:col-span-2"
+						help={lockHelp('auth.oidc.issuer_uri', 'Discovery is resolved from this address')}
+						tag={issuerAct.tag}
+						error={issuerAct.error}
+					>
+						<Input
+							id="oidc-issuer"
+							bind:value={oidcIssuer}
+							class="font-mono text-xs"
+							placeholder="https://idp.example.com/realms/main"
+							disabled={!canEdit || issuerAct.busy || locked('auth.oidc.issuer_uri')}
+							onblur={() => commitOidc(issuerAct, 'auth.oidc.issuer_uri', oidcIssuer, eff?.auth?.oidc?.issuerUri ?? '')}
+						/>
+					</FormField>
+					<FormField
+						label="Client ID"
+						id="oidc-client-id"
+						bordered={false}
+						help={lockHelp('auth.oidc.client_id')}
+						tag={clientIdAct.tag}
+						error={clientIdAct.error}
+					>
+						<Input
+							id="oidc-client-id"
+							bind:value={oidcClientId}
+							class="font-mono text-xs"
+							disabled={!canEdit || clientIdAct.busy || locked('auth.oidc.client_id')}
+							onblur={() => commitOidc(clientIdAct, 'auth.oidc.client_id', oidcClientId, eff?.auth?.oidc?.clientId ?? '')}
+						/>
+					</FormField>
+					<FormField
+						label="Client secret"
+						id="oidc-client-secret"
+						bordered={false}
+						help={lockHelp('auth.oidc.client_secret', oidcSecretSet ? 'A secret is stored, type to replace it' : 'Stored server side, never shown')}
+						tag={secretAct.tag}
+						error={secretAct.error}
+					>
+						<Input
 							id="oidc-client-secret"
-							help={oidcSecretSet ? 'A secret is stored, type to replace it' : 'Stored server side, never shown'}
-						>
-							<Input
-								id="oidc-client-secret"
-								type="password"
-								bind:value={oidcClientSecret}
-								placeholder={oidcSecretSet ? '••••••••' : ''}
-								disabled={!canEdit || oidcAct.busy || locked('auth.oidc.client_secret')}
-								onblur={commitOidcSecret}
-							/>
-						</FormField>
-						<FormField label="Redirect URL" id="oidc-redirect">
-							<Input
-								id="oidc-redirect"
-								bind:value={oidcRedirect}
-								class="font-mono text-xs"
-								disabled={!canEdit || oidcAct.busy || locked('auth.oidc.redirect_url')}
-								onblur={() => commitOidc('auth.oidc.redirect_url', oidcRedirect, eff?.auth?.oidc?.redirectUrl ?? '')}
-							/>
-						</FormField>
-						<FormField label="Role claim" id="oidc-role-claim" help="Claim mapped to system roles">
-							<Input
-								id="oidc-role-claim"
-								bind:value={oidcRoleClaim}
-								class="font-mono text-xs"
-								disabled={!canEdit || oidcAct.busy || locked('auth.oidc.role_claim')}
-								onblur={() => commitOidc('auth.oidc.role_claim', oidcRoleClaim, eff?.auth?.oidc?.roleClaim ?? '')}
-							/>
-						</FormField>
-						<FormField label="Group claim" id="oidc-group-claim" help="Claim listing idp groups">
-							<Input
-								id="oidc-group-claim"
-								bind:value={oidcGroupClaim}
-								class="font-mono text-xs"
-								disabled={!canEdit || oidcAct.busy || locked('auth.oidc.group_claim')}
-								onblur={() => commitOidc('auth.oidc.group_claim', oidcGroupClaim, eff?.auth?.oidc?.groupClaim ?? '')}
-							/>
-						</FormField>
-					</div>
-				{/if}
-			</div>
+							type="password"
+							bind:value={oidcClientSecret}
+							placeholder={oidcSecretSet ? '••••••••' : ''}
+							disabled={!canEdit || secretAct.busy || locked('auth.oidc.client_secret')}
+							onblur={commitOidcSecret}
+						/>
+					</FormField>
+					<FormField
+						label="Redirect URL"
+						id="oidc-redirect"
+						bordered={false}
+						class="sm:col-span-2"
+						help={lockHelp('auth.oidc.redirect_url', 'Callback registered with the identity provider')}
+						tag={redirectAct.tag}
+						error={redirectAct.error}
+					>
+						<Input
+							id="oidc-redirect"
+							bind:value={oidcRedirect}
+							class="font-mono text-xs"
+							disabled={!canEdit || redirectAct.busy || locked('auth.oidc.redirect_url')}
+							onblur={() => commitOidc(redirectAct, 'auth.oidc.redirect_url', oidcRedirect, eff?.auth?.oidc?.redirectUrl ?? '')}
+						/>
+					</FormField>
+					<FormField
+						label="Role claim"
+						id="oidc-role-claim"
+						bordered={false}
+						help={lockHelp('auth.oidc.role_claim', 'Claim mapped to system roles')}
+						tag={roleClaimAct.tag}
+						error={roleClaimAct.error}
+					>
+						<Input
+							id="oidc-role-claim"
+							bind:value={oidcRoleClaim}
+							class="font-mono text-xs"
+							disabled={!canEdit || roleClaimAct.busy || locked('auth.oidc.role_claim')}
+							onblur={() => commitOidc(roleClaimAct, 'auth.oidc.role_claim', oidcRoleClaim, eff?.auth?.oidc?.roleClaim ?? '')}
+						/>
+					</FormField>
+					<FormField
+						label="Group claim"
+						id="oidc-group-claim"
+						bordered={false}
+						help={lockHelp('auth.oidc.group_claim', 'Claim listing idp groups')}
+						tag={groupClaimAct.tag}
+						error={groupClaimAct.error}
+					>
+						<Input
+							id="oidc-group-claim"
+							bind:value={oidcGroupClaim}
+							class="font-mono text-xs"
+							disabled={!canEdit || groupClaimAct.busy || locked('auth.oidc.group_claim')}
+							onblur={() => commitOidc(groupClaimAct, 'auth.oidc.group_claim', oidcGroupClaim, eff?.auth?.oidc?.groupClaim ?? '')}
+						/>
+					</FormField>
+				</div>
+			{/if}
 		</FormCard>
 	</div>
 {/if}

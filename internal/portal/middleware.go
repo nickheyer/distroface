@@ -58,7 +58,12 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 			}
 			if match := apiRoutePattern.FindStringSubmatch(r.URL.Path); match != nil {
 				name, suffix := match[1], match[2]
-				if mapped := p.MapName(name); mapped != name {
+				mapped := p.MapName(name)
+				if !p.InScope(mapped) {
+					denyForeignOCI(w)
+					return
+				}
+				if mapped != name {
 					res.log.Debug("path mapping: %s -> %s (host %s, %s %s)", name, mapped, r.Host, r.Method, r.URL.Path)
 					r.URL.Path = "/v2/" + mapped + "/" + suffix
 					r.URL.RawPath = "" // Repo names have no escapable chars
@@ -81,6 +86,8 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 					if mapped := p.MapName(repoName); strings.HasPrefix(mapped, p.OrgName+"/") {
 						q.Set("namespace", p.OrgName)
 						q.Set("repo", strings.TrimPrefix(mapped, p.OrgName+"/"))
+					} else if p.Isolated {
+						q.Set("namespace", p.OrgName)
 					}
 				} else {
 					q.Set("namespace", p.OrgName)
@@ -98,11 +105,23 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 						res.log.Debug("artifact path mapping: %s -> %s (host %s, %s %s)", repo, mapped, r.Host, r.Method, r.URL.Path)
 						r.URL.Path = "/api/v1/artifacts/_ns/" + mapped + "/" + suffix
 						r.URL.RawPath = ""
+					} else if p.Isolated {
+						http.Error(w, "repository not found", http.StatusNotFound)
+						return
 					}
 				}
 			}
 		}
 		next.ServeHTTP(w, r)
+	})
+}
+
+// Isolated portals answer foreign repos as unknown
+func denyForeignOCI(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"errors": []map[string]string{{"code": "NAME_UNKNOWN", "message": "repository name not known to registry"}},
 	})
 }
 

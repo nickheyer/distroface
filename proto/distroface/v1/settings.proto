@@ -131,6 +131,7 @@ message ACMESettings {
 message PortalPolicySettings {
   repeated string hostname_blacklist = 1; // Exact or *.suffix patterns
   optional bool require_hostname_approval = 2;
+  optional bool isolated = 3; // Org portals refuse content outside the org namespace
 }
 
 // Artifact repo limits, org scope may override sizes and retention

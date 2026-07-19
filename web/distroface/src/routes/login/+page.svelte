@@ -9,6 +9,7 @@
 	import { Separator } from '$lib/components/ui/separator';
 	import { Label } from '$lib/components/ui/label';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import { portalStore } from '$lib/stores/portal.svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { Shield, Globe, ArrowRight, Check, Loader2 } from '@lucide/svelte';
@@ -225,11 +226,29 @@
 	<div class="w-full max-w-105">
 		<!-- Logo & heading -->
 		<div class="text-center mb-8">
-			<img
-				src="/adaptive-icon.png"
-				alt="Distroface"
-				class="mx-auto h-12 w-12 rounded-xl mb-5"
-			/>
+			{#if portalStore.isPortal}
+				<div class="inline-flex items-center gap-3.5 mb-6">
+					<img
+						src="/adaptive-icon.png"
+						alt={portalStore.displayName}
+						class="h-10 w-10 rounded-xl"
+					/>
+					<div class="h-9 w-px bg-border"></div>
+					<div class="text-left leading-tight">
+						<div class="flex items-center gap-2">
+							<span class="text-lg font-bold tracking-tight">{portalStore.displayName}</span>
+							<span class="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Portal</span>
+						</div>
+						<p class="text-xs text-muted-foreground mt-1">Managed by {portalStore.displayName}</p>
+					</div>
+				</div>
+			{:else}
+				<img
+					src="/adaptive-icon.png"
+					alt="Distroface"
+					class="mx-auto h-12 w-12 rounded-xl mb-5"
+				/>
+			{/if}
 			{#if processingOidc}
 				<h1 class="text-xl font-semibold tracking-tight">Signing you in</h1>
 				<p class="text-sm text-muted-foreground mt-1.5">Completing authentication...</p>
@@ -380,7 +399,11 @@
 		{/if}
 
 		<p class="text-center text-[11px] text-muted-foreground/50 mt-6">
-			Distroface &middot; Container Image Registry
+			{#if portalStore.isPortal}
+				Portal managed by {portalStore.displayName} &middot; Powered by Distroface
+			{:else}
+				Distroface &middot; Container Image Registry
+			{/if}
 		</p>
 	</div>
 </div>

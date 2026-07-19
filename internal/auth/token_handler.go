@@ -17,10 +17,11 @@ import (
 
 // Applies portal rules at the token endpoint, portals resolve by hostnames/ports
 type RegistryAccessPolicy interface {
-	MapName(r *http.Request, name string) string // Rewrites repo name
-	AllowAnonymous(r *http.Request) bool         // Check if anon access permitted
-	AllowPush(r *http.Request) bool              // Check if push permitted
-	IsPortalHost(host string) bool               // Check if host is an enabled portal hostname
+	MapName(r *http.Request, name string) string  // Rewrites repo name
+	AllowAnonymous(r *http.Request) bool          // Check if anon access permitted
+	AllowPush(r *http.Request) bool               // Check if push permitted
+	AllowRepo(r *http.Request, name string) bool  // Check if mapped repo serves on this host
+	IsPortalHost(host string) bool                // Check if host is an enabled portal hostname
 }
 
 // TokenHandler implements the Docker Token Authentication Specification.
@@ -213,6 +214,9 @@ func (h *TokenHandler) resolveAccess(r *http.Request, user *AuthenticatedUser, s
 		// Granted claims must carry the mapped name to match the rewritten URL
 		if h.policy != nil {
 			resourceName = h.policy.MapName(r, resourceName)
+			if !h.policy.AllowRepo(r, resourceName) {
+				continue
+			}
 		}
 
 		granted := h.filterActions(r, user, resourceName, requestedActions)

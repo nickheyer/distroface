@@ -468,6 +468,9 @@ func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.Authentica
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repository name is required"))
 	}
 	ns, name := repoRef(ctx, user, namespace, name)
+	if portal.ForeignRef(ctx, ns) {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
+	}
 	repo, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -499,6 +502,9 @@ func (s *ArtifactService) mutableRepo(ctx context.Context, user *auth.Authentica
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repository name is required"))
 	}
 	ns, name := repoRef(ctx, user, namespace, name)
+	if portal.ForeignRef(ctx, ns) {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
+	}
 	repo, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)

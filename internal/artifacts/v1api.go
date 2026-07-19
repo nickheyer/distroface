@@ -359,6 +359,10 @@ func (a *V1API) handleCreateRepo(w http.ResponseWriter, r *http.Request, user *a
 	if ns == "" {
 		ns = user.Username
 	}
+	if portal.ForeignRef(r.Context(), ns) {
+		http.Error(w, "FORBIDDEN", http.StatusForbidden)
+		return
+	}
 	if !a.access.CanCreateInNamespace(r.Context(), user, ns) {
 		http.Error(w, "FORBIDDEN", http.StatusForbidden)
 		return
@@ -950,6 +954,10 @@ func (a *V1API) repoNS(user *auth.AuthenticatedUser, vars map[string]string) str
 func (a *V1API) getRepo(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, namespace, name, action string) (*storage.ArtifactRepository, bool) {
 	if namespace == "" && user != nil {
 		namespace = user.Username
+	}
+	if portal.ForeignRef(r.Context(), namespace) {
+		http.Error(w, "Repository not found", http.StatusNotFound)
+		return nil, false
 	}
 	if !a.can(user, action, namespace+"/"+name) {
 		http.Error(w, "FORBIDDEN", http.StatusForbidden)

@@ -10,6 +10,7 @@ class PortalStore {
 	mapUnqualified = $state(false);
 	primaryHost = $state('');
 	primaryScheme = $state('http');
+	hidePrimaryLink = $state(false);
 
 	async init() {
 		try {
@@ -21,6 +22,7 @@ class PortalStore {
 			this.allowPush = resp.allowPush;
 			this.mapUnqualified = resp.mapUnqualified;
 			this.primaryHost = resp.primaryHost;
+			this.hidePrimaryLink = resp.hidePrimaryLink;
 			if (resp.primaryScheme) this.primaryScheme = resp.primaryScheme;
 		} catch {
 			// Treated as the primary host on failure

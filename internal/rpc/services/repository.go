@@ -34,6 +34,9 @@ func NewRepositoryService(store *stores.Store, reg *registry.RegistryAccess, enf
 
 // Checks if the requesting user can read the given repo via RBAC
 func (s *RepositoryService) canReadRepo(ctx context.Context, repo *storage.Repository) bool {
+	if portal.ForeignRef(ctx, repo.Namespace) {
+		return false
+	}
 	if !repo.IsPrivate {
 		return true
 	}
@@ -115,6 +118,9 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.R
 func (s *RepositoryService) DeleteRepository(ctx context.Context, req *connect.Request[v1.DeleteRepositoryRequest]) (*connect.Response[v1.DeleteRepositoryResponse], error) {
 	if req.Msg.Namespace == "" || req.Msg.Name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	}
+	if portal.ForeignRef(ctx, req.Msg.Namespace) {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
 	user := auth.UserFromContext(ctx)
@@ -221,6 +227,9 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, req *connect.R
 	if req.Msg.Namespace == "" || req.Msg.Name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
 	}
+	if portal.ForeignRef(ctx, req.Msg.Namespace) {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
+	}
 
 	user := auth.UserFromContext(ctx)
 	if user == nil {
@@ -309,6 +318,18 @@ func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *co
 	repos, total, err := s.store.ListStarredRepositories(ctx, user.ID, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	// Isolated portals drop stars pointing outside the org
+	if p := portal.FromContext(ctx); p != nil && p.Isolated {
+		kept := repos[:0]
+		for _, r := range repos {
+			if r.Namespace == p.OrgName {
+				kept = append(kept, r)
+			}
+		}
+		total -= int64(len(repos) - len(kept))
+		repos = kept
 	}
 
 	protoRepos := make([]*v1.Repository, len(repos))
