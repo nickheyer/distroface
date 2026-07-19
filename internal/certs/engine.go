@@ -205,13 +205,26 @@ func (e *Engine) portalManager(ctx context.Context, portalID string) *autocert.M
 	return e.managerFor(eff.GetDirectoryUrl(), eff.GetEmail())
 }
 
-// Shared server config, sni picks the right cert per hostname
+// Shared server config, sni picks the right cert per hostname and
+// GetConfigForClient layers on any per host client certificate policy
 func (e *Engine) TLSConfig() *tls.Config {
 	return &tls.Config{
-		MinVersion:     tls.VersionTLS12,
-		NextProtos:     []string{"h2", "http/1.1", acme.ALPNProto},
-		GetCertificate: e.getCertificate,
+		MinVersion:         tls.VersionTLS12,
+		NextProtos:         []string{"h2", "http/1.1", acme.ALPNProto},
+		GetCertificate:     e.getCertificate,
+		GetConfigForClient: e.getConfigForClient,
 	}
+}
+
+// Returns a per connection config only when the host enforces mtls
+func (e *Engine) getConfigForClient(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+	cfg, err := e.configForClient(hello)
+	if err != nil || cfg == nil {
+		return nil, err
+	}
+	// The chosen config is terminal, no second round of resolution
+	cfg.GetConfigForClient = nil
+	return cfg, nil
 }
 
 // Serves exactly the configured source for the hostname or nothing
@@ -221,12 +234,7 @@ func (e *Engine) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 		ctx = c
 	}
 	host := bareHost(hello.ServerName)
-	port := 0
-	if hello.Conn != nil {
-		if addr, ok := hello.Conn.LocalAddr().(*net.TCPAddr); ok {
-			port = addr.Port
-		}
-	}
+	port := localPort(hello)
 
 	var portal *TLSPortal
 	if host != "" && e.portals != nil {

@@ -68,9 +68,10 @@ func (ca *caMaterial) signLeaf(pub any, commonName string, dnsNames []string, ip
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Duration(days) * 24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		DNSNames:     dnsNames,
-		IPAddresses:  ips,
+		// Both usages so one leaf serves tls and authenticates as a client
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		DNSNames:    dnsNames,
+		IPAddresses: ips,
 	}
 	if tmpl.NotAfter.After(ca.cert.NotAfter) {
 		tmpl.NotAfter = ca.cert.NotAfter

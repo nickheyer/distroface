@@ -30,6 +30,7 @@ func Defaults() *v1.Settings {
 		Tls: &v1.TLSSettings{
 			Mode:          v1.TLSMode_TLS_MODE_DUAL.Enum(),
 			PrimarySource: v1.CertSource_CERT_SOURCE_CONFIG.Enum(),
+			MtlsMode:      v1.MTLSMode_MTLS_MODE_OFF.Enum(),
 		},
 		Acme: &v1.ACMESettings{
 			Enabled:         proto.Bool(false),

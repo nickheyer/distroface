@@ -96,6 +96,11 @@ func (s *Server) setupHandler() {
 		mux.Handle("/acme/", s.ACMEServer.Handler())
 	}
 
+	// Instance trust anchor, public so docker and dfcli can fetch it
+	if s.CertEngine != nil {
+		mux.Handle("/.well-known/distroface/ca.pem", s.CertEngine.TrustBundleHandler())
+	}
+
 	// OIDC HTTP handlers (not Connect RPC - these are OAuth2 redirect flows)
 	// Registered unconditionally, handlers self gate on runtime settings
 	if s.OIDCHandler != nil {
@@ -211,6 +216,8 @@ func (s *Server) setupHandler() {
 	if s.PortalResolver != nil {
 		root = s.PortalResolver.Middleware(s.primaryHostname, inner)
 	}
+	// Verified mtls identity rides the request context for auth and audit
+	root = certs.ClientCertMiddleware(root)
 	root = utils.Headers(s.Resolver, root)
 	s.handler = h2c.NewHandler(root, &http2.Server{})
 }
@@ -224,8 +231,8 @@ func (s *Server) primaryHostname() string {
 // enforcement waits until a certificate is actually servable
 func (s *Server) httpsOnlyRedirect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The acme protocol runs its own transport, never redirect it
-		if strings.HasPrefix(r.URL.Path, "/acme/") {
+		// Acme and the trust anchor must work before a client trusts our tls
+		if strings.HasPrefix(r.URL.Path, "/acme/") || r.URL.Path == "/.well-known/distroface/ca.pem" {
 			next.ServeHTTP(w, r)
 			return
 		}

@@ -23,7 +23,7 @@
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import { certBadgeClass, certDate, certHealth, certSourceLabels, certStateBadge } from '$lib/cert-utils';
 	import { acmeDirectoryURL, isLocked, patchSettings, systemScope, type SettingsPatch } from '$lib/settings-utils';
-	import { TLSMode, type FieldProvenance, type Settings } from '$lib/proto/distroface/v1/settings_pb';
+	import { MTLSMode, TLSMode, type FieldProvenance, type Settings } from '$lib/proto/distroface/v1/settings_pb';
 	import {
 		CertSource, TLSScope,
 		type CertificateDomain, type GetCertStatusResponse, type GetTLSMaterialResponse
@@ -38,6 +38,7 @@
 	let loadError = $state('');
 
 	let tlsMode = $state<TLSMode>(TLSMode.TLS_MODE_DUAL);
+	let mtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_OFF);
 	let primarySource = $state<CertSource>(CertSource.CONFIG);
 	let acmeEnabled = $state(false);
 	let acmeEmail = $state('');
@@ -48,6 +49,7 @@
 	let blacklistText = $state('');
 
 	const modeAct = new Act();
+	const mtlsAct = new Act();
 	const primaryAct = new Act();
 	const acmeSwitchAct = new Act();
 	const internalAcmeAct = new Act();
@@ -72,12 +74,25 @@
 		{ value: TLSMode.TLS_MODE_HTTPS_ONLY, label: 'HTTPS only', help: 'Cleartext requests redirect to HTTPS' },
 		{ value: TLSMode.TLS_MODE_CLEARTEXT, label: 'Cleartext only', help: 'Never terminate TLS in app' }
 	];
+	const mtlsOptions: { value: MTLSMode; label: string; help: string }[] = [
+		{ value: MTLSMode.MTLS_MODE_OFF, label: 'Off', help: 'No client certificate requested' },
+		{ value: MTLSMode.MTLS_MODE_OPTIONAL, label: 'Optional', help: 'Verified when presented, identity recorded' },
+		{ value: MTLSMode.MTLS_MODE_REQUIRED, label: 'Required', help: 'Handshake fails without a trusted client cert' }
+	];
 	const blacklistPlaceholder = 'internal.corp\n*.example.org';
 
 	const primaryHostname = $derived(eff?.server?.publicHostname ?? '');
 	const primaryHealth = $derived(certHealth(certStatus?.acmeCert));
 	const primaryBadge = $derived(certStateBadge(certStatus?.state));
 	const directoryURL = $derived(primaryHostname ? acmeDirectoryURL(primaryHostname) : '');
+	const caEndpoint = $derived(
+		primaryHostname
+			? `https://${primaryHostname}/.well-known/distroface/ca.pem`
+			: '/.well-known/distroface/ca.pem'
+	);
+	const dfcliHint = $derived(
+		primaryHostname ? `dfcli trust install --server https://${primaryHostname}` : 'dfcli trust install'
+	);
 
 	const acmeSwitchHelp = $derived(
 		challengePort
@@ -92,6 +107,7 @@
 
 	function seedForms(s: Settings) {
 		tlsMode = s.tls?.mode ?? TLSMode.TLS_MODE_DUAL;
+		mtlsMode = s.tls?.mtlsMode ?? MTLSMode.MTLS_MODE_OFF;
 		primarySource = s.tls?.primarySource || CertSource.CONFIG;
 		acmeEnabled = s.acme?.enabled ?? false;
 		acmeEmail = s.acme?.email ?? '';
@@ -156,6 +172,22 @@
 	function setTlsMode(v: TLSMode) {
 		tlsMode = v;
 		apply(modeAct, { tls: { mode: v } }, ['tls.mode']);
+	}
+
+	function setMtlsMode(v: MTLSMode) {
+		mtlsMode = v;
+		apply(mtlsAct, { tls: { mtlsMode: v } }, ['tls.mtls_mode']);
+	}
+
+	// Fetches the public trust anchor endpoint and saves it
+	async function downloadTrustAnchor() {
+		try {
+			const resp = await fetch('/.well-known/distroface/ca.pem');
+			if (!resp.ok) return;
+			downloadBlob(await resp.text(), 'distroface-ca.pem');
+		} catch {
+			// Material download stays available as a fallback
+		}
 	}
 
 	function setPrimarySource(v: CertSource) {
@@ -295,6 +327,24 @@
 				onDownload={material?.appCa ? downloadAppCA : undefined}
 				onRemove={removeAppCA}
 			/>
+			{#if material?.appCa}
+				<div class="mt-3 pt-3 border-t border-border/40">
+					<FormField label="Trust anchor" help="Clients fetch this CA to trust the registry's self-issued TLS">
+						<div class="flex items-center gap-2">
+							<code class="text-xs bg-muted px-2 py-1 rounded font-mono min-w-0 flex-1 truncate">{caEndpoint}</code>
+							<CopyButton text={caEndpoint} />
+							<Button variant="outline" size="sm" class="h-7 shrink-0" onclick={downloadTrustAnchor}>Download</Button>
+						</div>
+						<div class="flex items-center gap-2 mt-1.5">
+							<code class="text-xs bg-muted px-2 py-1 rounded font-mono min-w-0 flex-1 truncate">{dfcliHint}</code>
+							<CopyButton text={dfcliHint} />
+						</div>
+						<p class="text-[13px] text-muted-foreground">
+							Run <code class="font-mono">dfcli trust install</code> on a client so docker pull trusts the registry.
+						</p>
+					</FormField>
+				</div>
+			{/if}
 		</FormCard>
 
 		<!-- Built-in ACME certificate authority -->
@@ -529,6 +579,40 @@
 				</FormField>
 
 			</div>
+		</FormCard>
+
+		<!-- Mutual TLS -->
+		<FormCard title="Mutual TLS" description="Require clients to present a certificate issued by this instance">
+			<FormField
+				label="Client certificate policy"
+				help={lockHint('tls.mtls_mode', 'Applies to the primary hostname, portals can override')}
+				tag={mtlsAct.tag}
+				error={mtlsAct.error}
+			>
+				<RadioGroup.Root
+					value={String(mtlsMode)}
+					onValueChange={(v) => setMtlsMode(Number(v) as MTLSMode)}
+					disabled={mtlsAct.busy || locked('tls.mtls_mode')}
+					class="gap-0 divide-y divide-border/40"
+				>
+					{#each mtlsOptions as option (option.value)}
+						<div class="py-2.5 first:pt-1 last:pb-1">
+							<label class="flex items-center gap-2.5 cursor-pointer" for="mtls-{option.value}">
+								<RadioGroup.Item value={String(option.value)} id="mtls-{option.value}" />
+								<span class="text-sm">{option.label}</span>
+								<span class="text-xs text-muted-foreground">{option.help}</span>
+							</label>
+						</div>
+					{/each}
+				</RadioGroup.Root>
+				{#if mtlsMode !== MTLSMode.MTLS_MODE_OFF && !material?.appCa}
+					<p class="text-[13px] text-amber-600 dark:text-amber-400">Generate the instance CA above so client certificates can be verified</p>
+				{:else if mtlsMode === MTLSMode.MTLS_MODE_REQUIRED}
+					<p class="text-[13px] text-muted-foreground">
+						Clients need a certificate issued by this instance's CA — sign one from a CSR or an organization CA.
+					</p>
+				{/if}
+			</FormField>
 		</FormCard>
 
 		<!-- Portal hostnames -->

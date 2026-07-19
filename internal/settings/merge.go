@@ -28,6 +28,7 @@ var scopeAllowed = map[v1.SettingsScopeType][]string{
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: {
 		"acme.email",
 		"acme.directory_url",
+		"tls.mtls_mode",
 	},
 }
 

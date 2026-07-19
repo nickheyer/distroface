@@ -102,10 +102,19 @@ enum TLSMode {
   TLS_MODE_CLEARTEXT = 3; // Never terminate tls in app
 }
 
-// Primary hostname serving behavior
+// Whether a client certificate is requested or required at handshake
+enum MTLSMode {
+  MTLS_MODE_UNSPECIFIED = 0;
+  MTLS_MODE_OFF = 1; // No client certificate requested
+  MTLS_MODE_OPTIONAL = 2; // Verified when presented, identity attached
+  MTLS_MODE_REQUIRED = 3; // Handshake fails without a trusted client cert
+}
+
+// Primary hostname serving behavior, portal scope may override mtls_mode
 message TLSSettings {
   optional TLSMode mode = 1;
   optional CertSource primary_source = 2; // config, manual, acme, or app_ca
+  optional MTLSMode mtls_mode = 3; // Client certificate policy for the tier
 }
 
 // Acme issuance, org and portal scopes override email and directory

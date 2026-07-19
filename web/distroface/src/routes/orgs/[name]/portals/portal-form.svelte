@@ -20,6 +20,7 @@
 	import { configStore } from '$lib/stores/config.svelte';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { CertSource, TLSScope, type TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
+	import { MTLSMode } from '$lib/proto/distroface/v1/settings_pb';
 
 	let {
 		orgName,
@@ -65,6 +66,8 @@
 	let acmeDirInherited = $state('');
 	let acmeEmailInherited = $state('');
 	let builtinAcme = $state(false);
+	let mtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_UNSPECIFIED);
+	let savedMtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_UNSPECIFIED);
 	const builtinDirectory = $derived(acmeDirectoryURL(configStore.publicHostname));
 	/* svelte-ignore state_referenced_locally */
 	let rules = $state<RuleDraft[]>(
@@ -75,6 +78,16 @@
 	const sourceOptions = [
 		CertSource.NONE, CertSource.ACME, CertSource.ORG_CA, CertSource.ORG_CERT, CertSource.MANUAL
 	];
+
+	const mtlsOptions = [
+		{ value: MTLSMode.MTLS_MODE_UNSPECIFIED, label: 'Inherit from instance' },
+		{ value: MTLSMode.MTLS_MODE_OFF, label: 'Off' },
+		{ value: MTLSMode.MTLS_MODE_OPTIONAL, label: 'Optional' },
+		{ value: MTLSMode.MTLS_MODE_REQUIRED, label: 'Required' }
+	];
+	const mtlsLabels: Record<number, string> = Object.fromEntries(
+		mtlsOptions.map((o) => [o.value, o.label])
+	);
 
 	async function loadMaterial() {
 		try {
@@ -98,6 +111,8 @@
 				acmeDirectory = stored.settings?.acme?.directoryUrl ?? '';
 				savedAcmeEmail = acmeEmail;
 				savedAcmeDir = acmeDirectory;
+				mtlsMode = stored.settings?.tls?.mtlsMode ?? MTLSMode.MTLS_MODE_UNSPECIFIED;
+				savedMtlsMode = mtlsMode;
 			}
 			const eff = await rpcClient.settings.getEffectiveSettings({ scope: orgScope(orgId) }, silentCallOptions);
 			acmeDirInherited = eff.settings?.acme?.directoryUrl ?? '';
@@ -118,6 +133,16 @@
 		}, ['acme.email', 'acme.directory_url']);
 		savedAcmeEmail = email;
 		savedAcmeDir = dir;
+	}
+
+	// Portal mtls override, inherit clears it back to the instance policy
+	async function saveMtls(portalId: string) {
+		if (mtlsMode === savedMtlsMode) return;
+		const inherit = mtlsMode === MTLSMode.MTLS_MODE_UNSPECIFIED;
+		await patchSettings(portalScope(portalId), {
+			tls: inherit ? {} : { mtlsMode }
+		}, ['tls.mtls_mode']);
+		savedMtlsMode = mtlsMode;
 	}
 
 	onMount(() => {
@@ -204,6 +229,7 @@
 			if (portal) {
 				await rpcClient.portal.updatePortal({ ...common, id: portal.id, setRules: true }, silentCallOptions);
 				await saveAcme(portal.id);
+				await saveMtls(portal.id);
 				if (certSource === CertSource.MANUAL && pemsFilled) {
 					await uploadPortalCert(portal.id);
 				}
@@ -213,6 +239,7 @@
 			const created = resp.portal;
 			if (!created) return;
 			await saveAcme(created.id);
+			await saveMtls(created.id);
 			if (certSource === CertSource.MANUAL && pemsFilled) {
 				try {
 					await uploadPortalCert(created.id);
@@ -305,6 +332,21 @@
 				{#if certSource !== CertSource.NONE}
 					<FormField label="Require HTTPS" horizontal help="Redirects cleartext requests to HTTPS.">
 						<Switch bind:checked={tls} />
+					</FormField>
+					<FormField label="Client certificates (mTLS)" id="portal-mtls" help="Inherit uses the instance policy.">
+						<Select.Root type="single" value={String(mtlsMode)} onValueChange={(v) => (mtlsMode = Number(v) as MTLSMode)}>
+							<Select.Trigger id="portal-mtls" class="w-64">{mtlsLabels[mtlsMode]}</Select.Trigger>
+							<Select.Content>
+								{#each mtlsOptions as option (option.value)}
+									<Select.Item value={String(option.value)} label={option.label} />
+								{/each}
+							</Select.Content>
+						</Select.Root>
+						{#if mtlsMode === MTLSMode.MTLS_MODE_REQUIRED}
+							<p class="text-[13px] text-muted-foreground">
+								Only clients with a certificate issued by the organization CA can reach this portal.
+							</p>
+						{/if}
 					</FormField>
 				{/if}
 

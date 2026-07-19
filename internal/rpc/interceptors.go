@@ -9,6 +9,7 @@ import (
 	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
+	"github.com/nickheyer/distroface/internal/certs"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -170,6 +171,14 @@ func (s *Server) recordAuthDenial(ctx context.Context, req connect.AnyRequest, d
 	s.AuditRecorder.Record(ctx, ev)
 }
 
+// Notes the verified client certificate subject on the audit row
+func mtlsDetail(ctx context.Context) string {
+	if id := certs.ClientIdentityFrom(ctx); id != nil {
+		return "mtls client " + id.CommonName
+	}
+	return ""
+}
+
 func (s *Server) auditInterceptor(recorder *audit.Recorder) connect.UnaryInterceptorFunc {
 	return func(next connect.UnaryFunc) connect.UnaryFunc {
 		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
@@ -189,6 +198,7 @@ func (s *Server) auditInterceptor(recorder *audit.Recorder) connect.UnaryInterce
 				Resource: resource,
 				Outcome:  audit.OutcomeSuccess,
 				SourceIP: admin.ClientIP(req.Peer().Addr, req.Header()),
+				Detail:   mtlsDetail(ctx),
 			}
 			if user := auth.UserFromContext(ctx); user != nil {
 				ev.Actor, ev.ActorID = user.Username, user.ID

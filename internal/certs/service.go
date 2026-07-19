@@ -304,10 +304,8 @@ func (s *Service) GenerateAppCA(ctx context.Context, req *connect.Request[v1.Gen
 	}
 	cn := strings.TrimSpace(req.Msg.CommonName)
 	if cn == "" {
-		cn = s.engine.primaryHost(ctx)
-	}
-	if cn == "" {
-		cn = "distroface"
+		// A distinct name avoids colliding with minted leaf hostnames
+		cn = "DistroFace Instance Root CA"
 	}
 	certPEM, keyPEM, err := GenerateRootCA(cn)
 	if err != nil {
