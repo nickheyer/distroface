@@ -19,15 +19,18 @@
 	import CertMaterialRow from '$lib/components/cert-material-row.svelte';
 	import CertUploadPanel from '$lib/components/cert-upload-panel.svelte';
 	import { Input } from '$lib/components/ui/input';
+	import { Textarea } from '$lib/components/ui/textarea';
 	import { Lock, RefreshCw, Loader2, Globe, Pencil } from '@lucide/svelte';
-	import { certSourceLabels, certStateBadge } from '$lib/cert-utils';
+	import { certDate, certSourceLabels, certStateBadge } from '$lib/cert-utils';
 	import { effectiveAddress } from '$lib/portal-address';
 	import { Act, errText } from '$lib/act.svelte';
 	import { Pager } from '$lib/pager.svelte';
 	import { QueryFilter } from '$lib/query.svelte';
 	import { downloadBlob } from '$lib/download';
-	import { orgScope, patchSettings, systemScope } from '$lib/settings-utils';
-	import { CertSource, CertState, TLSScope, type TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
+	import CopyButton from '$lib/components/copy-button.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
+	import { acmeDirectoryURL, orgScope, patchSettings, systemScope } from '$lib/settings-utils';
+	import { CertSource, CertState, TLSScope, type CertificateInfo, type TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
 
@@ -45,6 +48,14 @@
 	const dirAct = new Act();
 	const emailAct = new Act();
 	const renewAct = new Act();
+	const signAct = new Act();
+	const builtinAct = new Act();
+
+	let csrPem = $state('');
+	let validityDays = $state(90);
+	let signedPem = $state('');
+	let signedCert = $state<CertificateInfo | null>(null);
+	const builtinDirectory = $derived(acmeDirectoryURL(configStore.publicHostname));
 
 	let uploadOpen = $state(false);
 	let uploadScope = $state<TLSScope>(TLSScope.TLS_SCOPE_ORG);
@@ -124,6 +135,31 @@
 		commitOrgSetting(dirAct, 'acme.directory_url', 'directoryUrl', orgAcmeDir.trim(), savedAcmeDir, (v) => (savedAcmeDir = v));
 	const commitAcmeEmail = () =>
 		commitOrgSetting(emailAct, 'acme.email', 'email', orgAcmeEmail.trim(), savedAcmeEmail, (v) => (savedAcmeEmail = v));
+
+	// Org gets a leaf signed without its private key leaving the client
+	function signCsr() {
+		signAct.run(async () => {
+			const resp = await rpcClient.certificate.signCSR(
+				{ orgId, csrPem: csrPem.trim(), validityDays },
+				silentCallOptions
+			);
+			signedPem = resp.certPem;
+			signedCert = resp.cert ?? null;
+		});
+	}
+
+	function downloadSigned() {
+		if (signedPem) downloadBlob(signedPem, `${orgName}-signed.pem`);
+	}
+
+	// Points the org's ACME default at the instance's own directory
+	function useBuiltinACME() {
+		builtinAct.run(async () => {
+			await patchSettings(orgScope(orgId), { acme: { directoryUrl: builtinDirectory } }, ['acme.directory_url']);
+			orgAcmeDir = builtinDirectory;
+			savedAcmeDir = builtinDirectory;
+		});
+	}
 
 	function issueICA() {
 		caAct.run(async () => {
@@ -242,6 +278,49 @@
 		</div>
 	</FormCard>
 
+	<!-- Sign a CSR from the org CA, private key stays with the client -->
+	<FormCard title="Sign a CSR" description="Sign a certificate request with this org's CA.">
+		{#if !orgCA}
+			<p class="text-[13px] text-amber-600 dark:text-amber-400">Add a signing CA above before signing requests.</p>
+		{:else}
+			<div class="space-y-3">
+				<FormField label="Certificate request" id="csr-pem" help="Paste a PEM CSR, the private key never leaves your machine." tag={signAct.tag} error={signAct.error}>
+					<Textarea
+						id="csr-pem"
+						bind:value={csrPem}
+						class="font-mono text-xs"
+						rows={5}
+						placeholder="-----BEGIN CERTIFICATE REQUEST-----"
+						disabled={signAct.busy}
+					/>
+				</FormField>
+				<div class="flex items-end gap-3">
+					<FormField label="Validity (days)" id="csr-days" bordered={false} class="w-32">
+						<Input id="csr-days" type="number" min="1" bind:value={validityDays} disabled={signAct.busy} />
+					</FormField>
+					<Button variant="outline" size="sm" class="h-9" disabled={signAct.busy || !csrPem.trim()} onclick={signCsr}>
+						{#if signAct.busy}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}Sign{/if}
+					</Button>
+				</div>
+				{#if signedPem}
+					<div class="rounded-lg border border-border/60 p-3 space-y-2">
+						<div class="flex items-center justify-between gap-2 flex-wrap">
+							<div class="text-xs text-muted-foreground">
+								{#if signedCert?.sans?.length}<span class="font-mono">{signedCert.sans.join(', ')}</span>{/if}
+								{#if signedCert?.notAfter}<span class="ml-2">expires {certDate(signedCert)}</span>{/if}
+							</div>
+							<div class="flex gap-1 shrink-0">
+								<CopyButton text={signedPem} />
+								<Button variant="ghost" size="sm" class="h-7" onclick={downloadSigned}>Download</Button>
+							</div>
+						</div>
+						<Textarea class="font-mono text-xs" rows={5} readonly value={signedPem} />
+					</div>
+				{/if}
+			</div>
+		{/if}
+	</FormCard>
+
 	<!-- ACME defaults -->
 	<FormCard title="ACME Defaults" description="Overrides for this org's ACME portals, applied live.">
 		<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -279,6 +358,13 @@
 				/>
 			</FormField>
 		</div>
+		<div class="mt-3 flex items-center gap-3">
+			<Button variant="outline" size="sm" class="h-8" disabled={builtinAct.busy || orgAcmeDir === builtinDirectory} onclick={useBuiltinACME}>
+				{#if builtinAct.busy}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}Use built-in ACME{/if}
+			</Button>
+			<span class="text-[13px] text-muted-foreground">Point this org's portals at the instance's own ACME directory.</span>
+		</div>
+		{#if builtinAct.error}<p class="mt-1 text-[13px] text-destructive">{builtinAct.error}</p>{/if}
 	</FormCard>
 
 	<!-- Portal HTTPS health -->

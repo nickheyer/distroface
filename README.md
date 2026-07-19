@@ -1,9 +1,10 @@
 <div align="center">
+  <p><b>DistroFace</b><br></p>
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="web/distroface/static/icon.png">
     <img src="web/distroface/static/splash-icon.png" alt="DistroFace" width="120">
   </picture>
-  <p><b>Refined blob storage</b><br></p>
+  <p><b>Blob Distribution & Storage</b><br></p>
 </div>
 
 ![](.github/screenshots/repo.png)

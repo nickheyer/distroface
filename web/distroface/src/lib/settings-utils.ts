@@ -14,6 +14,11 @@ export type ScopeInit = Pick<SettingsScope, 'type' | 'scopeId'>;
 
 export const systemScope: ScopeInit = { type: SettingsScopeType.SYSTEM, scopeId: '' };
 
+// Built in acme directory endpoint on the instance host
+export function acmeDirectoryURL(publicHostname: string): string {
+	return `https://${publicHostname}/acme/directory`;
+}
+
 export const orgScope = (orgId: string): ScopeInit => ({
 	type: SettingsScopeType.ORG,
 	scopeId: orgId

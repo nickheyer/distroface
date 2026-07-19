@@ -20,8 +20,9 @@
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime } from '$lib/utils';
 	import { downloadBlob } from '$lib/download';
+	import CopyButton from '$lib/components/copy-button.svelte';
 	import { certBadgeClass, certDate, certHealth, certSourceLabels, certStateBadge } from '$lib/cert-utils';
-	import { isLocked, patchSettings, systemScope, type SettingsPatch } from '$lib/settings-utils';
+	import { acmeDirectoryURL, isLocked, patchSettings, systemScope, type SettingsPatch } from '$lib/settings-utils';
 	import { TLSMode, type FieldProvenance, type Settings } from '$lib/proto/distroface/v1/settings_pb';
 	import {
 		CertSource, TLSScope,
@@ -42,12 +43,14 @@
 	let acmeEmail = $state('');
 	let acmeDirectory = $state('');
 	let challengePort = $state('');
+	let internalAcme = $state(false);
 	let requireApproval = $state(false);
 	let blacklistText = $state('');
 
 	const modeAct = new Act();
 	const primaryAct = new Act();
 	const acmeSwitchAct = new Act();
+	const internalAcmeAct = new Act();
 	const acmeDirAct = new Act();
 	const acmeEmailAct = new Act();
 	const acmePortAct = new Act();
@@ -74,6 +77,7 @@
 	const primaryHostname = $derived(eff?.server?.publicHostname ?? '');
 	const primaryHealth = $derived(certHealth(certStatus?.acmeCert));
 	const primaryBadge = $derived(certStateBadge(certStatus?.state));
+	const directoryURL = $derived(primaryHostname ? acmeDirectoryURL(primaryHostname) : '');
 
 	const acmeSwitchHelp = $derived(
 		challengePort
@@ -93,6 +97,7 @@
 		acmeEmail = s.acme?.email ?? '';
 		acmeDirectory = s.acme?.directoryUrl ?? '';
 		challengePort = s.acme?.challengePort ?? '';
+		internalAcme = s.acme?.internalEnabled ?? false;
 		requireApproval = s.portals?.requireHostnameApproval ?? false;
 		blacklistText = (s.portals?.hostnameBlacklist ?? []).join('\n');
 	}
@@ -161,6 +166,11 @@
 	function setAcmeEnabled(v: boolean) {
 		acmeEnabled = v;
 		apply(acmeSwitchAct, { acme: { enabled: v } }, ['acme.enabled']);
+	}
+
+	function setInternalAcme(v: boolean) {
+		internalAcme = v;
+		apply(internalAcmeAct, { acme: { internalEnabled: v } }, ['acme.internal_enabled']);
 	}
 
 	function commitAcmeDirectory() {
@@ -285,6 +295,39 @@
 				onDownload={material?.appCa ? downloadAppCA : undefined}
 				onRemove={removeAppCA}
 			/>
+		</FormCard>
+
+		<!-- Built-in ACME certificate authority -->
+		<FormCard title="Built-in Certificate Authority" description="Issue certificates from the instance root over ACME">
+			<div class="space-y-3">
+				<FormField
+					label="Built-in ACME server"
+					horizontal
+					help={lockHint('acme.internal_enabled', 'Serve an ACME directory backed by the instance CA')}
+					tag={internalAcmeAct.tag}
+					error={internalAcmeAct.error}
+				>
+					<Switch
+						checked={internalAcme}
+						disabled={internalAcmeAct.busy || locked('acme.internal_enabled')}
+						onCheckedChange={setInternalAcme}
+					/>
+				</FormField>
+				{#if internalAcme}
+					{#if !material?.appCa}
+						<p class="text-[13px] text-amber-600 dark:text-amber-400">Generate the instance CA above so issued certificates chain to a root</p>
+					{/if}
+					<FormField label="Directory URL" help="Point certbot, caddy, lego, or step at this endpoint">
+						<div class="flex items-center gap-2">
+							<code class="text-xs bg-muted px-2 py-1 rounded font-mono min-w-0 flex-1 truncate">{directoryURL}</code>
+							{#if directoryURL}<CopyButton text={directoryURL} />{/if}
+						</div>
+						<p class="text-[13px] text-muted-foreground">
+							Clients enrolled here receive certificates that chain to the instance root CA, no external CA needed.
+						</p>
+					</FormField>
+				{/if}
+			</div>
 		</FormCard>
 
 		<!-- ACME -->

@@ -16,7 +16,8 @@
 	import { Act } from '$lib/act.svelte';
 	import { effectiveAddress, placementError, portalScheme } from '$lib/portal-address';
 	import { certDate, certSourceLabels, certStateBadge, isIssuableHostname } from '$lib/cert-utils';
-	import { orgScope, patchSettings, portalScope } from '$lib/settings-utils';
+	import { acmeDirectoryURL, orgScope, patchSettings, portalScope } from '$lib/settings-utils';
+	import { configStore } from '$lib/stores/config.svelte';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { CertSource, TLSScope, type TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
 
@@ -63,6 +64,8 @@
 	let portalCert = $state<TLSMaterialInfo | null>(null);
 	let acmeDirInherited = $state('');
 	let acmeEmailInherited = $state('');
+	let builtinAcme = $state(false);
+	const builtinDirectory = $derived(acmeDirectoryURL(configStore.publicHostname));
 	/* svelte-ignore state_referenced_locally */
 	let rules = $state<RuleDraft[]>(
 		portal?.rules.map((r) => ({ pattern: r.pattern, replace: r.replace })) ?? []
@@ -99,6 +102,7 @@
 			const eff = await rpcClient.settings.getEffectiveSettings({ scope: orgScope(orgId) }, silentCallOptions);
 			acmeDirInherited = eff.settings?.acme?.directoryUrl ?? '';
 			acmeEmailInherited = eff.settings?.acme?.email ?? '';
+			builtinAcme = eff.settings?.acme?.internalEnabled ?? false;
 		} catch {
 			// Placeholders stay generic
 		}
@@ -322,9 +326,15 @@
 							<Input id="portal-acme-email" bind:value={acmeEmail} placeholder={acmeEmailInherited || 'inherited'} />
 						</FormField>
 					</div>
-					<p class="text-[13px] text-muted-foreground">
-						Issuance needs the hostname reachable from the internet.
-					</p>
+					{#if builtinAcme}
+						<p class="text-[13px] text-muted-foreground">
+							The built-in CA at <span class="font-mono">{builtinDirectory}</span> issues this portal's certificate, chaining to the instance root.
+						</p>
+					{:else}
+						<p class="text-[13px] text-muted-foreground">
+							Issuance needs the hostname reachable from the internet.
+						</p>
+					{/if}
 				{:else if certSource === CertSource.ORG_CA}
 					{#if orgCA}
 						<p class="text-[13px] text-muted-foreground">
