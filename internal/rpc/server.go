@@ -43,7 +43,8 @@ type ServerDeps struct {
 	PortalResolver      *portal.Resolver
 	PortalService       *portal.Service
 	CertEngine          *certs.Engine
-	AuthLimiter         *admin.Limiter // Lockout limiter nil disables
+	ACMEServer          *certs.ACMEServer // Nil hides the built in acme directory
+	AuthLimiter         *admin.Limiter    // Lockout limiter nil disables
 	ArtifactManager     *artifacts.Manager
 	ArtifactV1Facade    *artifacts.V1API
 	GCCollector         *admin.Collector
@@ -88,6 +89,11 @@ func (s *Server) setupHandler() {
 	if s.TokenHandler != nil {
 		mux.Handle("GET /auth/token", s.TokenHandler)
 		mux.Handle("POST /auth/token", s.TokenHandler)
+	}
+
+	// Built in acme directory, public and self gating on the live toggle
+	if s.ACMEServer != nil {
+		mux.Handle("/acme/", s.ACMEServer.Handler())
 	}
 
 	// OIDC HTTP handlers (not Connect RPC - these are OAuth2 redirect flows)
@@ -218,6 +224,11 @@ func (s *Server) primaryHostname() string {
 // enforcement waits until a certificate is actually servable
 func (s *Server) httpsOnlyRedirect(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// The acme protocol runs its own transport, never redirect it
+		if strings.HasPrefix(r.URL.Path, "/acme/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		// Portals enforce their own scheme in portal middleware
 		if r.TLS != nil || portal.FromContext(r.Context()) != nil {
 			next.ServeHTTP(w, r)

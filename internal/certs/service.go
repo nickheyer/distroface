@@ -3,6 +3,8 @@ package certs
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"regexp"
 	"strings"
@@ -173,8 +175,8 @@ func (s *Service) UploadTLSCertificate(ctx context.Context, req *connect.Request
 	}
 	isCAScope := target.Scope == v1.TLSScope_TLS_SCOPE_ORG_CA || target.Scope == v1.TLSScope_TLS_SCOPE_APP_CA
 	if isCAScope {
-		if leaf := firstCertificate([]byte(msg.CertPem)); leaf == nil || !leaf.IsCA {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("scope %v requires a ca certificate", target.Scope))
+		if err := ValidateCABundle([]byte(msg.CertPem)); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err)
 		}
 	}
 	target.CertPEM = msg.CertPem
@@ -364,6 +366,72 @@ func (s *Service) IssueOrgICA(ctx context.Context, req *connect.Request[v1.Issue
 	s.log.Info("org ica issued from instance root: %s (org %s)", cn, org.Name)
 
 	return connect.NewResponse(&v1.IssueOrgICAResponse{OrgCa: materialInfo(record, true)}), nil
+}
+
+func (s *Service) SignCSR(ctx context.Context, req *connect.Request[v1.SignCSRRequest]) (*connect.Response[v1.SignCSRResponse], error) {
+	block, _ := pem.Decode([]byte(req.Msg.CsrPem))
+	if block == nil || block.Type != "CERTIFICATE REQUEST" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("expected a pem certificate request"))
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid csr: %w", err))
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("csr signature invalid: %w", err))
+	}
+
+	orgID := ""
+	if req.Msg.OrgId == "" {
+		if err := s.requireSystemAdmin(ctx); err != nil {
+			return nil, err
+		}
+	} else {
+		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+		if err != nil {
+			return nil, err
+		}
+		orgID = org.ID
+	}
+
+	sans := csrSANs(csr)
+	if len(sans) == 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("csr has no subject names"))
+	}
+	signed, err := s.engine.SignServerCert(ctx, orgID, csr.PublicKey, sans, int(req.Msg.ValidityDays))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+	}
+	if user := auth.UserFromContext(ctx); user != nil {
+		s.log.Info("csr signed for %v by %s (org %q)", sans, user.Username, req.Msg.OrgId)
+	}
+	return connect.NewResponse(&v1.SignCSRResponse{
+		CertPem: signed.CertPEM,
+		Cert:    certInfoFromLeaf(signed.Leaf),
+	}), nil
+}
+
+// Union of the csr common name and dns sans
+func csrSANs(csr *x509.CertificateRequest) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(name string) {
+		name = strings.TrimSpace(name)
+		if name != "" && !seen[name] {
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	if csr.Subject.CommonName != "" {
+		add(csr.Subject.CommonName)
+	}
+	for _, d := range csr.DNSNames {
+		add(d)
+	}
+	for _, ip := range csr.IPAddresses {
+		add(ip.String())
+	}
+	return out
 }
 
 func (s *Service) GetCertStatus(ctx context.Context, req *connect.Request[v1.GetCertStatusRequest]) (*connect.Response[v1.GetCertStatusResponse], error) {

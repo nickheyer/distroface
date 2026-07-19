@@ -115,6 +115,7 @@ message ACMESettings {
   optional string directory_url = 3; // Empty means lets encrypt production
   optional string challenge_port = 4; // System only, empty disables http-01
   optional bool redirect_http = 5; // System only, challenge listener redirects to https
+  optional bool internal_enabled = 6; // System only, serve the built in acme directory
 }
 
 // Instance rules for org claimed hostnames

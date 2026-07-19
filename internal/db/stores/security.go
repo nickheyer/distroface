@@ -104,6 +104,13 @@ func (s *Store) DeleteCertificateDomain(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Delete(&db.CertificateDomain{}, "id = ?", id).Error
 }
 
+// Approved domains eligible for proactive renewal
+func (s *Store) ListApprovedCertificateDomains(ctx context.Context) ([]*db.CertificateDomain, error) {
+	var domains []*db.CertificateDomain
+	err := s.db.WithContext(ctx).Where("approved = ?", true).Find(&domains).Error
+	return domains, err
+}
+
 func (s *Store) GetCertificateDomainsByIDs(ctx context.Context, ids []string) ([]*db.CertificateDomain, error) {
 	if len(ids) == 0 {
 		return nil, nil

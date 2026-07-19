@@ -37,6 +37,8 @@ service CertificateService {
   rpc IssueOrgICA(IssueOrgICARequest) returns (IssueOrgICAResponse) {}
   // Resolved certificate state for the app or a portal, with problems
   rpc GetCertStatus(GetCertStatusRequest) returns (GetCertStatusResponse) {}
+  // Signs a pem csr with the org ca, or the app ca when org_id is empty
+  rpc SignCSR(SignCSRRequest) returns (SignCSRResponse) {}
 }
 
 // Where a served certificate comes from, portals use none/acme/org_ca/
@@ -60,6 +62,7 @@ enum TLSScope {
   TLS_SCOPE_ORG = 3; // Org shared certificate
   TLS_SCOPE_ORG_CA = 4; // Org signing ca
   TLS_SCOPE_PORTAL = 5; // Certificate for a single portal
+  TLS_SCOPE_ACME_CA = 6; // Built in acme issuing intermediate
 }
 
 // Who owns a hostname registration
@@ -267,4 +270,18 @@ message IssueCertificateRequest {
 // Certificate details after issuance
 message IssueCertificateResponse {
   CertificateInfo cert = 1;
+}
+
+// Empty org_id signs from the app ca and needs a system admin,
+// keys never touch the server, sans must satisfy hostname policy
+message SignCSRRequest {
+  string org_id = 1;
+  string csr_pem = 2;
+  int32 validity_days = 3; // Zero means the 90 day default
+}
+
+// Leaf first, then the issuing chain
+message SignCSRResponse {
+  string cert_pem = 1;
+  CertificateInfo cert = 2;
 }

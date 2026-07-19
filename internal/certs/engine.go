@@ -52,12 +52,13 @@ type Engine struct {
 
 	configCert *tls.Certificate // From cert_file/key_file at startup
 
-	mu        sync.Mutex
-	managers  map[string]*autocert.Manager // Keyed directory plus email
-	certCache map[string]*cachedKeyPair    // Parsed uploads keyed by scope target
-	leaves    map[string]*tls.Certificate  // Org ca minted leaves keyed org plus host
-	challenge *http.Server
-	ready     readyCache
+	mu           sync.Mutex
+	managers     map[string]*autocert.Manager // Keyed directory plus email
+	certCache    map[string]*cachedKeyPair    // Parsed uploads keyed by scope target
+	leaves       map[string]*tls.Certificate  // Org ca minted leaves keyed org plus host
+	challenge    *http.Server
+	ready        readyCache
+	acmeIssuerMu sync.Mutex // Serializes lazy acme ca minting
 }
 
 type cachedKeyPair struct {

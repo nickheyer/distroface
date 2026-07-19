@@ -5,12 +5,10 @@ import (
 	"net"
 
 	"github.com/distribution/distribution/v3"
-	"github.com/distribution/distribution/v3/notifications"
 	repositorymiddleware "github.com/distribution/distribution/v3/registry/middleware/repository"
 	"github.com/distribution/reference"
 	"github.com/google/uuid"
 	"github.com/opencontainers/go-digest"
-	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/nickheyer/distroface/internal/audit"
 	storage "github.com/nickheyer/distroface/internal/db"
@@ -20,8 +18,7 @@ import (
 	"github.com/nickheyer/distroface/pkg/utils"
 )
 
-// listenerDeps holds the dependencies needed by the repository middleware listener.
-// Set via RegisterListenerMiddleware before handlers.NewApp is called.
+// Deps for the repository middleware, set before handlers.NewApp
 var listenerDeps struct {
 	store      *stores.Store
 	log        *logger.Logger
@@ -30,7 +27,7 @@ var listenerDeps struct {
 }
 
 // RegisterListenerMiddleware stores the dependencies needed by the
-// repository middleware listener. Must be called before handlers.NewApp.
+// repository middleware observer. Must be called before handlers.NewApp.
 func RegisterListenerMiddleware(store *stores.Store, log *logger.Logger, dispatcher *webhook.Dispatcher, recorder *audit.Recorder) {
 	listenerDeps.store = store
 	listenerDeps.log = log
@@ -39,59 +36,115 @@ func RegisterListenerMiddleware(store *stores.Store, log *logger.Logger, dispatc
 }
 
 func init() {
-	repositorymiddleware.Register("distroface", func(ctx context.Context, repo distribution.Repository, _ map[string]any) (distribution.Repository, error) {
+	// Distribution hands middleware the app context, so the repo is
+	// wrapped directly and every event uses its per request context
+	repositorymiddleware.Register("distroface", func(_ context.Context, repo distribution.Repository, _ map[string]any) (distribution.Repository, error) {
 		if listenerDeps.store == nil {
 			return repo, nil
 		}
-		listener := &registryListener{
+		return &observedRepo{Repository: repo, obs: &observer{
 			store:      listenerDeps.store,
 			log:        listenerDeps.log,
 			dispatcher: listenerDeps.dispatcher,
 			recorder:   listenerDeps.recorder,
-			ctx:        ctx,
-		}
-		wrapped, _ := notifications.Listen(repo, nil, listener)
-		return wrapped, nil
+		}}, nil
 	})
 }
 
-// registryListener implements notifications.Listener to handle distribution v3
-// repository events directly via the repository middleware system.
-type registryListener struct {
+// Emits webhooks, audit rows, and counters for repository events
+type observer struct {
 	store      *stores.Store
 	log        *logger.Logger
 	dispatcher *webhook.Dispatcher
 	recorder   *audit.Recorder
-	ctx        context.Context
 }
 
-var _ notifications.Listener = (*registryListener)(nil)
+type observedRepo struct {
+	distribution.Repository
+	obs *observer
+}
 
-func (l *registryListener) ManifestPushed(repo reference.Named, m distribution.Manifest, options ...distribution.ManifestServiceOption) error {
+func (r *observedRepo) Manifests(ctx context.Context, options ...distribution.ManifestServiceOption) (distribution.ManifestService, error) {
+	ms, err := r.Repository.Manifests(ctx, options...)
+	if err != nil {
+		return nil, err
+	}
+	return &observedManifests{ManifestService: ms, repo: r.Repository.Named(), obs: r.obs}, nil
+}
+
+func (r *observedRepo) Tags(ctx context.Context) distribution.TagService {
+	return &observedTags{TagService: r.Repository.Tags(ctx), repo: r.Repository.Named(), obs: r.obs}
+}
+
+type observedManifests struct {
+	distribution.ManifestService
+	repo reference.Named
+	obs  *observer
+}
+
+func (m *observedManifests) Get(ctx context.Context, dgst digest.Digest, options ...distribution.ManifestServiceOption) (distribution.Manifest, error) {
+	manifest, err := m.ManifestService.Get(ctx, dgst, options...)
+	if err == nil {
+		m.obs.manifestPulled(ctx, m.repo, manifest, options...)
+	}
+	return manifest, err
+}
+
+func (m *observedManifests) Put(ctx context.Context, manifest distribution.Manifest, options ...distribution.ManifestServiceOption) (digest.Digest, error) {
+	dgst, err := m.ManifestService.Put(ctx, manifest, options...)
+	if err == nil {
+		m.obs.manifestPushed(ctx, m.repo, manifest, options...)
+	}
+	return dgst, err
+}
+
+func (m *observedManifests) Delete(ctx context.Context, dgst digest.Digest) error {
+	err := m.ManifestService.Delete(ctx, dgst)
+	if err == nil {
+		m.obs.manifestDeleted(ctx, m.repo, dgst)
+	}
+	return err
+}
+
+type observedTags struct {
+	distribution.TagService
+	repo reference.Named
+	obs  *observer
+}
+
+func (t *observedTags) Untag(ctx context.Context, tag string) error {
+	err := t.TagService.Untag(ctx, tag)
+	if err == nil {
+		t.obs.tagDeleted(ctx, t.repo, tag)
+	}
+	return err
+}
+
+func (o *observer) manifestPushed(ctx context.Context, repo reference.Named, m distribution.Manifest, options ...distribution.ManifestServiceOption) {
 	namespace, name := utils.SplitRepoName(repo.Name())
 	if namespace == "" || name == "" {
-		return nil
+		return
 	}
 
-	r, err := l.store.GetRepository(l.ctx, namespace, name)
+	r, err := o.store.GetRepository(ctx, namespace, name)
 	if err != nil {
-		l.log.Error("listener: failed to look up repo %s/%s: %v", namespace, name, err)
-		return nil
+		o.log.Error("listener: failed to look up repo %s/%s: %v", namespace, name, err)
+		return
 	}
 
 	if r == nil {
 		ownerID := ""
 		isOrgNamespace := false
-		user, err := l.store.GetUserByUsername(l.ctx, namespace)
+		user, err := o.store.GetUserByUsername(ctx, namespace)
 		if err != nil {
-			l.log.Error("listener: failed to look up user %s: %v", namespace, err)
+			o.log.Error("listener: failed to look up user %s: %v", namespace, err)
 		}
 		if user != nil {
 			ownerID = user.ID
 		} else {
-			org, err := l.store.GetOrganization(l.ctx, namespace)
+			org, err := o.store.GetOrganization(ctx, namespace)
 			if err != nil {
-				l.log.Error("listener: failed to look up org %s: %v", namespace, err)
+				o.log.Error("listener: failed to look up org %s: %v", namespace, err)
 			}
 			if org != nil {
 				ownerID = org.ID
@@ -106,92 +159,68 @@ func (l *registryListener) ManifestPushed(repo reference.Named, m distribution.M
 			OwnerID:        ownerID,
 			IsOrgNamespace: isOrgNamespace,
 		}
-		if err := l.store.CreateRepository(l.ctx, r); err != nil {
-			l.log.Error("listener: failed to create repo %s/%s: %v", namespace, name, err)
-			return nil
+		if err := o.store.CreateRepository(ctx, r); err != nil {
+			o.log.Error("listener: failed to create repo %s/%s: %v", namespace, name, err)
+			return
 		}
-		l.log.Info("listener: auto-created repository %s/%s", namespace, name)
+		o.log.Info("listener: auto-created repository %s/%s", namespace, name)
 	}
 
-	if err := l.store.IncrementPushCount(l.ctx, namespace, name); err != nil {
-		l.log.Error("listener: failed to increment push count for %s/%s: %v", namespace, name, err)
-	}
-
-	tag := utils.TagFromOptions(options)
-	_, dgst := utils.ExtractRef(repo, m)
-	if l.dispatcher != nil {
-		l.dispatcher.Dispatch(l.ctx, "push", namespace, name, tag, dgst)
-	}
-	l.audit("push", namespace, name, tag, dgst)
-	return nil
-}
-
-func (l *registryListener) ManifestPulled(repo reference.Named, m distribution.Manifest, options ...distribution.ManifestServiceOption) error {
-	namespace, name := utils.SplitRepoName(repo.Name())
-	if namespace == "" || name == "" {
-		return nil
-	}
-
-	if err := l.store.IncrementPullCount(l.ctx, namespace, name); err != nil {
-		l.log.Error("listener: failed to increment pull count for %s/%s: %v", namespace, name, err)
+	if err := o.store.IncrementPushCount(ctx, namespace, name); err != nil {
+		o.log.Error("listener: failed to increment push count for %s/%s: %v", namespace, name, err)
 	}
 
 	tag := utils.TagFromOptions(options)
 	_, dgst := utils.ExtractRef(repo, m)
-	if l.dispatcher != nil {
-		l.dispatcher.Dispatch(l.ctx, "pull", namespace, name, tag, dgst)
+	if o.dispatcher != nil {
+		o.dispatcher.Dispatch(ctx, "push", namespace, name, tag, dgst)
 	}
-	l.audit("pull", namespace, name, tag, dgst)
-	return nil
+	o.audit(ctx, "push", namespace, name, tag, dgst)
 }
 
-func (l *registryListener) ManifestDeleted(repo reference.Named, dgst digest.Digest) error {
+func (o *observer) manifestPulled(ctx context.Context, repo reference.Named, m distribution.Manifest, options ...distribution.ManifestServiceOption) {
 	namespace, name := utils.SplitRepoName(repo.Name())
 	if namespace == "" || name == "" {
-		return nil
+		return
 	}
-	if l.dispatcher != nil {
-		l.dispatcher.Dispatch(l.ctx, "delete", namespace, name, "", dgst.String())
+
+	if err := o.store.IncrementPullCount(ctx, namespace, name); err != nil {
+		o.log.Error("listener: failed to increment pull count for %s/%s: %v", namespace, name, err)
 	}
-	l.audit("delete", namespace, name, "", dgst.String())
-	return nil
+
+	tag := utils.TagFromOptions(options)
+	_, dgst := utils.ExtractRef(repo, m)
+	if o.dispatcher != nil {
+		o.dispatcher.Dispatch(ctx, "pull", namespace, name, tag, dgst)
+	}
+	o.audit(ctx, "pull", namespace, name, tag, dgst)
 }
 
-func (l *registryListener) BlobPushed(_ reference.Named, _ v1.Descriptor) error {
-	return nil
-}
-
-func (l *registryListener) BlobPulled(_ reference.Named, _ v1.Descriptor) error {
-	return nil
-}
-
-func (l *registryListener) BlobMounted(_ reference.Named, _ v1.Descriptor, _ reference.Named) error {
-	return nil
-}
-
-func (l *registryListener) BlobDeleted(_ reference.Named, _ digest.Digest) error {
-	return nil
-}
-
-func (l *registryListener) TagDeleted(repo reference.Named, tag string) error {
+func (o *observer) manifestDeleted(ctx context.Context, repo reference.Named, dgst digest.Digest) {
 	namespace, name := utils.SplitRepoName(repo.Name())
 	if namespace == "" || name == "" {
-		return nil
+		return
 	}
-	if l.dispatcher != nil {
-		l.dispatcher.Dispatch(l.ctx, "delete", namespace, name, tag, "")
+	if o.dispatcher != nil {
+		o.dispatcher.Dispatch(ctx, "delete", namespace, name, "", dgst.String())
 	}
-	l.audit("delete", namespace, name, tag, "")
-	return nil
+	o.audit(ctx, "delete", namespace, name, "", dgst.String())
 }
 
-func (l *registryListener) RepoDeleted(_ reference.Named) error {
-	return nil
+func (o *observer) tagDeleted(ctx context.Context, repo reference.Named, tag string) {
+	namespace, name := utils.SplitRepoName(repo.Name())
+	if namespace == "" || name == "" {
+		return
+	}
+	if o.dispatcher != nil {
+		o.dispatcher.Dispatch(ctx, "delete", namespace, name, tag, "")
+	}
+	o.audit(ctx, "delete", namespace, name, tag, "")
 }
 
-// Actor and source come from the distribution request context
-func (l *registryListener) audit(action, namespace, name, tag, dgst string) {
-	if l.recorder == nil {
+// Actor and source come from the request scoped auth context
+func (o *observer) audit(ctx context.Context, action, namespace, name, tag, dgst string) {
+	if o.recorder == nil {
 		return
 	}
 	ref := namespace + "/" + name
@@ -201,12 +230,12 @@ func (l *registryListener) audit(action, namespace, name, tag, dgst string) {
 	if dgst != "" {
 		ref += "@" + dgst
 	}
-	actor, _ := l.ctx.Value("auth.user.name").(string)
-	addr, _ := l.ctx.Value("http.request.remoteaddr").(string)
+	actor, _ := ctx.Value("auth.user.name").(string)
+	addr, _ := ctx.Value("http.request.remoteaddr").(string)
 	if host, _, err := net.SplitHostPort(addr); err == nil {
 		addr = host
 	}
-	l.recorder.Record(l.ctx, audit.Event{
+	o.recorder.Record(ctx, audit.Event{
 		Action:   "Registry/" + action,
 		Resource: "registry",
 		Outcome:  audit.OutcomeSuccess,

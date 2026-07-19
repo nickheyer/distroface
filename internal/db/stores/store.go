@@ -144,6 +144,7 @@ func (s *Store) Migrate() error {
 		&db.ArtifactProperty{},
 		&db.CertificateDomain{},
 		&db.ACMECacheEntry{},
+		&db.ACMEAccount{},
 		&db.TLSCertificate{},
 		&db.AuditEvent{},
 	); err != nil {

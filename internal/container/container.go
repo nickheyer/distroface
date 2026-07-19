@@ -207,6 +207,7 @@ func New() (*App, error) {
 	portalResolver.SetCertReady(func(ctx context.Context, p *portal.Portal, host string) bool {
 		return certEngine.PortalCertReady(ctx, p.CertSource, p.OrgID, p.ID, host)
 	})
+	certEngine.ScheduleRenewal(ctx)
 
 	mainPort, err := strconv.Atoi(cfg.Server.Port)
 	if err != nil {
@@ -219,6 +220,7 @@ func New() (*App, error) {
 	log.Info("TLS engine ready (mode=%v acme=%v)",
 		resolver.System(ctx).GetTls().GetMode(), certEngine.ACMEEnabled(ctx))
 	certService := certs.NewService(store, enforcer, certEngine, resolver, log)
+	acmeServer := certs.NewACMEServer(certEngine)
 
 	oidcHandler := auth.NewOIDCHandler(authManager, store, resolver, portalResolver, log)
 
@@ -256,6 +258,7 @@ func New() (*App, error) {
 		PortalResolver:      portalResolver,
 		PortalService:       portalService,
 		CertEngine:          certEngine,
+		ACMEServer:          acmeServer,
 		AuthLimiter:         authLimiter,
 		ArtifactManager:     artifactManager,
 		ArtifactV1Facade:    artifactV1Facade,

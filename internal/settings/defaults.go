@@ -32,11 +32,12 @@ func Defaults() *v1.Settings {
 			PrimarySource: v1.CertSource_CERT_SOURCE_CONFIG.Enum(),
 		},
 		Acme: &v1.ACMESettings{
-			Enabled:       proto.Bool(false),
-			Email:         proto.String(""),
-			DirectoryUrl:  proto.String(""),
-			ChallengePort: proto.String("80"),
-			RedirectHttp:  proto.Bool(true),
+			Enabled:         proto.Bool(false),
+			Email:           proto.String(""),
+			DirectoryUrl:    proto.String(""),
+			ChallengePort:   proto.String("80"),
+			RedirectHttp:    proto.Bool(true),
+			InternalEnabled: proto.Bool(false),
 		},
 		Portals: &v1.PortalPolicySettings{
 			RequireHostnameApproval: proto.Bool(false),

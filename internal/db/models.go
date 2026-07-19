@@ -248,6 +248,14 @@ type ACMECacheEntry struct { // Autocert cache row holding certs and account sta
 	UpdatedAt time.Time `gorm:"autoUpdateTime"`
 }
 
+type ACMEAccount struct { // Built in acme server account keyed by jwk thumbprint
+	ID            string    `gorm:"primaryKey"` // RFC 7638 thumbprint
+	PublicKeyJSON string    `gorm:"type:text;not null;column:public_key_json"`
+	Contacts      string    `gorm:"type:text;not null;default:'[]'"` // JSON array
+	Status        string    `gorm:"not null;default:'valid'"`
+	CreatedAt     time.Time `gorm:"autoCreateTime"`
+}
+
 type AuditEvent struct {
 	ID        string    `json:"id" gorm:"primaryKey"`
 	Actor     string    `json:"actor" gorm:"index"`

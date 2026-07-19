@@ -64,6 +64,8 @@ var AuthenticatedOnlyProcedures = map[string]bool{
 	distrofacev1connect.CertificateServiceRemoveCertificateDomainProcedure:      true,
 	distrofacev1connect.CertificateServiceBulkRemoveCertificateDomainsProcedure: true,
 	distrofacev1connect.CertificateServiceIssueCertificateProcedure:             true,
+	// System admin for app ca, org admin for org ca, checked in-service
+	distrofacev1connect.CertificateServiceSignCSRProcedure: true,
 }
 
 // ProcedurePermissions maps each RPC procedure path to the resource and action
