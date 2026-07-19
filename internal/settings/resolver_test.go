@@ -201,8 +201,12 @@ func TestSeedSystemOnce(t *testing.T) {
 	ctx := t.Context()
 
 	seed := &v1.Settings{Server: &v1.ServerSettings{PublicHostname: proto.String("reg.example.com")}}
-	if err := r.SeedSystem(ctx, seed); err != nil {
+	seeded, err := r.SeedSystem(ctx, seed)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if !seeded {
+		t.Fatal("first seed reported ignored")
 	}
 	eff, _, _ := r.Effective(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
 	if eff.GetServer().GetPublicHostname() != "reg.example.com" {
@@ -211,8 +215,12 @@ func TestSeedSystemOnce(t *testing.T) {
 
 	// Second seed with different value must not overwrite
 	r2 := NewResolver(store, nil)
-	if err := r2.SeedSystem(ctx, &v1.Settings{Server: &v1.ServerSettings{PublicHostname: proto.String("other")}}); err != nil {
+	seeded, err = r2.SeedSystem(ctx, &v1.Settings{Server: &v1.ServerSettings{PublicHostname: proto.String("other")}})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if seeded {
+		t.Fatal("second seed reported applied")
 	}
 	eff, _, _ = r2.Effective(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
 	if eff.GetServer().GetPublicHostname() != "reg.example.com" {

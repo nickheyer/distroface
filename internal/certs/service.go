@@ -676,8 +676,31 @@ func (s *Service) ApproveCertificateDomain(ctx context.Context, req *connect.Req
 	return connect.NewResponse(&v1.ApproveCertificateDomainResponse{Domain: s.domainToProto(ctx, record, orgName)}), nil
 }
 
+// Readable source name for precondition errors
+func sourceName(src v1.CertSource) string {
+	switch src {
+	case v1.CertSource_CERT_SOURCE_NONE:
+		return "none"
+	case v1.CertSource_CERT_SOURCE_CONFIG:
+		return "config file"
+	case v1.CertSource_CERT_SOURCE_MANUAL:
+		return "uploaded"
+	case v1.CertSource_CERT_SOURCE_ACME:
+		return "acme"
+	case v1.CertSource_CERT_SOURCE_ORG_CA:
+		return "org ca"
+	case v1.CertSource_CERT_SOURCE_ORG_CERT:
+		return "org certificate"
+	case v1.CertSource_CERT_SOURCE_APP_CA:
+		return "instance ca"
+	}
+	return "unspecified"
+}
+
 func (s *Service) IssueCertificate(ctx context.Context, req *connect.Request[v1.IssueCertificateRequest]) (*connect.Response[v1.IssueCertificateResponse], error) {
 	var domain, orgID string
+	viaACME := true
+	caScope := v1.TLSScope_TLS_SCOPE_UNSPECIFIED
 
 	switch target := req.Msg.Target.(type) {
 	case *v1.IssueCertificateRequest_DomainId:
@@ -711,14 +734,34 @@ func (s *Service) IssueCertificate(ctx context.Context, req *connect.Request[v1.
 		}
 		domain = bareHost(portal.Hostname)
 		orgID = portal.OrgID
+		switch portal.CertSource {
+		case v1.CertSource_CERT_SOURCE_ACME:
+		case v1.CertSource_CERT_SOURCE_ORG_CA:
+			viaACME = false
+			caScope = v1.TLSScope_TLS_SCOPE_ORG_CA
+		default:
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("portal certificate source is %q; only acme and org ca sources issue on demand", sourceName(portal.CertSource)))
+		}
 	default:
 		if err := s.requireSystemAdmin(ctx); err != nil {
 			return nil, err
 		}
 		domain = s.engine.primaryHost(ctx)
+		src := s.engine.PrimarySource(ctx)
+		switch src {
+		case v1.CertSource_CERT_SOURCE_ACME:
+		case v1.CertSource_CERT_SOURCE_APP_CA:
+			viaACME = false
+			caScope = v1.TLSScope_TLS_SCOPE_APP_CA
+		default:
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("primary certificate source is %q; only acme and instance ca sources issue on demand", sourceName(src)))
+		}
 	}
 
-	if orgID != "" {
+	// Acme burns shared quota, ca leaves mint locally
+	if viaACME && orgID != "" {
 		if err := s.engine.Policy().Allowed(ctx, domain, orgID); err != nil {
 			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
 		}
@@ -728,7 +771,13 @@ func (s *Service) IssueCertificate(ctx context.Context, req *connect.Request[v1.
 		}
 	}
 
-	info, err := s.engine.EnsureCertificate(ctx, domain)
+	var info *v1.CertificateInfo
+	var err error
+	if viaACME {
+		info, err = s.engine.EnsureCertificate(ctx, domain)
+	} else {
+		info, err = s.engine.EnsureCALeaf(ctx, caScope, orgID, domain)
+	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("issuance failed: %w", err))
 	}

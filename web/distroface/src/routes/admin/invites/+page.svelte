@@ -1,393 +1,195 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
-	import { onMount } from 'svelte';
-	import { SvelteSet } from 'svelte/reactivity';
-	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Input } from '$lib/components/ui/input';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
-	} from '$lib/components/ui/table';
-	import FormPanel from '$lib/components/form-panel.svelte';
-	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
-	import FormField from '$lib/components/form-field.svelte';
-	import AsyncSelect from '$lib/components/async-select.svelte';
-	import CopyButton from '$lib/components/copy-button.svelte';
-	import EmptyState from '$lib/components/empty-state.svelte';
-	import DataPagination from '$lib/components/data-pagination.svelte';
-	import BulkActionBar from '$lib/components/bulk-action-bar.svelte';
-	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Ticket } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
-	import { authStore } from '$lib/stores/auth.svelte';
-	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import { toast } from 'svelte-sonner';
-	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime } from '$lib/utils';
-	import { Pager } from '$lib/pager.svelte';
-	import { QueryFilter } from '$lib/query.svelte';
+	import { rpc } from '$lib/rpc';
+	import { Lister } from '$lib/list.svelte';
+	import type { Role } from '$lib/proto/distroface/v1/types_pb';
 	import type { RegistrationInvite } from '$lib/proto/distroface/v1/auth_pb';
-	import type { BulkOperationError } from '$lib/proto/distroface/v1/types_pb';
+	import { fmtDate } from '$lib/fmt';
+	import { errata } from '$lib/state/errata.svelte';
+	import Leaf from '$lib/bits/Leaf.svelte';
+	import Tally from '$lib/bits/Tally.svelte';
+	import Copy from '$lib/bits/Copy.svelte';
+	import Confirm from '$lib/bits/Confirm.svelte';
 
-	let invites = $state<RegistrationInvite[]>([]);
-	let loading = $state(true);
-	let loaded = $state(false);
-	const pager = new Pager(20);
-	const filter = new QueryFilter([
-		{ key: 'code', label: 'Code' },
-		{ key: 'description', label: 'Description' },
-		{ key: 'created_by', label: 'Created By' }
-	]);
+	const invites = new Lister<RegistrationInvite>((page) =>
+		rpc.auth.listInvites({ page }).then((r) => ({ rows: r.invites, page: r.page }))
+	);
 
-	let createPanelOpen = $state(false);
-	let inviteDescription = $state('');
-	let inviteSelectedRoles = $state<string[]>([]);
-	let invitePin = $state('');
-	let inviteMaxUses = $state<number | undefined>(undefined);
-	let inviteExpiryHours = $state<number | undefined>(undefined);
-	let creating = $state(false);
+	let allRoles = $state<Role[]>([]);
 
-	let deleteDialogOpen = $state(false);
-	let deleteInvite = $state<RegistrationInvite | null>(null);
-	let deleting = $state(false);
-
-	const selected = new SvelteSet<string>();
-	const pageIds = $derived(invites.map((i) => i.id));
-	const allOnPageSelected = $derived(pageIds.length > 0 && pageIds.every((id) => selected.has(id)));
-	const someOnPageSelected = $derived(pageIds.some((id) => selected.has(id)));
-
-	let bulkDeleteDialogOpen = $state(false);
-	let bulkWorking = $state(false);
-
-	async function loadInvites() {
-		loading = true;
-		try {
-			const resp = await rpcClient.auth.listInvites({ page: pager.request(filter.request()) });
-			invites = resp.invites;
-			pager.apply(resp.page);
-		} catch {
-			// error interceptor
-		} finally {
-			loading = false;
-			loaded = true;
-		}
-	}
-
-	function filterChanged() {
-		pager.reset();
-		loadInvites();
-	}
-
-	function toggleSelectPage() {
-		if (allOnPageSelected) {
-			for (const id of pageIds) selected.delete(id);
-		} else {
-			for (const id of pageIds) selected.add(id);
-		}
-	}
-
-	function toggleSelect(id: string) {
-		if (selected.has(id)) selected.delete(id);
-		else selected.add(id);
-	}
-
-	function reportBulkErrors(errors: BulkOperationError[]) {
-		if (errors.length === 0) return;
-		const lookup = new Map(invites.map((i) => [i.id, i.description]));
-		const first = errors[0];
-		const who = lookup.get(first.id) ?? first.id;
-		toast.error(
-			errors.length === 1
-				? `${who}: ${first.error}`
-				: `${errors.length} failed (${who}: ${first.error}, ...)`
-		);
-	}
-
-	async function confirmBulkDelete() {
-		bulkWorking = true;
-		try {
-			const resp = await rpcClient.auth.bulkDeleteInvites({ ids: [...selected] });
-			reportBulkErrors(resp.errors);
-			selected.clear();
-			bulkDeleteDialogOpen = false;
-			await loadInvites();
-		} catch {
-			// error interceptor
-		} finally {
-			bulkWorking = false;
-		}
-	}
-
-	function resetCreateForm() {
-		inviteDescription = '';
-		inviteSelectedRoles = [];
-		invitePin = '';
-		inviteMaxUses = undefined;
-		inviteExpiryHours = undefined;
-	}
-
-	async function createInvite() {
-		if (!inviteDescription.trim()) return;
-		creating = true;
-		try {
-			await rpcClient.auth.createInvite({
-				description: inviteDescription.trim(),
-				roleIds: inviteSelectedRoles,
-				pin: invitePin || undefined,
-				maxUses: inviteMaxUses && inviteMaxUses > 0 ? inviteMaxUses : undefined,
-				expiresInHours: inviteExpiryHours && inviteExpiryHours > 0 ? inviteExpiryHours : undefined
-			});
-			createPanelOpen = false;
-			resetCreateForm();
-			await loadInvites();
-		} catch {
-			// error interceptor
-		} finally {
-			creating = false;
-		}
-	}
-
-	function openDelete(invite: RegistrationInvite) {
-		deleteInvite = invite;
-		deleteDialogOpen = true;
-	}
-
-	async function confirmDelete() {
-		if (!deleteInvite) return;
-		deleting = true;
-		try {
-			await rpcClient.auth.deleteInvite({ id: deleteInvite.id });
-			deleteDialogOpen = false;
-			await loadInvites();
-		} catch {
-			// error interceptor
-		} finally {
-			deleting = false;
-		}
-	}
-
-	function getInviteUrl(code: string): string {
-		return `${window.location.origin}/login?invite=${code}`;
-	}
-
-	onMount(() => {
-		if (!authStore.hasPermission('settings', 'read')) { goto(resolve('/admin')); return; }
-		loadInvites();
+	$effect(() => {
+		invites.first();
+		rpc.role.listRoles({ page: { pageSize: 200 } }).then((r) => (allRoles = r.roles));
 	});
+
+	let picked = $state<Set<string>>(new Set());
+
+	function togglePick(id: string, on: boolean) {
+		const next = new Set(picked);
+		if (on) next.add(id);
+		else next.delete(id);
+		picked = next;
+	}
+
+	let creating = $state(false);
+	let newDesc = $state('');
+	let newRoles = $state<Set<string>>(new Set());
+	let newPin = $state('');
+	let newMaxUses = $state('');
+	let newExpiry = $state('');
+	let busy = $state(false);
+
+	function toggleRole(id: string, on: boolean) {
+		const next = new Set(newRoles);
+		if (on) next.add(id);
+		else next.delete(id);
+		newRoles = next;
+	}
+
+	async function issue(e: Event) {
+		e.preventDefault();
+		busy = true;
+		try {
+			await rpc.auth.createInvite({
+				description: newDesc,
+				roleIds: [...newRoles],
+				pin: newPin || undefined,
+				maxUses: newMaxUses.trim() ? Number(newMaxUses) : undefined,
+				expiresInHours: newExpiry.trim() ? Number(newExpiry) : undefined
+			});
+			errata.remark('Invite issued.');
+			creating = false;
+			newDesc = '';
+			newRoles = new Set();
+			newPin = '';
+			newMaxUses = '';
+			newExpiry = '';
+			await invites.first();
+		} catch {
+			// Interceptor reports
+		} finally {
+			busy = false;
+		}
+	}
+
+	async function withdraw(inv: RegistrationInvite) {
+		await rpc.auth.deleteInvite({ id: inv.id });
+		errata.remark('Invite revoked.');
+		await invites.fetch();
+	}
+
+	async function withdrawPicked() {
+		const r = await rpc.auth.bulkDeleteInvites({ ids: [...picked] });
+		if (r.errors.length) errata.report(`${r.deletedCount} revoked; ${r.errors.length} failed.`);
+		else errata.remark(`${r.deletedCount} revoked.`);
+		picked = new Set();
+		await invites.first();
+	}
+
+	function inviteLink(code: string): string {
+		return `${window.location.origin}/login?invite=${encodeURIComponent(code)}`;
+	}
 </script>
 
-<div class="space-y-4">
-	<div class="section-header">
-		<div>
-			<h2 class="section-title">Registration Invites</h2>
-			<p class="section-subtitle">Invite links allow users to register when public registration is disabled.</p>
-		</div>
-		<div class="flex items-center gap-2">
-			<div class="w-96">
-				<QueryFilterBar {filter} placeholder="Search invites..." onchange={filterChanged} />
-			</div>
-			<PermissionGate resource="settings" action="create">
-				<Button size="sm" onclick={() => (createPanelOpen = true)}>Create Invite</Button>
-			</PermissionGate>
-		</div>
-	</div>
-
-	{#if !loaded}
-		<div class="space-y-2">
-			{#each { length: 3 }, i (i)}
-				<Skeleton class="h-12 w-full rounded-lg" />
-			{/each}
-		</div>
-	{:else if invites.length === 0}
-		<EmptyState
-			icon={Ticket}
-			message={filter.active ? 'No invites match the current filter' : 'No invites yet'}
-		>
-			{#snippet actions()}
-				<PermissionGate resource="settings" action="create">
-					<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>Create Invite</Button>
-				</PermissionGate>
-			{/snippet}
-		</EmptyState>
+<Leaf no="01" title="Active invites">
+	{#if invites.loaded && invites.rows.length === 0}
+		<p class="vacant">No invites yet.</p>
 	{:else}
-		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
-			<Table>
-				<TableHeader>
-					<TableRow class="bg-muted/30 hover:bg-muted/30">
-						<PermissionGate resource="settings" action="delete">
-							<TableHead class="th w-10">
-								<Checkbox
-									checked={allOnPageSelected}
-									indeterminate={someOnPageSelected && !allOnPageSelected}
-									onCheckedChange={toggleSelectPage}
-									aria-label="Select all on page"
+		<div class="ledger-scroll">
+			<table class="ledger">
+				<thead>
+					<tr>
+						<th>&nbsp;</th>
+						<th>Code</th>
+						<th>Description</th>
+						<th>Roles</th>
+						<th class="num">Uses</th>
+						<th>Expires</th>
+						<th>Created by</th>
+						<th class="end">&nbsp;</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each invites.rows as inv (inv.id)}
+						<tr>
+							<td>
+								<input
+									type="checkbox"
+									checked={picked.has(inv.id)}
+									onchange={(e) => togglePick(inv.id, e.currentTarget.checked)}
+									aria-label="select invite"
 								/>
-							</TableHead>
-						</PermissionGate>
-						<TableHead class="th">Description</TableHead>
-						<TableHead class="th">Code</TableHead>
-						<TableHead class="th">Roles</TableHead>
-						<TableHead class="th">Uses</TableHead>
-						<TableHead class="th">Security</TableHead>
-						<TableHead class="th">Expires</TableHead>
-						<PermissionGate resource="settings" action="delete">
-							<TableHead class="th w-12"></TableHead>
-						</PermissionGate>
-					</TableRow>
-				</TableHeader>
-				<TableBody>
-					{#each invites as invite (invite.id)}
-						<TableRow class={selected.has(invite.id) ? 'bg-primary/5 hover:bg-primary/5' : ''}>
-							<PermissionGate resource="settings" action="delete">
-								<TableCell class="py-3 px-3">
-									<Checkbox
-										checked={selected.has(invite.id)}
-										onCheckedChange={() => toggleSelect(invite.id)}
-										aria-label={`Select ${invite.description}`}
-									/>
-								</TableCell>
-							</PermissionGate>
-							<TableCell class="font-medium py-3 px-3">{invite.description}</TableCell>
-							<TableCell class="py-3 px-3">
-								<div class="flex items-center gap-1">
-									<code class="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{invite.code}</code>
-									<CopyButton text={getInviteUrl(invite.code)} label="Invite link copied!" />
-								</div>
-							</TableCell>
-							<TableCell class="py-3 px-3">
-								<div class="flex gap-1 flex-wrap">
-									{#each invite.roles as role (role.id)}
-										<Badge variant="outline" class="text-xs">{role.name}</Badge>
-									{/each}
-								</div>
-							</TableCell>
-							<TableCell class="text-sm py-3 px-3">
-								<span class="tabular-nums">{invite.useCount}{invite.maxUses > 0 ? `/${invite.maxUses}` : ''}</span>
-							</TableCell>
-							<TableCell class="py-3 px-3">
-								{#if invite.hasPin}
-									<Badge variant="outline" class="text-xs">PIN</Badge>
-								{:else}
-									<span class="text-xs text-muted-foreground">None</span>
+							</td>
+							<td class="mono">
+								{inv.code}
+								<Copy text={inv.code} />
+								<Copy text={inviteLink(inv.code)} label="copy link" />
+								{#if inv.hasPin}
+									<span class="caps soft" title="a PIN is required">· pin</span>
 								{/if}
-							</TableCell>
-							<TableCell class="text-sm text-muted-foreground py-3 px-3">
-								{#if invite.expiresAt}
-									{@const expires = timestampDate(invite.expiresAt)}
-									{@const isExpired = expires < new Date()}
-									<Badge variant={isExpired ? 'destructive' : 'outline'} class="text-xs">
-										{isExpired ? 'Expired' : relativeTime(expires).replace(' ago', '')}
-									</Badge>
-								{:else}
-									Never
-								{/if}
-							</TableCell>
-							<PermissionGate resource="settings" action="delete">
-								<TableCell class="text-right py-3 px-3">
-									<Button variant="ghost" size="sm" class="h-7 px-2 text-xs text-destructive hover:text-destructive" onclick={() => openDelete(invite)}>
-										Delete
-									</Button>
-								</TableCell>
-							</PermissionGate>
-						</TableRow>
+							</td>
+							<td class="note">{inv.description || ''}</td>
+							<td><span class="caps soft">{inv.roles.map((r) => r.name).join(' · ') || '—'}</span></td>
+							<td class="num mono">{inv.useCount}{inv.maxUses ? ` / ${inv.maxUses}` : ''}</td>
+							<td class="mono">{fmtDate(inv.expiresAt)}</td>
+							<td>{inv.createdBy}</td>
+							<td class="end">
+								<Confirm label="revoke" onconfirm={() => withdraw(inv)} />
+							</td>
+						</tr>
 					{/each}
-				</TableBody>
-			</Table>
+				</tbody>
+			</table>
 		</div>
-
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) loadInvites(); }}
-			onNext={() => { if (pager.next()) loadInvites(); }}
-		/>
+		<Tally lister={invites} unit="invites" />
 	{/if}
-</div>
 
-<!-- Bulk Actions -->
-<BulkActionBar count={selected.size} onClear={() => selected.clear()}>
-	<PermissionGate resource="settings" action="delete">
-		<Button
-			variant="ghost"
-			size="sm"
-			class="h-7 text-destructive hover:text-destructive"
-			disabled={bulkWorking}
-			onclick={() => (bulkDeleteDialogOpen = true)}
-		>
-			Delete
-		</Button>
-	</PermissionGate>
-</BulkActionBar>
-
-<!-- Create Invite Panel -->
-<FormPanel bind:open={createPanelOpen} title="Create Registration Invite" wide>
-	<div class="space-y-3">
-		<FormField label="Description" id="invite-desc" required>
-			<Input id="invite-desc" bind:value={inviteDescription} placeholder="Team onboarding Q1" />
-		</FormField>
-		<FormField label="Roles" help="Granted on registration">
-			<AsyncSelect
-				multiple
-				bind:selected={inviteSelectedRoles}
-				placeholder="Select roles..."
-				searchPlaceholder="Search roles..."
-				fetchPage={async (query, pageToken) => {
-					const resp = await rpcClient.role.listRoles({
-						page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 }
-					});
-					return {
-						items: resp.roles.map((r) => ({ value: r.id, label: r.name, description: r.description })),
-						nextPageToken: resp.page?.nextPageToken ?? ''
-					};
-				}}
-			/>
-		</FormField>
-		<FormField label="PIN" id="invite-pin-input" help="Also required to register">
-			<Input id="invite-pin-input" bind:value={invitePin} placeholder="None" />
-		</FormField>
-		<div class="grid grid-cols-2 gap-3">
-			<FormField label="Max uses" id="invite-max">
-				<Input id="invite-max" type="number" bind:value={inviteMaxUses} placeholder="Unlimited" min={1} />
-			</FormField>
-			<FormField label="Expires in hours" id="invite-expiry">
-				<Input id="invite-expiry" type="number" bind:value={inviteExpiryHours} placeholder="Never" min={1} />
-			</FormField>
+	{#if picked.size > 0}
+		<div class="row gap-top">
+			<Confirm label="revoke all {picked.size} selected" onconfirm={withdrawPicked} />
 		</div>
-	</div>
+	{/if}
+</Leaf>
 
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (createPanelOpen = false)}>Cancel</Button>
-		<Button onclick={createInvite} disabled={creating || !inviteDescription.trim()}>
-			{creating ? 'Creating...' : 'Create Invite'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<!-- Delete Confirmation -->
-<ConfirmDialog
-	bind:open={deleteDialogOpen}
-	title="Delete Invite"
-	confirmLabel="Delete"
-	onConfirm={confirmDelete}
-	loading={deleting}
->
-	{#snippet description()}
-		Are you sure you want to delete this invite? The link will stop working immediately.
-	{/snippet}
-</ConfirmDialog>
-
-<!-- Bulk Delete Confirmation -->
-<ConfirmDialog
-	bind:open={bulkDeleteDialogOpen}
-	title="Delete Invites"
-	confirmLabel="Delete"
-	onConfirm={confirmBulkDelete}
-	loading={bulkWorking}
->
-	{#snippet description()}
-		Are you sure you want to delete <strong>{selected.size} invite{selected.size !== 1 ? 's' : ''}</strong>?
-		The links will stop working immediately.
-	{/snippet}
-</ConfirmDialog>
+<Leaf no="02" title="New invite">
+	{#if creating}
+		<form class="panel" onsubmit={issue}>
+			<label class="field">
+				<span>Description</span>
+				<input type="text" bind:value={newDesc} placeholder="the platform team…" />
+			</label>
+			<fieldset class="field">
+				<span>Roles granted on registration</span>
+				{#each allRoles as r (r.id)}
+					<label class="tick">
+						<input
+							type="checkbox"
+							checked={newRoles.has(r.id)}
+							onchange={(e) => toggleRole(r.id, e.currentTarget.checked)}
+						/>
+						{r.name}
+					</label>
+				{/each}
+			</fieldset>
+			<div class="row">
+				<label class="field" style="flex: 1; min-width: 9rem">
+					<span>PIN</span>
+					<input type="text" bind:value={newPin} placeholder="optional" />
+				</label>
+				<label class="field" style="flex: 1; min-width: 9rem">
+					<span>Uses allowed</span>
+					<input type="text" bind:value={newMaxUses} placeholder="unlimited" />
+				</label>
+				<label class="field" style="flex: 1; min-width: 9rem">
+					<span>Expires in, hours</span>
+					<input type="text" bind:value={newExpiry} placeholder="never" />
+				</label>
+			</div>
+			<div class="row gap-top">
+				<button class="act wax" type="submit" disabled={busy}>Create invite</button>
+				<button class="rowact plain" type="button" onclick={() => (creating = false)}>cancel</button>
+			</div>
+		</form>
+	{:else}
+		<button class="act" onclick={() => (creating = true)}>Create invite</button>
+	{/if}
+</Leaf>

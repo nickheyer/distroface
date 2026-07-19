@@ -1,4 +1,3 @@
-import tailwindcss from '@tailwindcss/vite';
 import { sveltekit } from '@sveltejs/kit/vite';
 import { defineConfig } from 'vite';
 import { execSync } from 'child_process';
@@ -17,7 +16,7 @@ function getVersion() {
 }
 
 export default defineConfig({
-	plugins: [tailwindcss(), sveltekit()],
+	plugins: [sveltekit()],
 	define: {
 		__APP_VERSION__: JSON.stringify(getVersion())
 	},

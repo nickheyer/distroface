@@ -1,652 +1,381 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
-	import { onMount } from 'svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Switch } from '$lib/components/ui/switch';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
-	} from '$lib/components/ui/table';
-	import AppDialog from '$lib/components/app-dialog.svelte';
-	import FormPanel from '$lib/components/form-panel.svelte';
-	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
-	import FormField from '$lib/components/form-field.svelte';
-	import EmptyState from '$lib/components/empty-state.svelte';
-	import DataPagination from '$lib/components/data-pagination.svelte';
-	import AsyncSelect from '$lib/components/async-select.svelte';
-	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Loader2 } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
-	import { authStore } from '$lib/stores/auth.svelte';
-	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import { Pager } from '$lib/pager.svelte';
-	import { QueryFilter } from '$lib/query.svelte';
-	import type { ResourceActions } from '$lib/proto/distroface/v1/role_pb';
+	import { rpc } from '$lib/rpc';
+	import { Lister } from '$lib/list.svelte';
 	import type { Permission, Role } from '$lib/proto/distroface/v1/types_pb';
+	import type { ResourceActions, ScopeableObject } from '$lib/proto/distroface/v1/role_pb';
+	import { errata } from '$lib/state/errata.svelte';
+	import Leaf from '$lib/bits/Leaf.svelte';
+	import Tally from '$lib/bits/Tally.svelte';
+	import Confirm from '$lib/bits/Confirm.svelte';
 
-	let roles = $state<Role[]>([]);
-	let resourceActions = $state<ResourceActions[]>([]);
-	let permissionMatrix = $state<Record<string, Permission[]>>({});
-	let loading = $state(true);
-	let loaded = $state(false);
-	const pager = new Pager(20);
-	const filter = new QueryFilter([
-		{ key: 'name', label: 'Name' },
-		{ key: 'description', label: 'Description' }
-	]);
-
-	let showCreateDialog = $state(false);
-	let showPermissionsDialog = $state(false);
-	let editingRole = $state<Role | null>(null);
-	let editingPermissions = $state<Record<string, boolean>>({});
-	let savingPermissions = $state(false);
-
-	let activeSection = $state<'global' | 'scoped'>('global');
-	let scopedPermissions = $state<Record<string, boolean>>({});
-	let scopedResource = $state('');
-	let scopedObjectRows = $state<Record<string, string[]>>({});
-	let objectNames = $state<Record<string, string>>({});
-	let addObjectId = $state('');
-
-	let deleteDialogOpen = $state(false);
-	let deleteTarget = $state<Role | null>(null);
-	let deleting = $state(false);
-
-	let newRoleForm = $state({ name: '', description: '', isDefault: false });
-	let creating = $state(false);
-
-	let allActions = $derived(
-		[...new Set(resourceActions.flatMap((ra) => ra.actions))].sort()
+	const roles = new Lister<Role>((page) =>
+		rpc.role.listRoles({ page }).then((r) => ({ rows: r.roles, page: r.page }))
 	);
 
-	let globalPermCount = $derived(
-		Object.values(editingPermissions).filter(Boolean).length
-	);
+	let matrix = $state<ResourceActions[]>([]);
+	let rolePerms = $state<Record<string, Permission[]>>({});
 
-	let scopedCount = $derived(Object.values(scopedPermissions).filter(Boolean).length);
-
-	let totalPermCount = $derived(globalPermCount + scopedCount);
-
-	const scopeableResources = ['repositories', 'artifacts', 'organizations'];
-
-	let currentRows = $derived(scopedObjectRows[scopedResource] ?? []);
-
-	let scopedResourceActions = $derived(() => {
-		if (!scopedResource) return [];
-		const ra = resourceActions.find((r) => r.resource === scopedResource);
-		return ra?.actions ?? [];
-	});
-
-	function hasFullAccess(roleId: string): boolean {
-		const perms = permissionMatrix[roleId] || [];
-		return perms.some((p) => p.resource === '*' && p.action === '*');
-	}
-
-	function objectName(objectId: string): string {
-		return objectNames[`${scopedResource}:${objectId}`] ?? objectId;
-	}
-
-	function formatResourceName(resource: string): string {
-		return resource.replace(/_/g, ' ');
-	}
-
-	function getResourcePermCount(resource: string): number {
-		const ra = resourceActions.find((r) => r.resource === resource);
-		if (!ra) return 0;
-		return ra.actions.filter((act) => editingPermissions[`${resource}:${act}`]).length;
-	}
-
-	function isResourceAllChecked(resource: string): boolean {
-		const ra = resourceActions.find((r) => r.resource === resource);
-		if (!ra) return false;
-		return ra.actions.every((act) => editingPermissions[`${resource}:${act}`]);
-	}
-
-	function isResourceIndeterminate(resource: string): boolean {
-		const ra = resourceActions.find((r) => r.resource === resource);
-		if (!ra) return false;
-		const checked = ra.actions.filter((act) => editingPermissions[`${resource}:${act}`]).length;
-		return checked > 0 && checked < ra.actions.length;
-	}
-
-	function togglePermission(key: string) {
-		editingPermissions = { ...editingPermissions, [key]: !editingPermissions[key] };
-	}
-
-	function toggleResourceAll(resource: string) {
-		const ra = resourceActions.find((r) => r.resource === resource);
-		if (!ra) return;
-		const allEnabled = ra.actions.every((act) => editingPermissions[`${resource}:${act}`]);
-		const updated = { ...editingPermissions };
-		for (const act of ra.actions) {
-			updated[`${resource}:${act}`] = !allEnabled;
-		}
-		editingPermissions = updated;
-	}
-
-	function toggleScopedPermission(objectId: string, action: string) {
-		const key = `${scopedResource}:${action}:${objectId}`;
-		scopedPermissions = { ...scopedPermissions, [key]: !scopedPermissions[key] };
-	}
-
-	function isGlobalCovered(resource: string, action: string): boolean {
-		return editingPermissions[`${resource}:${action}`] || false;
-	}
-
-	function getScopedCountForObject(objectId: string): number {
-		const actions = scopedResourceActions();
-		return actions.filter((act) => scopedPermissions[`${scopedResource}:${act}:${objectId}`]).length;
-	}
-
-	function isObjectAllChecked(objectId: string): boolean {
-		const actions = scopedResourceActions();
-		if (actions.length === 0) return false;
-		return actions.every(
-			(act) => isGlobalCovered(scopedResource, act) || scopedPermissions[`${scopedResource}:${act}:${objectId}`]
-		);
-	}
-
-	function isObjectIndeterminate(objectId: string): boolean {
-		const actions = scopedResourceActions();
-		if (actions.length === 0) return false;
-		const checked = actions.filter(
-			(act) => isGlobalCovered(scopedResource, act) || scopedPermissions[`${scopedResource}:${act}:${objectId}`]
-		).length;
-		return checked > 0 && checked < actions.length;
-	}
-
-	function toggleObjectAll(objectId: string) {
-		const actions = scopedResourceActions();
-		const nonGlobalActions = actions.filter((act) => !isGlobalCovered(scopedResource, act));
-		if (nonGlobalActions.length === 0) return;
-		const allEnabled = nonGlobalActions.every(
-			(act) => scopedPermissions[`${scopedResource}:${act}:${objectId}`]
-		);
-		const updated = { ...scopedPermissions };
-		for (const act of nonGlobalActions) {
-			updated[`${scopedResource}:${act}:${objectId}`] = !allEnabled;
-		}
-		scopedPermissions = updated;
-	}
-
-	function getPermCount(roleId: string): number {
-		return (permissionMatrix[roleId] || []).length;
-	}
-
-	async function loadRoles() {
-		loading = true;
-		try {
-			const [rolesResp, matrixResp] = await Promise.all([
-				rpcClient.role.listRoles({ page: pager.request(filter.request()) }),
-				rpcClient.role.getPermissionMatrix({})
-			]);
-			roles = rolesResp.roles;
-			pager.apply(rolesResp.page);
-			resourceActions = matrixResp.resourceActions;
-
-			const matrix: Record<string, Permission[]> = {};
-			for (const [roleId, rolePerms] of Object.entries(matrixResp.rolePermissions)) {
-				matrix[roleId] = rolePerms.permissions;
-			}
-			permissionMatrix = matrix;
-		} catch {
-			// error interceptor
-		} finally {
-			loading = false;
-			loaded = true;
-		}
-	}
-
-	function filterChanged() {
-		pager.reset();
-		loadRoles();
-	}
-
-	async function fetchObjectPage(query: string, pageToken: string) {
-		const resp = await rpcClient.role.listScopeableObjects({
-			page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 },
-			resource: scopedResource
-		});
-		for (const obj of resp.objects) {
-			objectNames[`${obj.resource}:${obj.id}`] = obj.name;
-		}
-		return {
-			items: resp.objects.map((obj) => ({ value: obj.id, label: obj.name })),
-			nextPageToken: resp.page?.nextPageToken ?? ''
-		};
+	async function loadMatrix() {
+		const r = await rpc.role.getPermissionMatrix({});
+		matrix = r.resourceActions;
+		const perms: Record<string, Permission[]> = {};
+		for (const [roleId, rp] of Object.entries(r.rolePermissions)) perms[roleId] = rp.permissions;
+		rolePerms = perms;
 	}
 
 	$effect(() => {
-		if (!addObjectId) return;
-		const objectId = addObjectId;
-		addObjectId = '';
-		const rows = scopedObjectRows[scopedResource] ?? [];
-		if (!rows.includes(objectId)) {
-			scopedObjectRows = { ...scopedObjectRows, [scopedResource]: [...rows, objectId] };
-		}
+		roles.first();
+		loadMatrix();
 	});
 
-	function openPermissionsDialog(role: Role) {
-		editingRole = role;
-		activeSection = 'global';
-		scopedResource = scopeableResources[0];
-		addObjectId = '';
-		objectNames = {};
+	// The grants desk for one role
+	let desk = $state<Role | null>(null);
+	let global = $state<Set<string>>(new Set());
+	let scoped = $state<{ resource: string; action: string; objectId: string }[]>([]);
+	let sweeping = $state<{ resource: string; action: string; objectId: string }[]>([]);
+	let busy = $state(false);
 
-		const globalMap: Record<string, boolean> = {};
-		const scopedMap: Record<string, boolean> = {};
-		const rows: Record<string, string[]> = {};
-		const rolePerms = permissionMatrix[role.id] || [];
-
-		for (const perm of rolePerms) {
-			if (perm.resource === '*' && perm.action === '*') {
-				for (const ra of resourceActions) {
-					for (const act of ra.actions) {
-						globalMap[`${ra.resource}:${act}`] = true;
-					}
-				}
-			} else if (!perm.objectId || perm.objectId === '*') {
-				globalMap[`${perm.resource}:${perm.action}`] = true;
-			} else {
-				scopedMap[`${perm.resource}:${perm.action}:${perm.objectId}`] = true;
-				const list = (rows[perm.resource] ??= []);
-				if (!list.includes(perm.objectId)) list.push(perm.objectId);
-			}
-		}
-
-		editingPermissions = globalMap;
-		scopedPermissions = scopedMap;
-		scopedObjectRows = rows;
-		showPermissionsDialog = true;
+	function isGlobal(objectId: string): boolean {
+		return objectId === '' || objectId === '*';
 	}
 
-	async function savePermissions() {
-		if (!editingRole) return;
-		savingPermissions = true;
+	function isWildcard(p: Permission): boolean {
+		return p.resource === '*' || p.action === '*';
+	}
 
-		const permissions: { resource: string; action: string; objectId: string }[] = [];
-
-		for (const [key, enabled] of Object.entries(editingPermissions)) {
-			if (enabled) {
-				const [resource, action] = key.split(':');
-				permissions.push({ resource, action, objectId: '*' });
-			}
+	function openDesk(role: Role) {
+		if (desk?.id === role.id) {
+			desk = null;
+			return;
 		}
+		desk = role;
+		const perms = rolePerms[role.id] ?? role.permissions;
+		sweeping = perms
+			.filter((p) => isWildcard(p))
+			.map((p) => ({ resource: p.resource, action: p.action, objectId: p.objectId }));
+		global = new Set(
+			perms
+				.filter((p) => isGlobal(p.objectId) && !isWildcard(p))
+				.map((p) => `${p.resource}|${p.action}`)
+		);
+		scoped = perms
+			.filter((p) => !isGlobal(p.objectId) && !isWildcard(p))
+			.map((p) => ({ resource: p.resource, action: p.action, objectId: p.objectId }));
+	}
 
-		for (const [key, enabled] of Object.entries(scopedPermissions)) {
-			if (enabled) {
-				const parts = key.split(':');
-				const resource = parts[0];
-				const action = parts[1];
-				const objectId = parts.slice(2).join(':');
-				if (!editingPermissions[`${resource}:${action}`]) {
-					permissions.push({ resource, action, objectId });
-				}
-			}
+	function dropSweeping(i: number) {
+		sweeping = sweeping.filter((_, j) => j !== i);
+	}
+
+	function toggleGlobal(resource: string, action: string, on: boolean) {
+		const key = `${resource}|${action}`;
+		const next = new Set(global);
+		if (on) next.add(key);
+		else next.delete(key);
+		global = next;
+	}
+
+	// Adding an object-scoped grant
+	let pickResource = $state('');
+	let pickAction = $state('');
+	let pickObject = $state('');
+	let objects = $state<ScopeableObject[]>([]);
+
+	$effect(() => {
+		if (!pickResource) {
+			objects = [];
+			return;
 		}
+		rpc.role
+			.listScopeableObjects({ page: { pageSize: 200 }, resource: pickResource })
+			.then((r) => (objects = r.objects));
+	});
 
+	function addScoped() {
+		if (!pickResource || !pickAction || !pickObject) return;
+		scoped = [...scoped, { resource: pickResource, action: pickAction, objectId: pickObject }];
+		pickObject = '';
+	}
+
+	function dropScoped(i: number) {
+		scoped = scoped.filter((_, j) => j !== i);
+	}
+
+	async function saveDesk() {
+		if (!desk) return;
+		busy = true;
 		try {
-			await rpcClient.role.updatePermissions({
-				roleId: editingRole.id,
-				permissions
-			});
-			showPermissionsDialog = false;
-			editingRole = null;
-			await loadRoles();
+			const permissions: Pick<Permission, 'resource' | 'action' | 'objectId'>[] = [
+				...sweeping,
+				...[...global].map((key) => {
+					const [resource, action] = key.split('|');
+					return { resource, action, objectId: '' };
+				}),
+				...scoped
+			];
+			await rpc.role.updatePermissions({ roleId: desk.id, permissions });
+			errata.remark(`Permissions for ${desk.name} saved.`);
+			await loadMatrix();
 		} catch {
-			// error interceptor
+			// Interceptor reports
 		} finally {
-			savingPermissions = false;
+			busy = false;
 		}
 	}
 
-	async function createRole() {
-		if (!newRoleForm.name.trim()) return;
-		creating = true;
+	async function removeRole(role: Role) {
+		await rpc.role.deleteRole({ id: role.id });
+		errata.remark(`Role ${role.name} deleted.`);
+		if (desk?.id === role.id) desk = null;
+		await roles.first();
+		await loadMatrix();
+	}
+
+	// Chartering a role
+	let creating = $state(false);
+	let newName = $state('');
+	let newDesc = $state('');
+	let newDefault = $state(false);
+
+	async function createRole(e: Event) {
+		e.preventDefault();
+		busy = true;
 		try {
-			await rpcClient.role.createRole({
-				name: newRoleForm.name.trim().toLowerCase(),
-				description: newRoleForm.description.trim(),
-				isDefault: newRoleForm.isDefault,
+			await rpc.role.createRole({
+				name: newName.trim(),
+				description: newDesc,
+				isDefault: newDefault,
 				permissions: []
 			});
-			showCreateDialog = false;
-			newRoleForm = { name: '', description: '', isDefault: false };
-			pager.reset();
-			await loadRoles();
-		} catch {
-			// error interceptor
-		} finally {
+			errata.remark(`Role ${newName.trim()} created.`);
 			creating = false;
-		}
-	}
-
-	function openDelete(role: Role) {
-		deleteTarget = role;
-		deleteDialogOpen = true;
-	}
-
-	async function confirmDelete() {
-		if (!deleteTarget) return;
-		deleting = true;
-		try {
-			await rpcClient.role.deleteRole({ id: deleteTarget.id });
-			deleteDialogOpen = false;
-			await loadRoles();
+			newName = '';
+			newDesc = '';
+			newDefault = false;
+			await roles.first();
+			await loadMatrix();
 		} catch {
-			// error interceptor
+			// Interceptor reports
 		} finally {
-			deleting = false;
+			busy = false;
 		}
 	}
 
-	onMount(() => {
-		if (!authStore.hasPermission('roles', 'read')) { goto(resolve('/admin')); return; }
-		loadRoles();
+	let editDesc = $state('');
+	let editDefault = $state(false);
+
+	$effect(() => {
+		if (desk) {
+			editDesc = desk.description;
+			editDefault = desk.isDefault;
+		}
 	});
+
+	async function saveRoleMeta() {
+		if (!desk) return;
+		await rpc.role.updateRole({ id: desk.id, description: editDesc, isDefault: editDefault });
+		errata.remark('Role updated.');
+		await roles.fetch();
+	}
+
+	const actionsOf = $derived((resource: string) => matrix.find((m) => m.resource === resource)?.actions ?? []);
 </script>
 
-<div class="space-y-4">
-	<div class="section-header">
-		<div>
-			<h2 class="section-title">Roles & Permissions</h2>
-			<p class="section-subtitle">Manage roles and their access permissions</p>
-		</div>
-		<div class="flex items-center gap-2">
-			<div class="w-96">
-				<QueryFilterBar {filter} placeholder="Search roles..." onchange={filterChanged} />
-			</div>
-			<PermissionGate resource="roles" action="create">
-				<Button size="sm" onclick={() => (showCreateDialog = true)}>Create Role</Button>
-			</PermissionGate>
-		</div>
-	</div>
-
-	{#if !loaded}
-		<div class="space-y-3">
-			{#each { length: 3 }, i (i)}
-				<Skeleton class="h-20 w-full rounded-xl" />
-			{/each}
-		</div>
+<Leaf no="01" title="Roles">
+	{#if roles.loaded && roles.rows.length === 0}
+		<p class="vacant">No roles yet.</p>
 	{:else}
-		<div class="space-y-2 transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
-			{#each roles as role (role.id)}
-				<div class="rounded-xl border border-border/60 bg-card p-4">
-					<div class="flex items-center gap-4">
-						<div class="flex-1 min-w-0">
-							<div class="flex items-center gap-2">
-								<span class="font-medium">{role.name}</span>
-								{#if role.isSystem}
-									<Badge variant="secondary" class="text-[10px] px-1.5 py-0">System</Badge>
-								{:else}
-									<Badge variant="outline" class="text-[10px] px-1.5 py-0">Custom</Badge>
+		<div class="ledger-scroll">
+			<table class="ledger">
+				<thead>
+					<tr>
+						<th>Role</th>
+						<th>Description</th>
+						<th>Type</th>
+						<th class="end">&nbsp;</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each roles.rows as role (role.id)}
+						<tr>
+							<td><b>{role.name}</b></td>
+							<td class="note">{role.description || ''}</td>
+							<td>
+								<span class="caps soft">
+									{role.isSystem ? 'system' : 'custom'}{role.isDefault ? ' · assigned to new users' : ''}
+								</span>
+							</td>
+							<td class="end">
+								<button class="rowact plain" onclick={() => openDesk(role)}>
+									{desk?.id === role.id ? 'close' : 'permissions'}
+								</button>
+								{#if !role.isSystem}
+									<Confirm label="delete" onconfirm={() => removeRole(role)} />
 								{/if}
-								{#if role.isDefault}
-									<Badge variant="outline" class="text-[10px] px-1.5 py-0 border-success/30 text-success">Default</Badge>
-								{/if}
-							</div>
-							<p class="text-[13px] text-muted-foreground mt-0.5 truncate">
-								{role.description || 'No description'}
-							</p>
-						</div>
-
-						<div class="shrink-0 flex items-center gap-2">
-							{#if hasFullAccess(role.id)}
-								<Badge variant="destructive" class="text-xs">Full Access</Badge>
-							{:else if authStore.canUpdateRoles}
-								<Button
-									size="sm"
-									variant="outline"
-									onclick={() => openPermissionsDialog(role)}
-								>
-									Permissions ({getPermCount(role.id)})
-								</Button>
-							{:else}
-								<span class="text-sm text-muted-foreground">{getPermCount(role.id)} permissions</span>
-							{/if}
-
-							{#if !role.isSystem}
-								<PermissionGate resource="roles" action="delete">
-									<Button
-										variant="ghost"
-										size="sm"
-										class="h-8 px-2 text-xs shrink-0 text-destructive hover:text-destructive"
-										onclick={() => openDelete(role)}
-									>
-										Delete
-									</Button>
-								</PermissionGate>
-							{/if}
-						</div>
-					</div>
-				</div>
-			{/each}
-		</div>
-
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) loadRoles(); }}
-			onNext={() => { if (pager.next()) loadRoles(); }}
-		/>
-	{/if}
-</div>
-
-<FormPanel bind:open={showCreateDialog} title="Create Role" description="Permissions are configured after creation">
-	<div class="space-y-3">
-		<FormField label="Name" id="role-name" required help="Lowercase letters numbers hyphens">
-			<Input id="role-name" bind:value={newRoleForm.name} placeholder="moderator" />
-		</FormField>
-		<FormField label="Description" id="role-desc">
-			<Input id="role-desc" bind:value={newRoleForm.description} placeholder="What this role is for" />
-		</FormField>
-		<FormField label="Default role" help="Granted to new users" horizontal>
-			<Switch
-				checked={newRoleForm.isDefault}
-				onCheckedChange={(checked) => (newRoleForm.isDefault = checked)}
-			/>
-		</FormField>
-	</div>
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (showCreateDialog = false)}>Cancel</Button>
-		<Button onclick={createRole} disabled={creating || !newRoleForm.name.trim()}>
-			{creating ? 'Creating...' : 'Create Role'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<AppDialog
-	bind:open={showPermissionsDialog}
-	title={activeSection === 'global' ? 'Global Permissions' : 'Scoped Permissions'}
-	sidebarTitle={editingRole?.name ?? ''}
-	sidebarSubtitle={editingRole?.isSystem ? 'System role' : 'Custom role'}
-	size="full"
-	description={activeSection === 'global'
-		? 'Apply to every object of a resource'
-		: 'Apply to specific objects only'}
->
-	{#snippet sidebar()}
-		<nav class="flex-1 p-4 space-y-1">
-			<button
-				class="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors {activeSection === 'global'
-					? 'bg-primary text-primary-foreground'
-					: 'hover:bg-muted'}"
-				onclick={() => (activeSection = 'global')}
-			>
-				<span class="font-medium flex-1">Global</span>
-				<span class="text-xs opacity-75">{globalPermCount}</span>
-			</button>
-			<button
-				class="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-colors {activeSection === 'scoped'
-					? 'bg-primary text-primary-foreground'
-					: 'hover:bg-muted'}"
-				onclick={() => (activeSection = 'scoped')}
-			>
-				<span class="font-medium flex-1">Scoped</span>
-				<span class="text-xs opacity-75">{scopedCount}</span>
-			</button>
-		</nav>
-	{/snippet}
-
-	{#if activeSection === 'global'}
-		<div class="overflow-x-auto border rounded-xl">
-			<Table>
-				<TableHeader>
-					<TableRow class="bg-muted/50">
-						<TableHead class="th sticky left-0 bg-muted/50 z-10 w-50 border-r">Resource</TableHead>
-						{#each allActions as action (action)}
-							<TableHead class="th text-center">
-								<span class="capitalize">{action}</span>
-							</TableHead>
-						{/each}
-					</TableRow>
-				</TableHeader>
-				<TableBody>
-					{#each resourceActions as ra (ra.resource)}
-						{@const count = getResourcePermCount(ra.resource)}
-						{@const total = ra.actions.length}
-						<TableRow class="hover:bg-muted/30">
-							<TableCell class="sticky left-0 bg-background z-10 font-medium border-r px-3">
-								<div class="flex items-center gap-2">
-									<Checkbox
-										checked={isResourceAllChecked(ra.resource)}
-										indeterminate={isResourceIndeterminate(ra.resource)}
-										onCheckedChange={() => toggleResourceAll(ra.resource)}
-									/>
-									<span class="capitalize text-sm">{formatResourceName(ra.resource)}</span>
-									{#if count > 0}
-										<Badge variant="secondary" class="text-[10px] ml-auto px-1.5 py-0">{count}/{total}</Badge>
-									{/if}
-								</div>
-							</TableCell>
-							{#each allActions as action (action)}
-								{@const key = `${ra.resource}:${action}`}
-								{@const hasAction = ra.actions.includes(action)}
-								{@const checked = hasAction && (editingPermissions[key] || false)}
-								<TableCell class="text-center px-3">
-									{#if hasAction}
-										<div class="flex justify-center">
-											<Checkbox {checked} onCheckedChange={() => togglePermission(key)} />
-										</div>
-									{:else}
-										<span class="text-muted-foreground/20">&mdash;</span>
-									{/if}
-								</TableCell>
-							{/each}
-						</TableRow>
+							</td>
+						</tr>
 					{/each}
-				</TableBody>
-			</Table>
+				</tbody>
+			</table>
 		</div>
-	{:else}
-		<div class="flex gap-2 mb-4">
-			{#each scopeableResources as res (res)}
-				<button
-					class="px-4 py-2 rounded-lg border text-sm font-medium capitalize transition-colors {scopedResource === res
-						? 'bg-primary text-primary-foreground border-primary'
-						: 'bg-background hover:bg-muted border-border'}"
-					onclick={() => (scopedResource = res)}
-				>
-					{formatResourceName(res)}
-				</button>
-			{/each}
-		</div>
+		<Tally lister={roles} unit="roles" />
+	{/if}
 
-		{#key scopedResource}
-			<div class="mb-3">
-				<AsyncSelect
-					bind:selected={addObjectId}
-					placeholder="Add {formatResourceName(scopedResource)}..."
-					searchPlaceholder="Search {formatResourceName(scopedResource)}..."
-					fetchPage={fetchObjectPage}
-				/>
+	{#if creating}
+		<form class="panel" onsubmit={createRole}>
+			<p class="panel-title">New role</p>
+			<label class="field">
+				<span>Name</span>
+				<input type="text" bind:value={newName} required />
+			</label>
+			<label class="field">
+				<span>Description</span>
+				<input type="text" bind:value={newDesc} />
+			</label>
+			<label class="tick">
+				<input type="checkbox" bind:checked={newDefault} />
+				Assigned to new users
+			</label>
+			<div class="row gap-top">
+				<button class="act wax" type="submit" disabled={busy || !newName.trim()}>Create role</button>
+				<button class="rowact plain" type="button" onclick={() => (creating = false)}>cancel</button>
 			</div>
-		{/key}
+		</form>
+	{:else}
+		<div class="gap-top">
+			<button class="act" onclick={() => (creating = true)}>New role</button>
+		</div>
+	{/if}
+</Leaf>
 
-		{#if currentRows.length === 0}
-			<EmptyState message="No scoped {formatResourceName(scopedResource)}, search above to add one" />
-		{:else}
-			<div class="overflow-x-auto border rounded-xl">
-				<Table>
-					<TableHeader>
-						<TableRow class="bg-muted/50">
-							<TableHead class="th sticky left-0 bg-muted/50 z-10 w-60 border-r">Object</TableHead>
-							{#each scopedResourceActions() as action (action)}
-								<TableHead class="th text-center">
-									<span class="capitalize">{action}</span>
-								</TableHead>
-							{/each}
-						</TableRow>
-					</TableHeader>
-					<TableBody>
-						{#each currentRows as objectId (objectId)}
-							{@const objScopedCount = getScopedCountForObject(objectId)}
-							<TableRow class="hover:bg-muted/30">
-								<TableCell class="sticky left-0 bg-background z-10 font-medium border-r px-3">
-									<div class="flex items-center gap-2">
-										<Checkbox
-											checked={isObjectAllChecked(objectId)}
-											indeterminate={isObjectIndeterminate(objectId)}
-											onCheckedChange={() => toggleObjectAll(objectId)}
-										/>
-										<span class="text-sm truncate max-w-40">{objectName(objectId)}</span>
-										{#if objScopedCount > 0}
-											<Badge variant="secondary" class="text-[10px] ml-auto px-1.5 py-0 shrink-0">{objScopedCount}</Badge>
-										{/if}
-									</div>
-								</TableCell>
-								{#each scopedResourceActions() as action (action)}
-									{@const globalCovered = isGlobalCovered(scopedResource, action)}
-									{@const scopedKey = `${scopedResource}:${action}:${objectId}`}
-									{@const checked = globalCovered || (scopedPermissions[scopedKey] || false)}
-									<TableCell class="text-center px-3">
-										{#if globalCovered}
-											<div class="flex justify-center items-center gap-1">
-												<Checkbox checked={true} disabled />
-												<Badge variant="outline" class="text-[9px] px-1 py-0 text-muted-foreground">(global)</Badge>
-											</div>
-										{:else}
-											<div class="flex justify-center">
-												<Checkbox {checked} onCheckedChange={() => toggleScopedPermission(objectId, action)} />
-											</div>
-										{/if}
-									</TableCell>
-								{/each}
-							</TableRow>
-						{/each}
-					</TableBody>
-				</Table>
+{#if desk}
+	<Leaf no="02" title="Permissions · {desk.name}">
+		{#if !desk.isSystem}
+			<div class="row foot" style="margin-bottom: 1rem">
+				<label class="field" style="margin: 0; flex: 1; min-width: 16rem">
+					<span>Description</span>
+					<input type="text" bind:value={editDesc} />
+				</label>
+				<label class="tick">
+					<input type="checkbox" bind:checked={editDefault} />
+					Assigned to new users
+				</label>
+				<button class="act" onclick={saveRoleMeta}>Save</button>
 			</div>
 		{/if}
-	{/if}
 
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (showPermissionsDialog = false)}>
-			Cancel
-		</Button>
-		<Button onclick={savePermissions} disabled={savingPermissions} class="gap-2">
-			{#if savingPermissions}
-				<Loader2 class="h-4 w-4 animate-spin" />
-				Saving...
+		{#if sweeping.length > 0}
+			<div class="panel" style="margin-top: 0">
+				<p class="panel-title">Wildcard permissions</p>
+				<p class="note" style="margin-bottom: 0.6rem">
+					Wildcards cover whole resources or every action. They apply in addition to the matrix
+					below and are kept when saving.
+				</p>
+				{#each sweeping as g, i (g.resource + g.action + g.objectId)}
+					<div class="row" style="margin-bottom: 0.3rem">
+						<span class="mono"
+							>{g.resource === '*' ? 'every resource' : g.resource} × {g.action === '*'
+								? 'every action'
+								: g.action}{g.objectId && g.objectId !== '*' ? ` on ${g.objectId}` : ''}</span>
+						{#if !desk.isSystem}
+							<button class="rowact plain" onclick={() => dropSweeping(i)}>drop</button>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
+
+		<div class="ledger-scroll">
+			<table class="ledger">
+				<thead>
+					<tr>
+						<th>Resource</th>
+						<th>Actions granted on all objects</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each matrix as ra (ra.resource)}
+						<tr>
+							<td class="mono">{ra.resource}</td>
+							<td>
+								<span class="row" style="gap: 1.1rem">
+									{#each ra.actions as action (action)}
+										<label class="tick" style="margin: 0">
+											<input
+												type="checkbox"
+												checked={global.has(`${ra.resource}|${action}`)}
+												onchange={(e) => toggleGlobal(ra.resource, action, e.currentTarget.checked)}
+											/>
+											{action}
+										</label>
+									{/each}
+								</span>
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+
+		<div class="panel">
+			<p class="panel-title">Object-scoped permissions</p>
+			{#if scoped.length === 0}
+				<p class="note">None. Everything above applies to all objects of its resource.</p>
 			{:else}
-				Save Permissions ({totalPermCount})
+				<div class="ledger-scroll">
+					<table class="ledger">
+						<thead>
+							<tr>
+								<th>Resource</th>
+								<th>Action</th>
+								<th>Object</th>
+								<th class="end">&nbsp;</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each scoped as g, i (g.resource + g.action + g.objectId)}
+								<tr>
+									<td class="mono">{g.resource}</td>
+									<td class="mono">{g.action}</td>
+									<td class="mono">{g.objectId}</td>
+									<td class="end">
+										<button class="rowact plain" onclick={() => dropScoped(i)}>drop</button>
+									</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			{/if}
-		</Button>
-	{/snippet}
-</AppDialog>
 
-<ConfirmDialog
-	bind:open={deleteDialogOpen}
-	title="Delete Role"
-	confirmLabel="Delete"
-	onConfirm={confirmDelete}
-	loading={deleting}
->
-	{#snippet description()}
-		Are you sure you want to delete the <strong>{deleteTarget?.name}</strong> role? Users with
-		this role will lose its permissions.
-	{/snippet}
-</ConfirmDialog>
+			<div class="row gap-top">
+				<select bind:value={pickResource} style="width: auto" aria-label="resource">
+					<option value="">resource…</option>
+					{#each matrix as ra (ra.resource)}
+						<option value={ra.resource}>{ra.resource}</option>
+					{/each}
+				</select>
+				<select bind:value={pickAction} style="width: auto" aria-label="action" disabled={!pickResource}>
+					<option value="">action…</option>
+					{#each actionsOf(pickResource) as action (action)}
+						<option value={action}>{action}</option>
+					{/each}
+				</select>
+				<select bind:value={pickObject} style="width: auto; max-width: 18rem" aria-label="object" disabled={!pickResource}>
+					<option value="">object…</option>
+					{#each objects as o (o.id)}
+						<option value={o.id}>{o.name} ({o.scopeSource})</option>
+					{/each}
+				</select>
+				<button class="act" disabled={!pickResource || !pickAction || !pickObject} onclick={addScoped}>
+					Add
+				</button>
+			</div>
+		</div>
+
+		<div class="row gap-top">
+			<button class="act wax" disabled={busy} onclick={saveDesk}>Save permissions</button>
+			<span class="note">Saving replaces the role's entire permission list with what is shown.</span>
+		</div>
+	</Leaf>
+{/if}

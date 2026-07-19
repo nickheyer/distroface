@@ -1,227 +1,76 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
-	import { onMount } from 'svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
-	} from '$lib/components/ui/table';
-	import EmptyState from '$lib/components/empty-state.svelte';
-	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { ScrollText, RefreshCw, ArrowUp, ArrowDown, Loader2 } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
-	import { authStore } from '$lib/stores/auth.svelte';
-	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime } from '$lib/utils';
-	import { Pager } from '$lib/pager.svelte';
-	import { QueryFilter } from '$lib/query.svelte';
+	import { rpc } from '$lib/rpc';
+	import { Lister } from '$lib/list.svelte';
 	import type { AuditEvent } from '$lib/proto/distroface/v1/audit_pb';
+	import { fmtWhen } from '$lib/fmt';
+	import Leaf from '$lib/bits/Leaf.svelte';
+	import Find from '$lib/bits/Find.svelte';
+	import Tally from '$lib/bits/Tally.svelte';
+	import Mark from '$lib/bits/Mark.svelte';
 
-	let events = $state<AuditEvent[]>([]);
-	let loading = $state(true);
-	let loaded = $state(false);
-	let loadingMore = $state(false);
-	let sortDesc = $state(true);
-	let tableWrap = $state<HTMLDivElement | null>(null);
-	const pager = new Pager(50);
-	const filter = new QueryFilter([
-		{ key: 'action', label: 'Action' },
-		{ key: 'actor', label: 'Actor' },
-		{ key: 'outcome', label: 'Outcome' },
-		{ key: 'resource', label: 'Resource' },
-		{ key: 'source_ip', label: 'Source IP' }
-	]);
+	const events = new Lister<AuditEvent>(
+		(page) => rpc.audit.listAuditEvents({ page }).then((r) => ({ rows: r.events, page: r.page })),
+		{ pageSize: 100 }
+	);
 
-	function pageRequest() {
-		return pager.request(filter.request(), `created_at ${sortDesc ? 'desc' : 'asc'}`);
-	}
-
-	async function loadEvents() {
-		loading = true;
-		pager.reset();
-		try {
-			const resp = await rpcClient.audit.listAuditEvents({ page: pageRequest() });
-			events = resp.events;
-			pager.apply(resp.page);
-			tableWrap?.querySelector('[data-slot=table-container]')?.scrollTo({ top: 0 });
-		} catch {
-			// error interceptor
-		} finally {
-			loading = false;
-			loaded = true;
-		}
-	}
-
-	async function loadMore() {
-		if (loading || loadingMore || !pager.next()) return;
-		loadingMore = true;
-		try {
-			const resp = await rpcClient.audit.listAuditEvents({ page: pageRequest() });
-			events = [...events, ...resp.events];
-			pager.apply(resp.page);
-		} catch {
-			// Error interceptor, back a page so scrolling retries
-			pager.prev();
-		} finally {
-			loadingMore = false;
-		}
-	}
-
-	function onTableScroll(e: Event) {
-		const el = e.target as HTMLElement;
-		if (el.scrollHeight - el.scrollTop - el.clientHeight < 200) loadMore();
-	}
-
-	function toggleSort() {
-		sortDesc = !sortDesc;
-		loadEvents();
-	}
-
-	function filterChanged() {
-		loadEvents();
-	}
-
-	function outcomeBadgeClass(outcome: string): string {
-		switch (outcome) {
-			case 'success':
-				return 'border-primary/30 text-primary';
-			case 'denied':
-				return 'border-amber-500/40 text-amber-600 dark:text-amber-400';
-			default:
-				return 'border-destructive/40 text-destructive';
-		}
-	}
-
-	function fullTime(event: AuditEvent): string {
-		return event.createdAt ? timestampDate(event.createdAt).toLocaleString() : '';
-	}
-
-	onMount(() => {
-		if (!authStore.hasPermission('settings', 'read')) { goto(resolve('/admin')); return; }
-		loadEvents();
+	$effect(() => {
+		events.first();
 	});
+
+	let open = $state('');
+
+	function outcomeMark(outcome: string): 'ok' | 'bad' | 'mid' {
+		const o = outcome.toLowerCase();
+		if (o === 'success' || o === 'ok' || o === 'allowed') return 'ok';
+		if (o === 'denied' || o === 'failure' || o === 'failed' || o === 'error') return 'bad';
+		return 'mid';
+	}
 </script>
 
-<div class="space-y-4">
-	<div class="section-header">
-		<div>
-			<h2 class="section-title">Audit Log</h2>
-			<p class="section-subtitle">
-				{#if pager.totalCount > 0}
-					{pager.totalCount.toLocaleString()} recorded event{pager.totalCount !== 1 ? 's' : ''}
-				{:else}
-					Logins and administrative changes across the instance
-				{/if}
-			</p>
-		</div>
-		<div class="flex items-center gap-2">
-			<div class="w-96">
-				<QueryFilterBar {filter} placeholder="Search audit events..." onchange={filterChanged} />
-			</div>
-			<Button variant="outline" size="icon" class="h-9 w-9 shrink-0" title="Refresh" onclick={loadEvents}>
-				<RefreshCw class="h-4 w-4" />
-			</Button>
-		</div>
-	</div>
+<Leaf no="01" title="Events">
+	{#snippet aside()}
+		<Find lister={events} placeholder="actor, action, address…" />
+	{/snippet}
 
-	{#if !loaded}
-		<div class="space-y-2">
-			{#each { length: 6 }, i (i)}
-				<Skeleton class="h-11 w-full rounded-lg" />
-			{/each}
-		</div>
-	{:else if events.length === 0}
-		<EmptyState
-			message={filter.active ? 'No events match the current filter' : 'No audit events recorded yet'}
-			description={filter.active
-				? 'Search matches action, actor, and resource. Add filters for exact fields.'
-				: 'Logins, permission denials, and administrative mutations will appear here as they happen.'}
-			icon={ScrollText}
-		/>
+	{#if events.loaded && events.rows.length === 0}
+		<p class="vacant">No events recorded.</p>
 	{:else}
-		<div
-			bind:this={tableWrap}
-			onscrollcapture={onTableScroll}
-			class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}
-				**:data-[slot=table-container]:max-h-[65vh] **:data-[slot=table-container]:overflow-y-auto"
-		>
-			<Table>
-				<TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur">
-					<TableRow class="bg-muted/30 hover:bg-muted/30">
-						<TableHead class="th">
-							<button
-								type="button"
-								class="flex items-center gap-1 hover:text-foreground transition-colors"
-								title={sortDesc ? 'Newest first, click for oldest first' : 'Oldest first, click for newest first'}
-								onclick={toggleSort}
-							>
-								Time
-								{#if sortDesc}
-									<ArrowDown class="h-3 w-3" />
-								{:else}
-									<ArrowUp class="h-3 w-3" />
-								{/if}
-							</button>
-						</TableHead>
-						<TableHead class="th">Actor</TableHead>
-						<TableHead class="th">Action</TableHead>
-						<TableHead class="th">Outcome</TableHead>
-						<TableHead class="th">Source IP</TableHead>
-						<TableHead class="th">Detail</TableHead>
-					</TableRow>
-				</TableHeader>
-				<TableBody>
-					{#each events as event (event.id)}
-						<TableRow>
-							<TableCell class="py-2.5 px-3 whitespace-nowrap">
-								<span class="text-sm text-muted-foreground tabular-nums" title={fullTime(event)}>
-									{event.createdAt ? relativeTime(timestampDate(event.createdAt)) : '-'}
-								</span>
-							</TableCell>
-							<TableCell class="py-2.5 px-3">
-								{#if event.actor}
-									<span class="text-sm font-medium">{event.actor}</span>
-								{:else}
-									<span class="text-sm text-muted-foreground italic">anonymous</span>
-								{/if}
-							</TableCell>
-							<TableCell class="py-2.5 px-3">
-								<div class="flex items-center gap-2 flex-wrap">
-									<code class="text-xs bg-muted px-1.5 py-0.5 rounded font-mono">{event.action}</code>
-									{#if event.resource}
-										<Badge variant="outline" class="text-[10px] px-1.5 py-0">{event.resource}</Badge>
-									{/if}
-								</div>
-							</TableCell>
-							<TableCell class="py-2.5 px-3">
-								<Badge variant="outline" class="text-xs {outcomeBadgeClass(event.outcome)}">
-									{event.outcome}
-								</Badge>
-							</TableCell>
-							<TableCell class="py-2.5 px-3">
-								<span class="text-xs text-muted-foreground font-mono">{event.sourceIp || '-'}</span>
-							</TableCell>
-							<TableCell class="py-2.5 px-3 max-w-64">
-								<span class="text-xs text-muted-foreground truncate block" title={event.detail}>
-									{event.detail || '-'}
-								</span>
-							</TableCell>
-						</TableRow>
+		<div class="ledger-scroll">
+			<table class="ledger">
+				<thead>
+					<tr>
+						<th>When</th>
+						<th>Actor</th>
+						<th>Action</th>
+						<th>Resource</th>
+						<th>Outcome</th>
+						<th>From</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each events.rows as e (e.id)}
+						<tr
+							onclick={() => (open = open === e.id ? '' : e.id)}
+							style={e.detail ? 'cursor: pointer' : ''}
+						>
+							<td class="mono">{fmtWhen(e.createdAt)}</td>
+							<td>{e.actor || '—'}</td>
+							<td class="mono">{e.action}</td>
+							<td class="mono" style="overflow-wrap: anywhere">{e.resource || '—'}</td>
+							<td><Mark kind={outcomeMark(e.outcome)} label={e.outcome || 'unknown'} /></td>
+							<td class="mono">{e.sourceIp || '—'}</td>
+						</tr>
+						{#if open === e.id && e.detail}
+							<tr>
+								<td colspan="6" style="padding-top: 0">
+									<pre class="tract" style="margin-bottom: 0.4rem">{e.detail}</pre>
+								</td>
+							</tr>
+						{/if}
 					{/each}
-					{#if loadingMore}
-						<TableRow class="hover:bg-transparent">
-							<TableCell colspan={6} class="py-3 px-3">
-								<div class="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-									<Loader2 class="h-3.5 w-3.5 animate-spin" />
-									Loading more events...
-								</div>
-							</TableCell>
-						</TableRow>
-					{/if}
-				</TableBody>
-			</Table>
+				</tbody>
+			</table>
 		</div>
+		<Tally lister={events} unit="events" />
 	{/if}
-</div>
+</Leaf>

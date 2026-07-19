@@ -56,7 +56,7 @@ dfcli artifact download builds -v 2.3.1 --property os=linux -o api-server.tar.gz
 
 ## Config
 
-One `config.yaml` — every default is in [`config.example.yaml`](config.example.yaml). Any key works as a `DISTROFACE_*` env var. Seed users and orgs on first boot with the `bootstrap:` block.
+One `config.yaml` — every default is in [`config.example.yaml`](config.example.yaml). Any key works as a `DISTROFACE_*` env var. Set `DISTROFACE_PUBLIC_HOSTNAME` to the name clients use — it drives TLS issuance and redirects, and applies on every boot. Seed users and orgs on first boot with the `bootstrap:` block.
 
 ## Hack
 

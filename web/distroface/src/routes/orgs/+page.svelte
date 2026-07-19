@@ -1,231 +1,127 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { resolve } from '$app/paths';
-	import { Card, CardContent, CardHeader, CardTitle } from '$lib/components/ui/card';
-	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Input } from '$lib/components/ui/input';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import FormPanel from '$lib/components/form-panel.svelte';
-	import FormField from '$lib/components/form-field.svelte';
-	import FormSection from '$lib/components/form-section.svelte';
-	import PageHeader from '$lib/components/page-header.svelte';
-	import EmptyState from '$lib/components/empty-state.svelte';
-	import DataPagination from '$lib/components/data-pagination.svelte';
-	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Building2, Plus, Users, ShieldCheck } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
-	import { authStore } from '$lib/stores/auth.svelte';
-	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import { toast } from 'svelte-sonner';
-	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime, orgRoleLabel } from '$lib/utils';
-	import { Pager } from '$lib/pager.svelte';
-	import { QueryFilter } from '$lib/query.svelte';
-	import { OrgRole } from '$lib/proto/distroface/v1/types_pb';
-	import type { Organization } from '$lib/proto/distroface/v1/types_pb';
+	import { goto } from '$app/navigation';
+	import { rpc } from '$lib/rpc';
+	import { Lister } from '$lib/list.svelte';
+	import { OrgRole, type Organization } from '$lib/proto/distroface/v1/types_pb';
+	import { fmtDate, orgRoleLabel } from '$lib/fmt';
+	import { session } from '$lib/state/session.svelte';
+	import { errata } from '$lib/state/errata.svelte';
+	import Find from '$lib/bits/Find.svelte';
+	import Tally from '$lib/bits/Tally.svelte';
+	import Leaf from '$lib/bits/Leaf.svelte';
 
-	let orgs = $state<Organization[]>([]);
-	let loading = $state(true);
-	let loaded = $state(false);
-	const pager = new Pager(20);
-	const filter = new QueryFilter([
-		{ key: 'name', label: 'Name' },
-		{ key: 'display_name', label: 'Display Name' },
-		{ key: 'description', label: 'Description' }
-	]);
+	const orgs = new Lister<Organization>((page) =>
+		rpc.organization.listOrganizations({ page }).then((r) => ({ rows: r.organizations, page: r.page }))
+	);
 
-	let createPanelOpen = $state(false);
-	let orgName = $state('');
-	let orgDisplayName = $state('');
-	let orgDescription = $state('');
-	let creating = $state(false);
+	$effect(() => {
+		orgs.first();
+	});
 
-	async function loadOrgs() {
-		loading = true;
+	let formOpen = $state(false);
+	let newName = $state('');
+	let newDisplay = $state('');
+	let newDesc = $state('');
+	let busy = $state(false);
+
+	async function createOrg(e: Event) {
+		e.preventDefault();
+		busy = true;
 		try {
-			const resp = await rpcClient.organization.listOrganizations({
-				page: pager.request(filter.request())
+			const r = await rpc.organization.createOrganization({
+				name: newName.trim(),
+				displayName: newDisplay.trim(),
+				description: newDesc
 			});
-			orgs = resp.organizations;
-			pager.apply(resp.page);
+			errata.remark(`Organization ${newName.trim()} created.`);
+			goto(`/orgs/${r.organization?.name ?? newName.trim()}`);
 		} catch {
-			// error interceptor
+			// Interceptor reports
 		} finally {
-			loading = false;
-			loaded = true;
+			busy = false;
 		}
 	}
-
-	function filterChanged() {
-		pager.reset();
-		loadOrgs();
-	}
-
-	function resetForm() {
-		orgName = '';
-		orgDisplayName = '';
-		orgDescription = '';
-	}
-
-	async function createOrg() {
-		if (!orgName.trim()) return;
-		creating = true;
-		try {
-			await rpcClient.organization.createOrganization({
-				name: orgName.trim().toLowerCase(),
-				displayName: orgDisplayName.trim(),
-				description: orgDescription.trim()
-			});
-			toast.success('Organization created');
-			createPanelOpen = false;
-			resetForm();
-			await loadOrgs();
-		} catch {
-			// error interceptor
-		} finally {
-			creating = false;
-		}
-	}
-
-	onMount(loadOrgs);
 </script>
 
-<PageHeader title="Organizations" subtitle="Manage your team namespaces" icon={Building2}>
-	{#snippet actions()}
-		<PermissionGate resource="organizations" action="create">
-			<Button size="sm" onclick={() => (createPanelOpen = true)}>
-				<Plus class="h-4 w-4 mr-1.5" />
-				New Organization
-			</Button>
-		</PermissionGate>
+<hgroup class="folio">
+	<p class="kicker">Distroface</p>
+	<h1>Organizations</h1>
+	<p class="sub">
+		Organizations hold repositories in their own namespace, run portals, and manage their own
+		trust.
+	</p>
+</hgroup>
+
+<Leaf no="01" title="All organizations">
+	{#snippet aside()}
+		<Find lister={orgs} placeholder="organization…" />
 	{/snippet}
-</PageHeader>
 
-<div class="max-w-md mb-4">
-	<QueryFilterBar {filter} placeholder="Search organizations..." onchange={filterChanged} />
-</div>
-
-{#if !loaded}
-	<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-		{#each { length: 3 }, i (i)}
-			<Skeleton class="h-36 rounded-xl" />
-		{/each}
-	</div>
-{:else if orgs.length === 0}
-	<EmptyState
-		icon={Building2}
-		message={filter.active ? 'No matching organizations' : 'No organizations yet'}
-		description={filter.active
-			? 'Try a different search.'
-			: 'Create an organization to collaborate with your team.'}
-	>
-		{#snippet actions()}
-			<PermissionGate resource="organizations" action="create">
-				<Button variant="outline" onclick={() => (createPanelOpen = true)}>
-					<Plus class="h-4 w-4 mr-1.5" />
-					Create Organization
-				</Button>
-			</PermissionGate>
-		{/snippet}
-	</EmptyState>
-{:else}
-	<div class="grid gap-4 md:grid-cols-2 lg:grid-cols-3 transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
-		{#each orgs as org (org.id)}
-			<a href={resolve('/orgs/[name]', { name: org.name })} class="block group">
-				<Card class="border-border/60 hover:border-primary/20 transition-all hover:shadow-sm h-full">
-					<CardHeader class="pb-2">
-						<div class="flex items-center gap-3">
-							<div class="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center">
-								<Building2 class="h-5 w-5 text-primary" />
-							</div>
-							<div class="min-w-0 flex-1">
-								<CardTitle class="text-base truncate group-hover:text-primary transition-colors">
-									{org.displayName || org.name}
-								</CardTitle>
-								{#if org.displayName && org.displayName !== org.name}
-									<p class="text-xs text-muted-foreground truncate">{org.name}</p>
+	{#if orgs.loaded && orgs.rows.length === 0}
+		<p class="vacant">No organizations yet.</p>
+	{:else}
+		<div class="ledger-scroll">
+			<table class="ledger">
+				<thead>
+					<tr>
+						<th>Organization</th>
+						<th class="num">Members</th>
+						<th>Your role</th>
+						<th>Created</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each orgs.rows as org (org.id)}
+						<tr>
+							<td>
+								<a href="/orgs/{org.name}">{org.displayName || org.name}</a>
+								<span class="mono faint">·&nbsp;{org.name}</span>
+								{#if org.description}
+									<div class="note" style="font-size: 0.8125rem">{org.description}</div>
 								{/if}
-							</div>
-							{#if org.currentUserRole !== OrgRole.UNSPECIFIED}
-								<Badge
-									variant={org.currentUserRole === OrgRole.OWNER ? 'default' : 'outline'}
-									class="text-xs shrink-0"
-								>
-									{orgRoleLabel(org.currentUserRole)}
-								</Badge>
-							{/if}
-						</div>
-					</CardHeader>
-					<CardContent>
-						{#if org.description}
-							<p class="text-[13px] text-muted-foreground line-clamp-2 mb-3">{org.description}</p>
-						{/if}
-						<div class="flex items-center gap-3 text-xs text-muted-foreground">
-							<span class="flex items-center gap-1">
-								<Users class="h-3.5 w-3.5" />
-								{org.memberCount} member{org.memberCount !== 1 ? 's' : ''}
-							</span>
-							{#if org.createdAt}
-								<span>Created {relativeTime(timestampDate(org.createdAt))}</span>
-							{/if}
-							{#if authStore.user && org.currentUserRole === OrgRole.UNSPECIFIED}
-								<span class="flex items-center gap-1 text-muted-foreground/60">
-									<ShieldCheck class="h-3 w-3" />Managed
-								</span>
-							{/if}
-						</div>
-					</CardContent>
-				</Card>
-			</a>
-		{/each}
-	</div>
-	<DataPagination
-		page={pager.page}
-		pageSize={pager.pageSize}
-		totalCount={pager.totalCount}
-		onPrev={() => { if (pager.prev()) loadOrgs(); }}
-		onNext={() => { if (pager.next()) loadOrgs(); }}
-	/>
+							</td>
+							<td class="num mono">{org.memberCount}</td>
+							<td>
+								{#if org.currentUserRole !== OrgRole.UNSPECIFIED}
+									<span class="caps soft">{orgRoleLabel[org.currentUserRole]}</span>
+								{:else}
+									<span class="faint">—</span>
+								{/if}
+							</td>
+							<td class="mono">{fmtDate(org.createdAt)}</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+		<Tally lister={orgs} unit="organizations" />
+	{/if}
+</Leaf>
+
+{#if session.signedIn && session.canCreateOrgs}
+	<Leaf no="02" title="New organization">
+		{#if formOpen}
+			<form class="panel" onsubmit={createOrg}>
+				<label class="field">
+					<span>Name</span>
+					<input type="text" bind:value={newName} required placeholder="lowercase, becomes the namespace" />
+				</label>
+				<label class="field">
+					<span>Display name</span>
+					<input type="text" bind:value={newDisplay} />
+				</label>
+				<label class="field">
+					<span>Description</span>
+					<textarea rows="2" bind:value={newDesc}></textarea>
+				</label>
+				<div class="row gap-top">
+					<button class="act wax" type="submit" disabled={busy || !newName.trim()}
+						>Create organization</button>
+					<button class="rowact plain" type="button" onclick={() => (formOpen = false)}>cancel</button>
+				</div>
+			</form>
+		{:else}
+			<button class="act" onclick={() => (formOpen = true)}>New organization</button>
+		{/if}
+	</Leaf>
 {/if}
-
-<!-- Create Org Panel -->
-<FormPanel
-	bind:open={createPanelOpen}
-	title="Create Organization"
-	description="Organizations are team namespaces for shared repositories. The name becomes the Docker namespace for pushing images."
-	icon={Building2}
->
-	<div class="space-y-6">
-		<FormSection title="Identity">
-			<div class="space-y-3">
-				<FormField
-					label="Name"
-					id="org-name"
-					help="Lowercase letters, numbers, hyphens. Used as the Docker namespace (e.g., docker push host/name/image)."
-					required
-				>
-					<Input id="org-name" bind:value={orgName} placeholder="my-team" />
-				</FormField>
-
-				<FormField label="Display Name" id="org-display" help="A human-readable name shown in the UI.">
-					<Input id="org-display" bind:value={orgDisplayName} placeholder="My Team" />
-				</FormField>
-			</div>
-		</FormSection>
-
-		<FormSection title="About">
-			<FormField label="Description" id="org-desc" help="A brief description of what this organization does.">
-				<Textarea id="org-desc" bind:value={orgDescription} placeholder="What does this organization do?" rows={3} />
-			</FormField>
-		</FormSection>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (createPanelOpen = false)}>Cancel</Button>
-		<Button onclick={createOrg} disabled={creating || !orgName.trim()}>
-			{creating ? 'Creating...' : 'Create Organization'}
-		</Button>
-	{/snippet}
-</FormPanel>

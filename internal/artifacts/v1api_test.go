@@ -64,7 +64,7 @@ func newTestEnv(t *testing.T, retention *v1proto.ArtifactRetentionSettings) *tes
 		MaxFileSizeMb: proto.Int64(10),
 		Retention:     retention,
 	}}
-	if err := res.SeedSystem(context.Background(), seed); err != nil {
+	if _, err := res.SeedSystem(context.Background(), seed); err != nil {
 		t.Fatalf("SeedSystem: %v", err)
 	}
 

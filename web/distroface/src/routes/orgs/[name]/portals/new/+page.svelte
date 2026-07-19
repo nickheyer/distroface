@@ -1,33 +1,42 @@
 <script lang="ts">
-	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
 	import { getContext } from 'svelte';
-	import PortalForm from '../portal-form.svelte';
-	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
-	import { configStore } from '$lib/stores/config.svelte';
+	import { goto } from '$app/navigation';
+	import { rpc } from '$lib/rpc';
+	import { OrgCtx, ORG_CTX } from '$lib/state/orgctx.svelte';
+	import { errata } from '$lib/state/errata.svelte';
+	import Leaf from '$lib/bits/Leaf.svelte';
+	import PortalForm, { type PortalFields } from '$lib/bits/PortalForm.svelte';
 
-	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
-	const orgName = $derived(page.params.name ?? '');
-	const orgId = $derived(ctx.org?.id ?? '');
-	const mainPort = $derived(configStore.mainPort);
+	const ctx = getContext<OrgCtx>(ORG_CTX);
 
-	$effect(() => {
-		if (!ctx.loading && ctx.org && !ctx.canAdmin) {
-			goto(resolve('/orgs/[name]', { name: orgName }));
+	let busy = $state(false);
+
+	async function raise(f: PortalFields) {
+		if (!ctx.org) return;
+		busy = true;
+		try {
+			const r = await rpc.portal.createPortal({
+				orgId: ctx.org.id,
+				name: f.name,
+				hostname: f.hostname,
+				port: f.port,
+				mapUnqualified: f.mapUnqualified,
+				rules: f.rules,
+				allowPush: f.allowPush,
+				requireAuth: f.requireAuth,
+				tls: f.tls,
+				certSource: f.certSource
+			});
+			errata.remark(`Portal ${f.name} created.`);
+			goto(`/orgs/${ctx.org.name}/portals/${r.portal?.id ?? ''}`);
+		} catch {
+			// Interceptor reports
+		} finally {
+			busy = false;
 		}
-	});
+	}
 </script>
 
-<div class="space-y-4">
-	<div class="section-header">
-		<div class="min-w-0 space-y-1">
-			<h2 class="section-title">New Portal</h2>
-			<p class="section-subtitle max-w-2xl">
-				Give {orgName} its own address. Clients on it only ever see this organization.
-			</p>
-		</div>
-	</div>
-
-	<PortalForm {orgName} {orgId} {mainPort} />
-</div>
+<Leaf no="01" title="New portal">
+	<PortalForm submitLabel="Create portal" {busy} onsave={raise} />
+</Leaf>

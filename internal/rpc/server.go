@@ -250,9 +250,10 @@ func (s *Server) httpsOnlyRedirect(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		host := sys.GetServer().GetPublicHostname()
+		// Same host the client used, never a stale configured name
+		host := r.Host
 		if host == "" {
-			host = r.Host
+			host = sys.GetServer().GetPublicHostname()
 		}
 		http.Redirect(w, r, "https://"+host+r.URL.RequestURI(), http.StatusTemporaryRedirect)
 	})

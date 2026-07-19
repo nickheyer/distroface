@@ -129,6 +129,11 @@ func bareHost(host string) string {
 	return host
 }
 
+// IssuableHost reports whether certificates can be issued for host
+func IssuableHost(host string) bool {
+	return issuableHost(bareHost(host))
+}
+
 // Dotted dns name, not an ip, not localhost
 func issuableHost(host string) bool {
 	if host == "" || host == "localhost" || !strings.Contains(host, ".") {
@@ -617,6 +622,19 @@ func (e *Engine) EnsureCertificate(ctx context.Context, domain string) (*v1.Cert
 		return nil, err
 	}
 	return e.CertificateInfo(ctx, domain)
+}
+
+// Mints the leaf a handshake for host would serve from a stored ca
+func (e *Engine) EnsureCALeaf(ctx context.Context, scope v1.TLSScope, orgID, host string) (*v1.CertificateInfo, error) {
+	host = bareHost(host)
+	if host == "" {
+		return nil, fmt.Errorf("no hostname to issue for")
+	}
+	cert, err := e.caLeaf(ctx, scope, orgID, host)
+	if err != nil {
+		return nil, err
+	}
+	return certInfoFromLeaf(cert.Leaf), nil
 }
 
 // Reads the cached chain without triggering issuance

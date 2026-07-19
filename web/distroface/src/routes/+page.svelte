@@ -1,110 +1,163 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
-	import { Package } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
-	import { authStore } from '$lib/stores/auth.svelte';
-	import { configStore } from '$lib/stores/config.svelte';
-	import { portalStore } from '$lib/stores/portal.svelte';
-	import { Pager } from '$lib/pager.svelte';
-	import { QueryFilter } from '$lib/query.svelte';
-	import RepoList from '$lib/components/repo-list.svelte';
-	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import PageHeader from '$lib/components/page-header.svelte';
-	import type { Repository } from '$lib/proto/distroface/v1/types_pb';
-  import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import { rpc } from '$lib/rpc';
+	import { Lister } from '$lib/list.svelte';
+	import { Visibility, type Repository } from '$lib/proto/distroface/v1/types_pb';
+	import { fmtBytes, fmtCount, fmtDate, visibilityLabel } from '$lib/fmt';
+	import { session } from '$lib/state/session.svelte';
+	import { gate, site } from '$lib/state/site.svelte';
+	import Find from '$lib/bits/Find.svelte';
+	import Tally from '$lib/bits/Tally.svelte';
+	import Leaf from '$lib/bits/Leaf.svelte';
+	import Copy from '$lib/bits/Copy.svelte';
 
-	let repos = $state<Repository[]>([]);
-	let repoLoading = $state(true);
-	let repoLoaded = $state(false);
-	const repoPager = new Pager(20);
-	const filter = new QueryFilter([
-		{ key: 'name', label: 'Name' },
-		{ key: 'namespace', label: 'Namespace' },
-		{ key: 'description', label: 'Description' }
-	]);
+	let namespace = $state(page.url.searchParams.get('ns') ?? '');
+	let visibility = $state<Visibility>(Visibility.UNSPECIFIED);
+	let shelf = $state<'all' | 'starred'>('all');
 
-	async function loadRepos() {
-		repoLoading = true;
-		try {
-			const response = await rpcClient.repository.listRepositories({
-				page: repoPager.request(filter.request())
-			});
-			repos = response.repositories;
-			repoPager.apply(response.page);
-		} catch {
-			repos = [];
-			repoPager.apply();
-		} finally {
-			repoLoading = false;
-			repoLoaded = true;
+	const repos = new Lister<Repository>((page) => {
+		if (shelf === 'starred') {
+			return rpc.repository
+				.listStarredRepositories({ page })
+				.then((r) => ({ rows: r.repositories, page: r.page }));
 		}
+		return rpc.repository
+			.listRepositories({
+				page,
+				namespace: gate.isPortal ? gate.orgName : namespace.trim(),
+				visibility
+			})
+			.then((r) => ({ rows: r.repositories, page: r.page }));
+	});
+
+	$effect(() => {
+		void visibility;
+		void shelf;
+		void namespace;
+		repos.first();
+	});
+
+	async function toggleStar(repo: Repository) {
+		const req = { namespace: repo.namespace, name: repo.name };
+		const r = repo.isStarred
+			? await rpc.repository.unstarRepository(req)
+			: await rpc.repository.starRepository(req);
+		repo.isStarred = !repo.isStarred;
+		repo.starCount = r.starCount;
 	}
 
-	function filterChanged() {
-		repoPager.reset();
-		loadRepos();
-	}
-
-	const emptyMessage = $derived(filter.active ? 'No repositories found' : 'No repositories yet');
-	const emptyDescription = $derived(
-		filter.active ? 'No results match the current filter' : undefined
+	const host = $derived(gate.host());
+	const exampleRef = $derived(
+		gate.isPortal && gate.mapUnqualified ? 'image' : 'namespace/image'
 	);
-
-	onMount(loadRepos);
 </script>
 
-<PageHeader
-	title="Explore"
-	subtitle={authStore.isAuthenticated
-		? `Welcome back, ${authStore.user?.displayName || authStore.user?.username}`
-		: 'Browse container images'}
-	icon={Package}
->
-	{#snippet actions()}
-		{#if !repoLoading && repoPager.totalCount > 0}
-			<span class="text-[12px] text-muted-foreground/60 tabular-nums">{repoPager.totalCount} repositor{repoPager.totalCount === 1 ? 'y' : 'ies'}</span>
+<hgroup class="folio">
+	<p class="kicker">{gate.isPortal ? `Portal · ${gate.portalName}` : site.publicHostname}</p>
+	<h1>{gate.isPortal ? gate.displayName : 'Registry index'}</h1>
+	{#if gate.isPortal}
+		<p class="sub">
+			Container repositories of {gate.displayName}, served at <span class="mono">{host}</span
+			>{gate.allowPush ? '' : ' - read-only'}.
+		</p>
+	{:else}
+		<p class="sub">Container repositories hosted on this instance.</p>
+	{/if}
+</hgroup>
+
+<Leaf no="01" title="Repositories">
+	{#snippet aside()}
+		{#if session.signedIn && !gate.isPortal}
+			<button
+				class="rowact plain"
+				style:color={shelf === 'starred' ? 'var(--wax)' : undefined}
+				onclick={() => (shelf = shelf === 'starred' ? 'all' : 'starred')}
+				>★ starred only</button>
 		{/if}
+		{#if !gate.isPortal}
+			<input
+				type="text"
+				style="width: 9.5rem"
+				placeholder="namespace…"
+				bind:value={namespace}
+				aria-label="namespace"
+			/>
+		{/if}
+		<select bind:value={visibility} style="width: auto" aria-label="visibility">
+			<option value={Visibility.UNSPECIFIED}>any visibility</option>
+			<option value={Visibility.PUBLIC}>public</option>
+			<option value={Visibility.PRIVATE}>private</option>
+		</select>
+		<Find lister={repos} placeholder="repository…" />
 	{/snippet}
-</PageHeader>
 
-<div class="space-y-6">
-	<div class="max-w-md">
-		<QueryFilterBar {filter} placeholder="Search repositories..." onchange={filterChanged} />
-	</div>
+	{#if repos.loaded && repos.rows.length === 0}
+		<p class="vacant">
+			{shelf === 'starred' ? 'Nothing starred yet.' : 'No repositories yet.'}
+		</p>
+	{:else}
+		<div class="ledger-scroll">
+			<table class="ledger">
+				<thead>
+					<tr>
+						<th>Repository</th>
+						<th>Visibility</th>
+						<th class="num">Tags</th>
+						<th class="num">Size</th>
+						<th class="num">Pulls</th>
+						<th>Last push</th>
+						<th class="end">★</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each repos.rows as repo (repo.id)}
+						<tr>
+							<td>
+								<a href="/r/{repo.namespace}/{repo.name}">{repo.fullName}</a>
+								{#if repo.description}
+									<div class="note" style="font-size: 0.8125rem">{repo.description}</div>
+								{/if}
+							</td>
+							<td><span class="caps soft">{visibilityLabel[repo.visibility]}</span></td>
+							<td class="num mono">{repo.tagCount}</td>
+							<td class="num mono">{fmtBytes(repo.sizeBytes)}</td>
+							<td class="num mono">{fmtCount(repo.pullCount)}</td>
+							<td class="mono">{fmtDate(repo.lastPushedAt)}</td>
+							<td class="end">
+								{#if session.signedIn}
+									<button
+										class="rowact plain"
+										title={repo.isStarred ? 'unstar' : 'star'}
+										style="text-decoration: none; font-size: 0.85rem"
+										style:color={repo.isStarred ? 'var(--wax)' : undefined}
+										onclick={() => toggleStar(repo)}>{repo.isStarred ? '★' : '☆'} {fmtCount(repo.starCount)}</button>
+								{:else}
+									<span class="mono faint">★ {fmtCount(repo.starCount)}</span>
+								{/if}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		</div>
+		<Tally lister={repos} unit="repositories" />
+	{/if}
+</Leaf>
 
-	<RepoList
-		{repos}
-		totalCount={repoPager.totalCount}
-		loading={repoLoading}
-		loaded={repoLoaded}
-		showCount={false}
-		page={repoPager.page}
-		pageSize={repoPager.pageSize}
-		onPrev={() => { if (repoPager.prev()) loadRepos(); }}
-		onNext={() => { if (repoPager.next()) loadRepos(); }}
-		{emptyMessage}
-		{emptyDescription}
-	>
-		{#snippet emptyActions()}
-			{#if !filter.active}
-				{#if authStore.isAuthenticated}
-					<div class="text-center space-y-2">
-						<p class="text-[13px] text-muted-foreground">Push your first image:</p>
-						<code class="code-inline block text-xs">
-							docker push {portalStore.host(
-								configStore.publicHostname
-							)}/{portalStore.imageRef(
-								portalStore.isPortal ? portalStore.orgName : (authStore.user?.username ?? ''),
-								'myimage'
-							)}:latest
-						</code>
-					</div>
-				{:else}
-					<p class="text-[13px] text-muted-foreground">
-						<a href={resolve("/login")} class="text-primary underline-offset-4 hover:underline">Sign in</a> to push images
-					</p>
-				{/if}
-			{/if}
-		{/snippet}
-	</RepoList>
-</div>
+{#if !gate.isPortal || gate.allowPush}
+	<Leaf no="02" title="Publishing">
+		<p class="note">
+			Repositories are created by pushing. A repository appears in the list after its first push.
+		</p>
+		<div class="stack gap-top">
+			<div class="cmdline">
+				docker login {host}
+				<Copy text={`docker login ${host}`} />
+			</div>
+			<div class="cmdline">
+				docker push {host}/{exampleRef}:tag
+				<Copy text={`docker push ${host}/${exampleRef}:tag`} />
+			</div>
+		</div>
+	</Leaf>
+{/if}

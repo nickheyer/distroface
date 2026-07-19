@@ -1,79 +1,59 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
-	import type { Pathname } from '$app/types';
-	import { onMount } from 'svelte';
-	import { authStore } from '$lib/stores/auth.svelte';
-	import { LayoutDashboard, Shield, ShieldCheck, ScrollText, HardDrive, Users, Key, Ticket } from '@lucide/svelte';
-	import PageHeader from '$lib/components/page-header.svelte';
+	import { session } from '$lib/state/session.svelte';
 
 	let { children } = $props();
 
-	type NavItem = { href: Pathname; label: string; icon: typeof Shield };
+	const path = $derived(page.url.pathname);
 
-	const navItems: NavItem[] = $derived([
-		...(authStore.canAccessAdmin
-			? [{ href: '/admin', label: 'Overview', icon: LayoutDashboard } satisfies NavItem]
-			: []),
-		...(authStore.canReadSettings
-			? [{ href: '/admin/auth', label: 'Authentication', icon: Shield } satisfies NavItem]
-			: []),
-		...(authStore.canManageSettings
-			? [{ href: '/admin/pki', label: 'PKI', icon: ShieldCheck } satisfies NavItem]
-			: []),
-		...(authStore.canReadSettings
-			? [{ href: '/admin/audit', label: 'Audit Log', icon: ScrollText } satisfies NavItem]
-			: []),
-		...(authStore.canReadSettings
-			? [{ href: '/admin/storage', label: 'Storage', icon: HardDrive } satisfies NavItem]
-			: []),
-		...(authStore.canReadUsers
-			? [{ href: '/admin/users', label: 'Users', icon: Users } satisfies NavItem]
-			: []),
-		...(authStore.canReadRoles
-			? [{ href: '/admin/roles', label: 'Roles', icon: Key } satisfies NavItem]
-			: []),
-		...(authStore.canReadSettings
-			? [{ href: '/admin/invites', label: 'Invites', icon: Ticket } satisfies NavItem]
-			: [])
-	]);
-
-	function isActive(href: string): boolean {
-		return page.url.pathname === href;
-	}
-
-	onMount(() => {
-		if (!authStore.canAccessAdmin) {
-			goto(resolve('/'));
-		}
-	});
+	const sections = $derived(
+		[
+			session.canReadUsers ? { href: '/admin/users', label: 'Users' } : null,
+			session.canReadRoles ? { href: '/admin/roles', label: 'Roles' } : null,
+			session.canReadSettings ? { href: '/admin/invites', label: 'Invites' } : null,
+			session.canManageSettings ? { href: '/admin/trust', label: 'Trust' } : null,
+			session.canReadSettings ? { href: '/admin/settings', label: 'Settings' } : null,
+			session.canManageSettings ? { href: '/admin/storage', label: 'Storage' } : null,
+			session.canManageSettings ? { href: '/admin/audit', label: 'Audit' } : null
+		].filter((s) => s !== null)
+	);
 </script>
 
-<PageHeader title="Administration" subtitle="Manage your Distroface instance" />
+<hgroup class="folio">
+	<p class="kicker">Distroface</p>
+	<h1>Administration</h1>
+</hgroup>
 
-<div class="flex flex-col md:flex-row gap-8 mt-2">
-	<nav class="md:w-52 shrink-0">
-		<div class="flex md:flex-col gap-0.5 overflow-x-auto md:overflow-visible pb-2 md:pb-0 md:sticky md:top-20">
-			{#each navItems as item (item.href)}
-				<a
-					href={resolve(item.href)}
-					class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors {isActive(item.href)
-						? 'bg-accent text-accent-foreground'
-						: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
-				>
-					<item.icon class="h-4 w-4" />
-					{item.label}
-				</a>
-			{/each}
-		</div>
-	</nav>
+<nav class="orgnav">
+	{#each sections as s (s.href)}
+		<a href={s.href} aria-current={path === s.href || path.startsWith(s.href + '/')}>{s.label}</a>
+	{/each}
+</nav>
 
-	<div class="flex-1 min-w-0">
-		{#key page.url.pathname}
-			<div class="page-enter">
-				{@render children?.()}
-			</div>
-		{/key}
-	</div>
-</div>
+{@render children()}
+
+<style>
+	.orgnav {
+		display: flex;
+		gap: 1.4rem;
+		flex-wrap: wrap;
+		border-top: 1px solid var(--ink);
+		border-bottom: 1px solid var(--hairline);
+		padding: 0.45rem 0;
+		margin-top: 1.2rem;
+	}
+	.orgnav a {
+		font-family: var(--mono);
+		font-size: var(--caps-size);
+		letter-spacing: var(--caps-track);
+		text-transform: uppercase;
+		color: var(--ink-soft);
+		text-decoration: none;
+	}
+	.orgnav a:hover {
+		color: var(--ink);
+	}
+	.orgnav a[aria-current='true'] {
+		color: var(--wax);
+	}
+</style>

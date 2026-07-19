@@ -18,8 +18,9 @@ services:
       - DISTROFACE_DATA_DIR=/app/data
       - TZ=UTC
 
-      # Public hostname, set when serving behind a real domain
-      #- DISTROFACE_SERVER_HOSTNAME=registry.example.com
+      # Public hostname, set when serving behind a real domain.
+      # Applies on every boot and wins over in app edits
+      #- DISTROFACE_PUBLIC_HOSTNAME=registry.example.com
 
       - DISTROFACE_AUTH_LOCAL_ENABLED=true
       - DISTROFACE_AUTH_OIDC_ENABLED=true

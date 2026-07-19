@@ -147,6 +147,11 @@ func Load(configPath string) (*Config, error) {
 	// Short alias used by the compose examples
 	_ = v.BindEnv("storage.data_dir", "DISTROFACE_STORAGE_DATA_DIR", "DISTROFACE_DATA_DIR")
 
+	// Every spelling an operator might guess lands on one key
+	_ = v.BindEnv("server.public_hostname",
+		"DISTROFACE_SERVER_PUBLIC_HOSTNAME", "DISTROFACE_PUBLIC_HOSTNAME",
+		"DISTROFACE_SERVER_HOSTNAME", "DISTROFACE_HOSTNAME")
+
 	// Keys without defaults need explicit env binding
 	_ = v.BindEnv("database.path")
 	_ = v.BindEnv("registry.storage_path")
@@ -175,6 +180,7 @@ func Load(configPath string) (*Config, error) {
 		return nil, err
 	}
 	applyLegacySettings(v, &cfg)
+	applyHostnameOverride(v, &cfg)
 
 	applyEnvBootstrapUser(&cfg)
 	applyDerivedPaths(&cfg)
@@ -217,15 +223,6 @@ func applyLegacySettings(v *viper.Viper, cfg *Config) {
 		return seed
 	}
 
-	if host := v.GetString("server.hostname"); host != "" {
-		s := ensure()
-		if s.GetServer().GetPublicHostname() == "" {
-			if s.Server == nil {
-				s.Server = &v1.ServerSettings{}
-			}
-			s.Server.PublicHostname = proto.String(host)
-		}
-	}
 	if v.IsSet("tls.enabled") && v.GetBool("tls.enabled") {
 		s := ensure()
 		if s.GetTls().GetMode() == v1.TLSMode_TLS_MODE_UNSPECIFIED {
@@ -270,6 +267,24 @@ func applyLegacySettings(v *viper.Viper, cfg *Config) {
 				"WARNING: config key %q is now a runtime setting, move it to the settings or overrides block\n", key)
 		}
 	}
+}
+
+// Hostname from yaml or env pins the runtime setting every boot
+func applyHostnameOverride(v *viper.Viper, cfg *Config) {
+	host := strings.TrimSpace(v.GetString("server.public_hostname"))
+	if host == "" {
+		host = strings.TrimSpace(v.GetString("server.hostname"))
+	}
+	if host == "" || cfg.Overrides.GetServer().GetPublicHostname() != "" {
+		return
+	}
+	if cfg.Overrides == nil {
+		cfg.Overrides = &v1.Settings{}
+	}
+	if cfg.Overrides.Server == nil {
+		cfg.Overrides.Server = &v1.ServerSettings{}
+	}
+	cfg.Overrides.Server.PublicHostname = proto.String(host)
 }
 
 // Appends one env defined bootstrap user

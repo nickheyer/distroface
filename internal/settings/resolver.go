@@ -77,19 +77,23 @@ func (r *Resolver) notify() {
 	}
 }
 
-// SeedSystem writes the file seed once when no system row exists
-func (r *Resolver) SeedSystem(ctx context.Context, seed *v1.Settings) error {
+// SeedSystem writes the file seed once when no system row exists,
+// reports whether the seed applied
+func (r *Resolver) SeedSystem(ctx context.Context, seed *v1.Settings) (bool, error) {
 	if seed == nil {
-		return nil
+		return false, nil
 	}
 	_, found, err := r.store.GetSettingsValue(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
 	if err != nil {
-		return err
+		return false, err
 	}
 	if found {
-		return nil
+		return false, nil
 	}
-	return r.save(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "", seed)
+	if err := r.save(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "", seed); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // Stored returns the raw row for one scope, empty when absent

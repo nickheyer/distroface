@@ -1,726 +1,435 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
-	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Input } from '$lib/components/ui/input';
-	import { Switch } from '$lib/components/ui/switch';
-	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
-	} from '$lib/components/ui/table';
-	import {
-		Collapsible, CollapsibleContent, CollapsibleTrigger
-	} from '$lib/components/ui/collapsible';
-	import FormPanel from '$lib/components/form-panel.svelte';
-	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
-	import FormField from '$lib/components/form-field.svelte';
-	import FormSection from '$lib/components/form-section.svelte';
-	import EmptyState from '$lib/components/empty-state.svelte';
-	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import CopyButton from '$lib/components/copy-button.svelte';
-	import DataPagination from '$lib/components/data-pagination.svelte';
-	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import {
-		Archive, ArrowLeft, ChevronDown, Download, Lock, Globe, Pencil,
-		Plus, Search, Settings, Tag, Tags, Trash2, Upload, X
-	} from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
-	import { authStore } from '$lib/stores/auth.svelte';
-	import { toast } from 'svelte-sonner';
-	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime, formatBytes, truncateDigest } from '$lib/utils';
-	import { Pager } from '$lib/pager.svelte';
-	import { QueryFilter } from '$lib/query.svelte';
+	import { rpc } from '$lib/rpc';
+	import { Lister } from '$lib/list.svelte';
+	import { MatchKind } from '$lib/proto/distroface/v1/pagination_pb';
 	import type { Artifact, ArtifactRepository } from '$lib/proto/distroface/v1/types_pb';
 	import type { ArtifactVersionGroup } from '$lib/proto/distroface/v1/artifact_pb';
+	import { fmtBytes, fmtCount, fmtWhen } from '$lib/fmt';
+	import { session } from '$lib/state/session.svelte';
+	import { errata } from '$lib/state/errata.svelte';
+	import { downloadArtifact, uploadChunks } from '$lib/files';
+	import Leaf from '$lib/bits/Leaf.svelte';
+	import Find from '$lib/bits/Find.svelte';
+	import Tally from '$lib/bits/Tally.svelte';
+	import Confirm from '$lib/bits/Confirm.svelte';
 
-	const SESSION_KEY = 'distroface_session';
-	const repoName = $derived(page.params.repo ?? '');
-	const namespace = $derived(page.params.namespace ?? '');
+	const namespace = $derived(page.params.namespace!);
+	const repoName = $derived(page.params.repo!);
 
 	let repo = $state<ArtifactRepository | null>(null);
-	let versions = $state<ArtifactVersionGroup[]>([]);
-	let loading = $state(true);
-	let notFound = $state(false);
-	let expandedVersions = $state<Record<string, boolean>>({});
-	const versionPager = new Pager(10);
+	let missing = $state(false);
+	let versionFilter = $state('');
 
-	// Search mode
-	const filter = new QueryFilter([
-		{ key: 'name', label: 'Name' },
-		{ key: 'version', label: 'Version' },
-		{ key: 'path', label: 'Path' }
-	]);
-	let searchResults = $state<Artifact[] | null>(null);
-	let searching = $state(false);
-	let searchLoaded = $state(false);
-	const searchPager = new Pager(20);
-
-	// Upload
-	let uploadPanelOpen = $state(false);
-	let uploadFile = $state<File | null>(null);
-	let uploadVersion = $state('');
-	let uploadPath = $state('');
-	let uploadProps = $state<{ key: string; value: string }[]>([]);
-	let uploading = $state(false);
-	let uploadStage = $state('');
-
-	// Repo settings
-	let settingsPanelOpen = $state(false);
-	let settingsDescription = $state('');
-	let settingsPrivate = $state(false);
-	let savingSettings = $state(false);
-
-	// Properties editor
-	let propsPanelOpen = $state(false);
-	let propsTarget = $state<Artifact | null>(null);
-	let propsRows = $state<{ key: string; value: string }[]>([]);
-	let savingProps = $state(false);
-
-	// Rename
-	let renamePanelOpen = $state(false);
-	let renameTarget = $state<Artifact | null>(null);
-	let renamePath = $state('');
-	let renameVersion = $state('');
-	let renaming = $state(false);
-
-	// Delete
-	let deleteDialogOpen = $state(false);
-	let deleteTarget = $state<Artifact | null>(null);
-	let deleting = $state(false);
-
-	const canMutate = $derived(
-		!!repo &&
-			(repo.owner === authStore.user?.username ||
-				authStore.hasPermission('artifacts', 'manage') ||
-				authStore.hasPermission('organizations', 'update', namespace))
+	const versions = new Lister<ArtifactVersionGroup>((p) =>
+		rpc.artifact
+			.listArtifactVersions({ page: p, repoName, namespace })
+			.then((r) => ({ rows: r.versions, page: r.page })),
+		{ pageSize: 20 }
 	);
 
-	async function loadRepo() {
-		loading = true;
-		notFound = false;
-		try {
-			const resp = await rpcClient.artifact.getArtifactRepository({ name: repoName, namespace });
-			repo = resp.repository ?? null;
-			await loadVersions();
-		} catch {
-			notFound = true;
-		} finally {
-			loading = false;
-		}
+	const files = new Lister<Artifact>((p) =>
+		rpc.artifact
+			.searchArtifacts({ page: p, repoName, namespace })
+			.then((r) => ({ rows: r.artifacts, page: r.page }))
+	);
+
+	$effect(() => {
+		void namespace;
+		void repoName;
+		missing = false;
+		repo = null;
+		versionFilter = '';
+		rpc.artifact
+			.getArtifactRepository({ name: repoName, namespace })
+			.then((r) => (repo = r.repository ?? null))
+			.catch(() => (missing = true));
+		versions.first();
+	});
+
+	$effect(() => {
+		files.filters = versionFilter
+			? [{ field: 'version', match: MatchKind.EQUALS, value: versionFilter }]
+			: [];
+		files.first();
+	});
+
+	function groupSize(g: ArtifactVersionGroup): bigint {
+		return g.artifacts.reduce((acc, a) => acc + a.size, 0n);
 	}
 
-	async function loadVersions() {
-		const resp = await rpcClient.artifact.listArtifactVersions({
-			page: versionPager.request(),
-			repoName,
-			namespace
-		});
-		versions = resp.versions;
-		versionPager.apply(resp.page);
-		if (versions.length > 0 && Object.keys(expandedVersions).length === 0) {
-			expandedVersions = { [versions[0].version]: true };
-		}
-	}
+	// ── File desk ───────────────────────────────────────────────────
+	let openFile = $state<Artifact | null>(null);
+	let propsText = $state('');
+	let metaText = $state('');
+	let moveName = $state('');
+	let movePath = $state('');
+	let moveVersion = $state('');
+	let deskBusy = $state(false);
 
-	async function runSearch() {
-		searchPager.reset();
-		await fetchSearch();
-	}
-
-	async function fetchSearch() {
-		if (!filter.active) {
-			searchResults = null;
-			searchPager.reset();
+	function openDesk(a: Artifact) {
+		if (openFile?.id === a.id) {
+			openFile = null;
 			return;
 		}
-		searching = true;
+		openFile = a;
+		propsText = Object.entries(a.properties)
+			.map(([k, v]) => `${k}=${v}`)
+			.join('\n');
+		metaText = a.metadata;
+		moveName = a.name;
+		movePath = a.path;
+		moveVersion = a.version;
+	}
+
+	function parseProps(text: string): Record<string, string> {
+		const out: Record<string, string> = {};
+		for (const line of text.split('\n')) {
+			const t = line.trim();
+			if (!t) continue;
+			const i = t.indexOf('=');
+			if (i < 1) continue;
+			out[t.slice(0, i).trim()] = t.slice(i + 1).trim();
+		}
+		return out;
+	}
+
+	async function saveDesk(e: Event) {
+		e.preventDefault();
+		if (!openFile) return;
+		if (metaText.trim()) {
+			try {
+				JSON.parse(metaText);
+			} catch {
+				errata.report('Metadata must be a valid JSON object.');
+				return;
+			}
+		}
+		deskBusy = true;
 		try {
-			const resp = await rpcClient.artifact.searchArtifacts({
-				page: searchPager.request(filter.request()),
+			await rpc.artifact.setArtifactProperties({
 				repoName,
+				id: openFile.id,
+				properties: parseProps(propsText),
 				namespace
 			});
-			searchResults = resp.artifacts;
-			searchPager.apply(resp.page);
-		} catch {
-			searchResults = [];
-			searchPager.apply();
-		} finally {
-			searching = false;
-			searchLoaded = true;
-		}
-	}
-
-	// ── Download ─────────────────────────────────────────────────────────
-
-	async function downloadArtifact(artifact: Artifact) {
-		const prefix = `/api/v1/artifacts/_ns/${encodeURIComponent(namespace)}/${encodeURIComponent(repoName)}`;
-		const url = `${prefix}/${encodeURIComponent(artifact.version)}/${artifact.path.split('/').map(encodeURIComponent).join('/')}`;
-		try {
-			const token = localStorage.getItem(SESSION_KEY);
-			const resp = await fetch(url, {
-				headers: token ? { Authorization: `Bearer ${token}` } : {}
-			});
-			if (!resp.ok) {
-				toast.error(`Download failed (${resp.status})`);
-				return;
-			}
-			const blob = await resp.blob();
-			const objectUrl = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = objectUrl;
-			a.download = artifact.name;
-			a.click();
-			URL.revokeObjectURL(objectUrl);
-		} catch {
-			toast.error('Download failed');
-		}
-	}
-
-	// ── Upload ───────────────────────────────────────────────────────────
-
-	function onFileSelected(e: Event) {
-		const input = e.target as HTMLInputElement;
-		uploadFile = input.files?.[0] ?? null;
-		if (uploadFile && !uploadPath) uploadPath = uploadFile.name;
-	}
-
-	async function doUpload() {
-		if (!uploadFile || !uploadVersion.trim()) return;
-		uploading = true;
-		try {
-			uploadStage = 'Initiating...';
-			const init = await rpcClient.artifact.initiateArtifactUpload({ repoName, namespace });
-
-			uploadStage = 'Uploading...';
-			const token = localStorage.getItem(SESSION_KEY);
-			const patchResp = await fetch(init.uploadUrl, {
-				method: 'PATCH',
-				headers: token ? { Authorization: `Bearer ${token}` } : {},
-				body: uploadFile
-			});
-			if (!patchResp.ok) {
-				toast.error(`Upload failed (${patchResp.status})`);
-				return;
-			}
-
-			uploadStage = 'Finalizing...';
-			const properties: Record<string, string> = {};
-			for (const row of uploadProps) {
-				if (row.key.trim()) properties[row.key.trim()] = row.value;
-			}
-			await rpcClient.artifact.completeArtifactUpload({
+			const r = await rpc.artifact.updateArtifact({
 				repoName,
-				namespace,
-				uploadId: init.uploadId,
-				version: uploadVersion.trim(),
-				path: uploadPath.trim(),
-				properties
+				id: openFile.id,
+				name: moveName !== openFile.name ? moveName : undefined,
+				path: movePath !== openFile.path ? movePath : undefined,
+				version: moveVersion !== openFile.version ? moveVersion : undefined,
+				metadata: metaText !== openFile.metadata ? metaText : undefined,
+				namespace
 			});
-			toast.success('Artifact uploaded');
-			closeUploadPanel();
-			await loadVersions();
+			errata.remark('Artifact saved.');
+			openFile = r.artifact ?? null;
+			await Promise.all([files.fetch(), versions.fetch()]);
 		} catch {
-			// Error interceptor already toasted
+			// Interceptor reports
 		} finally {
-			uploading = false;
-			uploadStage = '';
+			deskBusy = false;
 		}
 	}
 
-	function closeUploadPanel() {
-		uploadPanelOpen = false;
-		uploadFile = null;
-		uploadVersion = '';
-		uploadPath = '';
-		uploadProps = [];
+	async function removeFile(a: Artifact) {
+		await rpc.artifact.deleteArtifact({ repoName, id: a.id, version: '', path: '', namespace });
+		if (openFile?.id === a.id) openFile = null;
+		errata.remark(`${a.path} deleted.`);
+		await Promise.all([files.fetch(), versions.fetch()]);
 	}
 
-	// ── Repo settings ────────────────────────────────────────────────────
-
-	function openSettings() {
-		if (!repo) return;
-		settingsDescription = repo.description;
-		settingsPrivate = repo.isPrivate;
-		settingsPanelOpen = true;
-	}
-
-	async function saveSettings() {
-		savingSettings = true;
+	async function fetchFile(a: Artifact) {
 		try {
-			const resp = await rpcClient.artifact.updateArtifactRepository({
+			await downloadArtifact(namespace, repoName, a.version, a.path, a.name);
+		} catch (err) {
+			errata.report(err instanceof Error ? err.message : 'Download failed.');
+		}
+	}
+
+	// ── Upload ──────────────────────────────────────────────────────
+	let upFile = $state<File | null>(null);
+	let upVersion = $state('');
+	let upPath = $state('');
+	let upProps = $state('');
+	let upBusy = $state(false);
+	let upProgress = $state('');
+
+	function pickFile(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		upFile = input.files?.[0] ?? null;
+		if (upFile && !upPath) upPath = upFile.name;
+	}
+
+	async function upload(e: Event) {
+		e.preventDefault();
+		if (!upFile || !upVersion.trim()) return;
+		upBusy = true;
+		upProgress = 'starting';
+		try {
+			const init = await rpc.artifact.initiateArtifactUpload({ repoName, namespace });
+			await uploadChunks(init.uploadUrl, upFile, (sent) => {
+				upProgress = `${Math.min(100, Math.round((sent / Math.max(upFile!.size, 1)) * 100))}%`;
+			});
+			upProgress = 'finalizing';
+			await rpc.artifact.completeArtifactUpload({
+				repoName,
+				uploadId: init.uploadId,
+				version: upVersion.trim(),
+				path: upPath.trim() || upFile.name,
+				properties: parseProps(upProps),
+				metadata: '',
+				namespace
+			});
+			errata.remark(`${upPath.trim() || upFile.name} uploaded at ${upVersion.trim()}.`);
+			upFile = null;
+			upVersion = '';
+			upPath = '';
+			upProps = '';
+			await Promise.all([files.first(), versions.first()]);
+		} catch (err) {
+			errata.report(err instanceof Error ? err.message : 'Upload failed.');
+		} finally {
+			upBusy = false;
+			upProgress = '';
+		}
+	}
+
+	// ── Disposition ─────────────────────────────────────────────────
+	let editDesc = $state('');
+	let editPrivate = $state(true);
+	let metaBusy = $state(false);
+
+	$effect(() => {
+		if (repo) {
+			editDesc = repo.description;
+			editPrivate = repo.isPrivate;
+		}
+	});
+
+	async function saveRepo(e: Event) {
+		e.preventDefault();
+		metaBusy = true;
+		try {
+			const r = await rpc.artifact.updateArtifactRepository({
 				name: repoName,
 				namespace,
-				description: settingsDescription,
-				isPrivate: settingsPrivate
+				description: editDesc,
+				isPrivate: editPrivate
 			});
-			repo = resp.repository ?? repo;
-			toast.success('Repository updated');
-			settingsPanelOpen = false;
+			repo = r.repository ?? repo;
+			errata.remark('Repository saved.');
 		} catch {
-			// Error interceptor already toasted
+			// Interceptor reports
 		} finally {
-			savingSettings = false;
+			metaBusy = false;
 		}
 	}
 
-	// ── Properties ───────────────────────────────────────────────────────
-
-	function openProps(artifact: Artifact) {
-		propsTarget = artifact;
-		propsRows = Object.entries(artifact.properties).map(([key, value]) => ({ key, value }));
-		if (propsRows.length === 0) propsRows = [{ key: '', value: '' }];
-		propsPanelOpen = true;
+	async function removeRepo() {
+		await rpc.artifact.deleteArtifactRepository({ name: repoName, namespace });
+		errata.remark(`${namespace}/${repoName} deleted.`);
+		goto('/artifacts');
 	}
-
-	async function saveProps() {
-		if (!propsTarget) return;
-		savingProps = true;
-		try {
-			const properties: Record<string, string> = {};
-			for (const row of propsRows) {
-				if (row.key.trim()) properties[row.key.trim()] = row.value;
-			}
-			await rpcClient.artifact.setArtifactProperties({
-				repoName,
-				namespace,
-				id: propsTarget.id,
-				properties
-			});
-			toast.success('Properties updated');
-			propsPanelOpen = false;
-			await refreshAfterMutation();
-		} catch {
-			// Error interceptor already toasted
-		} finally {
-			savingProps = false;
-		}
-	}
-
-	// ── Rename ───────────────────────────────────────────────────────────
-
-	function openRename(artifact: Artifact) {
-		renameTarget = artifact;
-		renamePath = artifact.path;
-		renameVersion = artifact.version;
-		renamePanelOpen = true;
-	}
-
-	async function saveRename() {
-		if (!renameTarget || !renamePath.trim()) return;
-		renaming = true;
-		try {
-			await rpcClient.artifact.updateArtifact({
-				repoName,
-				namespace,
-				id: renameTarget.id,
-				path: renamePath.trim(),
-				version: renameVersion.trim() || undefined
-			});
-			toast.success('Artifact updated');
-			renamePanelOpen = false;
-			await refreshAfterMutation();
-		} catch {
-			// Error interceptor already toasted
-		} finally {
-			renaming = false;
-		}
-	}
-
-	// ── Delete ───────────────────────────────────────────────────────────
-
-	function openDelete(artifact: Artifact) {
-		deleteTarget = artifact;
-		deleteDialogOpen = true;
-	}
-
-	async function confirmDelete() {
-		if (!deleteTarget) return;
-		deleting = true;
-		try {
-			await rpcClient.artifact.deleteArtifact({ repoName, namespace, id: deleteTarget.id });
-			toast.success('Artifact deleted');
-			deleteDialogOpen = false;
-			await refreshAfterMutation();
-		} catch {
-			// Error interceptor already toasted
-		} finally {
-			deleting = false;
-		}
-	}
-
-	async function refreshAfterMutation() {
-		await loadVersions();
-		if (searchResults !== null) await runSearch();
-	}
-
-	onMount(loadRepo);
 </script>
 
-<svelte:head>
-	<title>{namespace}/{repoName} - Artifacts - Distroface</title>
-</svelte:head>
-
-{#snippet artifactTable(artifacts: Artifact[])}
-	<Table>
-		<TableHeader>
-			<TableRow class="bg-muted/30 hover:bg-muted/30">
-				<TableHead class="th">Path</TableHead>
-				<TableHead class="th">Size</TableHead>
-				<TableHead class="th">Type</TableHead>
-				<TableHead class="th">Digest</TableHead>
-				<TableHead class="th">Uploaded</TableHead>
-				<TableHead class="th w-32"></TableHead>
-			</TableRow>
-		</TableHeader>
-		<TableBody>
-			{#each artifacts as artifact (artifact.id)}
-				<TableRow>
-					<TableCell class="py-3 px-3">
-						<span class="font-medium font-mono text-[13px]">{artifact.path}</span>
-						{#if Object.keys(artifact.properties).length > 0}
-							<div class="flex flex-wrap gap-1 mt-1">
-								{#each Object.entries(artifact.properties) as [key, value] (key)}
-									<Badge variant="secondary" class="text-[10px] font-mono px-1.5 py-0">{key}={value}</Badge>
-								{/each}
-							</div>
-						{/if}
-					</TableCell>
-					<TableCell class="text-sm py-3 px-3 tabular-nums">{formatBytes(Number(artifact.size))}</TableCell>
-					<TableCell class="text-muted-foreground text-xs py-3 px-3 font-mono">{artifact.mimeType || '-'}</TableCell>
-					<TableCell class="py-3 px-3">
-						<div class="flex items-center gap-1">
-							<code class="text-xs text-muted-foreground">{truncateDigest(artifact.digest, 8)}</code>
-							<CopyButton text={artifact.digest} label="Digest copied!" />
-						</div>
-					</TableCell>
-					<TableCell class="text-muted-foreground text-sm py-3 px-3">
-						{artifact.createdAt ? relativeTime(timestampDate(artifact.createdAt)) : '-'}
-					</TableCell>
-					<TableCell class="text-right py-3 px-3">
-						<div class="flex items-center justify-end gap-0.5">
-							<Button
-								variant="ghost" size="icon" class="h-7 w-7" title="Download"
-								onclick={() => downloadArtifact(artifact)}
-							>
-								<Download class="h-3.5 w-3.5" />
-							</Button>
-							{#if canMutate}
-								<Button
-									variant="ghost" size="icon" class="h-7 w-7" title="Edit properties"
-									onclick={() => openProps(artifact)}
-								>
-									<Tags class="h-3.5 w-3.5" />
-								</Button>
-								<Button
-									variant="ghost" size="icon" class="h-7 w-7" title="Rename / move"
-									onclick={() => openRename(artifact)}
-								>
-									<Pencil class="h-3.5 w-3.5" />
-								</Button>
-								<Button
-									variant="ghost" size="icon"
-									class="h-7 w-7 text-destructive hover:text-destructive" title="Delete"
-									onclick={() => openDelete(artifact)}
-								>
-									<Trash2 class="h-3.5 w-3.5" />
-								</Button>
-							{/if}
-						</div>
-					</TableCell>
-				</TableRow>
-			{/each}
-		</TableBody>
-	</Table>
-{/snippet}
-
-<div class="space-y-6">
-	{#if loading}
-		<Skeleton class="h-16 w-full rounded-xl" />
-		<div class="space-y-2">
-			{#each Array(3)}
-				<Skeleton class="h-14 w-full rounded-xl" />
-			{/each}
-		</div>
-	{:else if notFound || !repo}
-		<EmptyState icon={Archive} message="Repository not found" description="It may be private or deleted.">
-			{#snippet actions()}
-				<Button variant="outline" size="sm" onclick={() => goto(resolve('/artifacts'))}>
-					<ArrowLeft class="h-4 w-4 mr-1.5" />
-					Back to Artifacts
-				</Button>
-			{/snippet}
-		</EmptyState>
-	{:else}
-		<div class="flex items-center gap-4">
-			<Button variant="ghost" size="icon" class="shrink-0" onclick={() => goto(resolve('/artifacts'))}>
-				<ArrowLeft class="h-4 w-4" />
-			</Button>
-			<div class="h-12 w-12 rounded-xl bg-linear-to-br from-primary/15 to-primary/5 flex items-center justify-center shrink-0 border border-primary/10">
-				<Archive class="h-6 w-6 text-primary" />
-			</div>
-			<div class="flex-1 min-w-0">
-				<div class="flex items-center gap-2">
-					<h1 class="text-2xl font-bold tracking-tight">
-						<span class="text-muted-foreground font-normal">{namespace}/</span>{repo.name}
-					</h1>
-					<Badge variant="outline" class="text-xs gap-1">
-						{#if repo.isPrivate}
-							<Lock class="h-2.5 w-2.5" />Private
-						{:else}
-							<Globe class="h-2.5 w-2.5" />Public
-						{/if}
-					</Badge>
-				</div>
-				<p class="text-[13px] text-muted-foreground mt-0.5">
-					{repo.description || 'No description'}
-					<span class="text-muted-foreground/50 mx-1.5">·</span>
-					{repo.artifactCount} artifact{Number(repo.artifactCount) === 1 ? '' : 's'}
-					<span class="text-muted-foreground/50 mx-1.5">·</span>
-					{formatBytes(Number(repo.totalSize))}
-					{#if repo.owner}
-						<span class="text-muted-foreground/50 mx-1.5">·</span>
-						by {repo.owner}
-					{/if}
-				</p>
-			</div>
-			<div class="flex items-center gap-2">
-				{#if canMutate}
-					<Button variant="outline" size="sm" onclick={openSettings}>
-						<Settings class="h-4 w-4 mr-1.5" />
-						Settings
-					</Button>
-				{/if}
-				<PermissionGate resource="artifacts" action="push">
-					<Button size="sm" onclick={() => (uploadPanelOpen = true)}>
-						<Upload class="h-4 w-4 mr-1.5" />
-						Upload
-					</Button>
-				</PermissionGate>
-			</div>
-		</div>
-
-		<div class="max-w-md">
-			<QueryFilterBar {filter} placeholder="Filter artifacts..." onchange={runSearch} />
-		</div>
-
-		{#if searchResults !== null}
-			{#if !searchLoaded}
-				<Skeleton class="h-24 w-full rounded-xl" />
-			{:else if searchResults.length === 0}
-				<EmptyState icon={Search} message="No matching artifacts" description="No results match the current filter" />
-			{:else}
-				<div class="data-table transition-opacity duration-200 {searching ? 'opacity-60' : ''}">
-					{@render artifactTable(searchResults)}
-				</div>
-				<DataPagination
-					page={searchPager.page} pageSize={searchPager.pageSize} totalCount={searchPager.totalCount}
-					onPrev={() => { if (searchPager.prev()) fetchSearch(); }}
-					onNext={() => { if (searchPager.next()) fetchSearch(); }}
-				/>
-			{/if}
-		{:else if versions.length === 0}
-			<EmptyState
-				icon={Archive}
-				message="No artifacts yet"
-				description="Upload files through the UI, dfcli, or the REST API."
-			>
-				{#snippet actions()}
-					<PermissionGate resource="artifacts" action="push">
-						<Button variant="outline" size="sm" onclick={() => (uploadPanelOpen = true)}>
-							<Upload class="h-4 w-4 mr-1.5" />
-							Upload Artifact
-						</Button>
-					</PermissionGate>
-				{/snippet}
-			</EmptyState>
-		{:else}
-			<div class="space-y-3">
-				{#each versions as group (group.version)}
-					<Collapsible
-						open={expandedVersions[group.version] ?? false}
-						onOpenChange={(v) => (expandedVersions = { ...expandedVersions, [group.version]: v })}
-					>
-						<div class="rounded-xl border border-border/50 overflow-hidden">
-							<CollapsibleTrigger
-								class="flex w-full items-center gap-2.5 px-4 py-3 bg-muted/20 hover:bg-muted/40 transition-colors text-left"
-							>
-								<ChevronDown class="h-4 w-4 text-muted-foreground transition-transform {expandedVersions[group.version] ? '' : '-rotate-90'}" />
-								<Tag class="h-3.5 w-3.5 text-primary" />
-								<span class="font-medium font-mono text-sm">{group.version}</span>
-								<span class="text-xs text-muted-foreground ml-auto tabular-nums">
-									{group.artifacts.length} file{group.artifacts.length === 1 ? '' : 's'}
-								</span>
-							</CollapsibleTrigger>
-							<CollapsibleContent>
-								{@render artifactTable(group.artifacts)}
-							</CollapsibleContent>
-						</div>
-					</Collapsible>
-				{/each}
-			</div>
-
-			<DataPagination
-				page={versionPager.page} pageSize={versionPager.pageSize} totalCount={versionPager.totalCount}
-				onPrev={() => { if (versionPager.prev()) loadVersions(); }}
-				onNext={() => { if (versionPager.next()) loadVersions(); }}
-			/>
+{#if missing}
+	<hgroup class="folio">
+		<p class="kicker">Artifacts</p>
+		<h1>Not found</h1>
+		<p class="sub">
+			No artifact repository <span class="mono">{namespace}/{repoName}</span> exists here. Back to
+			<a href="/artifacts">artifacts</a>.
+		</p>
+	</hgroup>
+{:else if repo}
+	<hgroup class="folio">
+		<p class="kicker"><a href="/artifacts">Artifacts</a> / {namespace}</p>
+		<h1>{repo.fullName}</h1>
+		<p class="sub">
+			{repo.isPrivate ? 'private' : 'public'}
+			· {fmtCount(repo.artifactCount)} artifacts · {fmtBytes(repo.totalSize)} held
+		</p>
+		{#if repo.description}
+			<p class="sub">{repo.description}</p>
 		{/if}
-	{/if}
-</div>
+	</hgroup>
 
-<!-- Upload panel -->
-<FormPanel
-	open={uploadPanelOpen}
-	onOpenChange={(v) => { if (!v) closeUploadPanel(); }}
-	title="Upload Artifact"
-	description="Upload a file into {repoName}. Re-uploading the same version and path replaces the existing artifact."
-	icon={Upload}
->
-	<div class="space-y-6">
-		<FormSection title="File">
-			<div class="space-y-3">
-				<FormField label="File" id="upload-file" required>
-					<Input id="upload-file" type="file" onchange={onFileSelected} />
-					{#if uploadFile}
-						<p class="text-xs text-muted-foreground mt-1">{uploadFile.name} · {formatBytes(uploadFile.size)}</p>
+	<Leaf no="01" title="Versions">
+		{#if versions.loaded && versions.rows.length === 0}
+			<p class="vacant">Nothing has been uploaded yet.</p>
+		{:else}
+			<div class="ledger-scroll">
+				<table class="ledger">
+					<thead>
+						<tr>
+							<th>Version</th>
+							<th class="num">Files</th>
+							<th class="num">Size</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each versions.rows as g (g.version)}
+							<tr>
+								<td class="mono">
+									<button
+										class="rowact"
+										style:color={versionFilter === g.version ? 'var(--wax)' : undefined}
+										onclick={() => (versionFilter = versionFilter === g.version ? '' : g.version)}
+										><b>{g.version}</b></button>
+								</td>
+								<td class="num mono">{g.artifacts.length}</td>
+								<td class="num mono">{fmtBytes(groupSize(g))}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			<Tally lister={versions} unit="versions" />
+		{/if}
+	</Leaf>
+
+	<Leaf no="02" title={versionFilter ? `Files · ${versionFilter}` : 'Files'}>
+		{#snippet aside()}
+			{#if versionFilter}
+				<button class="rowact plain" onclick={() => (versionFilter = '')}>× all versions</button>
+			{/if}
+			<Find lister={files} placeholder="path…" />
+		{/snippet}
+
+		{#if files.loaded && files.rows.length === 0}
+			<p class="vacant">No files{versionFilter ? ` at ${versionFilter}` : ''}.</p>
+		{:else}
+			<div class="ledger-scroll">
+				<table class="ledger">
+					<thead>
+						<tr>
+							<th>Path</th>
+							<th>Version</th>
+							<th class="num">Size</th>
+							<th>Type</th>
+							<th>Uploaded</th>
+							<th class="end">&nbsp;</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each files.rows as a (a.id)}
+							<tr>
+								<td class="mono" style="overflow-wrap: anywhere">{a.path}</td>
+								<td class="mono">{a.version}</td>
+								<td class="num mono">{fmtBytes(a.size)}</td>
+								<td class="mono soft">{a.mimeType || '—'}</td>
+								<td class="mono">{fmtWhen(a.createdAt)}</td>
+								<td class="end">
+									<button class="rowact plain" onclick={() => fetchFile(a)}>download</button>
+									{#if session.signedIn}
+										<button class="rowact plain" onclick={() => openDesk(a)}>
+											{openFile?.id === a.id ? 'close' : 'edit'}
+										</button>
+										<Confirm label="delete" onconfirm={() => removeFile(a)} />
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+			<Tally lister={files} unit="files" />
+		{/if}
+
+		{#if openFile}
+			<form class="panel" onsubmit={saveDesk}>
+				<p class="panel-title">Edit · {openFile.path} @ {openFile.version}</p>
+				<div class="row">
+					<label class="field" style="flex: 1; min-width: 12rem">
+						<span>Name</span>
+						<input type="text" bind:value={moveName} />
+					</label>
+					<label class="field" style="flex: 2; min-width: 16rem">
+						<span>Path</span>
+						<input type="text" bind:value={movePath} />
+					</label>
+					<label class="field" style="flex: 1; min-width: 8rem">
+						<span>Version</span>
+						<input type="text" bind:value={moveVersion} />
+					</label>
+				</div>
+				<label class="field">
+					<span>Properties</span>
+					<textarea rows="4" bind:value={propsText} placeholder="key=value, one per line"></textarea>
+				</label>
+				<label class="field">
+					<span>Metadata</span>
+					<textarea rows="4" bind:value={metaText} placeholder={'{ "any": "json" }'}></textarea>
+				</label>
+				<dl class="docket" style="max-width: 34rem">
+					<dt>Digest</dt>
+					<dd class="mono" style="overflow-wrap: anywhere">{openFile.digest}</dd>
+				</dl>
+				<div class="row gap-top">
+					<button class="act wax" type="submit" disabled={deskBusy}>Save</button>
+					<button class="rowact plain" type="button" onclick={() => (openFile = null)}>close</button>
+				</div>
+			</form>
+		{/if}
+	</Leaf>
+
+	{#if session.signedIn}
+		<Leaf no="03" title="Upload">
+			<form onsubmit={upload}>
+				<label class="field">
+					<span>File</span>
+					<input type="file" onchange={pickFile} />
+				</label>
+				<div class="row">
+					<label class="field" style="flex: 1; min-width: 9rem">
+						<span>Version</span>
+						<input type="text" bind:value={upVersion} placeholder="1.0.0" required />
+					</label>
+					<label class="field" style="flex: 2; min-width: 14rem">
+						<span>Path</span>
+						<input type="text" bind:value={upPath} placeholder="defaults to the file name" />
+					</label>
+				</div>
+				<label class="field">
+					<span>Properties</span>
+					<textarea rows="2" bind:value={upProps} placeholder="key=value, one per line"></textarea>
+				</label>
+				<div class="row">
+					<button class="act wax" type="submit" disabled={upBusy || !upFile || !upVersion.trim()}>
+						Upload artifact
+					</button>
+					{#if upProgress}
+						<span class="working">{upProgress}</span>
 					{/if}
-				</FormField>
-				<FormField label="Version" id="upload-version" required help="e.g. 1.0.0 or a build number.">
-					<Input id="upload-version" bind:value={uploadVersion} placeholder="1.0.0" />
-				</FormField>
-				<FormField label="Path" id="upload-path" help="Relative path within the version. Defaults to the file name.">
-					<Input id="upload-path" bind:value={uploadPath} placeholder="dist/app.zip" />
-				</FormField>
+				</div>
+			</form>
+		</Leaf>
+
+		<Leaf no="04" title="Manage">
+			<form onsubmit={saveRepo}>
+				<label class="field">
+					<span>Description</span>
+					<textarea rows="2" bind:value={editDesc}></textarea>
+				</label>
+				<label class="tick">
+					<input type="checkbox" bind:checked={editPrivate} />
+					Private
+				</label>
+				<div class="gap-top">
+					<button class="act" type="submit" disabled={metaBusy}>Save</button>
+				</div>
+			</form>
+			<hr />
+			<p class="note">
+				Deleting the repository removes every artifact and any blobs nothing else references.
+			</p>
+			<div class="gap-top">
+				<Confirm label="delete repository" onconfirm={removeRepo} />
 			</div>
-		</FormSection>
-
-		<FormSection title="Properties">
-			<div class="space-y-2">
-				{#each uploadProps as row, i (i)}
-					<div class="flex items-center gap-2">
-						<Input bind:value={row.key} placeholder="key" class="font-mono text-sm" />
-						<Input bind:value={row.value} placeholder="value" class="font-mono text-sm" />
-						<Button
-							variant="ghost" size="icon" class="h-8 w-8 shrink-0"
-							onclick={() => (uploadProps = uploadProps.filter((_, j) => j !== i))}
-						>
-							<X class="h-3.5 w-3.5" />
-						</Button>
-					</div>
-				{/each}
-				<Button variant="outline" size="sm" onclick={() => (uploadProps = [...uploadProps, { key: '', value: '' }])}>
-					<Plus class="h-3.5 w-3.5 mr-1.5" />
-					Add Property
-				</Button>
-			</div>
-		</FormSection>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={closeUploadPanel} disabled={uploading}>Cancel</Button>
-		<Button onclick={doUpload} disabled={uploading || !uploadFile || !uploadVersion.trim()}>
-			{uploading ? uploadStage || 'Uploading...' : 'Upload'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<!-- Repo settings panel -->
-<FormPanel
-	open={settingsPanelOpen}
-	onOpenChange={(v) => (settingsPanelOpen = v)}
-	title="Repository Settings"
-	description="Update the description and visibility of {repoName}."
-	icon={Settings}
->
-	<div class="space-y-6">
-		<FormSection title="General">
-			<div class="space-y-3">
-				<FormField label="Description" id="settings-description">
-					<Input id="settings-description" bind:value={settingsDescription} placeholder="What is stored here?" />
-				</FormField>
-				<FormField label="Private" help="Private repositories are only visible to you and admins.">
-					<Switch bind:checked={settingsPrivate} />
-				</FormField>
-			</div>
-		</FormSection>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (settingsPanelOpen = false)}>Cancel</Button>
-		<Button onclick={saveSettings} disabled={savingSettings}>
-			{savingSettings ? 'Saving...' : 'Save'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<!-- Properties editor panel -->
-<FormPanel
-	open={propsPanelOpen}
-	onOpenChange={(v) => (propsPanelOpen = v)}
-	title="Edit Properties"
-	description="Key/value properties for {propsTarget?.path ?? ''}. Saving replaces the full set."
-	icon={Tags}
->
-	<div class="space-y-2">
-		{#each propsRows as row, i (i)}
-			<div class="flex items-center gap-2">
-				<Input bind:value={row.key} placeholder="key" class="font-mono text-sm" />
-				<Input bind:value={row.value} placeholder="value" class="font-mono text-sm" />
-				<Button
-					variant="ghost" size="icon" class="h-8 w-8 shrink-0"
-					onclick={() => (propsRows = propsRows.filter((_, j) => j !== i))}
-				>
-					<X class="h-3.5 w-3.5" />
-				</Button>
-			</div>
-		{/each}
-		<Button variant="outline" size="sm" onclick={() => (propsRows = [...propsRows, { key: '', value: '' }])}>
-			<Plus class="h-3.5 w-3.5 mr-1.5" />
-			Add Property
-		</Button>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (propsPanelOpen = false)}>Cancel</Button>
-		<Button onclick={saveProps} disabled={savingProps}>
-			{savingProps ? 'Saving...' : 'Save Properties'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<!-- Rename panel -->
-<FormPanel
-	open={renamePanelOpen}
-	onOpenChange={(v) => (renamePanelOpen = v)}
-	title="Rename / Move Artifact"
-	description="Change the path or version of {renameTarget?.path ?? ''}."
-	icon={Pencil}
->
-	<div class="space-y-3">
-		<FormField label="Path" id="rename-path" required>
-			<Input id="rename-path" bind:value={renamePath} class="font-mono text-sm" />
-		</FormField>
-		<FormField label="Version" id="rename-version">
-			<Input id="rename-version" bind:value={renameVersion} class="font-mono text-sm" />
-		</FormField>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (renamePanelOpen = false)}>Cancel</Button>
-		<Button onclick={saveRename} disabled={renaming || !renamePath.trim()}>
-			{renaming ? 'Saving...' : 'Save'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<ConfirmDialog bind:open={deleteDialogOpen} title="Delete Artifact" confirmLabel="Delete" onConfirm={confirmDelete} loading={deleting}>
-	{#snippet description()}
-		Are you sure you want to delete <strong>{deleteTarget?.path}</strong> ({deleteTarget?.version})?
-		This cannot be undone.
-	{/snippet}
-</ConfirmDialog>
+		</Leaf>
+	{/if}
+{:else}
+	<p class="working" style="margin-top: 4rem">loading</p>
+{/if}

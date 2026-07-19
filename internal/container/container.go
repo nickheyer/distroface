@@ -94,12 +94,17 @@ func New() (*App, error) {
 
 	// Typed runtime settings, file seeds once and pins forever
 	resolver := settings.NewResolver(store, cfg.Overrides)
-	if err := resolver.SeedSystem(ctx, cfg.Settings); err != nil {
+	seeded, err := resolver.SeedSystem(ctx, cfg.Settings)
+	if err != nil {
 		return fail("seeding settings", err)
+	}
+	if cfg.Settings != nil && !seeded {
+		log.Warn("settings block IGNORED, the database is already seeded. Edit settings in the app, or pin values with the overrides block / DISTROFACE_OVERRIDES_JSON")
 	}
 	if locked := resolver.LockedPaths(); len(locked) > 0 {
 		log.Info("Settings pinned by config file: %v", locked)
 	}
+	warnHostnameMisconfig(ctx, resolver, log)
 
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
@@ -294,6 +299,23 @@ func New() (*App, error) {
 		CertEngine:     certEngine,
 		Server:         srv,
 	}, nil
+}
+
+// Screams at boot when tls is on but the hostname is not real
+func warnHostnameMisconfig(ctx context.Context, resolver *settings.Resolver, log *logger.Logger) {
+	sys := resolver.System(ctx)
+	host := sys.GetServer().GetPublicHostname()
+	if certs.IssuableHost(host) {
+		return
+	}
+	tlsEff := sys.GetTls()
+	servingTLS := tlsEff.GetMode() == v1.TLSMode_TLS_MODE_HTTPS_ONLY ||
+		tlsEff.GetPrimarySource() == v1.CertSource_CERT_SOURCE_APP_CA ||
+		tlsEff.GetPrimarySource() == v1.CertSource_CERT_SOURCE_ACME
+	if !servingTLS {
+		return
+	}
+	log.Warn("TLS is configured but public hostname is %q. Certificates will be issued for that name and https redirects will point at it. Set DISTROFACE_PUBLIC_HOSTNAME (or server.public_hostname in config.yaml) to the hostname clients use", host)
 }
 
 // Reseeds the anonymous policy tier when the toggle flips

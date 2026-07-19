@@ -1,122 +1,172 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
-	import { resolve } from '$app/paths';
-	import { onMount, onDestroy } from 'svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Switch } from '$lib/components/ui/switch';
-	import FormField from '$lib/components/form-field.svelte';
-	import FormCard from '$lib/components/form-card.svelte';
-	import { Loader2 } from '@lucide/svelte';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
-	import { authStore } from '$lib/stores/auth.svelte';
-	import { Act } from '$lib/act.svelte';
-	import { formatBytes, relativeTime } from '$lib/utils';
-	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import type { GetGCStatusResponse } from '$lib/proto/distroface/v1/gc_pb';
+	import { rpc, hush } from '$lib/rpc';
+	import type { GetGCStatusResponse, GetStorageUsageResponse } from '$lib/proto/distroface/v1/gc_pb';
+	import { fmtBytes, fmtWhen, fmtCount } from '$lib/fmt';
+	import { errata } from '$lib/state/errata.svelte';
+	import Leaf from '$lib/bits/Leaf.svelte';
+	import Mark from '$lib/bits/Mark.svelte';
 
-	let loading = $state(true);
-	let gcStatus = $state<GetGCStatusResponse | null>(null);
-	let gcRemoveUntagged = $state(false);
-	let gcPollTimer: ReturnType<typeof setInterval> | null = null;
+	let usage = $state<GetStorageUsageResponse | null>(null);
+	let gc = $state<GetGCStatusResponse | null>(null);
+	let dryRun = $state(true);
+	let removeUntagged = $state(false);
+	let busy = $state(false);
+	let poller: ReturnType<typeof setInterval> | undefined;
 
-	const runAct = new Act();
-
-	let canEdit = $derived(authStore.canUpdateSettings);
-
-	async function loadGCStatus() {
+	async function load() {
 		try {
-			gcStatus = await rpcClient.gc.getGCStatus({}, silentCallOptions);
-			if (gcStatus.running) {
-				if (!gcPollTimer) gcPollTimer = setInterval(loadGCStatus, 2000);
-			} else {
-				stopGCPoll();
+			usage = await rpc.gc.getStorageUsage({});
+		} catch {
+			usage = null;
+		}
+		await pollStatus();
+	}
+
+	async function pollStatus() {
+		try {
+			gc = await rpc.gc.getGCStatus({}, hush);
+			if (!gc.running && poller) {
+				clearInterval(poller);
+				poller = undefined;
+				usage = await rpc.gc.getStorageUsage({});
 			}
 		} catch {
-			// Next poll or action refreshes
+			// Leave the last known state
 		}
 	}
 
-	function stopGCPoll() {
-		if (gcPollTimer) {
-			clearInterval(gcPollTimer);
-			gcPollTimer = null;
-		}
-	}
-
-	async function runGC(dryRun: boolean) {
-		await runAct.run(() =>
-			rpcClient.gc.runGC({ dryRun, removeUntagged: gcRemoveUntagged }, silentCallOptions)
-		);
-		await loadGCStatus();
-	}
-
-	onMount(() => {
-		if (!authStore.hasPermission('settings', 'read')) { goto(resolve('/admin')); return; }
-		loadGCStatus().finally(() => (loading = false));
+	$effect(() => {
+		load();
+		return () => {
+			if (poller) clearInterval(poller);
+		};
 	});
 
-	onDestroy(stopGCPoll);
+	async function sweep() {
+		busy = true;
+		try {
+			await rpc.gc.runGC({ dryRun, removeUntagged });
+			errata.remark(dryRun ? 'Dry run started.' : 'Garbage collection started.');
+			if (!poller) poller = setInterval(pollStatus, 2500);
+			await pollStatus();
+		} catch {
+			// Interceptor reports
+		} finally {
+			busy = false;
+		}
+	}
 </script>
 
-{#if loading}
-	<div class="space-y-6">
-		<Skeleton class="h-52 w-full rounded-xl" />
-	</div>
-{:else}
-	<div class="space-y-6">
-		<FormCard
-			title="Garbage Collection"
-			description={gcStatus?.scheduled
-				? `Runs automatically every ${gcStatus.intervalHours}h`
-				: 'Automatic runs are off'}
-		>
-			<div class="space-y-4">
-				{#if gcStatus?.running}
-					<div class="flex items-center gap-2 text-sm">
-						<Loader2 class="h-4 w-4 animate-spin text-primary" />
-						<span class="font-medium">Collection in progress</span>
-					</div>
-				{:else if gcStatus?.lastRun}
-					{@const run = gcStatus.lastRun}
-					<div class="flex items-center gap-3 text-[13px] text-muted-foreground flex-wrap">
-						{#if run.error}
-							<Badge variant="outline" class="text-xs border-destructive/40 text-destructive">Failed</Badge>
-							<span class="font-mono text-xs">{run.error}</span>
-						{:else}
-							<Badge variant="outline" class="text-xs">{run.dryRun ? 'Dry run' : 'Completed'}</Badge>
-							{#if run.finishedAt}
-								<span>{relativeTime(timestampDate(run.finishedAt))}</span>
-							{/if}
-							{#if !run.dryRun}
-								<span class="tabular-nums">{run.blobsDeleted.toLocaleString()} blob{run.blobsDeleted !== 1n ? 's' : ''} removed</span>
-								<span class="tabular-nums">{formatBytes(Number(run.bytesFreed))} freed</span>
-							{/if}
-						{/if}
-					</div>
-				{:else}
-					<p class="text-[13px] text-muted-foreground">No garbage collection has run yet</p>
-				{/if}
+<Leaf no="01" title="Storage usage">
+	{#if usage}
+		<dl class="docket" style="max-width: 30rem; margin-bottom: 1.2rem">
+			<dt>Registry blobs</dt>
+			<dd class="mono">{fmtBytes(usage.registryBytes)}</dd>
+			<dt>Artifact blobs</dt>
+			<dd class="mono">{fmtBytes(usage.artifactBytes)}</dd>
+		</dl>
+		<p class="note" style="margin-bottom: 1rem">
+			Blobs are content-addressed and shared, so the attributions below can sum above the totals.
+		</p>
 
-				<FormField
-					label="Remove untagged manifests"
-					horizontal
-					error={runAct.error}
-				>
-					<Switch bind:checked={gcRemoveUntagged} disabled={!canEdit || gcStatus?.running} />
-				</FormField>
+		<div class="row" style="gap: 3rem; align-items: flex-start">
+			<div style="flex: 1; min-width: 18rem">
+				<p class="caps soft" style="margin-bottom: 0.4rem">Largest registry namespaces</p>
+				<table class="ledger">
+					<thead>
+						<tr>
+							<th>Namespace</th>
+							<th class="num">Repos</th>
+							<th class="num">Held</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each usage.registryNamespaces as e (e.name)}
+							<tr>
+								<td class="mono">{e.name}</td>
+								<td class="num mono">{e.count}</td>
+								<td class="num mono">{fmtBytes(e.bytes)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
 			</div>
-			{#snippet footer()}
-				{#if canEdit}
-					<Button variant="outline" onclick={() => runGC(true)} disabled={runAct.busy || gcStatus?.running}>
-						Dry Run
-					</Button>
-					<Button onclick={() => runGC(false)} disabled={runAct.busy || gcStatus?.running}>
-						Run Now
-					</Button>
+			<div style="flex: 1; min-width: 18rem">
+				<p class="caps soft" style="margin-bottom: 0.4rem">Largest artifact repositories</p>
+				<table class="ledger">
+					<thead>
+						<tr>
+							<th>Repository</th>
+							<th class="num">Artifacts</th>
+							<th class="num">Held</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each usage.artifactRepos as e (e.name)}
+							<tr>
+								<td class="mono">{e.name}</td>
+								<td class="num mono">{fmtCount(e.count)}</td>
+								<td class="num mono">{fmtBytes(e.bytes)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</div>
+	{:else}
+		<p class="working">loading</p>
+	{/if}
+</Leaf>
+
+<Leaf no="02" title="Garbage collection">
+	{#if gc}
+		<dl class="docket" style="max-width: 40rem; margin-bottom: 1.2rem">
+			<dt>Status</dt>
+			<dd>
+				{#if gc.running}
+					<Mark kind="mid" label="running" />
+				{:else}
+					<Mark kind="ok" label="idle" />
 				{/if}
-			{/snippet}
-		</FormCard>
+			</dd>
+			<dt>Schedule</dt>
+			<dd>
+				{#if gc.scheduled}
+					<span class="mono">every {gc.intervalHours} h</span>
+				{:else}
+					<span class="faint">manual only</span>
+				{/if}
+			</dd>
+			{#if gc.lastRun}
+				<dt>Last run</dt>
+				<dd>
+					<span class="mono">{fmtWhen(gc.lastRun.startedAt)}</span>
+					{#if gc.lastRun.error}
+						<span class="mark bad">failed</span>
+						<span class="note">{gc.lastRun.error}</span>
+					{:else}
+						<span class="mono">
+							· {fmtCount(gc.lastRun.blobsDeleted)} blobs, {fmtBytes(gc.lastRun.bytesFreed)}
+							{gc.lastRun.dryRun ? 'reclaimable (dry run)' : 'reclaimed'}
+						</span>
+					{/if}
+				</dd>
+			{/if}
+		</dl>
+	{/if}
+
+	<label class="tick">
+		<input type="checkbox" bind:checked={dryRun} />
+		Dry run
+		<span class="hint">Report what would be deleted without deleting anything.</span>
+	</label>
+	<label class="tick">
+		<input type="checkbox" bind:checked={removeUntagged} />
+		Remove untagged manifests
+	</label>
+	<div class="gap-top">
+		<button class="act wax" disabled={busy || gc?.running} onclick={sweep}>
+			{dryRun ? 'Start dry run' : 'Start collection'}
+		</button>
 	</div>
-{/if}
+</Leaf>

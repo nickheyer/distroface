@@ -5,7 +5,13 @@
 
 server:
   port: "8080"
+  # Bind address, which interface the process listens on. NOT your domain
   host: "0.0.0.0"
+  # The name clients reach this instance by. Drives tls issuance, https
+  # redirects, and docker login hints. Wins over the database on every
+  # boot and shows as a locked field in the app while set.
+  # Env: DISTROFACE_PUBLIC_HOSTNAME
+  # public_hostname: "registry.example.com"
   read_timeout: 15
   write_timeout: 15
   idle_timeout: 60
@@ -61,11 +67,11 @@ logging:
 
 # Runtime settings seeded into the database on FIRST boot only.
 # Same schema as the SettingsService api (protojson field names, enum names
-# spelled out). After first boot the app manages these live, this block is
-# ignored. DISTROFACE_SETTINGS_JSON env replaces this block when set.
+# spelled out). After first boot the app manages these live and this block
+# is IGNORED, a boot log line says so. Use server.public_hostname above or
+# the overrides block for values that must apply on every boot.
+# DISTROFACE_SETTINGS_JSON env replaces this block when set.
 # settings:
-#   server:
-#     public_hostname: "registry.example.com"
 #   tls:
 #     mode: "TLS_MODE_HTTPS_ONLY"          # TLS_MODE_DUAL serves both schemes
 #     primary_source: "CERT_SOURCE_ACME"   # CONFIG, MANUAL, ACME, or APP_CA

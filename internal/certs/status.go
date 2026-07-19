@@ -65,8 +65,19 @@ func (e *Engine) checkMaterial(ctx context.Context, st *v1.GetCertStatusResponse
 	st.State = v1.CertState_CERT_STATE_READY
 }
 
+// On demand leaf details in material form
+func leafMaterialInfo(leaf *x509.Certificate) *v1.TLSMaterialInfo {
+	return &v1.TLSMaterialInfo{
+		Subject:   leaf.Subject.CommonName,
+		Issuer:    leaf.Issuer.CommonName,
+		NotBefore: timestamppb.New(leaf.NotBefore),
+		NotAfter:  timestamppb.New(leaf.NotAfter),
+		Sans:      leaf.DNSNames,
+	}
+}
+
 // Signing ca material only needs to exist, parse as a ca, and be current
-func (e *Engine) checkCA(ctx context.Context, st *v1.GetCertStatusResponse, scope v1.TLSScope, orgID, missing string) {
+func (e *Engine) checkCA(ctx context.Context, st *v1.GetCertStatusResponse, scope v1.TLSScope, orgID, host, missing string) {
 	row, err := e.store.GetTLSCertificate(ctx, scope, orgID, "")
 	if err != nil || row == nil {
 		problem(st, v1.CertState_CERT_STATE_ERROR, "%s", missing)
@@ -83,6 +94,12 @@ func (e *Engine) checkCA(ctx context.Context, st *v1.GetCertStatusResponse, scop
 		return
 	}
 	st.State = v1.CertState_CERT_STATE_READY
+	// Report the leaf a handshake serves, not the signer
+	if host != "" {
+		if cert, err := e.caLeaf(ctx, scope, orgID, host); err == nil && cert.Leaf != nil {
+			st.ServingCert = leafMaterialInfo(cert.Leaf)
+		}
+	}
 }
 
 func (e *Engine) checkACME(ctx context.Context, st *v1.GetCertStatusResponse, host, orgID string) {
@@ -136,7 +153,7 @@ func (e *Engine) PortalStatus(ctx context.Context, p *storage.RegistryPortal) *v
 		e.checkMaterial(ctx, st, v1.TLSScope_TLS_SCOPE_ORG, p.OrgID, "", host,
 			"organization has no uploaded certificate")
 	case v1.CertSource_CERT_SOURCE_ORG_CA:
-		e.checkCA(ctx, st, v1.TLSScope_TLS_SCOPE_ORG_CA, p.OrgID,
+		e.checkCA(ctx, st, v1.TLSScope_TLS_SCOPE_ORG_CA, p.OrgID, host,
 			"organization has no signing ca")
 	case v1.CertSource_CERT_SOURCE_ACME:
 		e.checkACME(ctx, st, host, p.OrgID)
@@ -158,7 +175,7 @@ func (e *Engine) AppStatus(ctx context.Context) *v1.GetCertStatusResponse {
 	case v1.CertSource_CERT_SOURCE_ACME:
 		e.checkACME(ctx, st, host, "")
 	case v1.CertSource_CERT_SOURCE_APP_CA:
-		e.checkCA(ctx, st, v1.TLSScope_TLS_SCOPE_APP_CA, "",
+		e.checkCA(ctx, st, v1.TLSScope_TLS_SCOPE_APP_CA, "", host,
 			"no instance ca generated or uploaded")
 	default:
 		st.Source = v1.CertSource_CERT_SOURCE_CONFIG
