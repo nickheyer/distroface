@@ -129,6 +129,14 @@ func (s *Store) DeleteCertificateDomains(ctx context.Context, ids []string) erro
 
 // ── Uploaded TLS material operations ─────────────────────────────────────
 
+// Every org signing ca, for orphan reconciliation on root changes
+func (s *Store) ListOrgCACertificates(ctx context.Context) ([]*db.TLSCertificate, error) {
+	var rows []*db.TLSCertificate
+	err := s.db.WithContext(ctx).
+		Where("scope = ?", v1.TLSScope_TLS_SCOPE_ORG_CA).Find(&rows).Error
+	return rows, err
+}
+
 // Nil when no material stored for the target
 func (s *Store) GetTLSCertificate(ctx context.Context, scope v1.TLSScope, orgID, portalID string) (*db.TLSCertificate, error) {
 	var cert db.TLSCertificate

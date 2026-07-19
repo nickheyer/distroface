@@ -115,6 +115,7 @@ message TLSMaterialInfo {
   string created_by = 7;
   google.protobuf.Timestamp updated_at = 8;
   string cert_pem = 9; // Public chain only, set on org ca reads for download
+  bool orphaned = 10; // An intermediate no longer chaining to the instance root
 }
 
 // Scopes app and app_ca need a system admin, org scopes need an org admin

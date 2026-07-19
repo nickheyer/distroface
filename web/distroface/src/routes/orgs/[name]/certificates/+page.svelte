@@ -266,6 +266,12 @@
 				onDownload={orgCA ? downloadCA : undefined}
 				onRemove={() => (removeCAOpen = true)}
 			/>
+			{#if orgCA?.orphaned}
+				<p class="text-[13px] text-amber-600 dark:text-amber-400">
+					This intermediate no longer chains to the instance root (the root was rotated or
+					reimported). Re-issue it from the Instance CA so its certificates validate again.
+				</p>
+			{/if}
 			<CertMaterialRow
 				title="Shared certificate"
 				empty="Upload a certificate portals can serve directly."

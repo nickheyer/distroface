@@ -213,14 +213,15 @@ func (e *Engine) SignACMELeaf(ctx context.Context, pub any, sans []string, days 
 	return ca.signLeaf(pub, sans[0], dns, ips, days)
 }
 
-// Loads the acme issuing ca, minting it from the app root when absent
+// Loads the acme issuing ca, minting it whenever it is missing or no
+// longer chains to the current instance root, so a rotated or restored
+// root heals the issuer instead of orphaning every issued certificate
 func (e *Engine) ensureACMEIssuer(ctx context.Context) (*caMaterial, error) {
 	e.acmeIssuerMu.Lock()
 	defer e.acmeIssuerMu.Unlock()
 
-	ca, err := e.caMaterial(ctx, v1.TLSScope_TLS_SCOPE_ACME_CA, "")
-	if err == nil {
-		return ca, nil
+	if row, err := e.store.GetTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_ACME_CA, "", ""); err == nil && row != nil && !e.Orphaned(ctx, row.CertPEM) {
+		return e.caMaterial(ctx, v1.TLSScope_TLS_SCOPE_ACME_CA, "")
 	}
 	root, err := e.store.GetTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_APP_CA, "", "")
 	if err != nil {

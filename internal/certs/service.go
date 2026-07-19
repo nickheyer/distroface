@@ -187,8 +187,13 @@ func (s *Service) UploadTLSCertificate(ctx context.Context, req *connect.Request
 	if err := s.store.SaveTLSCertificate(ctx, target); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.engine.Invalidate(ctx)
 	s.log.Info("tls material uploaded: scope %v org %s portal %s", target.Scope, target.OrgID, target.PortalID)
+	// A reimported root re-derives the acme issuer and flags orphans
+	if target.Scope == v1.TLSScope_TLS_SCOPE_APP_CA {
+		s.reconcileRoot(ctx)
+	} else {
+		s.engine.Invalidate(ctx)
+	}
 
 	return connect.NewResponse(&v1.UploadTLSCertificateResponse{
 		Info: materialInfo(target, isCAScope),
@@ -201,8 +206,19 @@ func (s *Service) DeleteTLSCertificate(ctx context.Context, req *connect.Request
 	if err != nil {
 		return nil, err
 	}
+	// Removing the root strands every intermediate that chains to it
+	if target.Scope == v1.TLSScope_TLS_SCOPE_APP_CA {
+		if deps := s.engine.OrgICADependents(ctx); len(deps) > 0 {
+			return nil, connect.NewError(connect.CodeFailedPrecondition,
+				fmt.Errorf("%d organization intermediate cas chain to this root, re-issue or remove them first", len(deps)))
+		}
+	}
 	if err := s.store.DeleteTLSCertificate(ctx, target.Scope, target.OrgID, target.PortalID); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	// The acme issuer is derived from the root, drop it to re-mint later
+	if target.Scope == v1.TLSScope_TLS_SCOPE_APP_CA {
+		_ = s.store.DeleteTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_ACME_CA, "", "")
 	}
 	s.engine.Invalidate(ctx)
 	s.log.Info("tls material removed: scope %v org %s portal %s", target.Scope, target.OrgID, target.PortalID)
@@ -245,6 +261,10 @@ func (s *Service) GetTLSMaterial(ctx context.Context, req *connect.Request[v1.Ge
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	resp.OrgCa = materialInfo(orgCA, true)
+	// Flag an intermediate that no longer chains to the current root
+	if orgCA != nil && resp.OrgCa != nil {
+		resp.OrgCa.Orphaned = s.engine.Orphaned(ctx, orgCA.CertPEM)
+	}
 	// Orgs only learn whether an ica can be issued, never the root key material
 	if appCA, err := s.store.GetTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_APP_CA, "", ""); err == nil && appCA != nil {
 		resp.AppCaExists = true
@@ -322,10 +342,18 @@ func (s *Service) GenerateAppCA(ctx context.Context, req *connect.Request[v1.Gen
 	if err := s.store.SaveTLSCertificate(ctx, record); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
-	s.engine.Invalidate(ctx)
 	s.log.Info("instance root ca generated: %s", cn)
+	s.reconcileRoot(ctx)
 
 	return connect.NewResponse(&v1.GenerateAppCAResponse{AppCa: materialInfo(record, true)}), nil
+}
+
+// Re-mints the acme issuer and warns about org intermediates orphaned
+// by a rotated or reimported instance root
+func (s *Service) reconcileRoot(ctx context.Context) {
+	if orphaned := s.engine.ReconcileAppCADependents(ctx); len(orphaned) > 0 {
+		s.log.Warn("instance root changed, %d org intermediate cas no longer chain and need re-issue: %v", len(orphaned), orphaned)
+	}
 }
 
 func (s *Service) IssueOrgICA(ctx context.Context, req *connect.Request[v1.IssueOrgICARequest]) (*connect.Response[v1.IssueOrgICAResponse], error) {
