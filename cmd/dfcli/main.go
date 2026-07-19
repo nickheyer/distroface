@@ -1,3 +1,4 @@
+// DistroFace command line client ported from v1
 package main
 
 import (
@@ -5,13 +6,20 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -20,12 +28,70 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/nickheyer/distroface/internal/models"
-	"github.com/nickheyer/distroface/internal/utils"
+	"connectrpc.com/connect"
+	distrofacev1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"golang.org/x/term"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
+
+// Set at build time via ldflags
+var Version = "dev"
+
+const (
+	defaultServerURL = "http://localhost:8080"
+	patPrefix        = "df_"
+)
+
+// Persisted config json shape same as v1
+type AuthConfig struct {
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Username  string    `json:"username"`
+	Server    string    `json:"server"`
+}
+
+// Mirrors the v1 api artifact JSON
+type Artifact struct {
+	ID         string            `json:"id"`
+	RepoID     int64             `json:"repo_id"`
+	Name       string            `json:"name"`
+	Path       string            `json:"path"`
+	UploadID   string            `json:"upload_id"`
+	Version    string            `json:"version"`
+	Size       int64             `json:"size"`
+	MimeType   string            `json:"mime_type"`
+	Metadata   string            `json:"metadata"`
+	Properties map[string]string `json:"properties"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+}
+
+// Mirrors the v1 api repo JSON
+type ArtifactRepository struct {
+	ID          int64     `json:"id"`
+	Name        string    `json:"name"`
+	Description string    `json:"description"`
+	Owner       string    `json:"owner"`
+	Private     bool      `json:"private"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// Mirrors the v1 search endpoint JSON
+type SearchResponse struct {
+	Results []Artifact `json:"results"`
+	Total   int        `json:"total"`
+	Limit   int        `json:"limit"`
+	Offset  int        `json:"offset"`
+	Sort    string     `json:"sort"`
+	Order   string     `json:"order"`
+}
+
+// ── Token management ─────────────────────────────────────────────────────
 
 type TokenManager struct {
 	mu        sync.RWMutex
@@ -34,10 +100,7 @@ type TokenManager struct {
 }
 
 func NewTokenManager(token string, expiresAt time.Time) *TokenManager {
-	return &TokenManager{
-		token:     token,
-		expiresAt: expiresAt,
-	}
+	return &TokenManager{token: token, expiresAt: expiresAt}
 }
 
 func (tm *TokenManager) GetToken() string {
@@ -53,10 +116,20 @@ func (tm *TokenManager) SetToken(token string, expiresAt time.Time) {
 	tm.expiresAt = expiresAt
 }
 
+// False for empty tokens and PATs
 func (tm *TokenManager) IsExpired() bool {
 	tm.mu.RLock()
 	defer tm.mu.RUnlock()
+	if tm.token == "" || strings.HasPrefix(tm.token, patPrefix) {
+		return false
+	}
 	return time.Now().After(tm.expiresAt)
+}
+
+func (tm *TokenManager) IsPAT() bool {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+	return strings.HasPrefix(tm.token, patPrefix)
 }
 
 type APIClient struct {
@@ -65,20 +138,12 @@ type APIClient struct {
 	HTTPClient   *http.Client
 }
 
-const (
-	defaultConfigFile = "~/.dfcli/config.json"
-	defaultServerURL  = "http://localhost:8668"
-)
-
 var (
 	cfgFile string
 	client  *APIClient
 )
 
-// INIT
 func main() {
-	cobra.OnInitialize(initConfig)
-
 	rootCmd := &cobra.Command{
 		Use:           "dfcli",
 		Short:         "DistroFace CLI",
@@ -90,29 +155,24 @@ func main() {
 		},
 	}
 
-	// SET DEFAULTS BEFORE INIT
 	viper.SetDefault("server", defaultServerURL)
 	viper.SetDefault("timeout", "5m")
 
-	// INIT CONFIG AFTER DEFAULTS
 	cobra.OnInitialize(initConfig)
 
-	// GLOBAL FLAGS
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is ~/.dfcli/config.json)")
 	rootCmd.PersistentFlags().String("server", defaultServerURL, "DistroFace server URL")
 	rootCmd.PersistentFlags().String("timeout", "5m", "Request timeout (30s, 5m, 1h, etc.)")
 	rootCmd.PersistentFlags().Bool("debug", false, "Enable debug output")
 
-	// BIND FLAGS TO VIPER
-	viper.BindPFlag("server", rootCmd.PersistentFlags().Lookup("server"))
-	viper.BindPFlag("timeout", rootCmd.PersistentFlags().Lookup("timeout"))
-	viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
+	_ = viper.BindPFlag("server", rootCmd.PersistentFlags().Lookup("server"))
+	_ = viper.BindPFlag("timeout", rootCmd.PersistentFlags().Lookup("timeout"))
+	_ = viper.BindPFlag("debug", rootCmd.PersistentFlags().Lookup("debug"))
 
-	// AUTH COMMANDS
 	rootCmd.AddCommand(newLoginCmd())
 	rootCmd.AddCommand(newLogoutCmd())
+	rootCmd.AddCommand(newTrustCmd())
 
-	// IMAGE COMMANDS
 	imageCmd := &cobra.Command{
 		Use:   "image",
 		Short: "Manage container images",
@@ -120,15 +180,12 @@ func main() {
 	imageCmd.AddCommand(
 		newImageListCmd(),
 		newImageTagsCmd(),
-		newImageDeleteCmd(),
-		newImageVisibilityCmd(),
 	)
 	rootCmd.AddCommand(imageCmd)
 
-	// ARTIFACT COMMANDS
 	artifactCmd := &cobra.Command{
 		Use:   "artifact",
-		Short: "Manage artifacts",
+		Short: "Manage artifacts and artifact repositories",
 	}
 	artifactCmd.AddCommand(
 		newArtifactRepoCreateCmd(),
@@ -140,62 +197,11 @@ func main() {
 	)
 	rootCmd.AddCommand(artifactCmd)
 
-	// USER COMMANDS
-	userCmd := &cobra.Command{
-		Use:   "user",
-		Short: "Manage users",
-	}
-	userCmd.AddCommand(
-		newUserListCmd(),
-		newUserCreateCmd(),
-		newUserDeleteCmd(),
-		newUserGroupsCmd(),
-	)
-	rootCmd.AddCommand(userCmd)
-
-	// GROUP COMMANDS
-	groupCmd := &cobra.Command{
-		Use:   "group",
-		Short: "Manage groups",
-	}
-	groupCmd.AddCommand(
-		newGroupListCmd(),
-		newGroupCreateCmd(),
-		newGroupUpdateCmd(),
-		newGroupDeleteCmd(),
-	)
-	rootCmd.AddCommand(groupCmd)
-
-	// ROLE COMMANDS
-	roleCmd := &cobra.Command{
-		Use:   "role",
-		Short: "Manage roles",
-	}
-	roleCmd.AddCommand(
-		newRoleListCmd(),
-		newRoleUpdateCmd(),
-		newRoleDeleteCmd(),
-	)
-	rootCmd.AddCommand(roleCmd)
-
-	// SETTINGS COMMANDS
-	settingsCmd := &cobra.Command{
-		Use:   "settings",
-		Short: "Manage settings",
-	}
-	settingsCmd.AddCommand(
-		newSettingsGetCmd(),
-		newSettingsUpdateCmd(),
-		newSettingsResetCmd(),
-	)
-	rootCmd.AddCommand(settingsCmd)
-
-	// VERSION COMMAND
 	rootCmd.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print version information",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("dfcli version 1.0.0")
+			fmt.Printf("dfcli version %s\n", Version)
 		},
 	})
 
@@ -204,6 +210,8 @@ func main() {
 		os.Exit(1)
 	}
 }
+
+// ── Config and client setup ───────────────────────────────────────────────────────────────────────────────────────────
 
 func initConfig() {
 	if cfgFile != "" {
@@ -215,7 +223,6 @@ func initConfig() {
 			fmt.Fprintf(os.Stderr, "Failed to create config directory: %v\n", err)
 			os.Exit(1)
 		}
-
 		viper.AddConfigPath(configDir)
 		viper.SetConfigName("config")
 		viper.SetConfigType("json")
@@ -223,30 +230,16 @@ func initConfig() {
 
 	viper.AutomaticEnv()
 
-	// THIS OCCASIONALLY FAILS TO UNMARSHALL JSON CONFIG IN PARALLEL USAGE
-	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		if err := viper.ReadInConfig(); err != nil {
-			if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-				return
-			}
-			lastErr = err
-			time.Sleep(time.Duration(100) * time.Millisecond)
-			continue
+	if err := viper.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			fmt.Fprintf(os.Stderr, "Failed to read config file: %v\n", err)
+			os.Exit(1)
 		}
-		return
-	}
-
-	// EXIT IF ALL RETRIES FAILED
-	if lastErr != nil {
-		fmt.Fprintf(os.Stderr, "Failed to read config file after %d attempts: %v\n", 3, lastErr)
-		os.Exit(1)
 	}
 }
 
 func initClient() error {
-	// READ AUTH CONFIG FROM FILE DIRECTLY
-	var config models.AuthConfig
+	var config AuthConfig
 	data, err := os.ReadFile(getConfigPath())
 	if err == nil {
 		if err := json.Unmarshal(data, &config); err != nil {
@@ -254,10 +247,16 @@ func initClient() error {
 		}
 	}
 
-	// GET SERVER URL FROM VIPER
-	serverURL := viper.GetString("server")
+	// DFCLI_TOKEN env overrides the stored token
+	if envToken := os.Getenv("DFCLI_TOKEN"); envToken != "" {
+		config.Token = envToken
+		config.ExpiresAt = time.Now().Add(24 * 365 * time.Hour)
+	}
 
-	// FORCE FORMATTING OF SERVER URL
+	serverURL := viper.GetString("server")
+	if serverURL == defaultServerURL && config.Server != "" {
+		serverURL = config.Server
+	}
 	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
 		serverURL = "http://" + serverURL
 	}
@@ -268,11 +267,10 @@ func initClient() error {
 	}
 
 	client = &APIClient{
-		BaseURL:      serverURL,
+		BaseURL:      strings.TrimRight(serverURL, "/"),
 		TokenManager: NewTokenManager(config.Token, config.ExpiresAt),
 		HTTPClient:   &http.Client{Timeout: clientTimeout},
 	}
-
 	return nil
 }
 
@@ -288,599 +286,190 @@ func getHomeDir() string {
 }
 
 func getConfigPath() string {
+	if cfgFile != "" {
+		return cfgFile
+	}
 	return filepath.Join(getHomeDir(), ".dfcli", "config.json")
 }
 
-// HELPERS
+func saveConfig(config AuthConfig) error {
+	configPath := getConfigPath()
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %v", err)
+	}
+
+	// Preserve fields not being overwritten
+	var existing AuthConfig
+	if data, err := os.ReadFile(configPath); err == nil {
+		if json.Unmarshal(data, &existing) == nil {
+			if config.Username == "" {
+				config.Username = existing.Username
+			}
+		}
+	}
+
+	data, err := json.MarshalIndent(config, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal config: %v", err)
+	}
+	return os.WriteFile(configPath, data, 0600)
+}
+
+// ── HTTP plumbing ────────────────────────────────────────────────────────
+
 func (c *APIClient) refreshToken() error {
+	if c.TokenManager.IsPAT() {
+		return fmt.Errorf("personal access token was rejected - it may be expired or revoked (create a new one and run 'dfcli login --token ...')")
+	}
+	token := c.TokenManager.GetToken()
+	if token == "" {
+		return fmt.Errorf("not logged in - run 'dfcli login'")
+	}
+
 	if viper.GetBool("debug") {
 		fmt.Println("Refreshing access token...")
 	}
 
-	// GET EXISTING CONFIG TO PRESERVE USERNAME
-	var existingConfig models.AuthConfig
-	configData, err := os.ReadFile(getConfigPath())
-	if err == nil {
-		if err := json.Unmarshal(configData, &existingConfig); err == nil {
-			// READ CONFIG
-		}
-	} else {
-		initConfig()
+	payload, _ := json.Marshal(map[string]string{"refresh_token": token})
+	req, err := http.NewRequest(http.MethodPost, c.BaseURL+"/api/v1/auth/refresh", bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("refresh failed with status %d: %s - run 'dfcli login'", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	var auth models.AuthConfig
-
-	existing := c.TokenManager.GetToken()
-	if existing == "" {
-		resp, err := c.HTTPClient.Post(c.BaseURL+"/auth/token", "application/json", nil)
-		if err != nil {
-			return fmt.Errorf("refresh request failed: %v", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("refresh failed with status %d: %s", resp.StatusCode, string(body))
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to read refresh response: %v", err)
-		}
-
-		var result struct {
-			Token     string    `json:"access_token"`
-			ExpiresIn int       `json:"expires_in"`
-			IssuedAt  time.Time `json:"issued_at"`
-			Type      string    `json:"token_type"`
-		}
-
-		if err := json.Unmarshal(body, &result); err != nil {
-			return fmt.Errorf("failed to parse refresh response: %v", err)
-		}
-
-		if result.Token == "" {
-			return fmt.Errorf("no token in refresh response")
-		}
-
-		// UPDATE TOKEN MANAGER
-		expiresAt := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
-		c.TokenManager.SetToken(result.Token, expiresAt)
-
-		// PRESERVE USERNAME
-		username := existingConfig.Username
-		if username == "" {
-			username = "anonymous"
-		}
-
-		auth = models.AuthConfig{
-			Token:     result.Token,
-			ExpiresAt: expiresAt,
-			Username:  username,
-			Server:    c.BaseURL,
-		}
-	} else {
-		req := struct {
-			RefreshToken string `json:"refresh_token"`
-		}{
-			RefreshToken: existing, // USE EXISTING IF POSSIBLE
-		}
-
-		jsonData, err := json.Marshal(req)
-		if err != nil {
-			return fmt.Errorf("failed to marshal refresh request: %v", err)
-		}
-
-		// MAKE REQUEST
-		resp, err := c.HTTPClient.Post(c.BaseURL+"/api/v1/auth/refresh", "application/json", bytes.NewBuffer(jsonData))
-		if err != nil {
-			return fmt.Errorf("refresh request failed: %v", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return fmt.Errorf("refresh failed with status %d: %s", resp.StatusCode, string(body))
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to read refresh response: %v", err)
-		}
-
-		var result struct {
-			Token     string    `json:"token"`
-			ExpiresIn int       `json:"expires_in"`
-			IssuedAt  time.Time `json:"issued_at"`
-			Username  string    `json:"username,omitempty"`
-			Groups    []string  `json:"groups,omitempty"`
-		}
-
-		if err := json.Unmarshal(body, &result); err != nil {
-			return fmt.Errorf("failed to parse refresh response: %v", err)
-		}
-
-		if result.Token == "" {
-			return fmt.Errorf("no token in refresh response")
-		}
-
-		// UPDATE TOKEN MANAGER
-		expiresAt := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
-		c.TokenManager.SetToken(result.Token, expiresAt)
-
-		// PRESERVE USERNAME
-		username := result.Username
-		if username == "" {
-			username = existingConfig.Username
-		}
-
-		auth = models.AuthConfig{
-			Token:     result.Token,
-			ExpiresAt: expiresAt,
-			Username:  username,
-			Server:    c.BaseURL,
-		}
+	var result struct {
+		Token     string `json:"token"`
+		ExpiresIn int    `json:"expires_in"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("failed to parse refresh response: %v", err)
+	}
+	if result.Token == "" {
+		return fmt.Errorf("no token in refresh response")
 	}
 
-	// SAVE UPDATED CONFIG WITH PRESERVED USERNAME
-	return saveConfig(auth)
+	expiresAt := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
+	c.TokenManager.SetToken(result.Token, expiresAt)
+	return saveConfig(AuthConfig{Token: result.Token, ExpiresAt: expiresAt, Server: c.BaseURL})
 }
 
-func (c *APIClient) doRequest(method, path string, body any) (*http.Response, error) {
-	// HANDLE STREAMING UPLOADS DIFFERENTLY (PATCH)
-	if method == "PATCH" && body != nil {
+func (c *APIClient) doRequest(method, path string, body interface{}) (*http.Response, error) {
+	// Streaming uploads pass the reader straight through
+	if method == http.MethodPatch && body != nil {
 		if reader, ok := body.(io.Reader); ok {
 			req, err := http.NewRequest(method, c.BaseURL+path, reader)
 			if err != nil {
 				return nil, fmt.Errorf("failed to create PATCH request: %w", err)
 			}
-
 			if token := c.TokenManager.GetToken(); token != "" {
 				req.Header.Set("Authorization", "Bearer "+token)
 			}
-
-			return c.HTTPClient.Do(req)
+			resp, err := c.HTTPClient.Do(req)
+			if err != nil {
+				return nil, err
+			}
+			if resp.StatusCode >= 400 {
+				respBody, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(respBody))
+			}
+			return resp, nil
 		}
 	}
 
-	// FOR STANDARD REQUESTS, HANDLE BODY
-	var bodyReader io.Reader
+	var bodyBytes []byte
 	if body != nil {
-		var bodyBytes []byte
 		var err error
 		switch v := body.(type) {
 		case io.Reader:
-			// BUFFER THE READER TO ALLOW MULTIPLE READS
-			var buf bytes.Buffer
-			if _, err := io.Copy(&buf, v); err != nil {
-				return nil, fmt.Errorf("failed to read request body: %w", err)
-			}
-			bodyBytes = buf.Bytes()
+			bodyBytes, err = io.ReadAll(v)
 		default:
 			bodyBytes, err = json.Marshal(body)
-			if err != nil {
-				return nil, fmt.Errorf("failed to marshal request body: %w", err)
-			}
 		}
-		bodyReader = bytes.NewReader(bodyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to prepare request body: %w", err)
+		}
 	}
 
-	// ATTEMPT REQUEST WITH RETRY LOGIC
 	var resp *http.Response
 	for retries := 0; retries < 2; retries++ {
-		// RESET BODY READER POSITION IF NEEDED
-		if bodyReader != nil {
-			if seeker, ok := bodyReader.(io.ReadSeeker); ok {
-				if _, err := seeker.Seek(0, io.SeekStart); err != nil {
-					return nil, fmt.Errorf("failed to reset request body: %w", err)
-				}
-			}
+		var bodyReader io.Reader
+		if bodyBytes != nil {
+			bodyReader = bytes.NewReader(bodyBytes)
 		}
-
-		// CREATE REQUEST
 		req, err := http.NewRequest(method, c.BaseURL+path, bodyReader)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 
-		// CHECK IF TOKEN EXPIRED BEFORE FIRST ATTEMPT
+		// Sessions refresh proactively, PATs and anonymous never do
 		if retries == 0 && c.TokenManager.IsExpired() {
-			if viper.GetBool("debug") {
-				fmt.Println("Token expired, refreshing before request...")
-			}
 			if err := c.refreshToken(); err != nil {
 				return nil, fmt.Errorf("token refresh failed: %w", err)
 			}
 		}
 
-		// ADD AUTH HEADER
 		if token := c.TokenManager.GetToken(); token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
 		}
-
-		// SET CONTENT TYPE FOR JSON BODIES
-		if body != nil && method != "PATCH" {
+		if body != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
 
-		// EXECUTE REQUEST
 		resp, err = c.HTTPClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("request failed: %w", err)
 		}
 
-		// IF NOT UNAUTHORIZED OR SECOND TRY, BREAK
 		if resp.StatusCode != http.StatusUnauthorized || retries > 0 {
 			break
 		}
 
-		// ON FIRST 401, REFRESH TOKEN AND RETRY
+		// Single 401 retry, sessions refresh and PATs fail
 		resp.Body.Close()
 		if viper.GetBool("debug") {
 			fmt.Println("Received 401 Unauthorized, refreshing token and retrying...")
 		}
 		if err := c.refreshToken(); err != nil {
-			return nil, fmt.Errorf("token refresh failed after 401: %w", err)
+			return nil, err
 		}
 	}
 
-	// CHECK FOR ERROR RESPONSE
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(respBody))
 	}
-
 	return resp, nil
 }
 
-func printJSON(v any) error {
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
-}
+// ── Auth commands ────────────────────────────────────────────────────────
 
-func formatSize(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}
-
-func saveConfig(config models.AuthConfig) error {
-	configDir := filepath.Join(getHomeDir(), ".dfcli")
-	if err := os.MkdirAll(configDir, 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %v", err)
-	}
-
-	configPath := filepath.Join(configDir, "config.json")
-
-	// READ EXISTING CONFIG TO PRESERVE NON-OVERRIDDEN FIELDS
-	var existingConfig models.AuthConfig
-	data, err := os.ReadFile(configPath)
-	if err == nil {
-		if err := json.Unmarshal(data, &existingConfig); err == nil {
-			// PRESERVE USERNAME IF NOT BEING EXPLICITLY SET
-			if config.Username == "" {
-				config.Username = existingConfig.Username
-			}
-		}
-	}
-
-	data, err = json.MarshalIndent(config, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal config: %v", err)
-	}
-
-	if err := os.WriteFile(configPath, data, 0600); err != nil {
-		return fmt.Errorf("failed to write config file: %v", err)
-	}
-
-	return nil
-}
-
-// IMAGE OPERATIONS
-func (c *APIClient) listImages() ([]models.ImageRepository, error) {
-	resp, err := c.doRequest("GET", "/api/v1/repositories", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var repos []models.ImageRepository
-	return repos, json.NewDecoder(resp.Body).Decode(&repos)
-}
-
-func (c *APIClient) listImageTags(name string) ([]models.ImageTag, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/v2/%s/tags/list", name), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var tags []models.ImageTag
-	return tags, json.NewDecoder(resp.Body).Decode(&tags)
-}
-
-func (c *APIClient) deleteImageTag(name, tag string) error {
-	_, err := c.doRequest("DELETE", fmt.Sprintf("/api/v1/repositories/%s/tags/%s", name, tag), nil)
-	return err
-}
-
-func (c *APIClient) updateImageVisibility(name string, private bool) error {
-	payload := map[string]any{
-		"private": private,
-	}
-	_, err := c.doRequest("POST", fmt.Sprintf("/api/v1/repositories/%s/visibility", name), payload)
-	return err
-}
-
-// ARTIFACT OPERATIONS
-func (c *APIClient) createArtifactRepo(name string, description string, private bool) error {
-	payload := map[string]any{
-		"name":        name,
-		"description": description,
-		"private":     private,
-	}
-	_, err := c.doRequest("POST", "/api/v1/artifacts/repos", payload)
-	return err
-}
-
-func (c *APIClient) listArtifactRepos() ([]models.ArtifactRepository, error) {
-	resp, err := c.doRequest("GET", "/api/v1/artifacts/repos", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var repos []models.ArtifactRepository
-	return repos, json.NewDecoder(resp.Body).Decode(&repos)
-}
-
-func (c *APIClient) uploadArtifact(repo, filePath, version, artifactPath string, properties map[string]string) error {
-	// 1. INIT UPLOAD
-	resp, err := c.doRequest("POST", fmt.Sprintf("/api/v1/artifacts/%s/upload", repo), nil)
-	if err != nil {
-		return err
-	}
-
-	location := resp.Header.Get("Location")
-
-	// 2. READ AND UPLOAD FILE
-	file, err := os.Open(filePath)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-
-	// 3. UPLOAD CHUNKS
-	_, err = c.doRequest("PATCH", location, file)
-	if err != nil {
-		return err
-	}
-
-	// 4. COMPLETE UPLOAD
-	uploadURL := fmt.Sprintf("%s?version=%s&path=%s",
-		location, version, artifactPath)
-	_, err = c.doRequest("PUT", uploadURL, properties)
-	return err
-}
-
-func (c *APIClient) downloadArtifacts(repo string, q url.Values, outputPath string, unpack bool, flat bool, format string) error {
-	endpoint := fmt.Sprintf("/api/v1/artifacts/%s/query", repo)
-	if len(q) > 0 {
-		endpoint = endpoint + "?" + q.Encode()
-	}
-
-	resp, err := c.doRequest("GET", endpoint, nil)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	// CREATE TEMP FILE FOR DOWNLOAD
-	tempFile, err := os.CreateTemp("", "dfcli-download-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tempFile.Name())
-
-	if _, err := io.Copy(tempFile, resp.Body); err != nil {
-		return err
-	}
-	tempFile.Close()
-
-	// ENSURE OUTPUT DIR EXISTS
-	if err := os.MkdirAll(outputPath, 0755); err != nil {
-		return err
-	}
-
-	if !unpack {
-		// JUST MOVE TO FINAL LOCATION IF NOT UNPACKING
-		finalPath := outputPath
-		if info, err := os.Stat(outputPath); err == nil && info.IsDir() {
-			finalPath = filepath.Join(outputPath, fmt.Sprintf("%s_artifacts.%s", repo, format))
-		}
-		return os.Rename(tempFile.Name(), finalPath)
-	}
-
-	// UNPACK ARCHIVE AND HANDLE NESTED ARCHIVES
-	if err := recursivelyUnpack(tempFile.Name(), outputPath, flat); err != nil {
-		return fmt.Errorf("failed to unpack archive: %w", err)
-	}
-
-	return nil
-}
-
-func (c *APIClient) deleteArtifact(repo, version, path string) error {
-	_, err := c.doRequest("DELETE", fmt.Sprintf("/api/v1/artifacts/%s/%s/%s", repo, version, path), nil)
-	return err
-}
-
-func (c *APIClient) searchArtifacts(q url.Values) (*models.SearchResponse, error) {
-	endpoint := "/api/v1/artifacts/search"
-	if len(q) > 0 {
-		endpoint = endpoint + "?" + q.Encode()
-	}
-	var search *models.SearchResponse
-	resp, err := c.doRequest("GET", endpoint, nil)
-	if err != nil {
-		return &models.SearchResponse{
-			Results: []models.Artifact{},
-			Total:   0,
-		}, nil
-	}
-	defer resp.Body.Close()
-	return search, json.NewDecoder(resp.Body).Decode(&search)
-}
-
-// USER OPERATIONS
-func (c *APIClient) listUsers() ([]models.User, error) {
-	resp, err := c.doRequest("GET", "/api/v1/users", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var users []models.User
-	return users, json.NewDecoder(resp.Body).Decode(&users)
-}
-
-func (c *APIClient) createUser(username, password string, groups []string) error {
-	payload := map[string]any{
-		"username": username,
-		"password": password,
-		"groups":   groups,
-	}
-	_, err := c.doRequest("POST", "/api/v1/users", payload)
-	return err
-}
-
-func (c *APIClient) deleteUser(username string) error {
-	_, err := c.doRequest("DELETE", fmt.Sprintf("/api/v1/users/%s", username), nil)
-	return err
-}
-
-func (c *APIClient) updateUserGroups(username string, groups []string) error {
-	payload := map[string]any{
-		"username": username,
-		"groups":   groups,
-	}
-	_, err := c.doRequest("PUT", "/api/v1/users/groups", payload)
-	return err
-}
-
-// GROUP OPERATIONS
-func (c *APIClient) listGroups() ([]models.Group, error) {
-	resp, err := c.doRequest("GET", "/api/v1/groups", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var groups []models.Group
-	return groups, json.NewDecoder(resp.Body).Decode(&groups)
-}
-
-func (c *APIClient) createGroup(name, description string, roles []string) error {
-	payload := map[string]any{
-		"name":        name,
-		"description": description,
-		"roles":       roles,
-	}
-	_, err := c.doRequest("POST", "/api/v1/groups", payload)
-	return err
-}
-
-func (c *APIClient) updateGroup(name string, description string, roles []string) error {
-	payload := map[string]any{
-		"description": description,
-		"roles":       roles,
-	}
-	_, err := c.doRequest("PUT", fmt.Sprintf("/api/v1/groups/%s", name), payload)
-	return err
-}
-
-func (c *APIClient) deleteGroup(name string) error {
-	_, err := c.doRequest("DELETE", fmt.Sprintf("/api/v1/groups/%s", name), nil)
-	return err
-}
-
-// ROLE OPERATIONS
-func (c *APIClient) listRoles() ([]models.Role, error) {
-	resp, err := c.doRequest("GET", "/api/v1/roles", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var roles []models.Role
-	return roles, json.NewDecoder(resp.Body).Decode(&roles)
-}
-
-func (c *APIClient) updateRole(name string, description string, permissions []models.Permission) error {
-	payload := map[string]any{
-		"description": description,
-		"permissions": permissions,
-	}
-	_, err := c.doRequest("PUT", fmt.Sprintf("/api/v1/roles/%s", name), payload)
-	return err
-}
-
-func (c *APIClient) deleteRole(name string) error {
-	_, err := c.doRequest("DELETE", fmt.Sprintf("/api/v1/roles/%s", name), nil)
-	return err
-}
-
-// SETTINGS OPERATIONS
-func (c *APIClient) getSettings(section string) (map[string]any, error) {
-	resp, err := c.doRequest("GET", fmt.Sprintf("/api/v1/settings/%s", section), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var settings map[string]any
-	return settings, json.NewDecoder(resp.Body).Decode(&settings)
-}
-
-func (c *APIClient) updateSettings(section string, settings map[string]any) error {
-	_, err := c.doRequest("PUT", fmt.Sprintf("/api/v1/settings/%s", section), settings)
-	return err
-}
-
-func (c *APIClient) resetSettings(section string) error {
-	_, err := c.doRequest("POST", fmt.Sprintf("/api/v1/settings/%s/reset", section), nil)
-	return err
-}
-
-// USER AUTH OPERATION(S)
 func login(server, username, password string) (string, time.Time, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+	httpClient := &http.Client{Timeout: 30 * time.Second}
 
-	payload := map[string]string{
-		"username": username,
-		"password": password,
-	}
-
-	jsonData, err := json.Marshal(payload)
+	payload, err := json.Marshal(map[string]string{"username": username, "password": password})
 	if err != nil {
 		return "", time.Time{}, err
 	}
 
-	resolvedServer := fmt.Sprintf("%s/api/v1/auth/login", server)
-	req, err := http.NewRequest("POST", resolvedServer, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequest(http.MethodPost, server+"/api/v1/auth/login", bytes.NewReader(payload))
 	if err != nil {
 		return "", time.Time{}, err
 	}
-
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := client.Do(req)
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", time.Time{}, err
 	}
@@ -890,46 +479,63 @@ func login(server, username, password string) (string, time.Time, error) {
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("failed to read response: %v", err)
 	}
-
 	if viper.GetBool("debug") {
 		fmt.Printf("Login response: %s\n", string(body))
 	}
-
-	var result struct {
-		Token     string    `json:"token"`
-		ExpiresIn int       `json:"expires_in"`
-		IssuedAt  time.Time `json:"issued_at"`
-		Username  string    `json:"username"`
-		Groups    []string  `json:"groups"`
+	if resp.StatusCode != http.StatusOK {
+		return "", time.Time{}, fmt.Errorf("status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
+	var result struct {
+		Token     string `json:"token"`
+		ExpiresIn int    `json:"expires_in"`
+	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		return "", time.Time{}, fmt.Errorf("failed to parse response: %v", err)
 	}
-
 	if result.Token == "" {
 		return "", time.Time{}, fmt.Errorf("no token in response")
 	}
-
-	expiresAt := time.Now().Add(time.Duration(result.ExpiresIn) * time.Second)
-	return result.Token, expiresAt, nil
+	return result.Token, time.Now().Add(time.Duration(result.ExpiresIn) * time.Second), nil
 }
 
-// CONSTRUCTORS
 func newLoginCmd() *cobra.Command {
-	var username, password string
+	var username, password, patToken string
 
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Log in to DistroFace server",
+		Long: `Log in with a username/password, or store a personal access token:
+
+  dfcli login --token df_xxxxxxxx
+
+Personal access tokens never require refreshing and are the recommended
+credential for CI. The DFCLI_TOKEN environment variable overrides the
+stored token without touching the config file.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// PROMPT FOR USERNAME IF NOT PROVIDED
+			server := client.BaseURL
+
+			// PAT login stores and verifies, no session dance
+			if patToken != "" {
+				if !strings.HasPrefix(patToken, patPrefix) {
+					return fmt.Errorf("token must start with %q - create one under Settings → Tokens", patPrefix)
+				}
+				config := AuthConfig{
+					Token:     patToken,
+					ExpiresAt: time.Now().Add(24 * 365 * 10 * time.Hour), // PATs carry their own expiry server-side
+					Server:    server,
+				}
+				if err := saveConfig(config); err != nil {
+					return fmt.Errorf("failed to save config: %v", err)
+				}
+				fmt.Println("Personal access token stored")
+				return nil
+			}
+
 			if username == "" {
 				fmt.Print("Username: ")
 				fmt.Scanln(&username)
 			}
-
-			// PROMPT FOR PASSWORD IF NOT PROVIDED
 			if password == "" {
 				fmt.Print("Password: ")
 				bytePassword, err := term.ReadPassword(int(syscall.Stdin))
@@ -940,19 +546,17 @@ func newLoginCmd() *cobra.Command {
 				fmt.Println()
 			}
 
-			server := viper.GetString("server")
 			token, expiry, err := login(server, username, password)
 			if err != nil {
 				return fmt.Errorf("login failed: %v", err)
 			}
 
-			config := models.AuthConfig{
+			config := AuthConfig{
 				Token:     token,
 				Username:  username,
 				Server:    server,
 				ExpiresAt: expiry,
 			}
-
 			if err := saveConfig(config); err != nil {
 				return fmt.Errorf("failed to save config: %v", err)
 			}
@@ -962,9 +566,9 @@ func newLoginCmd() *cobra.Command {
 		},
 	}
 
-	// MAKE FLAGS OPTIONAL SINCE WE'LL PROMPT IF THEY'RE NOT PROVIDED
 	cmd.Flags().StringVarP(&username, "username", "u", "", "Username (optional, will prompt if not provided)")
 	cmd.Flags().StringVarP(&password, "password", "p", "", "Password (optional, will prompt if not provided)")
+	cmd.Flags().StringVar(&patToken, "token", "", "Personal access token (df_...) to store instead of a session")
 
 	return cmd
 }
@@ -983,70 +587,381 @@ func newLogoutCmd() *cobra.Command {
 	}
 }
 
-func newImageTagsCmd() *cobra.Command {
+// ── Trust distribution ────────────────────────────────────────────────────
+
+func newTrustCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "trust",
+		Short: "Trust the DistroFace instance certificate authority",
+		Long: `Fetch and install the instance root CA that signs every certificate
+DistroFace issues, so clients trust its self-issued TLS.`,
+	}
+	cmd.AddCommand(newTrustShowCmd(), newTrustInstallCmd())
+	return cmd
+}
+
+// Downloads the public instance root CA pem, - fall back to cleartext if possible
+func fetchInstanceCA() ([]byte, error) {
+	c := &http.Client{
+		Timeout: client.HTTPClient.Timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	path := "/.well-known/distroface/ca.pem"
+	resp, err := c.Get(client.BaseURL + path)
+	if err != nil && strings.HasPrefix(client.BaseURL, "https://") {
+		// No serving cert yet, retry the always cleartext anchor
+		httpURL := "http://" + strings.TrimPrefix(client.BaseURL, "https://") + path
+		fmt.Fprintf(os.Stderr, "https fetch failed (%v), retrying over http\n", err)
+		resp, err = c.Get(httpURL)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to reach the instance CA endpoint: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("the instance has no root CA yet - an admin can generate one in Settings → PKI")
+	}
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("fetch CA failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return io.ReadAll(resp.Body)
+}
+
+// SHA-256 fingerprint of the leaf cert for out of band verification
+func caFingerprint(pemData []byte) string {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return "unparseable"
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "unparseable"
+	}
+	sum := sha256.Sum256(cert.Raw)
+	var parts []string
+	for _, b := range sum {
+		parts = append(parts, hex.EncodeToString([]byte{b}))
+	}
+	return strings.ToUpper(strings.Join(parts, ":"))
+}
+
+func newTrustShowCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "tags [image]",
-		Short: "List tags for an image",
-		Args:  cobra.ExactArgs(1),
+		Use:   "show",
+		Short: "Print the instance root CA to stdout",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			tags, err := client.listImageTags(args[0])
+			pem, err := fetchInstanceCA()
 			if err != nil {
 				return err
 			}
-			return printJSON(tags)
+			_, err = os.Stdout.Write(pem)
+			return err
 		},
 	}
 }
 
-func newImageDeleteCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete [image] [tag]",
-		Short: "Delete an image tag",
-		Args:  cobra.ExactArgs(2),
+func newTrustInstallCmd() *cobra.Command {
+	var host string
+	cmd := &cobra.Command{
+		Use:   "install",
+		Short: "Trust the instance CA so docker pull works over its TLS",
+		Long: `Install the instance root CA into Docker's per-registry trust store
+(/etc/docker/certs.d/<host>/ca.crt) so 'docker pull' trusts the registry
+over its self-issued TLS. Docker picks it up with no daemon restart.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.deleteImageTag(args[0], args[1])
+			pem, err := fetchInstanceCA()
+			if err != nil {
+				return err
+			}
+			// Print to stderr so the user can verify before trusting it
+			fmt.Fprintf(os.Stderr, "Fetched instance CA, SHA-256 fingerprint:\n  %s\nVerify this matches the server's PKI page before trusting.\n\n", caFingerprint(pem))
+
+			if host == "" {
+				u, err := url.Parse(client.BaseURL)
+				if err != nil {
+					return fmt.Errorf("could not parse server URL %q: %w", client.BaseURL, err)
+				}
+				host = u.Host
+			}
+
+			// Docker's certs.d trust store is Linux and dockerd specific
+			if runtime.GOOS != "linux" {
+				tmp := filepath.Join(os.TempDir(), "distroface-ca.pem")
+				if werr := os.WriteFile(tmp, pem, 0644); werr != nil {
+					return werr
+				}
+				fmt.Printf("Docker's certs.d trust store is Linux/dockerd only.\n")
+				fmt.Printf("Saved the instance CA to %s\n", tmp)
+				fmt.Printf("On Docker Desktop add it to the host trust store, or point your client at it.\n")
+				return nil
+			}
+
+			dir := filepath.Join("/etc/docker/certs.d", host)
+			dest := filepath.Join(dir, "ca.crt")
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				return trustPermissionHint(err, pem, dest)
+			}
+			if err := os.WriteFile(dest, pem, 0644); err != nil {
+				return trustPermissionHint(err, pem, dest)
+			}
+			fmt.Printf("Installed instance CA to %s\n", dest)
+			fmt.Printf("docker now trusts %s over its self-issued TLS, no daemon restart needed.\n", host)
+			return nil
 		},
+	}
+	cmd.Flags().StringVar(&host, "host", "", "Registry host[:port] for the certs.d directory (defaults to the server host)")
+	return cmd
+}
+
+// On permission errors stage a copy and print the sudo command
+func trustPermissionHint(cause error, pem []byte, dest string) error {
+	if !os.IsPermission(cause) {
+		return cause
+	}
+	tmp := filepath.Join(os.TempDir(), "distroface-ca.pem")
+	if werr := os.WriteFile(tmp, pem, 0644); werr != nil {
+		return fmt.Errorf("permission denied writing %s, and could not stage a copy: %w", dest, werr)
+	}
+	fmt.Printf("Permission denied writing %s\n", dest)
+	fmt.Printf("Staged the CA at %s, install it with:\n", tmp)
+	fmt.Printf("  sudo mkdir -p %s && sudo cp %s %s\n", filepath.Dir(dest), tmp, dest)
+	return nil
+}
+
+// ── Image commands ────────────────────────────────────────────────────────
+
+type bearerTransport struct {
+	tm   *TokenManager
+	base http.RoundTripper
+}
+
+func (t *bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if token := t.tm.GetToken(); token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	return t.base.RoundTrip(req)
+}
+
+func (c *APIClient) rpcHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout:   c.HTTPClient.Timeout,
+		Transport: &bearerTransport{tm: c.TokenManager, base: http.DefaultTransport},
 	}
 }
 
-func newImageVisibilityCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "visibility [image] [public|private]",
-		Short: "Update image visibility",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.updateImageVisibility(args[0], args[1] == "private")
-		},
+func printProtoJSON(messages []proto.Message) error {
+	marshaler := protojson.MarshalOptions{EmitUnpopulated: true}
+	out := make([]json.RawMessage, len(messages))
+	for i, m := range messages {
+		raw, err := marshaler.Marshal(m)
+		if err != nil {
+			return err
+		}
+		out[i] = raw
 	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(data))
+	return nil
 }
 
 func newImageListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
-		Short: "List container images",
+		Short: "List image repositories",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			repos, err := client.listImages()
+			if client.TokenManager.IsExpired() {
+				if err := client.refreshToken(); err != nil {
+					return err
+				}
+			}
+			rpc := distrofacev1connect.NewRepositoryServiceClient(client.rpcHTTPClient(), client.BaseURL)
+			resp, err := rpc.ListRepositories(context.Background(), connect.NewRequest(&distrofacev1.ListRepositoriesRequest{
+				Page: &distrofacev1.PageRequest{PageSize: 100},
+			}))
 			if err != nil {
-				return fmt.Errorf("failed to list images: %v", err)
+				return err
 			}
-
-			// FORMAT OUTPUT AS A TABLE
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "NAME\tTAGS\tSIZE\tPRIVATE\tOWNER")
-			for _, repo := range repos {
-				tags := len(repo.Tags)
-				fmt.Fprintf(w, "%s\t%d\t%s\t%v\t%s\n",
-					repo.Name,
-					tags,
-					formatSize(repo.Size),
-					repo.Private,
-					repo.Owner,
-				)
+			msgs := make([]proto.Message, len(resp.Msg.Repositories))
+			for i, r := range resp.Msg.Repositories {
+				msgs[i] = r
 			}
-			return w.Flush()
+			return printProtoJSON(msgs)
 		},
 	}
 }
+
+func newImageTagsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "tags [namespace/image]",
+		Short: "List tags for an image (name must include its namespace)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			namespace, name, ok := strings.Cut(args[0], "/")
+			if !ok {
+				return fmt.Errorf("image must be qualified as namespace/name (e.g. myorg/app)")
+			}
+			if client.TokenManager.IsExpired() {
+				if err := client.refreshToken(); err != nil {
+					return err
+				}
+			}
+			rpc := distrofacev1connect.NewRepositoryServiceClient(client.rpcHTTPClient(), client.BaseURL)
+			resp, err := rpc.ListTags(context.Background(), connect.NewRequest(&distrofacev1.ListTagsRequest{
+				Namespace: namespace,
+				Name:      name,
+				Page:      &distrofacev1.PageRequest{PageSize: 100},
+			}))
+			if err != nil {
+				return err
+			}
+			msgs := make([]proto.Message, len(resp.Msg.Tags))
+			for i, t := range resp.Msg.Tags {
+				msgs[i] = t
+			}
+			return printProtoJSON(msgs)
+		},
+	}
+}
+
+// ── Artifact operations ──────────────────────────────────────────────────
+
+func (c *APIClient) createArtifactRepo(name, description string, private bool) error {
+	payload := map[string]interface{}{
+		"name":        name,
+		"description": description,
+		"private":     private,
+	}
+	resp, err := c.doRequest(http.MethodPost, "/api/v1/artifacts/repos", payload)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func (c *APIClient) listArtifactRepos() ([]ArtifactRepository, error) {
+	resp, err := c.doRequest(http.MethodGet, "/api/v1/artifacts/repos", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	var repos []ArtifactRepository
+	return repos, json.NewDecoder(resp.Body).Decode(&repos)
+}
+
+func (c *APIClient) uploadArtifact(repo, filePath, version, artifactPath string, properties map[string]string) error {
+	resp, err := c.doRequest(http.MethodPost, fmt.Sprintf("/api/v1/artifacts/%s/upload", repo), nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+
+	location := resp.Header.Get("Location")
+	if location == "" {
+		return fmt.Errorf("server did not return an upload location")
+	}
+
+	file, err := os.Open(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	resp, err = c.doRequest(http.MethodPatch, location, file)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+
+	uploadURL := fmt.Sprintf("%s?version=%s&path=%s", location, url.QueryEscape(version), url.QueryEscape(artifactPath))
+	if properties == nil {
+		properties = map[string]string{}
+	}
+	resp, err = c.doRequest(http.MethodPut, uploadURL, properties)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func (c *APIClient) downloadArtifacts(repo string, q url.Values, outputPath string, unpack, flat bool, format string) error {
+	endpoint := fmt.Sprintf("/api/v1/artifacts/%s/query", repo)
+	if len(q) > 0 {
+		endpoint += "?" + q.Encode()
+	}
+
+	resp, err := c.doRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	tempFile, err := os.CreateTemp("", "dfcli-download-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tempFile.Name())
+
+	if _, err := io.Copy(tempFile, resp.Body); err != nil {
+		return err
+	}
+	tempFile.Close()
+
+	if err := os.MkdirAll(outputPath, 0755); err != nil {
+		return err
+	}
+
+	if !unpack {
+		finalPath := outputPath
+		if info, err := os.Stat(outputPath); err == nil && info.IsDir() {
+			finalPath = filepath.Join(outputPath, fmt.Sprintf("%s_artifacts.%s", repo, format))
+		}
+		return moveFile(tempFile.Name(), finalPath)
+	}
+
+	if err := recursivelyUnpack(tempFile.Name(), outputPath, flat); err != nil {
+		return fmt.Errorf("failed to unpack archive: %w", err)
+	}
+	return nil
+}
+
+func (c *APIClient) deleteArtifact(repo, version, path string) error {
+	resp, err := c.doRequest(http.MethodDelete, fmt.Sprintf("/api/v1/artifacts/%s/%s/%s", repo, version, path), nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	return nil
+}
+
+func (c *APIClient) searchArtifacts(q url.Values) (*SearchResponse, error) {
+	endpoint := "/api/v1/artifacts/search"
+	if len(q) > 0 {
+		endpoint += "?" + q.Encode()
+	}
+	resp, err := c.doRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		// V1 behavior, search errors degrade to empty results
+		if viper.GetBool("debug") {
+			fmt.Fprintf(os.Stderr, "search error: %v\n", err)
+		}
+		return &SearchResponse{Results: []Artifact{}}, nil
+	}
+	defer resp.Body.Close()
+
+	var search SearchResponse
+	return &search, json.NewDecoder(resp.Body).Decode(&search)
+}
+
+// ── Artifact commands ────────────────────────────────────────────────────
 
 func newArtifactRepoCreateCmd() *cobra.Command {
 	var description string
@@ -1063,7 +978,6 @@ func newArtifactRepoCreateCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&description, "description", "d", "", "Repository description")
 	cmd.Flags().BoolVarP(&private, "private", "p", false, "Make repository private")
-
 	return cmd
 }
 
@@ -1079,6 +993,44 @@ func newArtifactRepoListCmd() *cobra.Command {
 			return printJSON(repos)
 		},
 	}
+}
+
+func newArtifactUploadCmd() *cobra.Command {
+	var version, path string
+	var properties map[string]string
+
+	cmd := &cobra.Command{
+		Use:   "upload [repo] [file]",
+		Short: "Upload an artifact",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			repo := args[0]
+			file := args[1]
+
+			if version == "" {
+				version = sanitizeVersion(filepath.Base(file))
+			} else {
+				version = sanitizeVersion(version)
+			}
+			if path == "" {
+				path = sanitizeFilePath(filepath.Base(file))
+			} else {
+				path = sanitizeFilePath(path)
+			}
+
+			fmt.Printf("Uploading %s to %s (version: %s, path: %s)\n", file, repo, version, path)
+			if err := client.uploadArtifact(repo, file, version, path, properties); err != nil {
+				return fmt.Errorf("upload failed: %v", err)
+			}
+			fmt.Println("Upload successful")
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version")
+	cmd.Flags().StringVarP(&path, "path", "p", "", "Artifact path in repository")
+	cmd.Flags().StringToStringVar(&properties, "property", nil, "Properties (key=value,key=value,...)")
+	return cmd
 }
 
 func newArtifactDownloadCmd() *cobra.Command {
@@ -1102,7 +1054,6 @@ func newArtifactDownloadCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			repo := args[0]
 
-			// BUILD QUERY
 			q := make(url.Values)
 			if version != "" {
 				q.Set("version", version)
@@ -1125,17 +1076,13 @@ func newArtifactDownloadCmd() *cobra.Command {
 			if flat {
 				q.Set("flat", "1")
 			}
-
-			// ADD PROPS
 			for key, value := range props {
 				q.Set(key, value)
 			}
 
-			// HANDLE OUTPUT PATH
 			if output == "" {
 				output = "."
 			}
-
 			return client.downloadArtifacts(repo, q, output, unpack, flat, format)
 		},
 	}
@@ -1150,8 +1097,22 @@ func newArtifactDownloadCmd() *cobra.Command {
 	cmd.Flags().StringVar(&format, "format", "zip", "Archive format (zip/tar.gz)")
 	cmd.Flags().BoolVar(&unpack, "unpack", false, "Unpack downloaded archives")
 	cmd.Flags().BoolVar(&flat, "flat", false, "Flatten directory structure")
-
 	return cmd
+}
+
+func newArtifactDeleteCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "delete [repo] [version] [path]",
+		Short: "Delete an artifact",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := client.deleteArtifact(args[0], args[1], args[2]); err != nil {
+				return fmt.Errorf("failed to delete artifact: %v", err)
+			}
+			fmt.Println("Artifact deleted successfully")
+			return nil
+		},
+	}
 }
 
 func newArtifactSearchCmd() *cobra.Command {
@@ -1171,7 +1132,6 @@ func newArtifactSearchCmd() *cobra.Command {
 		Use:   "search",
 		Short: "Search for artifacts (via query)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-
 			q := make(url.Values)
 			if repo != "" {
 				q.Set("repo", repo)
@@ -1194,433 +1154,153 @@ func newArtifactSearchCmd() *cobra.Command {
 			if order != "" {
 				q.Set("order", order)
 			}
-
-			// ADD PROPS
 			for key, value := range props {
 				q.Set(key, value)
 			}
 
 			search, err := client.searchArtifacts(q)
-			if table {
-				if err != nil {
-					return fmt.Errorf("search failed: %v", err)
-				}
+			if err != nil {
+				return fmt.Errorf("search failed: %v", err)
+			}
 
-				// FORMAT ARTIFACTS AS A TABLE (IF TABLE FLAG)
-				artifacts := search.Results
+			if table {
 				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 				fmt.Fprintln(w, "Total Matches:", search.Total)
 				fmt.Fprintln(w, "\nREPOSITORY\tNAME\tVERSION\tSIZE\tUPDATED")
-				for _, a := range artifacts {
+				for _, a := range search.Results {
 					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n",
-						a.RepoID,
-						a.Name,
-						a.Version,
-						formatSize(a.Size),
-						a.UpdatedAt.Format(time.RFC3339),
-					)
+						a.RepoID, a.Name, a.Version, formatSize(a.Size), a.UpdatedAt.Format(time.RFC3339))
 				}
 				return w.Flush()
-			} else {
-				// FORMAT AS JSON BY DEFAULT
-				return printJSON(search)
 			}
+			return printJSON(search)
 		},
 	}
+
 	cmd.Flags().StringVarP(&repo, "repo", "r", "", "Artifact repository name")
 	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version filter")
 	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
 	cmd.Flags().StringToStringVar(&props, "property", nil, "Properties (key=value,key=value,...)")
 	cmd.Flags().IntVar(&num, "num", 0, "Max number of matching artifacts to retrieve (default 1)")
+	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset for pagination")
 	cmd.Flags().StringVar(&sortBy, "sort", "", "Sort field (default created_at)")
 	cmd.Flags().StringVar(&order, "order", "", "Sort order (ASC or DESC)")
 	cmd.Flags().BoolVarP(&table, "table", "t", false, "Format results as a table")
-
 	return cmd
 }
 
-func newArtifactUploadCmd() *cobra.Command {
-	var version, path string
-	var properties map[string]string
-	cmd := &cobra.Command{
-		Use:   "upload [repo] [file]",
-		Short: "Upload an artifact",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			repo := args[0]
-			file := args[1]
+// ── Helpers ──────────────────────────────────────────────────────────────
 
-			// IF NO VERSION PROVIDED, USE SANITIZED FILENAME
-			if version == "" {
-				version = utils.SanitizeVersion(filepath.Base(file))
-			} else {
-				version = utils.SanitizeVersion(version)
-			}
-
-			// IF NO PATH PROVIDED, USE SANITIZED FILENAME
-			if path == "" {
-				path = utils.SanitizeFilePath(filepath.Base(file))
-			} else {
-				path = utils.SanitizeFilePath(path)
-			}
-
-			fmt.Printf("Uploading %s to %s (version: %s, path: %s)\n",
-				file, repo, version, path)
-
-			if err := client.uploadArtifact(repo, file, version, path, properties); err != nil {
-				return fmt.Errorf("upload failed: %v", err)
-			}
-
-			fmt.Println("Upload successful")
-			return nil
-		},
-	}
-
-	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version")
-	cmd.Flags().StringVarP(&path, "path", "p", "", "Artifact path in repository")
-	cmd.Flags().StringToStringVar(&properties, "property", nil, "Properties (key=value,key=value,...)")
-
-	return cmd
-}
-
-func newArtifactDeleteCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete [repo] [version] [path]",
-		Short: "Delete an artifact",
-		Args:  cobra.ExactArgs(3),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			repo := args[0]
-			version := args[1]
-			path := args[2]
-
-			if err := client.deleteArtifact(repo, version, path); err != nil {
-				return fmt.Errorf("failed to delete artifact: %v", err)
-			}
-
-			fmt.Println("Artifact deleted successfully")
-			return nil
-		},
-	}
-}
-
-func newUserListCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "list",
-		Short: "List users",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			users, err := client.listUsers()
-			if err != nil {
-				return err
-			}
-			return printJSON(users)
-		},
-	}
-}
-
-func newUserCreateCmd() *cobra.Command {
-	var password string
-	var groups []string
-
-	cmd := &cobra.Command{
-		Use:   "create [username]",
-		Short: "Create a new user",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.createUser(args[0], password, groups)
-		},
-	}
-
-	cmd.Flags().StringVarP(&password, "password", "p", "", "User password")
-	cmd.Flags().StringSliceVarP(&groups, "groups", "g", nil, "User groups")
-	cmd.MarkFlagRequired("password")
-
-	return cmd
-}
-
-func newUserDeleteCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete [username]",
-		Short: "Delete a user",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.deleteUser(args[0])
-		},
-	}
-}
-
-func newUserGroupsCmd() *cobra.Command {
-	var groups []string
-
-	cmd := &cobra.Command{
-		Use:   "groups [username]",
-		Short: "Update user groups",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.updateUserGroups(args[0], groups)
-		},
-	}
-
-	cmd.Flags().StringSliceVarP(&groups, "groups", "g", nil, "User groups")
-	cmd.MarkFlagRequired("groups")
-
-	return cmd
-}
-
-func newGroupListCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "list",
-		Short: "List groups",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			groups, err := client.listGroups()
-			if err != nil {
-				return err
-			}
-			return printJSON(groups)
-		},
-	}
-}
-
-func newGroupCreateCmd() *cobra.Command {
-	var description string
-	var roles []string
-
-	cmd := &cobra.Command{
-		Use:   "create [name]",
-		Short: "Create a new group",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.createGroup(args[0], description, roles)
-		},
-	}
-
-	cmd.Flags().StringVarP(&description, "description", "d", "", "Group description")
-	cmd.Flags().StringSliceVarP(&roles, "roles", "r", nil, "Group roles")
-	cmd.MarkFlagRequired("roles")
-
-	return cmd
-}
-
-func newGroupUpdateCmd() *cobra.Command {
-	var description string
-	var roles []string
-
-	cmd := &cobra.Command{
-		Use:   "update [name]",
-		Short: "Update a group",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.updateGroup(args[0], description, roles)
-		},
-	}
-
-	cmd.Flags().StringVarP(&description, "description", "d", "", "Group description")
-	cmd.Flags().StringSliceVarP(&roles, "roles", "r", nil, "Group roles")
-
-	return cmd
-}
-
-func newGroupDeleteCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete [name]",
-		Short: "Delete a group",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.deleteGroup(args[0])
-		},
-	}
-}
-
-func newRoleListCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "list",
-		Short: "List roles",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			roles, err := client.listRoles()
-			if err != nil {
-				return err
-			}
-			return printJSON(roles)
-		},
-	}
-}
-
-func newRoleUpdateCmd() *cobra.Command {
-	var description string
-	var addPerms, removePerms []string
-
-	cmd := &cobra.Command{
-		Use:   "update [name]",
-		Short: "Update a role",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			// GET CURRENT ROLE FIRST
-			roles, err := client.listRoles()
-			if err != nil {
-				return err
-			}
-
-			var currentRole *models.Role
-			for _, r := range roles {
-				if r.Name == args[0] {
-					currentRole = &r
-					break
-				}
-			}
-
-			if currentRole == nil {
-				return fmt.Errorf("role not found: %s", args[0])
-			}
-
-			// UPDATE PERMISSIONS
-			permissions := currentRole.Permissions
-
-			// ADD NEW PERMISSIONS
-			for _, p := range addPerms {
-				parts := strings.Split(p, ":")
-				if len(parts) != 2 {
-					return fmt.Errorf("invalid permission format: %s", p)
-				}
-
-				permissions = append(permissions, models.Permission{
-					Action:   models.Action(parts[0]),
-					Resource: models.Resource(parts[1]),
-				})
-			}
-
-			// REMOVE PERMISSIONS
-			if len(removePerms) > 0 {
-				var filtered []models.Permission
-				for _, p := range permissions {
-					remove := false
-					pStr := fmt.Sprintf("%s:%s", p.Action, p.Resource)
-					for _, rp := range removePerms {
-						if pStr == rp {
-							remove = true
-							break
-						}
-					}
-					if !remove {
-						filtered = append(filtered, p)
-					}
-				}
-				permissions = filtered
-			}
-
-			return client.updateRole(args[0], description, permissions)
-		},
-	}
-
-	cmd.Flags().StringVarP(&description, "description", "d", "", "Role description")
-	cmd.Flags().StringSliceVar(&addPerms, "add", nil, "Add permissions (ACTION:RESOURCE)")
-	cmd.Flags().StringSliceVar(&removePerms, "remove", nil, "Remove permissions (ACTION:RESOURCE)")
-
-	return cmd
-}
-
-func newRoleDeleteCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "delete [name]",
-		Short: "Delete a role",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.deleteRole(args[0])
-		},
-	}
-}
-
-func newSettingsGetCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "get [section]",
-		Short: "Get settings for a section",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			settings, err := client.getSettings(args[0])
-			if err != nil {
-				return err
-			}
-			return printJSON(settings)
-		},
-	}
-}
-
-func newSettingsUpdateCmd() *cobra.Command {
-	var values []string
-
-	cmd := &cobra.Command{
-		Use:   "update [section]",
-		Short: "Update settings for a section",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			settings := make(map[string]any)
-			for _, v := range values {
-				parts := strings.Split(v, "=")
-				if len(parts) != 2 {
-					return fmt.Errorf("invalid setting format: %s", v)
-				}
-				settings[parts[0]] = parts[1]
-			}
-			return client.updateSettings(args[0], settings)
-		},
-	}
-
-	cmd.Flags().StringSliceVarP(&values, "set", "s", nil, "Settings to update (key=value)")
-	cmd.MarkFlagRequired("set")
-
-	return cmd
-}
-
-func newSettingsResetCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "reset [section]",
-		Short: "Reset settings for a section to defaults",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return client.resetSettings(args[0])
-		},
-	}
-}
-
-// HELPERS
-func unpackZip(zipPath string, destPath string, flat bool) error {
-	r, err := zip.OpenReader(zipPath)
+func printJSON(v interface{}) error {
+	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	defer r.Close()
+	fmt.Println(string(data))
+	return nil
+}
 
-	for _, f := range r.File {
-		// DETERMINE OUTPUT PATH
+func formatSize(size int64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
+	}
+	div, exp := int64(unit), 0
+	for n := size / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(size)/float64(div), "KMGTPE"[exp])
+}
+
+var (
+	nonWordPattern    = regexp.MustCompile(`[^\w\-\.]`)
+	multiUnderscore   = regexp.MustCompile(`_+`)
+	multiSlashPattern = regexp.MustCompile(`/+`)
+)
+
+func sanitizeVersion(version string) string {
+	return strings.TrimSpace(nonWordPattern.ReplaceAllString(version, "_"))
+}
+
+func sanitizeFilePath(path string) string {
+	path = filepath.ToSlash(path)
+	path = strings.TrimSpace(path)
+	path = multiSlashPattern.ReplaceAllString(path, "/")
+	path = strings.Trim(path, "/")
+
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		part = nonWordPattern.ReplaceAllString(part, "_")
+		part = multiUnderscore.ReplaceAllString(part, "_")
+		parts[i] = part
+	}
+	return strings.Join(parts, "/")
+}
+
+// Rename with copy fallback for cross device moves
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	return os.Remove(src)
+}
+
+// ── Archive unpacking ────────────────────────────────────────────────────
+
+func unpackZip(zipPath, destPath string, flat bool) error {
+	reader, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	for _, f := range reader.File {
 		var targetPath string
 		if flat {
 			targetPath = filepath.Join(destPath, filepath.Base(f.Name))
 		} else {
 			targetPath = filepath.Join(destPath, f.Name)
 		}
+		if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(destPath)) {
+			continue // Zip slip guard
+		}
 
 		if f.FileInfo().IsDir() {
 			if !flat {
-				os.MkdirAll(targetPath, 0755)
+				_ = os.MkdirAll(targetPath, 0755)
 			}
 			continue
 		}
 
-		// CREATE PARENT DIRS
 		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 			return err
 		}
-
-		// EXTRACT FILE
 		outFile, err := os.OpenFile(targetPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
 		if err != nil {
 			return err
 		}
-
 		rc, err := f.Open()
 		if err != nil {
 			outFile.Close()
 			return err
 		}
-
 		_, err = io.Copy(outFile, rc)
 		rc.Close()
 		outFile.Close()
@@ -1628,11 +1308,10 @@ func unpackZip(zipPath string, destPath string, flat bool) error {
 			return err
 		}
 	}
-
 	return nil
 }
 
-func unpackTarGz(tarPath string, destPath string, flat bool) error {
+func unpackTarGz(tarPath, destPath string, flat bool) error {
 	file, err := os.Open(tarPath)
 	if err != nil {
 		return err
@@ -1646,7 +1325,6 @@ func unpackTarGz(tarPath string, destPath string, flat bool) error {
 	defer gzr.Close()
 
 	tr := tar.NewReader(gzr)
-
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -1656,12 +1334,14 @@ func unpackTarGz(tarPath string, destPath string, flat bool) error {
 			return err
 		}
 
-		// DETERMINE OUTPUT PATH
 		var targetPath string
 		if flat {
 			targetPath = filepath.Join(destPath, filepath.Base(header.Name))
 		} else {
 			targetPath = filepath.Join(destPath, header.Name)
+		}
+		if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(destPath)) {
+			continue // Tar slip guard
 		}
 
 		switch header.Typeflag {
@@ -1672,17 +1352,13 @@ func unpackTarGz(tarPath string, destPath string, flat bool) error {
 				}
 			}
 		case tar.TypeReg:
-			// CREATE PARENT DIRS
 			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
 				return err
 			}
-
-			// EXTRACT FILE
 			outFile, err := os.Create(targetPath)
 			if err != nil {
 				return err
 			}
-
 			if _, err := io.Copy(outFile, tr); err != nil {
 				outFile.Close()
 				return err
@@ -1690,39 +1366,37 @@ func unpackTarGz(tarPath string, destPath string, flat bool) error {
 			outFile.Close()
 		}
 	}
-
 	return nil
 }
 
-func recursivelyUnpack(archivePath string, destPath string, flat bool) error {
-	// DETECT ARCHIVE TYPE
-	file, err := os.Open(archivePath)
+func isZipMagic(magic []byte) bool {
+	return len(magic) >= 4 && magic[0] == 0x50 && magic[1] == 0x4B && magic[2] == 0x03 && magic[3] == 0x04
+}
+
+func isGzipMagic(magic []byte) bool {
+	return len(magic) >= 2 && magic[0] == 0x1F && magic[1] == 0x8B
+}
+
+func readMagic(path string) []byte {
+	file, err := os.Open(path)
 	if err != nil {
-		return err
+		return nil
 	}
 	defer file.Close()
-
-	// READ MAGIC NUMBERS
 	magic := make([]byte, 4)
-	if _, err := file.Read(magic); err != nil {
-		return err
-	}
+	n, _ := io.ReadFull(file, magic)
+	return magic[:n]
+}
 
-	// RESET FILE POINTER
-	if _, err := file.Seek(0, 0); err != nil {
-		return err
-	}
-
-	isZip := magic[0] == 0x50 && magic[1] == 0x4B && magic[2] == 0x03 && magic[3] == 0x04
-	isGzip := magic[0] == 0x1F && magic[1] == 0x8B
-
-	// FIRST LEVEL UNPACKING
+// Recursive unpacks nested archives in place
+func recursivelyUnpack(archivePath, destPath string, flat bool) error {
+	magic := readMagic(archivePath)
 	switch {
-	case isZip:
+	case isZipMagic(magic):
 		if err := unpackZip(archivePath, destPath, flat); err != nil {
 			return err
 		}
-	case isGzip:
+	case isGzipMagic(magic):
 		if err := unpackTarGz(archivePath, destPath, flat); err != nil {
 			return err
 		}
@@ -1730,9 +1404,8 @@ func recursivelyUnpack(archivePath string, destPath string, flat bool) error {
 		return fmt.Errorf("unsupported archive format")
 	}
 
-	// FIND AND UNPACK NESTED ARCHIVES
-	files := []string{}
-	err = filepath.Walk(destPath, func(path string, info os.FileInfo, err error) error {
+	var files []string
+	err := filepath.Walk(destPath, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() {
 			return nil
 		}
@@ -1743,70 +1416,42 @@ func recursivelyUnpack(archivePath string, destPath string, flat bool) error {
 		return err
 	}
 
-	// PROCESS EACH FILE FOR NESTED ARCHIVES
 	for _, path := range files {
-		file, err := os.Open(path)
+		magic := readMagic(path)
+		if !isZipMagic(magic) && !isGzipMagic(magic) {
+			continue
+		}
+
+		tempDir, err := os.MkdirTemp("", "dfcli-nested-*")
 		if err != nil {
 			continue
 		}
-
-		magic := make([]byte, 4)
-		if _, err := file.Read(magic); err != nil {
-			file.Close()
+		if err := recursivelyUnpack(path, tempDir, flat); err != nil {
+			os.RemoveAll(tempDir)
 			continue
 		}
-		file.Close()
 
-		isNested := (magic[0] == 0x50 && magic[1] == 0x4B && magic[2] == 0x03 && magic[3] == 0x04) || // ZIP
-			(magic[0] == 0x1F && magic[1] == 0x8B) // GZIP
-
-		if isNested {
-			// CREATE TEMP DIR FOR NESTED CONTENTS
-			tempDir, err := os.MkdirTemp("", "dfcli-nested-*")
-			if err != nil {
-				continue
+		err = filepath.Walk(tempDir, func(srcPath string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() {
+				return nil
 			}
-
-			// UNPACK NESTED ARCHIVE
-			if err := recursivelyUnpack(path, tempDir, flat); err != nil {
-				os.RemoveAll(tempDir)
-				continue
+			var targetPath string
+			if flat {
+				targetPath = filepath.Join(destPath, filepath.Base(srcPath))
+			} else {
+				rel, _ := filepath.Rel(tempDir, srcPath)
+				targetPath = filepath.Join(filepath.Dir(path), rel)
 			}
-
-			// MOVE CONTENTS TO FINAL DESTINATION
-			err = filepath.Walk(tempDir, func(srcPath string, info os.FileInfo, err error) error {
-				if err != nil || info.IsDir() {
-					return nil
-				}
-
-				// DETERMINE TARGET PATH
-				var targetPath string
-				if flat {
-					targetPath = filepath.Join(destPath, filepath.Base(srcPath))
-				} else {
-					rel, _ := filepath.Rel(tempDir, srcPath)
-					parentDir := filepath.Dir(path)
-					targetPath = filepath.Join(parentDir, rel)
-				}
-
-				// ENSURE TARGET DIR EXISTS
-				if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
-					return err
-				}
-
-				// MOVE FILE
-				return os.Rename(srcPath, targetPath)
-			})
-
-			os.RemoveAll(tempDir)
-			if err != nil {
-				continue
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+				return err
 			}
-
-			// REMOVE ORIGINAL ARCHIVE
-			os.Remove(path)
+			return moveFile(srcPath, targetPath)
+		})
+		os.RemoveAll(tempDir)
+		if err != nil {
+			continue
 		}
+		os.Remove(path)
 	}
-
 	return nil
 }

@@ -1,0 +1,20 @@
+---
+# Distroface - Authelia Users
+#
+# Do NOT use default admin in production.
+# Default login is "admin" / "admin"
+#
+# To generate a new password hash:
+#
+#   docker run --rm authelia/authelia:latest \
+#     authelia crypto hash generate argon2 \
+#     --password 'your-password-here'
+
+users:
+  admin: # username
+    disabled: false
+    displayname: 'Distroface Admin'
+    password: '$argon2id$v=19$m=65536,t=3,p=4$9X6yDiM/+/Wi1dBCzPGftw$7hqUauLP/Hh9Z5KlLQn/2IVNdX+/vbWLFgz/i+TtchI' # password (hash of "admin")
+    email: 'admin@distroface.local'
+    groups:
+      - 'admin'

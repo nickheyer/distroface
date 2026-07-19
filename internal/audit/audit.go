@@ -1,0 +1,92 @@
+package audit
+
+import (
+	"context"
+	"time"
+
+	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/settings"
+	"github.com/nickheyer/distroface/pkg/logger"
+)
+
+// Outcome constants
+const (
+	OutcomeSuccess = "success"
+	OutcomeDenied  = "denied"
+	OutcomeError   = "error"
+)
+
+type Event struct {
+	Action   string
+	Resource string
+	Outcome  string
+	Detail   string
+	SourceIP string
+	Actor    string
+	ActorID  string
+}
+
+// Writes security events to the db, disabled settings drop everything
+type Recorder struct {
+	store *stores.Store
+	res   *settings.Resolver
+	log   *logger.Logger
+}
+
+func NewRecorder(store *stores.Store, res *settings.Resolver, log *logger.Logger) *Recorder {
+	return &Recorder{store: store, res: res, log: log}
+}
+
+// Write failures only log, callers never see them
+func (r *Recorder) Record(ctx context.Context, ev Event) {
+	if r == nil || !r.res.System(ctx).GetSecurity().GetAudit().GetEnabled() {
+		return
+	}
+	record := &storage.AuditEvent{
+		Action:   ev.Action,
+		Resource: ev.Resource,
+		Outcome:  ev.Outcome,
+		Detail:   ev.Detail,
+		SourceIP: ev.SourceIP,
+		Actor:    ev.Actor,
+		ActorID:  ev.ActorID,
+	}
+	// Context may already be canceled, the write should still land
+	if err := r.store.CreateAuditEvent(context.WithoutCancel(ctx), record); err != nil {
+		r.log.Error("audit write failed for %s: %v", ev.Action, err)
+	}
+}
+
+// Prunes old events now and then daily until ctx ends
+func (r *Recorder) ScheduleRetention(ctx context.Context) {
+	if r == nil {
+		return
+	}
+	prune := func() {
+		days := int(r.res.System(ctx).GetSecurity().GetAudit().GetRetentionDays())
+		if days <= 0 {
+			return
+		}
+		// Store timestamps are utc, keep comparisons in the same zone
+		cutoff := time.Now().UTC().AddDate(0, 0, -days)
+		if n, err := r.store.DeleteAuditEventsBefore(ctx, cutoff); err != nil {
+			r.log.Error("audit retention prune failed: %v", err)
+		} else if n > 0 {
+			r.log.Info("audit retention pruned %d events", n)
+		}
+	}
+	go func() {
+		prune()
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				prune()
+			}
+		}
+	}()
+}

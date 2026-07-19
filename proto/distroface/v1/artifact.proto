@@ -1,0 +1,242 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// ArtifactService manages artifact repositories, uploads, and search.
+// Data transfer itself is plain HTTP under /api/v1/artifacts.
+service ArtifactService {
+  // CreateArtifactRepository creates a new artifact repository.
+  rpc CreateArtifactRepository(CreateArtifactRepositoryRequest) returns (CreateArtifactRepositoryResponse) {}
+  // GetArtifactRepository returns a single artifact repository by name.
+  rpc GetArtifactRepository(GetArtifactRepositoryRequest) returns (GetArtifactRepositoryResponse) {}
+  // ListArtifactRepositories returns artifact repositories visible to the caller.
+  rpc ListArtifactRepositories(ListArtifactRepositoriesRequest) returns (ListArtifactRepositoriesResponse) {}
+  // UpdateArtifactRepository modifies repository description or visibility.
+  rpc UpdateArtifactRepository(UpdateArtifactRepositoryRequest) returns (UpdateArtifactRepositoryResponse) {}
+  // DeleteArtifactRepository removes a repository, its artifacts, and unreferenced blobs.
+  rpc DeleteArtifactRepository(DeleteArtifactRepositoryRequest) returns (DeleteArtifactRepositoryResponse) {}
+
+  // InitiateArtifactUpload starts a chunked upload session and returns its ID.
+  rpc InitiateArtifactUpload(InitiateArtifactUploadRequest) returns (InitiateArtifactUploadResponse) {}
+  // CompleteArtifactUpload finalizes an upload session into a stored artifact.
+  rpc CompleteArtifactUpload(CompleteArtifactUploadRequest) returns (CompleteArtifactUploadResponse) {}
+
+  // GetArtifact returns a single artifact by ID.
+  rpc GetArtifact(GetArtifactRequest) returns (GetArtifactResponse) {}
+  // ListArtifacts returns artifacts in a repository, newest first.
+  rpc ListArtifacts(ListArtifactsRequest) returns (ListArtifactsResponse) {}
+  // ListArtifactVersions returns artifacts grouped by version.
+  rpc ListArtifactVersions(ListArtifactVersionsRequest) returns (ListArtifactVersionsResponse) {}
+  // SearchArtifacts searches artifacts by name/version/path/properties.
+  rpc SearchArtifacts(SearchArtifactsRequest) returns (SearchArtifactsResponse) {}
+
+  // UpdateArtifact renames/moves an artifact or replaces its metadata JSON.
+  rpc UpdateArtifact(UpdateArtifactRequest) returns (UpdateArtifactResponse) {}
+  // SetArtifactProperties replaces the full property set of an artifact.
+  rpc SetArtifactProperties(SetArtifactPropertiesRequest) returns (SetArtifactPropertiesResponse) {}
+  // DeleteArtifact removes an artifact (and its blob when unreferenced).
+  rpc DeleteArtifact(DeleteArtifactRequest) returns (DeleteArtifactResponse) {}
+}
+
+// CreateArtifactRepositoryRequest is the request to create an artifact repository.
+message CreateArtifactRepositoryRequest {
+  string name = 1;
+  string description = 2;
+  bool is_private = 3;
+  // namespace is the org or username the repo lives under; empty defaults to the caller.
+  string namespace = 4;
+}
+
+// CreateArtifactRepositoryResponse is the response after creating a repository.
+message CreateArtifactRepositoryResponse {
+  ArtifactRepository repository = 1;
+}
+
+// GetArtifactRepositoryRequest is the request to fetch a repository by name.
+message GetArtifactRepositoryRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+// GetArtifactRepositoryResponse is the response containing a single repository.
+message GetArtifactRepositoryResponse {
+  ArtifactRepository repository = 1;
+}
+
+// ListArtifactRepositoriesRequest is the request to list artifact repositories.
+message ListArtifactRepositoriesRequest {
+  PageRequest page = 1;
+  // namespace limits the list to one namespace when set.
+  string namespace = 2;
+}
+
+// ListArtifactRepositoriesResponse is the paginated list of repositories.
+message ListArtifactRepositoriesResponse {
+  repeated ArtifactRepository repositories = 1;
+  PageInfo page = 2;
+}
+
+// UpdateArtifactRepositoryRequest is the request to update a repository.
+message UpdateArtifactRepositoryRequest {
+  string name = 1;
+  optional string description = 2;
+  optional bool is_private = 3;
+  string namespace = 4;
+}
+
+// UpdateArtifactRepositoryResponse is the response after updating a repository.
+message UpdateArtifactRepositoryResponse {
+  ArtifactRepository repository = 1;
+}
+
+// DeleteArtifactRepositoryRequest is the request to delete a repository.
+message DeleteArtifactRepositoryRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+// DeleteArtifactRepositoryResponse is the response after deleting a repository.
+message DeleteArtifactRepositoryResponse {}
+
+// InitiateArtifactUploadRequest is the request to start an upload session.
+message InitiateArtifactUploadRequest {
+  string repo_name = 1;
+  string namespace = 2;
+}
+
+// InitiateArtifactUploadResponse carries the new upload session ID.
+message InitiateArtifactUploadResponse {
+  string upload_id = 1;
+  // upload_url is the HTTP endpoint chunks should be PATCHed to.
+  string upload_url = 2;
+}
+
+// CompleteArtifactUploadRequest finalizes an upload session.
+message CompleteArtifactUploadRequest {
+  string repo_name = 1;
+  string upload_id = 2;
+  string version = 3;
+  // path is the relative artifact path; defaults to a sanitized repo name.
+  string path = 4;
+  map<string, string> properties = 5;
+  // metadata is an optional arbitrary JSON object string.
+  string metadata = 6;
+  string namespace = 7;
+}
+
+// CompleteArtifactUploadResponse is the response containing the stored artifact.
+message CompleteArtifactUploadResponse {
+  Artifact artifact = 1;
+}
+
+// GetArtifactRequest is the request to fetch an artifact by ID.
+message GetArtifactRequest {
+  string repo_name = 1;
+  string id = 2;
+  string namespace = 3;
+}
+
+// GetArtifactResponse is the response containing a single artifact.
+message GetArtifactResponse {
+  Artifact artifact = 1;
+}
+
+// ListArtifactsRequest is the request to list artifacts in a repository.
+message ListArtifactsRequest {
+  PageRequest page = 1;
+  string repo_name = 2;
+  // version filters to a single version when set.
+  string version = 3;
+  string namespace = 4;
+}
+
+// ListArtifactsResponse is the paginated list of artifacts.
+message ListArtifactsResponse {
+  repeated Artifact artifacts = 1;
+  PageInfo page = 2;
+}
+
+// ListArtifactVersionsRequest is the request to list artifacts grouped by version.
+message ListArtifactVersionsRequest {
+  PageRequest page = 1;
+  string repo_name = 2;
+  string namespace = 3;
+}
+
+// ArtifactVersionGroup is a version string with its artifacts.
+message ArtifactVersionGroup {
+  string version = 1;
+  repeated Artifact artifacts = 2;
+}
+
+// ListArtifactVersionsResponse groups a repository's artifacts by version.
+message ListArtifactVersionsResponse {
+  repeated ArtifactVersionGroup versions = 1;
+  PageInfo page = 2;
+}
+
+// SearchArtifactsRequest is the request to search artifacts.
+message SearchArtifactsRequest {
+  // page.query filters on name, version, path.
+  // page.order_by accepts name, version, path, size, created_at, updated_at.
+  PageRequest page = 1;
+  // repo_name limits the search to one repository when set.
+  string repo_name = 2;
+  // properties must all match exactly (key=value).
+  map<string, string> properties = 3;
+  // namespace limits the search to one namespace when set.
+  string namespace = 4;
+}
+
+// SearchArtifactsResponse is the paginated search result.
+message SearchArtifactsResponse {
+  repeated Artifact artifacts = 1;
+  PageInfo page = 2;
+}
+
+// UpdateArtifactRequest renames/moves an artifact or replaces its metadata.
+message UpdateArtifactRequest {
+  string repo_name = 1;
+  string id = 2;
+  optional string name = 3;
+  optional string path = 4;
+  optional string version = 5;
+  // metadata replaces the stored metadata JSON when present.
+  optional string metadata = 6;
+  string namespace = 7;
+}
+
+// UpdateArtifactResponse is the response after updating an artifact.
+message UpdateArtifactResponse {
+  Artifact artifact = 1;
+}
+
+// SetArtifactPropertiesRequest replaces the full property set of an artifact.
+message SetArtifactPropertiesRequest {
+  string repo_name = 1;
+  string id = 2;
+  map<string, string> properties = 3;
+  string namespace = 4;
+}
+
+// SetArtifactPropertiesResponse is the response after setting properties.
+message SetArtifactPropertiesResponse {
+  Artifact artifact = 1;
+}
+
+// DeleteArtifactRequest removes an artifact by ID, or by version+path when ID is empty.
+message DeleteArtifactRequest {
+  string repo_name = 1;
+  string id = 2;
+  string version = 3;
+  string path = 4;
+  string namespace = 5;
+}
+
+// DeleteArtifactResponse is the response after deleting an artifact.
+message DeleteArtifactResponse {}

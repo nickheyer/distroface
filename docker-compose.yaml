@@ -1,0 +1,10 @@
+services:
+  distroface:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.distroface
+    container_name: distroface-dev
+    restart: "no"
+    network_mode: host
+    environment:
+      - TZ=UTC

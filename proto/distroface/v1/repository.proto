@@ -1,0 +1,161 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// RepositoryService manages container image repositories.
+service RepositoryService {
+  // GetRepository returns a repository by namespace and name.
+  rpc GetRepository(GetRepositoryRequest) returns (GetRepositoryResponse) {}
+  // ListRepositories returns a paginated list of repositories.
+  rpc ListRepositories(ListRepositoriesRequest) returns (ListRepositoriesResponse) {}
+  // DeleteRepository deletes a repository.
+  rpc DeleteRepository(DeleteRepositoryRequest) returns (DeleteRepositoryResponse) {}
+  // ListTags returns a paginated list of tags for a repository.
+  rpc ListTags(ListTagsRequest) returns (ListTagsResponse) {}
+  // ResolveTag resolves a tag name to its descriptor with children populated.
+  rpc ResolveTag(ResolveTagRequest) returns (ResolveTagResponse) {}
+  // UpdateRepository updates a repository's metadata.
+  rpc UpdateRepository(UpdateRepositoryRequest) returns (UpdateRepositoryResponse) {}
+  // StarRepository stars a repository for the current user.
+  rpc StarRepository(StarRepositoryRequest) returns (StarRepositoryResponse) {}
+  // UnstarRepository removes the current user's star from a repository.
+  rpc UnstarRepository(UnstarRepositoryRequest) returns (UnstarRepositoryResponse) {}
+  // ListStarredRepositories returns the current user's starred repositories.
+  rpc ListStarredRepositories(ListStarredRepositoriesRequest) returns (ListStarredRepositoriesResponse) {}
+}
+
+// GetRepositoryRequest identifies a repository to retrieve.
+message GetRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// GetRepositoryResponse contains the requested repository.
+message GetRepositoryResponse {
+  // repository is the requested repository.
+  Repository repository = 1;
+}
+
+// ListRepositoriesRequest contains pagination and filter parameters.
+message ListRepositoriesRequest {
+  PageRequest page = 1;
+  // namespace filters by namespace.
+  string namespace = 2;
+  // visibility filters by visibility.
+  Visibility visibility = 3;
+}
+
+// ListRepositoriesResponse contains a page of repositories.
+message ListRepositoriesResponse {
+  // repositories is the list of repositories.
+  repeated Repository repositories = 1;
+  PageInfo page = 2;
+}
+
+// DeleteRepositoryRequest identifies a repository to delete.
+message DeleteRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// DeleteRepositoryResponse is empty on success.
+message DeleteRepositoryResponse {}
+
+// ListTagsRequest identifies a repository and pagination parameters.
+message ListTagsRequest {
+  PageRequest page = 1;
+  // namespace is the repository namespace.
+  string namespace = 2;
+  // name is the repository name.
+  string name = 3;
+}
+
+// ListTagsResponse contains a page of tags.
+message ListTagsResponse {
+  // tags is the list of tags.
+  repeated Tag tags = 1;
+  PageInfo page = 2;
+}
+
+// ResolveTagRequest identifies a tag to resolve.
+message ResolveTagRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+  // tag is the tag name.
+  string tag = 3;
+}
+
+// ResolveTagResponse contains the resolved descriptor for a tag.
+message ResolveTagResponse {
+  // descriptor is the resolved manifest descriptor with children populated.
+  Descriptor descriptor = 1;
+}
+
+// UpdateRepositoryRequest contains fields to update on a repository.
+message UpdateRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+  // description is the new description, if provided.
+  optional string description = 3;
+  // visibility is the new visibility, if provided.
+  optional Visibility visibility = 4;
+}
+
+// UpdateRepositoryResponse contains the updated repository.
+message UpdateRepositoryResponse {
+  // repository is the updated repository.
+  Repository repository = 1;
+}
+
+// StarRepositoryRequest identifies a repository to star.
+message StarRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// StarRepositoryResponse contains the updated star count.
+message StarRepositoryResponse {
+  // star_count is the repository's star count after starring.
+  int64 star_count = 1;
+}
+
+// UnstarRepositoryRequest identifies a repository to unstar.
+message UnstarRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// UnstarRepositoryResponse contains the updated star count.
+message UnstarRepositoryResponse {
+  // star_count is the repository's star count after unstarring.
+  int64 star_count = 1;
+}
+
+// ListStarredRepositoriesRequest contains pagination parameters.
+message ListStarredRepositoriesRequest {
+  PageRequest page = 1;
+}
+
+// ListStarredRepositoriesResponse contains a page of starred repositories.
+message ListStarredRepositoriesResponse {
+  // repositories is the list of starred repositories.
+  repeated Repository repositories = 1;
+  PageInfo page = 2;
+}

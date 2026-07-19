@@ -1,0 +1,283 @@
+package db
+
+import (
+	"time"
+
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+)
+
+// Organization role constants
+const (
+	OrgRoleOwner  = "owner"
+	OrgRoleAdmin  = "admin"
+	OrgRoleMember = "member"
+)
+
+type User struct {
+	ID                 string     `json:"id" gorm:"primaryKey"`
+	Username           string     `json:"username" gorm:"not null;uniqueIndex:idx_user_provider"`
+	Email              *string    `json:"email" gorm:"uniqueIndex:idx_user_email,where:email IS NOT NULL AND email <> ''"`
+	PasswordHash       string     `json:"-" gorm:"column:password_hash"`
+	DisplayName        string     `json:"display_name"`
+	AuthProvider       string     `json:"auth_provider" gorm:"not null;default:'local';uniqueIndex:idx_user_provider"`
+	OIDCSubject        string     `json:"oidc_subject" gorm:"column:oidc_subject;uniqueIndex:idx_oidc_identity,where:oidc_subject != ''"`
+	OIDCIssuer         string     `json:"oidc_issuer" gorm:"column:oidc_issuer;uniqueIndex:idx_oidc_identity,where:oidc_subject != ''"`
+	IsActive           bool       `json:"is_active" gorm:"not null;default:true"`
+	MustChangePassword bool       `json:"must_change_password" gorm:"not null;default:false;column:must_change_password"`
+	LastLogin          *time.Time `json:"last_login" gorm:"column:last_login"`
+	CreatedAt          time.Time  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt          time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type Role struct {
+	ID          string    `json:"id" gorm:"primaryKey"`
+	Name        string    `json:"name" gorm:"not null;uniqueIndex"`
+	Description string    `json:"description"`
+	IsSystem    bool      `json:"is_system" gorm:"not null;default:false"`
+	IsDefault   bool      `json:"is_default" gorm:"not null;default:false"`
+	CreatedAt   time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type UserRole struct {
+	ID        string    `json:"id" gorm:"primaryKey"`
+	UserID    string    `json:"user_id" gorm:"not null;index;column:user_id"`
+	RoleName  string    `json:"role_name" gorm:"not null;index;column:role_name"`
+	Source    string    `json:"source" gorm:"not null;default:'local'"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
+}
+
+type SystemSetting struct { // Internal state like the jwt secret, never user config
+	Key   string `gorm:"primaryKey"`
+	Value string `gorm:"not null"`
+}
+
+type SettingsRow struct { // One protojson settings document per scope tier
+	ScopeType int32     `gorm:"primaryKey;column:scope_type"`
+	ScopeID   string    `gorm:"primaryKey;default:'';column:scope_id"`
+	Value     string    `gorm:"type:text;not null"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
+}
+
+type Session struct {
+	ID        string    `json:"id" gorm:"primaryKey"`
+	UserID    string    `json:"user_id" gorm:"index;not null;column:user_id"`
+	User      User      `json:"-" gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Token     string    `json:"-" gorm:"not null;uniqueIndex"`
+	ExpiresAt time.Time `json:"expires_at" gorm:"not null;index"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
+}
+
+type APIToken struct {
+	ID         string     `json:"id" gorm:"primaryKey"`
+	UserID     string     `json:"user_id" gorm:"not null;index;column:user_id"`
+	Name       string     `json:"name" gorm:"not null"`
+	TokenHash  string     `json:"-" gorm:"not null;uniqueIndex;column:token_hash"`
+	ExpiresAt  *time.Time `json:"expires_at" gorm:"column:expires_at"`
+	LastUsedAt *time.Time `json:"last_used_at" gorm:"column:last_used_at"`
+	CreatedAt  time.Time  `json:"created_at" gorm:"autoCreateTime"`
+	User       *User      `json:"-" gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type Organization struct {
+	ID          string    `json:"id" gorm:"primaryKey"`
+	Name        string    `json:"name" gorm:"not null;uniqueIndex"`
+	DisplayName string    `json:"display_name" gorm:"column:display_name"`
+	Description string    `json:"description"`
+	CreatedBy   string    `json:"created_by" gorm:"not null;column:created_by"`
+	CreatedAt   time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type OrgMember struct {
+	ID        string        `json:"id" gorm:"primaryKey"`
+	OrgID     string        `json:"org_id" gorm:"not null;uniqueIndex:idx_org_user;column:org_id"`
+	UserID    string        `json:"user_id" gorm:"not null;uniqueIndex:idx_org_user;column:user_id"`
+	Role      string        `json:"role" gorm:"not null;default:'member'"`
+	Source    string        `json:"source" gorm:"not null;default:'local'"`
+	CreatedAt time.Time     `json:"created_at" gorm:"autoCreateTime"`
+	Org       *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+	User      *User         `json:"-" gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type Repository struct {
+	ID             string     `json:"id" gorm:"primaryKey"`
+	Namespace      string     `json:"namespace" gorm:"uniqueIndex:idx_namespace_name;not null"`
+	Name           string     `json:"name" gorm:"uniqueIndex:idx_namespace_name;not null"`
+	Description    string     `json:"description"`
+	OwnerID        string     `json:"owner_id" gorm:"index"`
+	IsPrivate      bool       `json:"is_private" gorm:"default:false"`
+	IsOrgNamespace bool       `json:"is_org_namespace" gorm:"default:false"`
+	PullCount      int64      `json:"pull_count" gorm:"default:0"`
+	PushCount      int64      `json:"push_count" gorm:"default:0"`
+	LastPush       *time.Time `json:"last_push"`
+	CreatedAt      time.Time  `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt      time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type Star struct {
+	ID        string      `json:"id" gorm:"primaryKey"`
+	UserID    string      `json:"user_id" gorm:"not null;uniqueIndex:idx_star_user_repo;column:user_id"`
+	RepoID    string      `json:"repo_id" gorm:"not null;uniqueIndex:idx_star_user_repo;index;column:repo_id"`
+	CreatedAt time.Time   `json:"created_at" gorm:"autoCreateTime"`
+	User      *User       `json:"-" gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Repo      *Repository `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+// Webhook scope constants
+const (
+	WebhookScopeRepository   = "repository"
+	WebhookScopeOrganization = "organization"
+)
+
+type Webhook struct {
+	ID              string        `json:"id" gorm:"primaryKey"`
+	Scope           string        `json:"scope" gorm:"not null"`
+	RepoID          *string       `json:"repo_id" gorm:"index;column:repo_id"`
+	OrgID           *string       `json:"org_id" gorm:"index;column:org_id"`
+	URL             string        `json:"url" gorm:"not null"`
+	Secret          string        `json:"-" gorm:"column:secret"` // Plaintext secret needed for hmac signing
+	Events          string        `json:"events" gorm:"not null"` // JSON array: ["push","pull","delete"]
+	Active          bool          `json:"active" gorm:"not null;default:true"`
+	ContentType     string        `json:"content_type" gorm:"not null;default:'application/json'"`
+	PayloadTemplate string        `json:"payload_template" gorm:"type:text"`
+	CreatedBy       string        `json:"created_by" gorm:"not null;column:created_by"`
+	CreatedAt       time.Time     `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt       time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
+	Repo            *Repository   `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+	Org             *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
+type WebhookDelivery struct {
+	ID           string    `json:"id" gorm:"primaryKey"`
+	WebhookID    string    `json:"webhook_id" gorm:"not null;index;column:webhook_id"`
+	Event        string    `json:"event" gorm:"not null"`
+	StatusCode   int       `json:"status_code"`
+	Success      bool      `json:"success"`
+	RequestBody  string    `json:"request_body"`
+	ResponseBody string    `json:"response_body" gorm:"type:text"`
+	DurationMs   int64     `json:"duration_ms"`
+	Attempt      int       `json:"attempt" gorm:"not null;default:1"`
+	DeliveredAt  time.Time `json:"delivered_at" gorm:"autoCreateTime"`
+	Webhook      *Webhook  `json:"-" gorm:"foreignKey:WebhookID;constraint:OnDelete:CASCADE"`
+}
+
+type RegistryPortal struct { // Alternate org-owned registry host and/or proxy port
+	ID             string        `json:"id" gorm:"primaryKey"`
+	OrgID          string        `json:"org_id" gorm:"not null;index;column:org_id"`
+	Name           string        `json:"name" gorm:"not null"`
+	Hostname       string        `json:"hostname" gorm:"not null;index"` // Empty matches any host on Port
+	Port           int           `json:"port" gorm:"not null;index"`     // 0 serves on the main port only, ports may be shared
+	MapUnqualified bool          `json:"map_unqualified" gorm:"not null"`
+	Rules          string        `json:"rules" gorm:"not null;default:'[]'"` // JSON array of {pattern, replace}
+	AllowPush      bool          `json:"allow_push" gorm:"not null"`
+	RequireAuth    bool          `json:"require_auth" gorm:"not null"`
+	TLS             bool          `json:"tls" gorm:"not null;default:false;column:tls"`             // Https enforced for this portal, cleartext requests redirect
+	CertSource      v1.CertSource `json:"cert_source" gorm:"not null;default:1;column:cert_source"` // How the serving certificate materializes
+	HidePrimaryLink bool          `json:"hide_primary_link" gorm:"not null;default:false;column:hide_primary_link"` // Portal UI drops the exit link
+	Enabled         bool          `json:"enabled" gorm:"not null"`
+	CreatedAt      time.Time     `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt      time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
+	Org            *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
+type TLSCertificate struct { // Uploaded pem material, keys never leave the db
+	ID        string      `json:"id" gorm:"primaryKey"`
+	Scope     v1.TLSScope `json:"scope" gorm:"not null;uniqueIndex:idx_tls_cert_target"`
+	OrgID     string      `json:"org_id" gorm:"not null;default:'';uniqueIndex:idx_tls_cert_target;column:org_id"`
+	PortalID  string      `json:"portal_id" gorm:"not null;default:'';uniqueIndex:idx_tls_cert_target;column:portal_id"`
+	CertPEM   string      `json:"-" gorm:"type:text;not null;column:cert_pem"`
+	KeyPEM    string      `json:"-" gorm:"type:text;not null;column:key_pem"`
+	CreatedBy string      `json:"created_by" gorm:"column:created_by"`
+	CreatedAt time.Time   `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt time.Time   `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v1 parity
+	ID          int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	Namespace   string    `json:"namespace" gorm:"not null;default:'';uniqueIndex:idx_artifact_repo_namespace_name;column:namespace"` // Org name or owner username
+	Name        string    `json:"name" gorm:"not null;uniqueIndex:idx_artifact_repo_namespace_name"`
+	Description string    `json:"description"`
+	OwnerID     string    `json:"owner_id" gorm:"index;column:owner_id"`
+	IsPrivate   bool      `json:"private" gorm:"not null;default:false"`
+	CreatedAt   time.Time `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt   time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type Artifact struct {
+	ID         string              `json:"id" gorm:"primaryKey"`
+	RepoID     int64               `json:"repo_id" gorm:"not null;index;uniqueIndex:idx_artifact_identity;column:repo_id"`
+	Name       string              `json:"name" gorm:"not null"`
+	Path       string              `json:"path" gorm:"not null;uniqueIndex:idx_artifact_identity"`
+	UploadID   string              `json:"upload_id" gorm:"not null;column:upload_id"`
+	Version    string              `json:"version" gorm:"not null;uniqueIndex:idx_artifact_identity"`
+	PropsHash  string              `json:"-" gorm:"not null;default:'';uniqueIndex:idx_artifact_identity;column:props_hash"` // Property set fingerprint, fourth identity component
+	Digest     string              `json:"digest" gorm:"not null;index"`                                                     // Full sha256 content address
+	Size       int64               `json:"size" gorm:"not null"`
+	MimeType   string              `json:"mime_type" gorm:"column:mime_type"`
+	Metadata   string              `json:"metadata" gorm:"type:text;not null;default:'{}'"` // Arbitrary JSON object
+	CreatedAt  time.Time           `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt  time.Time           `json:"updated_at" gorm:"autoUpdateTime"`
+	Properties map[string]string   `json:"properties" gorm:"-"` // Loaded from artifact_properties
+	Repo       *ArtifactRepository `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type ArtifactProperty struct {
+	ID         int64     `json:"id" gorm:"primaryKey;autoIncrement"`
+	ArtifactID string    `json:"artifact_id" gorm:"not null;uniqueIndex:idx_prop_artifact_key;column:artifact_id"`
+	Key        string    `json:"key" gorm:"not null;uniqueIndex:idx_prop_artifact_key;index:idx_prop_key_value"`
+	Value      string    `json:"value" gorm:"not null;index:idx_prop_key_value"`
+	CreatedAt  time.Time `json:"created_at" gorm:"autoCreateTime"`
+	Artifact   *Artifact `json:"-" gorm:"foreignKey:ArtifactID;constraint:OnDelete:CASCADE"`
+}
+
+type CertificateDomain struct { // Allowlist and approval entry for a portal hostname
+	ID         string                    `json:"id" gorm:"primaryKey"`
+	Domain     string                    `json:"domain" gorm:"not null;uniqueIndex"`
+	Scope      v1.CertificateDomainScope `json:"scope" gorm:"not null;default:1"`
+	OrgID      *string                   `json:"org_id" gorm:"index;column:org_id"`
+	Approved   bool                      `json:"approved" gorm:"not null;default:false"`
+	ApprovedBy string                    `json:"approved_by" gorm:"column:approved_by"`
+	CreatedBy  string                    `json:"created_by" gorm:"not null;column:created_by"`
+	CreatedAt  time.Time                 `json:"created_at" gorm:"autoCreateTime"`
+	Org        *Organization             `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
+type ACMECacheEntry struct { // Autocert cache row holding certs and account state
+	Key       string    `gorm:"primaryKey"`
+	Data      []byte    `gorm:"not null"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
+}
+
+type ACMEAccount struct { // Built in acme server account keyed by jwk thumbprint
+	ID            string    `gorm:"primaryKey"` // RFC 7638 thumbprint
+	PublicKeyJSON string    `gorm:"type:text;not null;column:public_key_json"`
+	Contacts      string    `gorm:"type:text;not null;default:'[]'"` // JSON array
+	Status        string    `gorm:"not null;default:'valid'"`
+	CreatedAt     time.Time `gorm:"autoCreateTime"`
+}
+
+type AuditEvent struct {
+	ID        string    `json:"id" gorm:"primaryKey"`
+	Actor     string    `json:"actor" gorm:"index"`
+	ActorID   string    `json:"actor_id" gorm:"column:actor_id"`
+	SourceIP  string    `json:"source_ip" gorm:"column:source_ip"`
+	Action    string    `json:"action" gorm:"not null;index"`
+	Resource  string    `json:"resource" gorm:"index"`
+	Outcome   string    `json:"outcome" gorm:"not null"`
+	Detail    string    `json:"detail" gorm:"type:text"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime;index"`
+}
+
+type RegistrationInvite struct {
+	ID          string     `json:"id" gorm:"primaryKey"`
+	Code        string     `json:"code" gorm:"not null;uniqueIndex"`
+	Description string     `json:"description"`
+	Roles       string     `json:"roles" gorm:"not null;default:'[]'"` // JSON array of role names
+	PinHash     string     `json:"-" gorm:"column:pin_hash"`
+	MaxUses     int        `json:"max_uses" gorm:"not null;default:0"` // 0 = unlimited
+	UseCount    int        `json:"use_count" gorm:"not null;default:0"`
+	ExpiresAt   *time.Time `json:"expires_at" gorm:"column:expires_at"`
+	CreatedBy   string     `json:"created_by" gorm:"not null;column:created_by"`
+	CreatedAt   time.Time  `json:"created_at" gorm:"autoCreateTime"`
+}

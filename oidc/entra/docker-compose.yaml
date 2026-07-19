@@ -1,0 +1,38 @@
+# Distroface + Microsoft Entra ID (OIDC)
+#
+# Entra portal setup
+#   1. Register an app with a Web redirect URI matching DISTROFACE_AUTH_OIDC_REDIRECT_URL
+#   2. Create a client secret under Certificates & secrets
+#   3. Add app roles valued after distroface roles (admin, user) and assign users
+
+services:
+  distroface:
+    image: nickheyer/distroface:dev
+    container_name: distroface
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      # Container runs as uid 1000, chown host dir if need be
+      - /opt/distroface:/app/data
+    environment:
+      - DISTROFACE_DATA_DIR=/app/data
+      - TZ=UTC
+
+      # Public hostname, set when serving behind a real domain
+      #- DISTROFACE_SERVER_HOSTNAME=registry.example.com
+
+      - DISTROFACE_AUTH_LOCAL_ENABLED=true
+      - DISTROFACE_AUTH_OIDC_ENABLED=true
+
+      # Tenant ID required, dont use `common`
+      - DISTROFACE_AUTH_OIDC_ISSUER_URI=https://login.microsoftonline.com/<TENANT_ID>/v2.0
+
+      # Application (client) ID from app registration
+      - DISTROFACE_AUTH_OIDC_CLIENT_ID=<CLIENT_ID>
+      - DISTROFACE_AUTH_OIDC_CLIENT_SECRET=<CLIENT_SECRET>
+
+      # Change localhost:8080 to your public distroface domain
+      - DISTROFACE_AUTH_OIDC_REDIRECT_URL=http://localhost:8080/api/v1/auth/oidc/callback
+
+      # Entra app role values map straight to distroface roles
+      - DISTROFACE_AUTH_OIDC_ROLE_CLAIM=roles

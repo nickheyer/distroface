@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// Read access to the security audit trail, admin only
+service AuditService {
+  // Lists audit events with optional filters and time ordering
+  rpc ListAuditEvents(ListAuditEventsRequest) returns (ListAuditEventsResponse) {}
+}
+
+// One recorded security relevant action
+message AuditEvent {
+  string id = 1;
+  string actor = 2;
+  string actor_id = 3;
+  string source_ip = 4;
+  string action = 5;
+  string resource = 6;
+  string outcome = 7;
+  string detail = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+// page.query filters on action, actor, outcome, resource, source_ip.
+// page.order_by accepts created_at, newest first by default.
+message ListAuditEventsRequest {
+  PageRequest page = 1;
+}
+
+// Matching events in the requested order
+message ListAuditEventsResponse {
+  repeated AuditEvent events = 1;
+  PageInfo page = 2;
+}

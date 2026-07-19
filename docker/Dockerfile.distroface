@@ -1,0 +1,75 @@
+# syntax=docker/dockerfile:1
+ARG APP_VERSION=dev
+
+# Generate protobuf code using buf
+FROM --platform=$BUILDPLATFORM bufbuild/buf:latest AS proto-builder
+WORKDIR /app
+COPY buf.yaml buf.gen.yaml ./
+COPY proto/ ./proto/
+RUN mkdir -p web/distroface/static pkg/proto web/distroface/src/lib/proto && buf generate
+
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend-builder
+
+ARG APP_VERSION
+ENV APP_VERSION=${APP_VERSION}
+
+WORKDIR /app/web/distroface
+
+COPY web/distroface/package*.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+COPY web/distroface/ ./
+COPY --from=proto-builder /app/web/distroface/src/lib/proto ./src/lib/proto/
+
+RUN npm run build
+
+FROM golang:1.25-alpine AS backend-builder
+
+ARG APP_VERSION
+ENV APP_VERSION=${APP_VERSION}
+
+RUN apk add --no-cache gcc musl-dev sqlite-dev
+
+WORKDIR /app
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY . .
+COPY --from=proto-builder /app/pkg/proto ./pkg/proto/
+COPY --from=frontend-builder /app/web/distroface/build ./web/distroface/build
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=1 go build -o distroface ./cmd/distroface
+
+FROM alpine:latest
+
+ARG APP_VERSION
+ENV APP_VERSION=${APP_VERSION}
+ENV DISTROFACE_DATA_DIR=/app/data
+
+RUN apk --no-cache add ca-certificates sqlite-libs
+
+RUN addgroup -g 1000 -S distroface && \
+    adduser -u 1000 -S -G distroface -h /app -H -s /sbin/nologin distroface
+
+WORKDIR /app
+
+COPY --from=backend-builder /app/distroface .
+
+# Portals bind privileged ports without root
+RUN apk add --no-cache --virtual .setcap libcap && \
+    setcap cap_net_bind_service=+ep /app/distroface && \
+    apk del .setcap && \
+    mkdir -p /app/data && chown distroface:distroface /app/data
+
+USER 1000:1000
+
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -qO /dev/null --post-data='{}' --header='Content-Type: application/json' \
+    http://127.0.0.1:8080/distroface.v1.HealthService/HealthCheck || exit 1
+
+CMD ["./distroface"]

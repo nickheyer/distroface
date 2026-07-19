@@ -1,0 +1,288 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// Manages tls certificate domains and acme issuance, system admins manage
+// system scope, org admins manage domains matching their portal hostnames
+service CertificateService {
+  // Lists registered domains, org scoped when org_id is set
+  rpc ListCertificateDomains(ListCertificateDomainsRequest) returns (ListCertificateDomainsResponse) {}
+  // Registers a domain as allowed to receive certificates
+  rpc AddCertificateDomain(AddCertificateDomainRequest) returns (AddCertificateDomainResponse) {}
+  // Removes a registered domain
+  rpc RemoveCertificateDomain(RemoveCertificateDomainRequest) returns (RemoveCertificateDomainResponse) {}
+  // Removes multiple registered domains in one call
+  rpc BulkRemoveCertificateDomains(BulkRemoveCertificateDomainsRequest) returns (BulkRemoveCertificateDomainsResponse) {}
+  // Marks an org scoped domain as allowed to issue, system admin only
+  rpc ApproveCertificateDomain(ApproveCertificateDomainRequest) returns (ApproveCertificateDomainResponse) {}
+  // Requests immediate issuance for a target, blocks until done
+  rpc IssueCertificate(IssueCertificateRequest) returns (IssueCertificateResponse) {}
+  // Uploads pem tls material for the app, an org, an org ca, or a portal
+  rpc UploadTLSCertificate(UploadTLSCertificateRequest) returns (UploadTLSCertificateResponse) {}
+  // Removes uploaded tls material
+  rpc DeleteTLSCertificate(DeleteTLSCertificateRequest) returns (DeleteTLSCertificateResponse) {}
+  // Reports uploaded tls material for the app, an org, or a portal
+  rpc GetTLSMaterial(GetTLSMaterialRequest) returns (GetTLSMaterialResponse) {}
+  // Mints a fresh standalone signing ca for an org, replacing any existing one
+  rpc GenerateOrgCA(GenerateOrgCARequest) returns (GenerateOrgCAResponse) {}
+  // Mints the instance root ca, system admin only
+  rpc GenerateAppCA(GenerateAppCARequest) returns (GenerateAppCAResponse) {}
+  // Signs an org intermediate from the instance root, replacing any org ca
+  rpc IssueOrgICA(IssueOrgICARequest) returns (IssueOrgICAResponse) {}
+  // Resolved certificate state for the app or a portal, with problems
+  rpc GetCertStatus(GetCertStatusRequest) returns (GetCertStatusResponse) {}
+  // Signs a pem csr with the org ca, or the app ca when org_id is empty
+  rpc SignCSR(SignCSRRequest) returns (SignCSRResponse) {}
+}
+
+// Where a served certificate comes from, portals use none/acme/org_ca/
+// org_cert/manual, the app primary uses config/manual/acme/app_ca
+enum CertSource {
+  CERT_SOURCE_UNSPECIFIED = 0;
+  CERT_SOURCE_NONE = 1; // Cleartext only
+  CERT_SOURCE_CONFIG = 2; // cert_file/key_file pair from the config
+  CERT_SOURCE_MANUAL = 3; // Uploaded pem material
+  CERT_SOURCE_ACME = 4; // Automatic issuance from an acme ca
+  CERT_SOURCE_ORG_CA = 5; // Minted on demand from the org signing ca
+  CERT_SOURCE_ORG_CERT = 6; // The org's shared uploaded certificate
+  CERT_SOURCE_APP_CA = 7; // Minted on demand from the instance root ca
+}
+
+// Storage target of uploaded tls material
+enum TLSScope {
+  TLS_SCOPE_UNSPECIFIED = 0;
+  TLS_SCOPE_APP = 1; // Certificate serving the primary hostname
+  TLS_SCOPE_APP_CA = 2; // Instance root ca
+  TLS_SCOPE_ORG = 3; // Org shared certificate
+  TLS_SCOPE_ORG_CA = 4; // Org signing ca
+  TLS_SCOPE_PORTAL = 5; // Certificate for a single portal
+  TLS_SCOPE_ACME_CA = 6; // Built in acme issuing intermediate
+}
+
+// Who owns a hostname registration
+enum CertificateDomainScope {
+  CERTIFICATE_DOMAIN_SCOPE_UNSPECIFIED = 0;
+  CERTIFICATE_DOMAIN_SCOPE_SYSTEM = 1; // Instance level, always approved
+  CERTIFICATE_DOMAIN_SCOPE_ORG = 2; // Claimed by an organization
+}
+
+// Computed serving state for a certificate target
+enum CertState {
+  CERT_STATE_UNSPECIFIED = 0;
+  CERT_STATE_NONE = 1; // Cleartext, no certificate expected
+  CERT_STATE_PENDING = 2; // Source configured, certificate not servable yet
+  CERT_STATE_READY = 3; // Handshakes serve a valid certificate
+  CERT_STATE_ERROR = 4; // Source configured but handshakes will fail
+}
+
+// Live certificate details read from the acme cache
+message CertificateInfo {
+  bool issued = 1;
+  string issuer = 2;
+  google.protobuf.Timestamp not_before = 3;
+  google.protobuf.Timestamp not_after = 4;
+  repeated string sans = 5;
+}
+
+// A hostname allowed to receive acme certificates
+message CertificateDomain {
+  string id = 1;
+  string domain = 2;
+  CertificateDomainScope scope = 3;
+  string org_id = 4; // Set when scope is org
+  string org_name = 5; // Display label for org_id
+  string created_by = 6;
+  google.protobuf.Timestamp created_at = 7;
+  CertificateInfo cert = 8;
+  bool approved = 9; // Org domains need system admin approval before issuance
+  string approved_by = 10;
+}
+
+// Parsed details of uploaded pem material, keys never leave the server
+message TLSMaterialInfo {
+  string subject = 1;
+  string issuer = 2;
+  google.protobuf.Timestamp not_before = 3;
+  google.protobuf.Timestamp not_after = 4;
+  repeated string sans = 5;
+  bool is_ca = 6;
+  string created_by = 7;
+  google.protobuf.Timestamp updated_at = 8;
+  string cert_pem = 9; // Public chain only, set on org ca reads for download
+  bool orphaned = 10; // An intermediate no longer chaining to the instance root
+}
+
+// Scopes app and app_ca need a system admin, org scopes need an org admin
+message UploadTLSCertificateRequest {
+  TLSScope scope = 1;
+  string org_id = 2; // Required for org, org_ca, and portal scopes
+  string portal_id = 3; // Required for portal scope
+  string cert_pem = 4;
+  string key_pem = 5;
+}
+
+// The stored material
+message UploadTLSCertificateResponse {
+  TLSMaterialInfo info = 1;
+}
+
+// Same scoping rules as upload
+message DeleteTLSCertificateRequest {
+  TLSScope scope = 1;
+  string org_id = 2;
+  string portal_id = 3;
+}
+
+// Empty
+message DeleteTLSCertificateResponse {}
+
+// Empty org_id reports app scope, portal_id narrows to one portal
+message GetTLSMaterialRequest {
+  string org_id = 1;
+  string portal_id = 2;
+}
+
+// Only fields matching the requested scope are set
+message GetTLSMaterialResponse {
+  TLSMaterialInfo app_cert = 1;
+  TLSMaterialInfo org_cert = 2;
+  TLSMaterialInfo org_ca = 3; // cert_pem populated for download
+  TLSMaterialInfo portal_cert = 4;
+  TLSMaterialInfo app_ca = 5; // cert_pem populated for download
+  bool app_ca_exists = 6; // Set on org reads so admins know an ica can be issued
+}
+
+// Common name defaults to the org name
+message GenerateOrgCARequest {
+  string org_id = 1;
+  string common_name = 2;
+}
+
+// The new ca, cert_pem populated for download
+message GenerateOrgCAResponse {
+  TLSMaterialInfo org_ca = 1;
+}
+
+// Common name defaults to the instance hostname
+message GenerateAppCARequest {
+  string common_name = 1;
+}
+
+// The new instance root, cert_pem populated for download
+message GenerateAppCAResponse {
+  TLSMaterialInfo app_ca = 1;
+}
+
+// Common name defaults to the org name
+message IssueOrgICARequest {
+  string org_id = 1;
+  string common_name = 2;
+}
+
+// The new intermediate with the root chain, cert_pem populated for download
+message IssueOrgICAResponse {
+  TLSMaterialInfo org_ca = 1;
+}
+
+// Empty ids resolve the app tier, portal_id needs org_id
+message GetCertStatusRequest {
+  string org_id = 1;
+  string portal_id = 2;
+}
+
+// What the engine would serve for the target right now and why not
+message GetCertStatusResponse {
+  CertSource source = 1; // Portal cert source, or the app primary source
+  CertState state = 2;
+  repeated string problems = 3; // Human readable blockers, empty when ready
+  TLSMaterialInfo serving_cert = 6; // Stored material details when the source uses uploads
+  CertificateInfo acme_cert = 7; // Cached acme cert details when the source is acme
+}
+
+// Org scoped listing when org_id set, admins may pass empty for all
+message ListCertificateDomainsRequest {
+  PageRequest page = 1;
+  string org_id = 2;
+  CertificateDomainScope scope = 3; // Unspecified lists both scopes
+  bool pending_only = 4; // Only registrations awaiting approval
+}
+
+// Registered domains with live cert details
+message ListCertificateDomainsResponse {
+  repeated CertificateDomain domains = 1;
+  PageInfo page = 2;
+}
+
+// Org scope when org_id set, domain must match an org portal hostname
+message AddCertificateDomainRequest {
+  string domain = 1;
+  string org_id = 2;
+}
+
+// The registered domain
+message AddCertificateDomainResponse {
+  CertificateDomain domain = 1;
+}
+
+// Caller must administer the owning org or the system
+message RemoveCertificateDomainRequest {
+  string id = 1;
+}
+
+// Empty
+message RemoveCertificateDomainResponse {}
+
+// Caller must administer each domain's owning org or the system
+message BulkRemoveCertificateDomainsRequest {
+  repeated string ids = 1;
+}
+
+// Per domain failures, removed count covers the rest
+message BulkRemoveCertificateDomainsResponse {
+  int32 removed_count = 1;
+  repeated BulkOperationError errors = 2;
+}
+
+// Domain id to approve
+message ApproveCertificateDomainRequest {
+  string id = 1;
+}
+
+// The approved domain
+message ApproveCertificateDomainResponse {
+  CertificateDomain domain = 1;
+}
+
+// Unset target issues for the primary hostname
+message IssueCertificateRequest {
+  // What the certificate is issued for
+  oneof target {
+    string domain_id = 1; // A registered certificate domain
+    string portal_id = 2; // The portal's current hostname
+  }
+}
+
+// Certificate details after issuance
+message IssueCertificateResponse {
+  CertificateInfo cert = 1;
+}
+
+// Empty org_id signs from the app ca and needs a system admin,
+// keys never touch the server, sans must satisfy hostname policy
+message SignCSRRequest {
+  string org_id = 1;
+  string csr_pem = 2;
+  int32 validity_days = 3; // Zero means the 90 day default
+}
+
+// Leaf first, then the issuing chain
+message SignCSRResponse {
+  string cert_pem = 1;
+  CertificateInfo cert = 2;
+}

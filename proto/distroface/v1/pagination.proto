@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// Pagination and filter metadata for every list rpc
+message PageRequest {
+  int32 page_size = 1; // Server default 20, hard cap 500
+  string page_token = 2; // Opaque cursor, empty for the first page
+  Query query = 3; // Structured filter, fields allowlisted per endpoint
+  string order_by = 4; // "column direction", allowlisted per endpoint
+}
+
+// Structured filter carried by every list request
+message Query {
+  string text = 1; // Free text matched against endpoint default fields
+  repeated FieldFilter filters = 2; // All must match, fields allowlisted per endpoint
+}
+
+// One field scoped predicate
+message FieldFilter {
+  string field = 1; // Public field name from the endpoint allowlist
+  MatchKind match = 2; // Unspecified behaves as contains
+  string value = 3; // Compared literally, wildcards are escaped
+}
+
+// How a filter value is compared
+enum MatchKind {
+  MATCH_KIND_UNSPECIFIED = 0;
+  MATCH_KIND_CONTAINS = 1;
+  MATCH_KIND_EQUALS = 2;
+  MATCH_KIND_PREFIX = 3;
+}
+
+// Pagination results for every list response
+message PageInfo {
+  string next_page_token = 1; // Empty on the last page
+  int64 total_count = 2; // Total rows matching the filters
+}

@@ -1,0 +1,335 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// Visibility represents the visibility of a repository.
+enum Visibility {
+  // VISIBILITY_UNSPECIFIED is the default unspecified visibility.
+  VISIBILITY_UNSPECIFIED = 0;
+  // VISIBILITY_PUBLIC is a publicly accessible repository.
+  VISIBILITY_PUBLIC = 1;
+  // VISIBILITY_PRIVATE is a private repository.
+  VISIBILITY_PRIVATE = 2;
+}
+
+// OrgRole represents a member's role within an organization.
+enum OrgRole {
+  ORG_ROLE_UNSPECIFIED = 0;
+  ORG_ROLE_OWNER = 1;
+  ORG_ROLE_ADMIN = 2;
+  ORG_ROLE_MEMBER = 3;
+}
+
+// Permission represents a single resource/action/object permission tuple.
+message Permission {
+  string resource = 1;
+  string action = 2;
+  string object_id = 3;
+}
+
+// RoleRef is a role reference, id for selection, name for display.
+message RoleRef {
+  string id = 1;
+  string name = 2;
+}
+
+// User represents a registered user account.
+message User {
+  string id = 1;
+  string username = 2;
+  string email = 3;
+  string display_name = 4;
+  repeated RoleRef roles = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  repeated Permission permissions = 8;
+  string auth_provider = 9;
+  bool is_active = 10;
+  bool must_change_password = 11;
+}
+
+// Reports a per-item failure in a bulk operation.
+message BulkOperationError {
+  string id = 1;
+  string error = 2;
+}
+
+// Role represents a named role in the RBAC system.
+message Role {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  bool is_system = 4;
+  bool is_default = 5;
+  repeated Permission permissions = 6;
+}
+
+// Organization represents a group that can own repositories.
+message Organization {
+  string id = 1;
+  string name = 2;
+  string display_name = 3;
+  string description = 4;
+  int32 member_count = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  OrgRole current_user_role = 8;
+}
+
+// OrgMember represents a user's membership in an organization.
+message OrgMember {
+  string user_id = 1;
+  string username = 2;
+  OrgRole role = 3;
+  google.protobuf.Timestamp joined_at = 4;
+}
+
+// APIToken represents a personal access token (metadata only, no secret).
+message APIToken {
+  string id = 1;
+  string name = 2;
+  string created_by = 3;
+  google.protobuf.Timestamp created_at = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  google.protobuf.Timestamp last_used_at = 6;
+}
+
+// Repository represents a container image repository.
+message Repository {
+  // id is the unique identifier for the repository.
+  string id = 1;
+  // namespace is the repository namespace (typically username or org).
+  string namespace = 2;
+  // name is the repository name within the namespace.
+  string name = 3;
+  // full_name is namespace/name.
+  string full_name = 4;
+  // description is the repository description.
+  string description = 5;
+  // visibility is the repository visibility.
+  Visibility visibility = 6;
+  // tag_count is the number of tags in the repository.
+  int32 tag_count = 7;
+  // size_bytes is the total size of the repository.
+  int64 size_bytes = 8;
+  // owner_id is the ID of the repository owner.
+  string owner_id = 9;
+  // created_at is when the repository was created.
+  google.protobuf.Timestamp created_at = 10;
+  // updated_at is when the repository was last updated.
+  google.protobuf.Timestamp updated_at = 11;
+  // last_pushed_at is when the last push occurred.
+  google.protobuf.Timestamp last_pushed_at = 12;
+  // pull_count is the number of times images have been pulled.
+  int64 pull_count = 13;
+  // push_count is the number of times images have been pushed.
+  int64 push_count = 14;
+  // is_org_namespace indicates whether the namespace belongs to an organization.
+  bool is_org_namespace = 15;
+  // star_count is the number of users who starred the repository.
+  int64 star_count = 16;
+  // is_starred indicates whether the requesting user starred the repository.
+  bool is_starred = 17;
+}
+
+// Platform describes the platform which the image in the manifest runs on.
+// Mirrors the OCI image-spec Platform type.
+message Platform {
+  // architecture specifies the CPU architecture (e.g. amd64, arm64).
+  string architecture = 1;
+  // os specifies the operating system (e.g. linux, windows).
+  string os = 2;
+  // os_version is an optional OS version (e.g. 10.0.14393.1066).
+  string os_version = 3;
+  // os_features lists required OS features (e.g. win32k).
+  repeated string os_features = 4;
+  // variant is an optional CPU variant (e.g. v7 for ARMv7).
+  string variant = 5;
+}
+
+// Tag represents a tagged image in a repository.
+// Fields mirror the OCI descriptor (minus the data field).
+message Tag {
+  // name is the tag name.
+  string name = 1;
+  // digest is the manifest digest.
+  string digest = 2;
+  // size_bytes is the total size of the tagged image (manifest + all referenced blobs).
+  int64 size_bytes = 3;
+  // pushed_at is when the tag was created/pushed, derived from OCI annotations if available.
+  google.protobuf.Timestamp pushed_at = 4;
+  // media_type is the manifest media type (e.g. application/vnd.oci.image.manifest.v1+json).
+  string media_type = 5;
+  // platforms lists the target platforms. Single-arch images have one entry;
+  // multi-arch manifest lists/indexes have one entry per supported platform.
+  repeated Platform platforms = 6;
+  // annotations contains arbitrary metadata from the manifest descriptor.
+  map<string, string> annotations = 7;
+  // artifact_type is the IANA media type of the artifact, if set.
+  string artifact_type = 8;
+}
+
+// Descriptor is the universal content-addressable reference type per the OCI spec.
+// Every blob, layer, config, manifest, and index is described by a Descriptor.
+// When resolved (e.g. via GetTagDetail or GetManifestDetail), the children field
+// is populated with the descriptors contained within (config+layers for a manifest,
+// child manifests for an index).
+message Descriptor {
+  // digest is the content digest.
+  string digest = 1;
+  // size_bytes is the content size in bytes.
+  int64 size_bytes = 2;
+  // media_type is the IANA media type of the content.
+  string media_type = 3;
+  // platform describes the platform, if applicable (e.g. on manifest index entries).
+  Platform platform = 4;
+  // annotations contains arbitrary metadata.
+  map<string, string> annotations = 5;
+  // artifact_type is the IANA media type of the artifact, per OCI spec.
+  string artifact_type = 6;
+  // children lists the descriptors referenced by this content when resolved.
+  // For a manifest: config + layer descriptors. For an index: child manifest descriptors.
+  // Empty for unresolved descriptors or terminal blobs (layers, configs).
+  repeated Descriptor children = 7;
+  // image_config contains parsed image configuration data when available.
+  // For manifests: includes build history correlated with layer sizes.
+  // For config blobs: includes runtime configuration details.
+  ImageConfig image_config = 8;
+}
+
+// HistoryEntry describes a single step in the image build history.
+message HistoryEntry {
+  // created_by is the command that created this layer (e.g. Dockerfile instruction).
+  string created_by = 1;
+  // empty_layer is true if this history entry did not produce a filesystem diff.
+  bool empty_layer = 2;
+  // comment is an optional comment.
+  string comment = 3;
+  // created is when this layer was created.
+  google.protobuf.Timestamp created = 4;
+  // size_bytes is the compressed layer size (0 for empty layers).
+  // Correlated from the manifest's layer descriptors.
+  int64 size_bytes = 5;
+}
+
+// WebhookEvent represents the type of registry event that triggers a webhook.
+enum WebhookEvent {
+  WEBHOOK_EVENT_UNSPECIFIED = 0;
+  WEBHOOK_EVENT_PUSH = 1;
+  WEBHOOK_EVENT_PULL = 2;
+  WEBHOOK_EVENT_DELETE = 3;
+}
+
+// WebhookScope represents what a webhook is scoped to.
+enum WebhookScope {
+  WEBHOOK_SCOPE_UNSPECIFIED = 0;
+  WEBHOOK_SCOPE_REPOSITORY = 1;
+  WEBHOOK_SCOPE_ORGANIZATION = 2;
+}
+
+// Webhook represents a configured webhook endpoint.
+message Webhook {
+  string id = 1;
+  WebhookScope scope = 2;
+  string repo_id = 3;
+  string org_id = 4;
+  string url = 5;
+  bool has_secret = 6;
+  repeated WebhookEvent events = 7;
+  bool active = 8;
+  string content_type = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+  string scope_name = 12;
+  string payload_template = 13;
+}
+
+// WebhookDelivery represents a single delivery attempt for a webhook.
+message WebhookDelivery {
+  string id = 1;
+  string webhook_id = 2;
+  WebhookEvent event = 3;
+  int32 status_code = 4;
+  bool success = 5;
+  string request_body = 6;
+  string response_body = 7;
+  int64 duration_ms = 8;
+  int32 attempt = 9;
+  google.protobuf.Timestamp delivered_at = 10;
+}
+
+// ArtifactRepository is a generic (non-OCI) artifact repository.
+message ArtifactRepository {
+  int64 id = 1;
+  string name = 2;
+  string description = 3;
+  // owner is the username of the repository owner.
+  string owner = 4;
+  bool is_private = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+  // artifact_count is the number of artifacts stored in the repository.
+  int64 artifact_count = 8;
+  // total_size is the sum of artifact sizes in bytes.
+  int64 total_size = 9;
+  // namespace is the org name or owner username the repo lives under.
+  string namespace = 10;
+  // full_name is namespace/name.
+  string full_name = 11;
+}
+
+// Artifact is a single stored artifact (file) within an artifact repository.
+message Artifact {
+  string id = 1;
+  int64 repo_id = 2;
+  // name is the file basename.
+  string name = 3;
+  // path is the relative path of the artifact within its version.
+  string path = 4;
+  // upload_id is the upload session that produced this artifact.
+  string upload_id = 5;
+  string version = 6;
+  int64 size = 7;
+  string mime_type = 8;
+  // metadata is an arbitrary JSON object string.
+  string metadata = 9;
+  map<string, string> properties = 10;
+  // digest is the sha256 content address of the artifact blob.
+  string digest = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+// ImageConfig contains parsed metadata from an OCI/Docker image config blob.
+// Populated on manifest descriptors (with layer-correlated history) and on
+// config blob descriptors (with runtime configuration details).
+message ImageConfig {
+  // created is when the image was created.
+  google.protobuf.Timestamp created = 1;
+  // author is the image author.
+  string author = 2;
+  // architecture is the CPU architecture.
+  string architecture = 3;
+  // os is the operating system.
+  string os = 4;
+  // history is the ordered list of build steps.
+  repeated HistoryEntry history = 5;
+  // Cmd is the default command.
+  repeated string cmd = 6;
+  // entrypoint is the image entrypoint.
+  repeated string entrypoint = 7;
+  // env is the default environment variables.
+  repeated string env = 8;
+  // labels are image labels.
+  map<string, string> labels = 9;
+  // working_dir is the working directory.
+  string working_dir = 10;
+  // exposed_ports lists exposed port mappings.
+  repeated string exposed_ports = 11;
+  // volumes lists volume mount points.
+  repeated string volumes = 12;
+}

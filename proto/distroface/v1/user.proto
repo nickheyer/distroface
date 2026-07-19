@@ -1,0 +1,132 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// UserService manages user profiles.
+service UserService {
+  // GetUser returns a user by username.
+  rpc GetUser(GetUserRequest) returns (GetUserResponse) {}
+  // UpdateUser updates the current user's profile.
+  rpc UpdateUser(UpdateUserRequest) returns (UpdateUserResponse) {}
+  // ChangePassword changes the current user's password.
+  rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse) {}
+  // ListUsers returns all users (admin).
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {}
+  // AdminUpdateUser updates a user's status and roles (admin).
+  rpc AdminUpdateUser(AdminUpdateUserRequest) returns (AdminUpdateUserResponse) {}
+  // AdminDeleteUser deletes a user (admin).
+  rpc AdminDeleteUser(AdminDeleteUserRequest) returns (AdminDeleteUserResponse) {}
+  // AdminCreateUser creates a local user with a password directly (admin).
+  rpc AdminCreateUser(AdminCreateUserRequest) returns (AdminCreateUserResponse) {}
+  // AdminBulkUpdateUsers updates status and roles on many users (admin).
+  rpc AdminBulkUpdateUsers(AdminBulkUpdateUsersRequest) returns (AdminBulkUpdateUsersResponse) {}
+  // AdminBulkDeleteUsers deletes many users (admin).
+  rpc AdminBulkDeleteUsers(AdminBulkDeleteUsersRequest) returns (AdminBulkDeleteUsersResponse) {}
+}
+
+// GetUserRequest identifies a user to retrieve.
+message GetUserRequest {
+  string username = 1;
+}
+
+// GetUserResponse contains the requested user.
+message GetUserResponse {
+  User user = 1;
+}
+
+// UpdateUserRequest contains fields to update on the current user.
+message UpdateUserRequest {
+  optional string display_name = 1;
+  optional string email = 2;
+}
+
+// UpdateUserResponse contains the updated user.
+message UpdateUserResponse {
+  User user = 1;
+}
+
+// ChangePasswordRequest contains the current and new password.
+message ChangePasswordRequest {
+  string current_password = 1;
+  string new_password = 2;
+}
+
+// ChangePasswordResponse is empty on success.
+message ChangePasswordResponse {}
+
+// ListUsersRequest for paginated user listing.
+message ListUsersRequest {
+  PageRequest page = 1;
+}
+
+// ListUsersResponse contains a page of users.
+message ListUsersResponse {
+  repeated User users = 1;
+  PageInfo page = 2;
+}
+
+// AdminUpdateUserRequest allows admins to update a user.
+message AdminUpdateUserRequest {
+  string user_id = 1;
+  optional string email = 2;
+  optional bool is_active = 3;
+  repeated string role_ids = 4;
+}
+
+// AdminUpdateUserResponse contains the updated user.
+message AdminUpdateUserResponse {
+  User user = 1;
+}
+
+// AdminDeleteUserRequest identifies the user to delete.
+message AdminDeleteUserRequest {
+  string user_id = 1;
+}
+
+// AdminDeleteUserResponse is empty on success.
+message AdminDeleteUserResponse {}
+
+// Contains the fields for a directly created local user
+message AdminCreateUserRequest {
+  string username = 1;
+  string password = 2;
+  string email = 3;
+  string display_name = 4;
+  repeated string role_ids = 5;
+  bool must_change_password = 6;
+}
+
+// Contains the created user.
+message AdminCreateUserResponse {
+  User user = 1;
+}
+
+// Applies the set fields to every listed user.
+message AdminBulkUpdateUsersRequest {
+  repeated string user_ids = 1;
+  optional bool is_active = 2;
+  repeated string add_role_ids = 3;
+  repeated string remove_role_ids = 4;
+}
+
+// Reports per-user failures.
+message AdminBulkUpdateUsersResponse {
+  int32 updated_count = 1;
+  repeated BulkOperationError errors = 2;
+}
+
+// Identifies the users to delete.
+message AdminBulkDeleteUsersRequest {
+  repeated string user_ids = 1;
+}
+
+// Reports per-user failures.
+message AdminBulkDeleteUsersResponse {
+  int32 deleted_count = 1;
+  repeated BulkOperationError errors = 2;
+}

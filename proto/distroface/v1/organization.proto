@@ -1,0 +1,139 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// OrganizationService manages organizations and team membership.
+service OrganizationService {
+  // CreateOrganization creates a new organization.
+  rpc CreateOrganization(CreateOrganizationRequest) returns (CreateOrganizationResponse) {}
+  // GetOrganization returns an organization by name.
+  rpc GetOrganization(GetOrganizationRequest) returns (GetOrganizationResponse) {}
+  // ListOrganizations returns all organizations.
+  rpc ListOrganizations(ListOrganizationsRequest) returns (ListOrganizationsResponse) {}
+  // UpdateOrganization updates an organization.
+  rpc UpdateOrganization(UpdateOrganizationRequest) returns (UpdateOrganizationResponse) {}
+  // DeleteOrganization deletes an organization.
+  rpc DeleteOrganization(DeleteOrganizationRequest) returns (DeleteOrganizationResponse) {}
+  // ListOrgMembers returns members of an organization.
+  rpc ListOrgMembers(ListOrgMembersRequest) returns (ListOrgMembersResponse) {}
+  // AddOrgMember adds a user to an organization.
+  rpc AddOrgMember(AddOrgMemberRequest) returns (AddOrgMemberResponse) {}
+  // RemoveOrgMember removes a user from an organization.
+  rpc RemoveOrgMember(RemoveOrgMemberRequest) returns (RemoveOrgMemberResponse) {}
+  // UpdateOrgMemberRole changes a member's role in an organization.
+  rpc UpdateOrgMemberRole(UpdateOrgMemberRoleRequest) returns (UpdateOrgMemberRoleResponse) {}
+  // TransferOrgOwnership makes another member the owner and demotes the caller to admin.
+  rpc TransferOrgOwnership(TransferOrgOwnershipRequest) returns (TransferOrgOwnershipResponse) {}
+}
+
+// CreateOrganizationRequest contains the fields to create a new organization.
+message CreateOrganizationRequest {
+  string name = 1;
+  string display_name = 2;
+  string description = 3;
+}
+
+// CreateOrganizationResponse contains the newly created organization.
+message CreateOrganizationResponse {
+  Organization organization = 1;
+}
+
+// GetOrganizationRequest identifies an organization by name.
+message GetOrganizationRequest {
+  string name = 1;
+}
+
+// GetOrganizationResponse contains the requested organization.
+message GetOrganizationResponse {
+  Organization organization = 1;
+}
+
+// ListOrganizationsRequest supports pagination and name search.
+message ListOrganizationsRequest {
+  PageRequest page = 1;
+}
+
+// ListOrganizationsResponse contains a page of organizations.
+message ListOrganizationsResponse {
+  repeated Organization organizations = 1;
+  PageInfo page = 2;
+}
+
+// UpdateOrganizationRequest contains fields to update on an organization.
+message UpdateOrganizationRequest {
+  string id = 1;
+  optional string display_name = 2;
+  optional string description = 3;
+}
+
+// UpdateOrganizationResponse contains the updated organization.
+message UpdateOrganizationResponse {
+  Organization organization = 1;
+}
+
+// DeleteOrganizationRequest identifies an organization to delete.
+message DeleteOrganizationRequest {
+  string id = 1;
+}
+
+// DeleteOrganizationResponse is empty on success.
+message DeleteOrganizationResponse {}
+
+// ListOrgMembersRequest identifies the organization to list members of.
+message ListOrgMembersRequest {
+  PageRequest page = 1;
+  string org_id = 2;
+}
+
+// ListOrgMembersResponse contains a page of the organization's members.
+message ListOrgMembersResponse {
+  repeated OrgMember members = 1;
+  PageInfo page = 2;
+}
+
+// AddOrgMemberRequest adds a user to an organization with a role.
+message AddOrgMemberRequest {
+  string org_id = 1;
+  string user_id = 2;
+  OrgRole role = 3;
+}
+
+// AddOrgMemberResponse contains the newly added member.
+message AddOrgMemberResponse {
+  OrgMember member = 1;
+}
+
+// RemoveOrgMemberRequest identifies a member to remove.
+message RemoveOrgMemberRequest {
+  string org_id = 1;
+  string user_id = 2;
+}
+
+// RemoveOrgMemberResponse is empty on success.
+message RemoveOrgMemberResponse {}
+
+// UpdateOrgMemberRoleRequest changes a member's role.
+message UpdateOrgMemberRoleRequest {
+  string org_id = 1;
+  string user_id = 2;
+  OrgRole role = 3;
+}
+
+// UpdateOrgMemberRoleResponse contains the updated member.
+message UpdateOrgMemberRoleResponse {
+  OrgMember member = 1;
+}
+
+// TransferOrgOwnershipRequest identifies the member receiving ownership.
+message TransferOrgOwnershipRequest {
+  string org_id = 1;
+  string user_id = 2;
+}
+
+// TransferOrgOwnershipResponse is empty on success.
+message TransferOrgOwnershipResponse {}

@@ -1,0 +1,144 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/certificate.proto";
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// Manages per org registry portal (proxied alias hostnames) via url mapping
+service PortalService {
+  // Creates a registry portal for an organization
+  rpc CreatePortal(CreatePortalRequest) returns (CreatePortalResponse) {}
+  // Resolves the portal serving the requesting host, empty off portal hosts
+  rpc ResolvePortal(ResolvePortalRequest) returns (ResolvePortalResponse) {}
+  // Returns a single portal by id
+  rpc GetPortal(GetPortalRequest) returns (GetPortalResponse) {}
+  // Returns all portals belonging to an organization
+  rpc ListPortals(ListPortalsRequest) returns (ListPortalsResponse) {}
+  // Updates a portal's hostname, mapping rules, or access options
+  rpc UpdatePortal(UpdatePortalRequest) returns (UpdatePortalResponse) {}
+  // Removes a portal
+  rpc DeletePortal(DeletePortalRequest) returns (DeletePortalResponse) {}
+}
+
+// Rewrites repo names requested through portal, first match wins, result lands in namespace of org
+message PortalRule {
+  string pattern = 1; // Regex, anchored to the full name
+  string replace = 2; // Supports go regexp expansion ($1, ${0}, ${name})
+}
+
+// Alternate org owned registry endpoint, requests on its hostname are mapped to canon repo paths in org namespace
+message RegistryPortal {
+  string id = 1;
+  string org_id = 2;
+  string name = 3;
+  string hostname = 4; // Hostname this portal answers on, empty matches any host on its port
+  bool map_unqualified = 5; // Map single-segment names into the org namespace
+  repeated PortalRule rules = 6; // Custom rules, evaluated before map_unqualified
+  bool allow_push = 7; // False makes the portal read-only
+  bool require_auth = 8; // Require auth for all access, including public pulls
+  bool enabled = 9;
+  int32 port = 10; // Dedicated proxy port, 0 serves on the main port only, ports may be shared
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  bool tls = 13; // Https enforced for this portal, cleartext requests redirect
+  CertSource cert_source = 14;
+  CertState cert_state = 17; // Computed serving state
+  string cert_detail = 18; // Computed, first blocker when not ready
+  bool hide_primary_link = 19; // Hide the portal UI's link back to the primary UI
+}
+
+// Fields to create a portal, hostname or port required
+message CreatePortalRequest {
+  string org_id = 1;
+  string name = 2;
+  string hostname = 3;
+  bool map_unqualified = 4;
+  repeated PortalRule rules = 5;
+  bool allow_push = 6;
+  bool require_auth = 7;
+  int32 port = 8;
+  bool tls = 9;
+  CertSource cert_source = 10; // Unspecified behaves as none
+  bool hide_primary_link = 11;
+}
+
+// The newly created portal
+message CreatePortalResponse {
+  RegistryPortal portal = 1;
+}
+
+// Empty, the serving host identifies the portal
+message ResolvePortalRequest {}
+
+// Portal identity for the requesting host, is_portal false off portals
+message ResolvePortalResponse {
+  bool is_portal = 1;
+  string org_name = 2;
+  string primary_scheme = 9; // http or https for the primary ui host
+  string org_display_name = 3;
+  string portal_name = 4;
+  bool allow_push = 5;
+  bool require_auth = 6;
+  bool map_unqualified = 7;
+  string primary_host = 8;
+  bool hide_primary_link = 10; // Portal asks the UI to drop the exit link
+}
+
+// Identifies a single portal within an organization
+message GetPortalRequest {
+  string org_id = 1;
+  string id = 2;
+}
+
+// The requested portal
+message GetPortalResponse {
+  RegistryPortal portal = 1;
+}
+
+// Identifies the organization to list portals for
+message ListPortalsRequest {
+  PageRequest page = 1;
+  string org_id = 2;
+}
+
+// The organization's portals
+message ListPortalsResponse {
+  repeated RegistryPortal portals = 1;
+  PageInfo page = 2;
+}
+
+// Updates portal fields, unset fields are unchanged
+message UpdatePortalRequest {
+  string org_id = 1;
+  string id = 2;
+  optional string name = 3;
+  optional string hostname = 4;
+  optional bool map_unqualified = 5;
+  bool set_rules = 6; // When true, rules replaces the existing rule list
+  repeated PortalRule rules = 7;
+  optional bool allow_push = 8;
+  optional bool require_auth = 9;
+  optional bool enabled = 10;
+  optional int32 port = 11;
+  optional bool tls = 12;
+  CertSource cert_source = 13; // Unspecified keeps the current source
+  optional bool hide_primary_link = 14;
+}
+
+// The updated portal
+message UpdatePortalResponse {
+  RegistryPortal portal = 1;
+}
+
+// Identifies the portal to delete
+message DeletePortalRequest {
+  string org_id = 1;
+  string id = 2;
+}
+
+// Empty
+message DeletePortalResponse {}

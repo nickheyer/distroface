@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// WebhookService manages repository and organization webhooks.
+service WebhookService {
+  // CreateWebhook registers a new webhook.
+  rpc CreateWebhook(CreateWebhookRequest) returns (CreateWebhookResponse) {}
+  // ListWebhooks returns webhooks for a repo or org.
+  rpc ListWebhooks(ListWebhooksRequest) returns (ListWebhooksResponse) {}
+  // GetWebhook returns a single webhook by ID.
+  rpc GetWebhook(GetWebhookRequest) returns (GetWebhookResponse) {}
+  // UpdateWebhook modifies an existing webhook.
+  rpc UpdateWebhook(UpdateWebhookRequest) returns (UpdateWebhookResponse) {}
+  // DeleteWebhook removes a webhook.
+  rpc DeleteWebhook(DeleteWebhookRequest) returns (DeleteWebhookResponse) {}
+  // ListWebhookDeliveries returns delivery history for a webhook.
+  rpc ListWebhookDeliveries(ListWebhookDeliveriesRequest) returns (ListWebhookDeliveriesResponse) {}
+  // RedeliverWebhook re-sends a past delivery.
+  rpc RedeliverWebhook(RedeliverWebhookRequest) returns (RedeliverWebhookResponse) {}
+}
+
+// CreateWebhookRequest is the request to create a webhook.
+message CreateWebhookRequest {
+  WebhookScope scope = 1;
+  string repo_id = 2;
+  string org_id = 3;
+  string url = 4;
+  string secret = 5;
+  repeated WebhookEvent events = 6;
+  bool active = 7;
+  string content_type = 8;
+  string payload_template = 9;
+}
+
+// CreateWebhookResponse is the response after creating a webhook.
+message CreateWebhookResponse {
+  Webhook webhook = 1;
+}
+
+// ListWebhooksRequest is the request to list webhooks.
+message ListWebhooksRequest {
+  PageRequest page = 1;
+  string repo_id = 2;
+  string org_id = 3;
+}
+
+// ListWebhooksResponse is the paginated list of webhooks.
+message ListWebhooksResponse {
+  repeated Webhook webhooks = 1;
+  PageInfo page = 2;
+}
+
+// GetWebhookRequest is the request to get a webhook by ID.
+message GetWebhookRequest {
+  string id = 1;
+}
+
+// GetWebhookResponse is the response containing a single webhook.
+message GetWebhookResponse {
+  Webhook webhook = 1;
+}
+
+// UpdateWebhookRequest is the request to update a webhook.
+message UpdateWebhookRequest {
+  string id = 1;
+  string url = 2;
+  string secret = 3;
+  repeated WebhookEvent events = 4;
+  optional bool active = 5;
+  string content_type = 6;
+  optional string payload_template = 7;
+}
+
+// UpdateWebhookResponse is the response after updating a webhook.
+message UpdateWebhookResponse {
+  Webhook webhook = 1;
+}
+
+// DeleteWebhookRequest is the request to delete a webhook.
+message DeleteWebhookRequest {
+  string id = 1;
+}
+
+// DeleteWebhookResponse is the response after deleting a webhook.
+message DeleteWebhookResponse {}
+
+// ListWebhookDeliveriesRequest is the request to list deliveries for a webhook.
+message ListWebhookDeliveriesRequest {
+  PageRequest page = 1;
+  string webhook_id = 2;
+}
+
+// ListWebhookDeliveriesResponse is the paginated list of deliveries.
+message ListWebhookDeliveriesResponse {
+  repeated WebhookDelivery deliveries = 1;
+  PageInfo page = 2;
+}
+
+// RedeliverWebhookRequest is the request to redeliver a past webhook delivery.
+message RedeliverWebhookRequest {
+  string delivery_id = 1;
+}
+
+// RedeliverWebhookResponse is the response after redelivering a webhook.
+message RedeliverWebhookResponse {
+  WebhookDelivery delivery = 1;
+}

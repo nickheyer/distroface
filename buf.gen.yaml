@@ -1,0 +1,28 @@
+version: v2
+plugins:
+  # Generate Go code with protoc-gen-go
+  - remote: buf.build/protocolbuffers/go
+    out: pkg/proto
+    opt:
+      - paths=source_relative
+
+  # Generate Connect-Go
+  - remote: buf.build/connectrpc/go
+    out: pkg/proto
+    opt:
+      - paths=source_relative
+
+  # Generate TypeScript
+  - remote: buf.build/bufbuild/es
+    out: web/distroface/src/lib/proto
+    opt:
+      - target=ts
+      - import_extension=none
+
+  # Generate OpenAPI specs for the embedded api console
+  - remote: buf.build/community/sudorandom-connect-openapi
+    out: web/distroface/src/lib/proto/specs
+    opt:
+      - format=json
+      - short-service-tags
+      - trim-unused-types

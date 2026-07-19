@@ -1,0 +1,191 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// AuthService handles user authentication and session management.
+service AuthService {
+  // Register creates a new user account.
+  rpc Register(RegisterRequest) returns (RegisterResponse) {}
+  // Login authenticates a user and returns a session token.
+  rpc Login(LoginRequest) returns (LoginResponse) {}
+  // Logout invalidates the current session.
+  rpc Logout(LogoutRequest) returns (LogoutResponse) {}
+  // GetCurrentUser returns the currently authenticated user.
+  rpc GetCurrentUser(GetCurrentUserRequest) returns (GetCurrentUserResponse) {}
+  // RefreshSession issues a fresh session token and invalidates the current one.
+  rpc RefreshSession(RefreshSessionRequest) returns (RefreshSessionResponse) {}
+  // GetAuthStatus returns which auth methods are available (public).
+  rpc GetAuthStatus(GetAuthStatusRequest) returns (GetAuthStatusResponse) {}
+  // GetOIDCLoginURL returns the OIDC provider redirect URL (public).
+  rpc GetOIDCLoginURL(GetOIDCLoginURLRequest) returns (GetOIDCLoginURLResponse) {}
+  // CreateInvite creates a registration invite code (admin).
+  rpc CreateInvite(CreateInviteRequest) returns (CreateInviteResponse) {}
+  // ListInvites returns all registration invites (admin).
+  rpc ListInvites(ListInvitesRequest) returns (ListInvitesResponse) {}
+  // GetInvite returns a single invite by ID (admin).
+  rpc GetInvite(GetInviteRequest) returns (GetInviteResponse) {}
+  // DeleteInvite deletes a registration invite (admin).
+  rpc DeleteInvite(DeleteInviteRequest) returns (DeleteInviteResponse) {}
+  // BulkDeleteInvites deletes many registration invites (admin).
+  rpc BulkDeleteInvites(BulkDeleteInvitesRequest) returns (BulkDeleteInvitesResponse) {}
+  // ValidateInvite checks if an invite code is valid (public).
+  rpc ValidateInvite(ValidateInviteRequest) returns (ValidateInviteResponse) {}
+}
+
+// RegisterRequest contains the fields needed to create a new account.
+message RegisterRequest {
+  string username = 1;
+  string email = 2;
+  string password = 3;
+  optional string invite_code = 4;
+  optional string invite_pin = 5;
+}
+
+// RegisterResponse contains the newly created user and session.
+message RegisterResponse {
+  User user = 1;
+  string session_token = 2;
+  repeated Permission permissions = 3;
+}
+
+// LoginRequest contains credentials for authentication.
+message LoginRequest {
+  string identifier = 1;
+  string password = 2;
+}
+
+// LoginResponse contains the authenticated user and session.
+message LoginResponse {
+  User user = 1;
+  string session_token = 2;
+  repeated Permission permissions = 3;
+}
+
+// LogoutRequest is empty; the session is identified from the auth header.
+message LogoutRequest {}
+
+// LogoutResponse is empty on success.
+message LogoutResponse {}
+
+// GetCurrentUserRequest is empty; the user is identified from the auth header.
+message GetCurrentUserRequest {}
+
+// GetCurrentUserResponse contains the current user with permissions.
+message GetCurrentUserResponse {
+  User user = 1;
+  repeated Permission permissions = 2;
+}
+
+// RefreshSessionRequest is empty; the session is identified from the auth header.
+message RefreshSessionRequest {}
+
+// RefreshSessionResponse contains the refreshed session token.
+message RefreshSessionResponse {
+  string session_token = 1;
+  int64 expires_at = 2;
+}
+
+// GetAuthStatusRequest is empty.
+message GetAuthStatusRequest {}
+
+// GetAuthStatusResponse returns available auth methods.
+message GetAuthStatusResponse {
+  bool local_enabled = 1;
+  bool oidc_enabled = 2;
+  bool registration_enabled = 3;
+  bool anonymous_access = 4;
+  bool first_user_setup = 5;
+}
+
+// GetOIDCLoginURLRequest is empty.
+message GetOIDCLoginURLRequest {}
+
+// GetOIDCLoginURLResponse returns the OIDC redirect URL.
+message GetOIDCLoginURLResponse {
+  string redirect_url = 1;
+}
+
+// CreateInviteRequest contains the fields to create a registration invite.
+message CreateInviteRequest {
+  string description = 1;
+  repeated string role_ids = 2;
+  optional string pin = 3;
+  optional int32 max_uses = 4;
+  optional int32 expires_in_hours = 5;
+}
+
+// CreateInviteResponse returns the created invite with its code.
+message CreateInviteResponse {
+  RegistrationInvite invite = 1;
+}
+
+// ListInvitesRequest supports pagination.
+message ListInvitesRequest {
+  PageRequest page = 1;
+}
+
+// ListInvitesResponse contains a page of registration invites.
+message ListInvitesResponse {
+  repeated RegistrationInvite invites = 1;
+  PageInfo page = 2;
+}
+
+// GetInviteRequest identifies an invite by ID.
+message GetInviteRequest {
+  string id = 1;
+}
+
+// GetInviteResponse contains the requested invite.
+message GetInviteResponse {
+  RegistrationInvite invite = 1;
+}
+
+// DeleteInviteRequest identifies the invite to delete.
+message DeleteInviteRequest {
+  string id = 1;
+}
+
+// DeleteInviteResponse is empty on success.
+message DeleteInviteResponse {}
+
+// BulkDeleteInvitesRequest identifies the invites to delete.
+message BulkDeleteInvitesRequest {
+  repeated string ids = 1;
+}
+
+// BulkDeleteInvitesResponse reports per-invite failures.
+message BulkDeleteInvitesResponse {
+  int32 deleted_count = 1;
+  repeated BulkOperationError errors = 2;
+}
+
+// ValidateInviteRequest checks an invite code's validity.
+message ValidateInviteRequest {
+  string code = 1;
+}
+
+// ValidateInviteResponse indicates whether the invite is valid.
+message ValidateInviteResponse {
+  bool valid = 1;
+  bool requires_pin = 2;
+}
+
+// RegistrationInvite represents an invite code for user registration.
+message RegistrationInvite {
+  string id = 1;
+  string code = 2;
+  string description = 3;
+  repeated RoleRef roles = 4;
+  bool has_pin = 5;
+  int32 max_uses = 6;
+  int32 use_count = 7;
+  google.protobuf.Timestamp expires_at = 8;
+  string created_by = 9;
+  google.protobuf.Timestamp created_at = 10;
+}

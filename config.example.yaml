@@ -1,0 +1,88 @@
+# Distroface boot config.
+# Only process wiring lives here. Every tunable (auth, tls mode, acme,
+# artifacts, gc, rate limits, webhooks, security, hostname) is a runtime
+# setting managed in the app and stored in the database.
+
+server:
+  port: "8080"
+  host: "0.0.0.0"
+  read_timeout: 15
+  write_timeout: 15
+  idle_timeout: 60
+  # Peers whose X-Forwarded-For / X-Real-IP headers are trusted.
+  # Defaults to loopback plus private ranges, set [] to trust none.
+  # trusted_proxies: ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+
+storage:
+  data_dir: "./data"
+
+database:
+  # path: "./data/distroface.db"    # Derived from storage.data_dir when unset
+  max_connections: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 300
+
+registry:
+  # storage_path: "./data/registry"   # Derived from storage.data_dir when unset
+
+artifacts:
+  # storage_path: "./data/artifacts"  # Derived from storage.data_dir when unset
+
+logging:
+  enabled: true
+  # dir: "./data/logs"          # Derived from storage.data_dir when unset
+  max_size: 10
+  max_backups: 5
+  max_age: 30
+  compress: true
+
+# On disk certificate pair, served when tls.primary_source is CERT_SOURCE_CONFIG
+# tls:
+#   cert_file: "/etc/distroface/tls/fullchain.pem"
+#   key_file: "/etc/distroface/tls/privkey.pem"
+
+# Secret material only, generated and persisted when unset
+# auth:
+#   jwt_secret: ""
+
+# Startup seeding, entries are created once and never updated
+# bootstrap:
+#   users:
+#     - username: "admin"
+#       password: "changeme"        # Required
+#       email: "admin@example.com"  # Optional
+#       roles: ["admin"]            # System roles, default roles when omitted
+#   orgs:
+#     - name: "platform"
+#       display_name: "Platform Team"  # Defaults to name
+#       members:
+#         - username: "admin"
+#           role: "owner"           # owner, admin, or member (default)
+
+# Runtime settings seeded into the database on FIRST boot only.
+# Same schema as the SettingsService api (protojson field names, enum names
+# spelled out). After first boot the app manages these live, this block is
+# ignored. DISTROFACE_SETTINGS_JSON env replaces this block when set.
+# settings:
+#   server:
+#     public_hostname: "registry.example.com"
+#   tls:
+#     mode: "TLS_MODE_HTTPS_ONLY"          # TLS_MODE_DUAL serves both schemes
+#     primary_source: "CERT_SOURCE_ACME"   # CONFIG, MANUAL, ACME, or APP_CA
+#   acme:
+#     enabled: true
+#     email: "admin@example.com"
+#     directory_url: ""                    # Empty means lets encrypt production
+#     challenge_port: "80"                 # Empty disables http-01
+#   auth:
+#     local_enabled: true
+#     local_allow_registration: false
+
+# Operator pinned settings. Always win over the database and the ui,
+# rendered as locked fields in the app. DISTROFACE_OVERRIDES_JSON env
+# replaces this block when set.
+# overrides:
+#   acme:
+#     directory_url: "https://step-ca.internal/acme/acme/directory"
+#   portals:
+#     require_hostname_approval: true
