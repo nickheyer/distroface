@@ -7,7 +7,12 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"net/http"
@@ -595,12 +600,24 @@ DistroFace issues, so clients trust its self-issued TLS.`,
 	return cmd
 }
 
-// Downloads the public instance root CA pem, no auth needed
+// Downloads the public instance root CA pem, - fall back to cleartext if possible
 func fetchInstanceCA() ([]byte, error) {
-	caURL := client.BaseURL + "/.well-known/distroface/ca.pem"
-	resp, err := client.HTTPClient.Get(caURL)
+	c := &http.Client{
+		Timeout: client.HTTPClient.Timeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
+	path := "/.well-known/distroface/ca.pem"
+	resp, err := c.Get(client.BaseURL + path)
+	if err != nil && strings.HasPrefix(client.BaseURL, "https://") {
+		// No serving cert yet, retry the always cleartext anchor
+		httpURL := "http://" + strings.TrimPrefix(client.BaseURL, "https://") + path
+		fmt.Fprintf(os.Stderr, "https fetch failed (%v), retrying over http\n", err)
+		resp, err = c.Get(httpURL)
+	}
 	if err != nil {
-		return nil, fmt.Errorf("failed to reach %s: %w", caURL, err)
+		return nil, fmt.Errorf("failed to reach the instance CA endpoint: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
@@ -611,6 +628,24 @@ func fetchInstanceCA() ([]byte, error) {
 		return nil, fmt.Errorf("fetch CA failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// SHA-256 fingerprint of the leaf cert for out of band verification
+func caFingerprint(pemData []byte) string {
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return "unparseable"
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return "unparseable"
+	}
+	sum := sha256.Sum256(cert.Raw)
+	var parts []string
+	for _, b := range sum {
+		parts = append(parts, hex.EncodeToString([]byte{b}))
+	}
+	return strings.ToUpper(strings.Join(parts, ":"))
 }
 
 func newTrustShowCmd() *cobra.Command {
@@ -641,6 +676,8 @@ over its self-issued TLS. Docker picks it up with no daemon restart.`,
 			if err != nil {
 				return err
 			}
+			// Print to stderr so the user can verify before trusting it
+			fmt.Fprintf(os.Stderr, "Fetched instance CA, SHA-256 fingerprint:\n  %s\nVerify this matches the server's PKI page before trusting.\n\n", caFingerprint(pem))
 
 			if host == "" {
 				u, err := url.Parse(client.BaseURL)

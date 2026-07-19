@@ -30,8 +30,8 @@ func Headers(res *settings.Resolver, next http.Handler) http.Handler {
 		h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
 		h.Set("Content-Security-Policy", csp)
-		// HSTS only means anything on a tls response
-		if r.TLS != nil || sec.GetHsts() {
+		// Opt-in only - browser ignores it over cleartext
+		if sec.GetHsts() && r.TLS != nil {
 			maxAge := sec.GetHstsMaxAgeSeconds()
 			if maxAge <= 0 {
 				maxAge = 31536000
