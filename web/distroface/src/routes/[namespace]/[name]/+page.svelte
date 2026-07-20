@@ -214,11 +214,11 @@
 		loadTags();
 	}
 
-	// Newest pushed tag names the pull command
+	// Latest or newest version names the pull command
 	async function loadPullTag() {
 		try {
 			const resp = await rpcClient.repository.listTags({
-				page: { pageSize: 1, orderBy: 'pushed_at desc' },
+				page: { pageSize: 1, orderBy: 'version desc' },
 				namespace, name
 			});
 			pullTag = resp.tags[0]?.name ?? null;
@@ -576,14 +576,16 @@
 								<TableHead class="th text-right w-24">
 									<div class="flex justify-end">{@render tagSortHeader('Size', 'size')}</div>
 								</TableHead>
-								<TableHead class="th w-10"></TableHead>
 							</TableRow>
 						</TableHeader>
 						<TableBody>
 							{#each tags as tag (tag.name)}
 								<TableRow class="cursor-pointer group/row" onclick={() => openTagDetail(tag.name)}>
 									<TableCell class="py-3 px-3">
-										<Badge variant="secondary" class="font-mono text-xs font-medium px-2 py-0.5">{tag.name}</Badge>
+										<div class="flex items-center gap-1">
+											<Badge variant="secondary" class="font-mono text-xs font-medium px-2 py-0.5">{tag.name}</Badge>
+											<CopyButton text="docker pull {pullCommand}:{tag.name}" label="Pull command copied!" />
+										</div>
 									</TableCell>
 									<TableCell class="py-3 px-3">
 										<span class="font-mono text-xs text-muted-foreground/70 block truncate">
@@ -603,9 +605,6 @@
 									</TableCell>
 									<TableCell class="text-right text-[13px] py-3 px-3 tabular-nums text-muted-foreground">
 										{formatBytes(Number(tag.sizeBytes))}
-									</TableCell>
-									<TableCell class="py-3 px-3" onclick={(e: MouseEvent) => e.stopPropagation()}>
-										<CopyButton text="docker pull {pullCommand}:{tag.name}" label="Pull command copied!" />
 									</TableCell>
 								</TableRow>
 							{/each}

@@ -8,7 +8,8 @@
 	let copied = $state(false);
 	let timeout: ReturnType<typeof setTimeout> | undefined;
 
-	function copy() {
+	function copy(e: MouseEvent) {
+		e.stopPropagation();
 		navigator.clipboard.writeText(text).then(() => {
 			copied = true;
 			toast.success(label);
