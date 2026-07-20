@@ -55,7 +55,7 @@
 	let tags = $state<Tag[]>([]);
 	let tagsLoading = $state(true);
 	const tagsPager = new Pager(20);
-	let tagSort = $state('name asc');
+	let tagSort = $state('version desc');
 
 	let editingDescription = $state(false);
 	let descriptionDraft = $state('');
@@ -570,7 +570,7 @@
 					<Table class="table-fixed">
 						<TableHeader>
 							<TableRow>
-								<TableHead class="th w-40">{@render tagSortHeader('Tag', 'name')}</TableHead>
+								<TableHead class="th w-40">{@render tagSortHeader('Tag', 'version')}</TableHead>
 								<TableHead class="th">Digest</TableHead>
 								<TableHead class="th w-32 hidden md:table-cell">Platform</TableHead>
 								<TableHead class="th text-right w-24">

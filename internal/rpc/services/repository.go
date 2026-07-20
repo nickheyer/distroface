@@ -247,13 +247,6 @@ func (s *RepositoryService) DeleteRepository(ctx context.Context, req *connect.R
 	return connect.NewResponse(&v1.DeleteRepositoryResponse{}), nil
 }
 
-// Tags are derived from distribution, so no sql to sort for us
-var tagSortColumns = map[string]func(a, b *v1.Tag) int{
-	"name":      func(a, b *v1.Tag) int { return natsort.Compare(a.Name, b.Name) },
-	"size":      func(a, b *v1.Tag) int { return cmp.Compare(a.SizeBytes, b.SizeBytes) },
-	"pushed_at": func(a, b *v1.Tag) int { return a.GetPushedAt().AsTime().Compare(b.GetPushedAt().AsTime()) },
-}
-
 func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v1.ListTagsRequest]) (*connect.Response[v1.ListTagsResponse], error) {
 	if req.Msg.Namespace == "" || req.Msg.Name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
@@ -276,9 +269,23 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *connect.Request[v
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
-	pages.Sort(req.Msg.Page, tags, tagSortColumns)
+	page := req.Msg.Page
+	if page == nil {
+		page = &v1.PageRequest{}
+	}
+	if page.OrderBy == "" {
+		page.OrderBy = "version desc"
+	}
 
-	pageSize, offset := pages.Parse(req.Msg.Page)
+	byVersion := natsort.TagVersionComparator(tags)
+	pages.Sort(page, tags, map[string]func(a, b *v1.Tag) int{
+		"name":      byVersion,
+		"version":   byVersion,
+		"size":      func(a, b *v1.Tag) int { return cmp.Compare(a.SizeBytes, b.SizeBytes) },
+		"pushed_at": func(a, b *v1.Tag) int { return a.GetPushedAt().AsTime().Compare(b.GetPushedAt().AsTime()) },
+	})
+
+	pageSize, offset := pages.Parse(page)
 
 	total := len(tags)
 	start := min(offset, total)
