@@ -22,6 +22,8 @@ service ArtifactService {
   rpc DeleteArtifactRepository(DeleteArtifactRepositoryRequest) returns (DeleteArtifactRepositoryResponse) {}
   // SyncArtifactRepository starts an immediate mirror sync in the background.
   rpc SyncArtifactRepository(SyncArtifactRepositoryRequest) returns (SyncArtifactRepositoryResponse) {}
+  // StopArtifactRepositorySync cancels the running mirror sync, if any.
+  rpc StopArtifactRepositorySync(StopArtifactRepositorySyncRequest) returns (StopArtifactRepositorySyncResponse) {}
 
   // InitiateArtifactUpload starts a chunked upload session and returns its ID.
   rpc InitiateArtifactUpload(InitiateArtifactUploadRequest) returns (InitiateArtifactUploadResponse) {}
@@ -119,6 +121,15 @@ message SyncArtifactRepositoryRequest {
 
 // SyncArtifactRepositoryResponse is empty; poll the repository for sync status.
 message SyncArtifactRepositoryResponse {}
+
+// StopArtifactRepositorySyncRequest identifies a mirror repository whose sync should stop.
+message StopArtifactRepositorySyncRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+// StopArtifactRepositorySyncResponse is empty.
+message StopArtifactRepositorySyncResponse {}
 
 // InitiateArtifactUploadRequest is the request to start an upload session.
 message InitiateArtifactUploadRequest {

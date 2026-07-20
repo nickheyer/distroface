@@ -1,10 +1,10 @@
 package services
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
 	"connectrpc.com/connect"
@@ -17,6 +17,7 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/natsort"
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
@@ -248,7 +249,8 @@ func (s *RepositoryService) DeleteRepository(ctx context.Context, req *connect.R
 
 // Tags are derived from distribution, so no sql to sort for us
 var tagSortColumns = map[string]func(a, b *v1.Tag) int{
-	"name":      func(a, b *v1.Tag) int { return strings.Compare(a.Name, b.Name) },
+	"name":      func(a, b *v1.Tag) int { return natsort.Compare(a.Name, b.Name) },
+	"size":      func(a, b *v1.Tag) int { return cmp.Compare(a.SizeBytes, b.SizeBytes) },
 	"pushed_at": func(a, b *v1.Tag) int { return a.GetPushedAt().AsTime().Compare(b.GetPushedAt().AsTime()) },
 }
 
@@ -410,6 +412,36 @@ func (s *RepositoryService) SyncRepository(ctx context.Context, req *connect.Req
 		return nil, mapSyncErr(err)
 	}
 	return connect.NewResponse(&v1.SyncRepositoryResponse{}), nil
+}
+
+func (s *RepositoryService) StopRepositorySync(ctx context.Context, req *connect.Request[v1.StopRepositorySyncRequest]) (*connect.Response[v1.StopRepositorySyncResponse], error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+	repo, err := s.store.GetRepository(ctx, req.Msg.Namespace, req.Msg.Name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if repo == nil {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
+	}
+
+	objectID := repo.Namespace + "/" + repo.Name
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, objectID)
+	if !canManage {
+		if user.Username != repo.Namespace {
+			isMember, role, _ := s.store.IsOrgMember(ctx, repo.Namespace, user.ID)
+			if !isMember || (role != storage.OrgRoleOwner && role != storage.OrgRoleAdmin) {
+				return nil, connect.NewError(connect.CodePermissionDenied, nil)
+			}
+		}
+	}
+
+	if err := s.mirrors.StopImageSync(repo); err != nil {
+		return nil, mapSyncErr(err)
+	}
+	return connect.NewResponse(&v1.StopRepositorySyncResponse{}), nil
 }
 
 func (s *RepositoryService) StarRepository(ctx context.Context, req *connect.Request[v1.StarRepositoryRequest]) (*connect.Response[v1.StarRepositoryResponse], error) {

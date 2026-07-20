@@ -3,9 +3,9 @@
 	import { goto } from '$app/navigation';
 	import { onMount, tick } from 'svelte';
 	import {
-		Package, ArrowDown, ArrowUp, Eye, Lock, Pencil, Check, X,
+		Package, ArrowDown, ArrowUp, ArrowUpDown, Eye, Lock, Pencil, Check, X,
 		Trash2, MoreHorizontal, EyeOff, ChevronRight,
-		Tags, Clock, Terminal, Star, HardDriveDownload, RefreshCw
+		Tags, Clock, Terminal, Star, HardDriveDownload, RefreshCw, Square
 	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -55,6 +55,7 @@
 	let tags = $state<Tag[]>([]);
 	let tagsLoading = $state(true);
 	const tagsPager = new Pager(20);
+	let tagSort = $state('name asc');
 
 	let editingDescription = $state(false);
 	let descriptionDraft = $state('');
@@ -82,7 +83,11 @@
 	let mirrorForm = $state(emptyMirrorForm());
 	let savingMirror = $state(false);
 	let syncingMirror = $state(false);
+	let stoppingMirror = $state(false);
 	const repoIsMirror = $derived(repo?.type === RepositoryType.MIRROR);
+	const mirrorSyncActive = $derived(
+		!!repo && (repo.mirrorSyncing || mirrorSyncStore.syncing('image', repo.id))
+	);
 
 	async function syncMirrorNow() {
 		if (syncingMirror) return;
@@ -94,6 +99,19 @@
 			// Error interceptor already toasted
 		} finally {
 			syncingMirror = false;
+		}
+	}
+
+	async function stopMirrorSync() {
+		if (stoppingMirror) return;
+		stoppingMirror = true;
+		try {
+			await rpcClient.repository.stopRepositorySync({ namespace, name });
+			toast.success('Sync stopped');
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			stoppingMirror = false;
 		}
 	}
 
@@ -178,7 +196,7 @@
 		tagsLoading = true;
 		try {
 			const resp = await rpcClient.repository.listTags({
-				page: tagsPager.request(),
+				page: tagsPager.request(undefined, tagSort),
 				namespace, name
 			});
 			tags = resp.tags;
@@ -188,6 +206,12 @@
 		} finally {
 			tagsLoading = false;
 		}
+	}
+
+	function toggleTagSort(col: string) {
+		tagSort = tagSort === `${col} desc` ? `${col} asc` : `${col} desc`;
+		tagsPager.reset();
+		loadTags();
 	}
 
 	// Newest pushed tag names the pull command
@@ -474,9 +498,15 @@
 										<DropdownMenuItem onclick={openMirrorSettings}>
 											<HardDriveDownload class="h-4 w-4 mr-2" />Mirror Settings
 										</DropdownMenuItem>
-										<DropdownMenuItem onclick={syncMirrorNow} disabled={syncingMirror}>
-											<RefreshCw class="h-4 w-4 mr-2 {syncingMirror ? 'animate-spin' : ''}" />Sync Now
-										</DropdownMenuItem>
+										{#if mirrorSyncActive}
+											<DropdownMenuItem onclick={stopMirrorSync} disabled={stoppingMirror}>
+												<Square class="h-4 w-4 mr-2" />Stop Sync
+											</DropdownMenuItem>
+										{:else}
+											<DropdownMenuItem onclick={syncMirrorNow} disabled={syncingMirror}>
+												<RefreshCw class="h-4 w-4 mr-2 {syncingMirror ? 'animate-spin' : ''}" />Sync Now
+											</DropdownMenuItem>
+										{/if}
 									{/if}
 								</PermissionGate>
 								<PermissionGate allowed={canDeleteRepo}>
@@ -500,6 +530,19 @@
 				</div>
 			{/if}
 		</div>
+
+		{#snippet tagSortHeader(label: string, col: string)}
+			<button type="button" class="inline-flex items-center gap-1 hover:text-foreground transition-colors" onclick={() => toggleTagSort(col)}>
+				{label}
+				{#if tagSort === `${col} desc`}
+					<ArrowDown class="h-3 w-3" />
+				{:else if tagSort === `${col} asc`}
+					<ArrowUp class="h-3 w-3" />
+				{:else}
+					<ArrowUpDown class="h-3 w-3 opacity-40" />
+				{/if}
+			</button>
+		{/snippet}
 
 		<!-- Tags section -->
 		<div class="space-y-4">
@@ -527,10 +570,12 @@
 					<Table class="table-fixed">
 						<TableHeader>
 							<TableRow>
-								<TableHead class="th w-40">Tag</TableHead>
+								<TableHead class="th w-40">{@render tagSortHeader('Tag', 'name')}</TableHead>
 								<TableHead class="th">Digest</TableHead>
 								<TableHead class="th w-32 hidden md:table-cell">Platform</TableHead>
-								<TableHead class="th text-right w-24">Size</TableHead>
+								<TableHead class="th text-right w-24">
+									<div class="flex justify-end">{@render tagSortHeader('Size', 'size')}</div>
+								</TableHead>
 								<TableHead class="th w-10"></TableHead>
 							</TableRow>
 						</TableHeader>

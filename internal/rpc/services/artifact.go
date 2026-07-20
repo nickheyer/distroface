@@ -227,6 +227,18 @@ func (s *ArtifactService) SyncArtifactRepository(ctx context.Context, req *conne
 	return connect.NewResponse(&v1.SyncArtifactRepositoryResponse{}), nil
 }
 
+func (s *ArtifactService) StopArtifactRepositorySync(ctx context.Context, req *connect.Request[v1.StopArtifactRepositorySyncRequest]) (*connect.Response[v1.StopArtifactRepositorySyncResponse], error) {
+	user := auth.UserFromContext(ctx)
+	repo, err := s.mutableRepo(ctx, user, req.Msg.Namespace, req.Msg.Name, rbac.ActionUpdate)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.mirrors.StopArtifactSync(repo); err != nil {
+		return nil, mapSyncErr(err)
+	}
+	return connect.NewResponse(&v1.StopArtifactRepositorySyncResponse{}), nil
+}
+
 // ── Uploads ──────────────────────────────────────────────────────────────
 
 func (s *ArtifactService) InitiateArtifactUpload(ctx context.Context, req *connect.Request[v1.InitiateArtifactUploadRequest]) (*connect.Response[v1.InitiateArtifactUploadResponse], error) {
@@ -646,7 +658,7 @@ func mapMirrorErr(err error) error {
 func mapSyncErr(err error) error {
 	var cool *mirror.CooldownError
 	switch {
-	case errors.Is(err, mirror.ErrSyncInFlight), errors.Is(err, mirror.ErrDisabled), errors.As(err, &cool):
+	case errors.Is(err, mirror.ErrSyncInFlight), errors.Is(err, mirror.ErrDisabled), errors.Is(err, mirror.ErrNoActiveSync), errors.As(err, &cool):
 		return connect.NewError(connect.CodeFailedPrecondition, err)
 	case errors.Is(err, mirror.ErrInvalid):
 		return connect.NewError(connect.CodeInvalidArgument, err)

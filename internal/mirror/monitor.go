@@ -23,6 +23,12 @@ var ErrSyncInFlight = errors.New("a sync for this repository is already running"
 // ErrDisabled rejects manual syncs while mirroring is switched off
 var ErrDisabled = errors.New("mirroring is disabled by the administrator")
 
+// ErrNoActiveSync rejects a stop when nothing is running
+var ErrNoActiveSync = errors.New("no sync is running for this repository")
+
+// ErrSyncStopped marks a sync an operator cancelled
+var ErrSyncStopped = errors.New("sync stopped by user")
+
 // CooldownError rejects a manual sync during an upstream rate limit
 type CooldownError struct {
 	Until time.Time
@@ -45,6 +51,8 @@ type Monitor struct {
 	mu          sync.Mutex
 	running     bool
 	inflight    map[string]bool
+	cancels     map[string]context.CancelFunc
+	stopped     map[string]bool
 	activeSyncs map[string]Event
 	events      *hub
 }
@@ -69,7 +77,8 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		},
 	}
 	if oci != nil {
-		oci.upstreamTransport = safeTransport(allowPrivate)
+		// Same pacing as artifact mirrors, hub abuse detection is touchy
+		oci.upstreamTransport = &pacedTransport{inner: safeTransport(allowPrivate), pace: pace}
 	}
 	return &Monitor{
 		store:     store,
@@ -80,6 +89,8 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		client:    client,
 		baseCtx:     context.Background(),
 		inflight:    make(map[string]bool),
+		cancels:     make(map[string]context.CancelFunc),
+		stopped:     make(map[string]bool),
 		activeSyncs: make(map[string]Event),
 		events:      newHub(),
 	}
@@ -134,6 +145,46 @@ func (m *Monitor) done(key string) {
 	m.mu.Lock()
 	delete(m.inflight, key)
 	m.mu.Unlock()
+}
+
+// Exposes the cancel so a stop request can reach it
+func (m *Monitor) armCancel(key string, cancel context.CancelFunc) {
+	m.mu.Lock()
+	m.cancels[key] = cancel
+	delete(m.stopped, key)
+	m.mu.Unlock()
+}
+
+// Clears the cancel and reports whether an operator stopped it
+func (m *Monitor) disarmCancel(key string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.cancels, key)
+	wasStopped := m.stopped[key]
+	delete(m.stopped, key)
+	return wasStopped
+}
+
+func (m *Monitor) stopSync(key string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cancel, ok := m.cancels[key]
+	if !ok {
+		return ErrNoActiveSync
+	}
+	m.stopped[key] = true
+	cancel()
+	return nil
+}
+
+// Cancels the running sync for an image repo
+func (m *Monitor) StopImageSync(repo *db.Repository) error {
+	return m.stopSync("image:" + repo.ID)
+}
+
+// Cancels the running sync for an artifact repo
+func (m *Monitor) StopArtifactSync(repo *db.ArtifactRepository) error {
+	return m.stopSync(fmt.Sprintf("artifact:%d", repo.ID))
 }
 
 // Publishes the admin clamps so shared helpers see fresh values
@@ -302,15 +353,21 @@ func (m *Monitor) execArtifactSync(ctx context.Context, repo *db.ArtifactReposit
 		Private:   repo.IsPrivate,
 		OwnerID:   repo.OwnerID,
 	}
-	m.beginSync(key, ev)
-
 	state := ParseState(repo.MirrorState)
 	runCtx, cancel := context.WithTimeout(ctx, currentLimits().SyncTimeout)
+	m.armCancel(key, cancel)
+	m.beginSync(key, ev)
+
 	syncErr := m.syncArtifactRepo(runCtx, repo, cfg, &state)
 	cancel()
+	if m.disarmCancel(key) && syncErr != nil {
+		syncErr = ErrSyncStopped
+	}
 
 	state, msg := nextState(state, syncErr)
-	if syncErr != nil {
+	if errors.Is(syncErr, ErrSyncStopped) {
+		m.log.Info("mirror sync for artifact repo %s/%s stopped by user", repo.Namespace, repo.Name)
+	} else if syncErr != nil {
 		m.log.Error("mirror sync for artifact repo %s/%s: %v", repo.Namespace, repo.Name, syncErr)
 	}
 	if err := m.store.SetArtifactRepoMirrorStatus(statusCtx(ctx), repo.ID, time.Now().UTC(), msg, state.Encode()); err != nil {
@@ -329,15 +386,21 @@ func (m *Monitor) execImageSync(ctx context.Context, repo *db.Repository, cfg *v
 		Private:   repo.IsPrivate,
 		OwnerID:   repo.OwnerID,
 	}
-	m.beginSync(key, ev)
-
 	state := ParseState(repo.MirrorState)
 	runCtx, cancel := context.WithTimeout(ctx, currentLimits().SyncTimeout)
+	m.armCancel(key, cancel)
+	m.beginSync(key, ev)
+
 	syncErr := m.oci.syncRepo(runCtx, repo, cfg, m.log)
 	cancel()
+	if m.disarmCancel(key) && syncErr != nil {
+		syncErr = ErrSyncStopped
+	}
 
 	state, msg := nextState(state, syncErr)
-	if syncErr != nil {
+	if errors.Is(syncErr, ErrSyncStopped) {
+		m.log.Info("mirror sync for image repo %s/%s stopped by user", repo.Namespace, repo.Name)
+	} else if syncErr != nil {
 		m.log.Error("mirror sync for image repo %s/%s: %v", repo.Namespace, repo.Name, syncErr)
 	}
 	if err := m.store.SetRepositoryMirrorStatus(statusCtx(ctx), repo.ID, time.Now().UTC(), msg, state.Encode()); err != nil {
@@ -362,6 +425,9 @@ func nextState(state SyncState, syncErr error) (SyncState, string) {
 		state.CooldownUntil = time.Time{}
 		state.RateLimited = false
 		return state, ""
+	// Operator stops skip failure accounting and cooldowns
+	case errors.Is(syncErr, ErrSyncStopped):
+		return state, ErrSyncStopped.Error()
 	case limited:
 		state.RateLimited = true
 		state.CooldownUntil = until

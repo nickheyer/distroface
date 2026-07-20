@@ -30,7 +30,7 @@
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import {
 		Archive, ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, ChevronDown, Download,
-		Lock, Globe, Pencil, Plus, RefreshCw, Search, Settings, Tag, Tags, Trash2, Upload, X
+		Lock, Globe, Pencil, Plus, RefreshCw, Search, Settings, Square, Tag, Tags, Trash2, Upload, X
 	} from '@lucide/svelte';
 	import {
 		Select, SelectContent, SelectItem, SelectTrigger
@@ -157,15 +157,34 @@
 		loadVersions();
 	}
 
-	// Release assets read best alphabetically within a version
+	let fileSort = $state('path asc');
+
 	function sortedFiles(list: Artifact[]) {
-		return [...list].sort((a, b) => a.path.localeCompare(b.path));
+		const [col, dir] = fileSort.split(' ');
+		const mul = dir === 'desc' ? -1 : 1;
+		return [...list].sort((a, b) => {
+			switch (col) {
+				case 'size':
+					return mul * (Number(a.size) - Number(b.size));
+				case 'created_at': {
+					const at = a.createdAt ? timestampDate(a.createdAt).getTime() : 0;
+					const bt = b.createdAt ? timestampDate(b.createdAt).getTime() : 0;
+					return mul * (at - bt);
+				}
+				default:
+					return mul * a.path.localeCompare(b.path);
+			}
+		});
 	}
 
 	function toggleSearchSort(col: string) {
 		searchSort = searchSort === `${col} desc` ? `${col} asc` : `${col} desc`;
 		searchPager.reset();
 		fetchSearch();
+	}
+
+	function toggleFileSort(col: string) {
+		fileSort = fileSort === `${col} desc` ? `${col} asc` : `${col} desc`;
 	}
 
 	async function runSearch() {
@@ -405,6 +424,10 @@
 	// ── Sync now ─────────────────────────────────────────────────────────
 
 	let syncing = $state(false);
+	let stopping = $state(false);
+	const syncActive = $derived(
+		!!repo && (repo.mirrorSyncing || mirrorSyncStore.syncing('artifact', repo.id))
+	);
 
 	async function syncNow() {
 		if (syncing) return;
@@ -416,6 +439,19 @@
 			// Error interceptor already toasted
 		} finally {
 			syncing = false;
+		}
+	}
+
+	async function stopSync() {
+		if (stopping) return;
+		stopping = true;
+		try {
+			await rpcClient.artifact.stopArtifactRepositorySync({ name: repoName, namespace });
+			toast.success('Sync stopped');
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			stopping = false;
 		}
 	}
 
@@ -442,12 +478,12 @@
 	<title>{namespace}/{repoName} - Artifacts - Distroface</title>
 </svelte:head>
 
-{#snippet sortHeader(label: string, col: string)}
-	<button type="button" class="inline-flex items-center gap-1 hover:text-foreground transition-colors" onclick={() => toggleSearchSort(col)}>
+{#snippet sortHeader(label: string, col: string, current: string, toggle: (col: string) => void)}
+	<button type="button" class="inline-flex items-center gap-1 hover:text-foreground transition-colors" onclick={() => toggle(col)}>
 		{label}
-		{#if searchSort === `${col} desc`}
+		{#if current === `${col} desc`}
 			<ArrowDown class="h-3 w-3" />
-		{:else if searchSort === `${col} asc`}
+		{:else if current === `${col} asc`}
 			<ArrowUp class="h-3 w-3" />
 		{:else}
 			<ArrowUpDown class="h-3 w-3 opacity-40" />
@@ -460,18 +496,18 @@
 		<TableHeader>
 			<TableRow class="bg-muted/30 hover:bg-muted/30">
 				<TableHead class="th">
-					{#if sortable}{@render sortHeader('Path', 'path')}{:else}Path{/if}
+					{#if sortable}{@render sortHeader('Path', 'path', searchSort, toggleSearchSort)}{:else}{@render sortHeader('Path', 'path', fileSort, toggleFileSort)}{/if}
 				</TableHead>
 				{#if sortable}
-					<TableHead class="th">{@render sortHeader('Version', 'version')}</TableHead>
+					<TableHead class="th">{@render sortHeader('Version', 'version', searchSort, toggleSearchSort)}</TableHead>
 				{/if}
 				<TableHead class="th">
-					{#if sortable}{@render sortHeader('Size', 'size')}{:else}Size{/if}
+					{#if sortable}{@render sortHeader('Size', 'size', searchSort, toggleSearchSort)}{:else}{@render sortHeader('Size', 'size', fileSort, toggleFileSort)}{/if}
 				</TableHead>
 				<TableHead class="th">Type</TableHead>
 				<TableHead class="th">Digest</TableHead>
 				<TableHead class="th">
-					{#if sortable}{@render sortHeader('Uploaded', 'created_at')}{:else}Uploaded{/if}
+					{#if sortable}{@render sortHeader('Uploaded', 'created_at', searchSort, toggleSearchSort)}{:else}{@render sortHeader('Uploaded', 'created_at', fileSort, toggleFileSort)}{/if}
 				</TableHead>
 				<TableHead class="th w-32"></TableHead>
 			</TableRow>
@@ -611,10 +647,17 @@
 			</div>
 			<div class="flex items-center gap-2">
 				{#if repoIsMirror && canMutate}
-					<Button variant="outline" size="sm" onclick={syncNow} disabled={syncing}>
-						<RefreshCw class="h-4 w-4 mr-1.5 {syncing ? 'animate-spin' : ''}" />
-						Sync Now
-					</Button>
+					{#if syncActive}
+						<Button variant="outline" size="sm" onclick={stopSync} disabled={stopping}>
+							<Square class="h-4 w-4 mr-1.5" />
+							Stop Sync
+						</Button>
+					{:else}
+						<Button variant="outline" size="sm" onclick={syncNow} disabled={syncing}>
+							<RefreshCw class="h-4 w-4 mr-1.5 {syncing ? 'animate-spin' : ''}" />
+							Sync Now
+						</Button>
+					{/if}
 				{/if}
 				{#if canMutate}
 					<Button variant="outline" size="sm" onclick={openSettings}>
