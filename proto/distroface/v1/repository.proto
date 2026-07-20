@@ -13,6 +13,8 @@ service RepositoryService {
   rpc CreateRepository(CreateRepositoryRequest) returns (CreateRepositoryResponse) {}
   // SyncRepository starts an immediate mirror sync in the background.
   rpc SyncRepository(SyncRepositoryRequest) returns (SyncRepositoryResponse) {}
+  // StopRepositorySync cancels the running mirror sync, if any.
+  rpc StopRepositorySync(StopRepositorySyncRequest) returns (StopRepositorySyncResponse) {}
   // GetRepository returns a repository by namespace and name.
   rpc GetRepository(GetRepositoryRequest) returns (GetRepositoryResponse) {}
   // ListRepositories returns a paginated list of repositories.
@@ -65,6 +67,17 @@ message SyncRepositoryRequest {
 
 // SyncRepositoryResponse is empty; poll the repository for sync status.
 message SyncRepositoryResponse {}
+
+// StopRepositorySyncRequest identifies a mirror repository whose sync should stop.
+message StopRepositorySyncRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// StopRepositorySyncResponse is empty.
+message StopRepositorySyncResponse {}
 
 // GetRepositoryRequest identifies a repository to retrieve.
 message GetRepositoryRequest {

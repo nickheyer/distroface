@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
@@ -28,6 +29,8 @@ func (t *inprocTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	pr, pw := io.Pipe()
 	w := &pipeResponseWriter{header: make(http.Header), pw: pw, ready: make(chan struct{})}
 	go func() {
+		// RoundTripper contract requires closing the request body
+		defer r2.Body.Close()
 		// A panicking handler must not take the process down
 		defer func() {
 			if r := recover(); r != nil {
@@ -40,6 +43,14 @@ func (t *inprocTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}()
 	<-w.ready
 
+	// Clients like gcr read the struct field, not the header
+	length := int64(-1)
+	if v := w.header.Get("Content-Length"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil {
+			length = n
+		}
+	}
+
 	return &http.Response{
 		Status:        http.StatusText(w.status),
 		StatusCode:    w.status,
@@ -48,7 +59,7 @@ func (t *inprocTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		ProtoMinor:    1,
 		Header:        w.header,
 		Body:          pr,
-		ContentLength: -1,
+		ContentLength: length,
 		Request:       req,
 	}, nil
 }
