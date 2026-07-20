@@ -50,6 +50,7 @@ message User {
   string auth_provider = 9;
   bool is_active = 10;
   bool must_change_password = 11;
+  bool oidc_linked = 12;
 }
 
 // Reports a per-item failure in a bulk operation.

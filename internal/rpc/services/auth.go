@@ -530,6 +530,7 @@ func userToProto(u *storage.User, roles []*storage.Role) *v1.User {
 		AuthProvider:       u.AuthProvider,
 		IsActive:           u.IsActive,
 		MustChangePassword: u.MustChangePassword,
+		OidcLinked:         u.OIDCSubject != "",
 		CreatedAt:          timestamppb.New(u.CreatedAt),
 		UpdatedAt:          timestamppb.New(u.UpdatedAt),
 	}

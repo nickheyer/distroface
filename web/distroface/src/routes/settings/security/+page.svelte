@@ -21,6 +21,7 @@
 	let oidcEnabled = $state(false);
 
 	const isOIDC = $derived(authStore.user?.authProvider !== 'local');
+	const ssoLinked = $derived(isOIDC || !!authStore.user?.oidcLinked);
 
 	const connectedAccounts = $derived([
 		{
@@ -34,8 +35,8 @@
 			label: 'Single sign-on',
 			description: 'Sign in through your organization’s identity provider.',
 			icon: Globe,
-			connected: isOIDC,
-			show: oidcEnabled || isOIDC
+			connected: ssoLinked,
+			show: oidcEnabled || ssoLinked
 		}
 	]);
 

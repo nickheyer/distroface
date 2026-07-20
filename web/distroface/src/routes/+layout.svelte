@@ -44,6 +44,7 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
+	import CliSetupPrompt from '$lib/components/cli-setup-prompt.svelte';
 
 	let { children } = $props();
 	let initialized = $state(false);
@@ -265,6 +266,8 @@
 			{/key}
 		</main>
 	</div>
+
+	<CliSetupPrompt />
 
 	<Sheet bind:open={mobileMenuOpen}>
 		<SheetContent side="right" class="w-72">
