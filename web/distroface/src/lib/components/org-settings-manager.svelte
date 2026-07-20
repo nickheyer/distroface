@@ -6,6 +6,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
+	import UnitInput from '$lib/components/unit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
 	import { Globe, Package, Save, Undo2 } from '@lucide/svelte';
@@ -163,7 +164,7 @@
 {:else}
 	<FormCard
 		title="Portals"
-		description="How this organization's registry portals expose content. Applies live to every portal."
+		description="How this organization's portals expose content."
 		icon={Globe}
 	>
 		<FormField
@@ -171,7 +172,7 @@
 			horizontal
 			tag={isolatedAct.tag ?? customTag(PATHS.portalsIsolated)}
 			error={isolatedAct.error}
-			help="Portals answer only for content in this organization's namespace, everything else responds not found. Off keeps the instance-wide fall-through for unmapped names."
+			help="Portals serve only this organization's content"
 		>
 			<Switch
 				checked={portalsIsolated}
@@ -183,37 +184,37 @@
 
 	<FormCard
 		title="Artifacts"
-		description="Retention and upload limits for this organization's artifact repositories. Values differing from the instance defaults are stored as overrides."
+		description="Retention and upload limits for artifact repositories."
 		icon={Package}
 	>
 		<div class="space-y-5">
 			<div class="space-y-3">
 				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Uploads</p>
-				<FormField label="Private by default" tag={customTag(PATHS.privateByDefault)} help="New artifact repositories created under this org start private." horizontal>
+				<FormField label="Private by default" tag={customTag(PATHS.privateByDefault)} horizontal>
 					<Switch bind:checked={privateByDefault} />
 				</FormField>
-				<FormField label="Max upload size (MB)" id="art-max-file" tag={customTag(PATHS.maxFileSizeMb)} help="Largest single artifact allowed; 0 means unlimited.">
-					<Input id="art-max-file" type="number" bind:value={maxFileSizeMb} min={0} class="w-36" />
+				<FormField label="Max upload size" id="art-max-file" tag={customTag(PATHS.maxFileSizeMb)} help="0 means unlimited">
+					<UnitInput id="art-max-file" unit="MB" bind:value={maxFileSizeMb} min={0} class="w-36" />
 				</FormField>
 			</div>
 
 			<div class="space-y-3 pt-4 border-t border-border/40">
 				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Retention</p>
-				<FormField label="Enable retention" tag={customTag(PATHS.retentionEnabled)} help="Automatically prune old artifacts on upload and on the scheduled reaper." horizontal>
+				<FormField label="Enable retention" tag={customTag(PATHS.retentionEnabled)} help="Prunes old artifacts automatically" horizontal>
 					<Switch bind:checked={retentionEnabled} />
 				</FormField>
 				{#if retentionEnabled}
 					<div class="space-y-3 pl-3 border-l-2 border-border/40">
-						<FormField label="Max versions per path" id="art-max-versions" tag={customTag(PATHS.maxVersions)} help="Newest versions kept per artifact path; 0 means unlimited.">
+						<FormField label="Max versions per path" id="art-max-versions" tag={customTag(PATHS.maxVersions)} help="0 means unlimited">
 							<Input id="art-max-versions" type="number" bind:value={maxVersions} min={0} class="w-36" />
 						</FormField>
-						<FormField label="Max age (days)" id="art-max-age" tag={customTag(PATHS.maxAgeDays)} help="Prune artifacts older than this; 0 disables age pruning.">
-							<Input id="art-max-age" type="number" bind:value={maxAgeDays} min={0} class="w-36" />
+						<FormField label="Max age" id="art-max-age" tag={customTag(PATHS.maxAgeDays)} help="0 disables age pruning">
+							<UnitInput id="art-max-age" unit="days" bind:value={maxAgeDays} min={0} class="w-36" />
 						</FormField>
-						<FormField label="Max total size (MB)" id="art-max-total" tag={customTag(PATHS.maxTotalSize)} help="Cap on summed artifact size per repo; 0 means unlimited.">
-							<Input id="art-max-total" type="number" bind:value={maxTotalSizeMb} min={0} class="w-36" />
+						<FormField label="Max total size" id="art-max-total" tag={customTag(PATHS.maxTotalSize)} help="Per repo, 0 means unlimited">
+							<UnitInput id="art-max-total" unit="MB" bind:value={maxTotalSizeMb} min={0} class="w-36" />
 						</FormField>
-						<FormField label="Keep latest" tag={customTag(PATHS.excludeLatest)} help="Never prune the newest artifact of a path, even over limits." horizontal>
+						<FormField label="Keep latest" tag={customTag(PATHS.excludeLatest)} help="Always keep the newest (per path), regardless of retention." horizontal>
 							<Switch bind:checked={excludeLatest} />
 						</FormField>
 					</div>

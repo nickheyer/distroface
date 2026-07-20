@@ -1,14 +1,21 @@
 <script lang="ts">
 	import { Lock, Eye, ArrowDown, Tags, HardDrive, Clock, Star } from '@lucide/svelte';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Visibility } from '$lib/proto/distroface/v1/types_pb';
+	import MirrorBadge from '$lib/components/mirror-badge.svelte';
+	import { RepositoryType, Visibility } from '$lib/proto/distroface/v1/types_pb';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
+	import { onMount } from 'svelte';
 	import { relativeTime, formatBytes } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import type { Repository } from '$lib/proto/distroface/v1/types_pb';
 	import { resolve } from '$app/paths';
 
 	let { repo }: { repo: Repository } = $props();
+
+	onMount(() => {
+		if (repo.type === RepositoryType.MIRROR) mirrorSyncStore.ensure();
+	});
 
 	const isPrivate = $derived(repo.visibility === Visibility.PRIVATE);
 	const isOwner = $derived(!!authStore.user && repo.ownerId === authStore.user.id);
@@ -49,6 +56,14 @@
 					</Badge>
 					{#if isOwner}
 						<Badge variant="secondary" class="text-[10px] shrink-0 py-0 h-4.5">Owner</Badge>
+					{/if}
+					{#if repo.type === RepositoryType.MIRROR}
+						<MirrorBadge
+							label="Mirror"
+							error={repo.mirrorLastError}
+							title={repo.mirror?.upstream ?? ''}
+							syncing={repo.mirrorSyncing || mirrorSyncStore.syncing('image', repo.id)}
+						/>
 					{/if}
 				</div>
 

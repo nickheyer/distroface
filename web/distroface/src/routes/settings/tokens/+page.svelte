@@ -237,13 +237,8 @@
 					{/each}
 				</TableBody>
 			</Table>
+			<DataPagination attached {pager} onChange={loadTokens} />
 		</div>
-
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) loadTokens(); }}
-			onNext={() => { if (pager.next()) loadTokens(); }}
-		/>
 	{/if}
 </div>
 
@@ -253,8 +248,8 @@
 	onOpenChange={(v) => { if (!v) closeCreatePanel(); }}
 	title={newPlaintextToken ? 'Token Created' : 'Create API Token'}
 	description={newPlaintextToken
-		? 'Your new token has been generated. Copy it now - it will not be shown again.'
-		: 'Create a personal access token for authenticating with the API and Docker registry.'}
+		? 'Copy it now, it will not be shown again.'
+		: 'Authenticates with the API and Docker registry.'}
 	icon={newPlaintextToken ? CheckCircle : Key}
 >
 	{#if newPlaintextToken}
@@ -299,11 +294,11 @@
 		<div class="space-y-6">
 			<FormSection title="Token Details">
 				<div class="space-y-3">
-					<FormField label="Token Name" id="token-name" required help="A descriptive name to identify this token (e.g., 'CI/CD Pipeline', 'Local Dev').">
-						<Input id="token-name" bind:value={tokenName} placeholder="e.g., CI/CD Pipeline" />
+					<FormField label="Token Name" id="token-name" required>
+						<Input id="token-name" bind:value={tokenName} placeholder="CI/CD Pipeline" />
 					</FormField>
 
-					<FormField label="Expiration" help="Tokens without expiration remain valid until manually revoked.">
+					<FormField label="Expiration" help="No expiration means valid until revoked">
 						<Select
 							type="single"
 							value={tokenExpiryOption}

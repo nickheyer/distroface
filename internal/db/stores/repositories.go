@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/pkg/pages"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"gorm.io/gorm"
 )
 
@@ -91,6 +92,21 @@ func (s *Store) DeleteRepository(ctx context.Context, namespace, name string) er
 
 func (s *Store) UpdateRepository(ctx context.Context, repo *db.Repository) error {
 	return s.db.WithContext(ctx).Save(repo).Error
+}
+
+// Targeted write so syncs never clobber concurrent edits
+func (s *Store) SetRepositoryMirrorStatus(ctx context.Context, id string, at time.Time, errMsg, state string) error {
+	return s.db.WithContext(ctx).Model(&db.Repository{}).Where("id = ?", id).
+		Updates(map[string]any{"mirror_last_sync": at, "mirror_last_error": errMsg, "mirror_state": state}).Error
+}
+
+// Mirror repos for the sync monitor
+func (s *Store) ListMirrorRepositories(ctx context.Context) ([]*db.Repository, error) {
+	var repos []*db.Repository
+	err := s.db.WithContext(ctx).
+		Where("type = ?", v1.RepositoryType_REPOSITORY_TYPE_MIRROR).
+		Order("namespace ASC, name ASC").Find(&repos).Error
+	return repos, err
 }
 
 func (s *Store) IncrementPullCount(ctx context.Context, namespace, name string) error {

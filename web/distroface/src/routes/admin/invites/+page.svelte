@@ -7,6 +7,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Input } from '$lib/components/ui/input';
+	import UnitInput from '$lib/components/unit-input.svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import {
 		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
@@ -183,7 +184,7 @@
 	<div class="section-header">
 		<div>
 			<h2 class="section-title">Registration Invites</h2>
-			<p class="section-subtitle">Invite links allow users to register when public registration is disabled.</p>
+			<p class="section-subtitle">Let users register when public registration is off</p>
 		</div>
 		<div class="flex items-center gap-2">
 			<div class="w-96">
@@ -296,13 +297,8 @@
 					{/each}
 				</TableBody>
 			</Table>
+			<DataPagination attached {pager} onChange={loadInvites} />
 		</div>
-
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) loadInvites(); }}
-			onNext={() => { if (pager.next()) loadInvites(); }}
-		/>
 	{/if}
 </div>
 
@@ -345,14 +341,14 @@
 			/>
 		</FormField>
 		<FormField label="PIN" id="invite-pin-input" help="Also required to register">
-			<Input id="invite-pin-input" bind:value={invitePin} placeholder="None" />
+			<Input id="invite-pin-input" bind:value={invitePin} placeholder="None" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore />
 		</FormField>
 		<div class="grid grid-cols-2 gap-3">
 			<FormField label="Max uses" id="invite-max">
 				<Input id="invite-max" type="number" bind:value={inviteMaxUses} placeholder="Unlimited" min={1} />
 			</FormField>
-			<FormField label="Expires in hours" id="invite-expiry">
-				<Input id="invite-expiry" type="number" bind:value={inviteExpiryHours} placeholder="Never" min={1} />
+			<FormField label="Expires" id="invite-expiry">
+				<UnitInput id="invite-expiry" unit="hrs" bind:value={inviteExpiryHours} placeholder="Never" min={1} />
 			</FormField>
 		</div>
 	</div>

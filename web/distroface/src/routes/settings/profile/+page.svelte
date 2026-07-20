@@ -116,7 +116,7 @@
 					<FormField
 						label="Display Name"
 						id="display-name"
-						help="Shown on your profile and alongside your repositories."
+						help="Shown on your profile and repositories"
 					>
 						<Input
 							id="display-name"
@@ -128,7 +128,7 @@
 					<FormField
 						label="Email"
 						id="email"
-						help="Used for account notifications. Not publicly visible."
+						help="For notifications, not publicly visible"
 					>
 						<Input
 							id="email"

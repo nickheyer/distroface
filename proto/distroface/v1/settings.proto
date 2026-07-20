@@ -61,6 +61,7 @@ message Settings {
   RateLimitSettings rate_limit = 8;
   WebhookSettings webhooks = 9;
   SecuritySettings security = 10;
+  MirrorSettings mirror = 11;
 }
 
 // Instance identity as clients reach it
@@ -177,6 +178,21 @@ message RateLimitSettings {
 // Delivery restrictions
 message WebhookSettings {
   optional bool allow_private_networks = 1;
+}
+
+// Scheduled upstream mirror syncs
+message MirrorSettings {
+  optional bool enabled = 1;
+  optional int32 default_interval_minutes = 2;
+  optional bool allow_private_networks = 3;
+  optional int32 min_interval_minutes = 4; // Floor applied to per repo intervals
+  optional int32 max_concurrent_syncs = 5; // Repos synced in parallel per sweep
+  optional int32 per_host_spacing_ms = 6; // Delay between requests to one upstream host
+  optional int32 sync_timeout_minutes = 7; // Hard cap on one repo sync
+  optional int32 rate_limit_cooldown_minutes = 8; // Pause when the upstream limits without a deadline
+  optional int32 max_cooldown_minutes = 9; // Longest honored cooldown or backoff
+  optional int32 failure_backoff_minutes = 10; // Base of the exponential failure backoff
+  optional int32 max_sync_depth = 11; // Cap on releases or tags per sync, 0 unlimited
 }
 
 // Hardening toggles

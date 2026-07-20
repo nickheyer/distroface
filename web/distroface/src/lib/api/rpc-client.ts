@@ -17,6 +17,7 @@ import { RoleService } from '$lib/proto/distroface/v1/role_pb';
 import { WebhookService } from '$lib/proto/distroface/v1/webhook_pb';
 import { PortalService } from '$lib/proto/distroface/v1/portal_pb';
 import { ArtifactService } from '$lib/proto/distroface/v1/artifact_pb';
+import { MirrorService } from '$lib/proto/distroface/v1/mirror_pb';
 import { GCService } from '$lib/proto/distroface/v1/gc_pb';
 import { CertificateService } from '$lib/proto/distroface/v1/certificate_pb';
 import { AuditService } from '$lib/proto/distroface/v1/audit_pb';
@@ -25,7 +26,9 @@ import { networkStore } from '$lib/stores/network.svelte';
 
 const SESSION_KEY = 'distroface_session';
 
+// Long lived streams never drive the global progress bar
 const progressInterceptor: Interceptor = (next) => async (req) => {
+	if (req.stream) return next(req);
 	networkStore.start();
 	try {
 		return await next(req);
@@ -78,6 +81,7 @@ export class RpcClient {
 	public readonly webhook: Client<typeof WebhookService>;
 	public readonly portal: Client<typeof PortalService>;
 	public readonly artifact: Client<typeof ArtifactService>;
+	public readonly mirror: Client<typeof MirrorService>;
 	public readonly gc: Client<typeof GCService>;
 	public readonly certificate: Client<typeof CertificateService>;
 	public readonly audit: Client<typeof AuditService>;
@@ -94,6 +98,7 @@ export class RpcClient {
 		this.webhook = createClient(WebhookService, transport);
 		this.portal = createClient(PortalService, transport);
 		this.artifact = createClient(ArtifactService, transport);
+		this.mirror = createClient(MirrorService, transport);
 		this.gc = createClient(GCService, transport);
 		this.certificate = createClient(CertificateService, transport);
 		this.audit = createClient(AuditService, transport);

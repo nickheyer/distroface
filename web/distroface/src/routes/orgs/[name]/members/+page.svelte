@@ -215,25 +215,20 @@
 					{/each}
 				</TableBody>
 			</Table>
+			<DataPagination attached {pager} onChange={loadMembers} />
 		</div>
-
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) loadMembers(); }}
-			onNext={() => { if (pager.next()) loadMembers(); }}
-		/>
 	{/if}
 </div>
 
 <FormPanel
 	bind:open={addMemberOpen}
 	title="Add Member"
-	description="Add a user to this organization. Members can push images to the shared namespace."
+	description="Members can push images to the shared namespace."
 	icon={UserPlus}
 >
 	<div class="space-y-6">
 		<FormSection title="User">
-			<FormField label="User" id="add-user" required help="Search for an existing user to add.">
+			<FormField label="User" id="add-user" required>
 				<AsyncSelect
 					bind:selected={addUserId}
 					placeholder="Select a user..."
@@ -251,7 +246,7 @@
 			</FormField>
 		</FormSection>
 
-		<FormSection title="Role" description="Admins can manage members and settings. Members can push images.">
+		<FormSection title="Role" description="Admins manage members and settings, members push images.">
 			<Select
 				type="single"
 				value={String(addRole)}
@@ -276,6 +271,6 @@
 
 <ConfirmDialog bind:open={removeMemberOpen} title="Remove Member" confirmLabel="Remove" onConfirm={confirmRemoveMember} loading={removingMember}>
 	{#snippet description()}
-		Are you sure you want to remove <strong>{removeMemberName}</strong> from this organization?
+		Remove <strong>{removeMemberName}</strong> from this organization?
 	{/snippet}
 </ConfirmDialog>

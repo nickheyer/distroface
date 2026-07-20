@@ -405,13 +405,8 @@
 					{/each}
 				</TableBody>
 			</Table>
+			<DataPagination attached {pager} onChange={loadUsers} />
 		</div>
-
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) loadUsers(); }}
-			onNext={() => { if (pager.next()) loadUsers(); }}
-		/>
 	{/if}
 </div>
 
@@ -485,7 +480,7 @@
 		<FormField label="Password" id="create-password" required error={createPasswordError}>
 			<div class="flex gap-2">
 				<div class="flex-1">
-					<PasswordInput id="create-password" bind:value={createPassword} placeholder="Set a password" autocomplete="new-password" />
+					<PasswordInput id="create-password" bind:value={createPassword} placeholder="Set a password" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore />
 				</div>
 				<Button variant="outline" class="shrink-0" onclick={generatePassword}>Generate</Button>
 			</div>

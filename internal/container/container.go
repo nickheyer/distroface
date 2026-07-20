@@ -20,6 +20,7 @@ import (
 	"github.com/nickheyer/distroface/internal/certs"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/mirror"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -242,6 +243,11 @@ func New() (*App, error) {
 	artifactReaper := artifacts.NewReaper(artifactManager, store, log)
 	artifactReaper.Schedule(ctx)
 
+	// Pushes go straight into the embedded registry handler
+	ociSyncer := mirror.NewOCISyncer(registryApp, tokenService)
+	mirrorMonitor := mirror.NewMonitor(store, resolver, artifactManager, ociSyncer, log)
+	mirrorMonitor.Schedule(ctx)
+
 	if err := seedLegacyACMEDomains(ctx, cfg.LegacyACMEDomains, store, log); err != nil {
 		return fail("seeding legacy acme domains", err)
 	}
@@ -265,6 +271,7 @@ func New() (*App, error) {
 		AuthLimiter:         authLimiter,
 		ArtifactManager:     artifactManager,
 		ArtifactV1Facade:    artifactV1Facade,
+		MirrorMonitor:       mirrorMonitor,
 		GCCollector:         gcCollector,
 		CertService:         certService,
 		AuditRecorder:       auditRecorder,

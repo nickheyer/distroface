@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
@@ -10,8 +11,15 @@
 	import {
 		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 	} from '$lib/components/ui/table';
+	import {
+		Select, SelectContent, SelectItem, SelectTrigger
+	} from '$lib/components/ui/select';
 	import AsyncSelect from '$lib/components/async-select.svelte';
 	import FormPanel from '$lib/components/form-panel.svelte';
+	import MirrorBadge from '$lib/components/mirror-badge.svelte';
+	import MirrorConfigFields, {
+		emptyMirrorForm, mirrorInit
+	} from '$lib/components/mirror-config-fields.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
@@ -28,7 +36,11 @@
 	import { relativeTime, formatBytes } from '$lib/utils';
 	import { Pager } from '$lib/pager.svelte';
 	import { QueryFilter } from '$lib/query.svelte';
+	import { ArtifactRepoType } from '$lib/proto/distroface/v1/types_pb';
 	import type { ArtifactRepository } from '$lib/proto/distroface/v1/types_pb';
+	import {
+		artifactRepoTypeOptions, artifactMirrorKind, artifactMirrorLabel
+	} from '$lib/mirror';
 
 	let repos = $state<ArtifactRepository[]>([]);
 	let loading = $state(true);
@@ -45,7 +57,10 @@
 	let newNamespace = $state('');
 	let newDescription = $state('');
 	let newPrivate = $state(false);
+	let newType = $state<ArtifactRepoType>(ArtifactRepoType.FILE);
+	let newMirror = $state(emptyMirrorForm());
 	let creating = $state(false);
+	const isMirror = $derived(newType !== ArtifactRepoType.FILE);
 
 	const ownNamespace = $derived(authStore.user?.username ?? '');
 
@@ -76,14 +91,16 @@
 	}
 
 	async function createRepo() {
-		if (!newName.trim()) return;
+		if (!newName.trim() || (isMirror && !newMirror.upstream.trim())) return;
 		creating = true;
 		try {
 			await rpcClient.artifact.createArtifactRepository({
 				name: newName.trim(),
 				namespace: newNamespace || ownNamespace,
 				description: newDescription.trim(),
-				isPrivate: newPrivate
+				isPrivate: newPrivate,
+				type: newType,
+				mirror: isMirror ? mirrorInit(newMirror) : undefined
 			});
 			toast.success('Repository created');
 			closeCreatePanel();
@@ -101,6 +118,8 @@
 		newNamespace = '';
 		newDescription = '';
 		newPrivate = false;
+		newType = ArtifactRepoType.FILE;
+		newMirror = emptyMirrorForm();
 	}
 
 	function openDelete(repo: ArtifactRepository, e: MouseEvent) {
@@ -132,17 +151,27 @@
 	}
 
 	onMount(() => {
+		mirrorSyncStore.ensure();
 		loadRepos();
+	});
+
+	// Finished syncs refresh the list live
+	let syncSeqSeen = 0;
+	$effect(() => {
+		const seq = mirrorSyncStore.finishedSeq;
+		if (seq === syncSeqSeen) return;
+		syncSeqSeen = seq;
+		if (mirrorSyncStore.lastFinished?.kind === 'artifact') loadRepos();
 	});
 </script>
 
 <svelte:head>
-	<title>Artifacts - Distroface</title>
+	<title>Artifact Repositories - Distroface</title>
 </svelte:head>
 
 <PageHeader
-	title="Artifacts"
-	subtitle="Generic artifact repositories for build outputs and packages"
+	title="Artifact Repositories"
+	subtitle="Build outputs, packages, and mirrored release assets"
 	icon={Archive}
 >
 	{#snippet actions()}
@@ -169,7 +198,7 @@
 	{:else if repos.length === 0}
 		<EmptyState
 			icon={Archive}
-			message={filter.active ? 'No repositories found' : 'No artifact repositories yet'}
+			message={filter.active ? 'No artifact repositories found' : 'No artifact repositories yet'}
 			description={filter.active
 				? 'No results match the current filter'
 				: 'Create a repository to store build artifacts, packages, and other files.'}
@@ -178,8 +207,7 @@
 				{#if !filter.active}
 					<PermissionGate resource="artifacts" action="create">
 						<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>
-							<Plus class="h-4 w-4 mr-1.5" />
-							New Repository
+							<Plus class="h-4 w-4 mr-1.5" />New Artifact Repository
 						</Button>
 					</PermissionGate>
 				{/if}
@@ -216,6 +244,14 @@
 											<Globe class="h-2.5 w-2.5" />Public
 										{/if}
 									</Badge>
+									{#if repo.type !== ArtifactRepoType.FILE && repo.type !== ArtifactRepoType.UNSPECIFIED}
+										<MirrorBadge
+											label={artifactMirrorLabel(repo.type)}
+											error={repo.mirrorLastError}
+											title={repo.mirror?.upstream ?? ''}
+											syncing={repo.mirrorSyncing || mirrorSyncStore.syncing('artifact', repo.id)}
+										/>
+									{/if}
 								</div>
 								{#if repo.description}
 									<p class="text-xs text-muted-foreground mt-0.5 line-clamp-1">{repo.description}</p>
@@ -242,13 +278,8 @@
 					{/each}
 				</TableBody>
 			</Table>
+			<DataPagination attached {pager} onChange={loadRepos} />
 		</div>
-
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) loadRepos(); }}
-			onNext={() => { if (pager.next()) loadRepos(); }}
-		/>
 	{/if}
 </div>
 
@@ -256,13 +287,13 @@
 	open={createPanelOpen}
 	onOpenChange={(v) => { if (!v) closeCreatePanel(); }}
 	title="New Artifact Repository"
-	description="Create a repository for storing build artifacts and packages."
+	description="Stores build artifacts and packages."
 	icon={Archive}
 >
 	<div class="space-y-6">
 		<FormSection title="Repository Details">
 			<div class="space-y-3">
-				<FormField label="Namespace" id="repo-namespace" help="Your personal namespace or an organization you administer.">
+				<FormField label="Namespace" id="repo-namespace" help="Your namespace or an organization you administer">
 					<AsyncSelect
 						bind:selected={newNamespace}
 						placeholder={ownNamespace}
@@ -279,30 +310,52 @@
 						}}
 					/>
 				</FormField>
-				<FormField label="Name" id="repo-name" required help="Letters, digits, dots, dashes, and underscores.">
-					<Input id="repo-name" bind:value={newName} placeholder="e.g., build-artifacts" />
+				<FormField label="Name" id="repo-name" required help="Letters, digits, dots, dashes, underscores">
+					<Input id="repo-name" bind:value={newName} placeholder="build-artifacts" />
 				</FormField>
 				<FormField label="Description" id="repo-description">
 					<Input id="repo-description" bind:value={newDescription} placeholder="What is stored here?" />
 				</FormField>
-				<FormField label="Private" help="Private repositories are only visible to you and admins.">
+				<FormField label="Type" id="repo-type" help="Mirrors pull upstream releases automatically">
+					<Select type="single" value={String(newType)} onValueChange={(v) => { if (v) newType = Number(v) as ArtifactRepoType; }}>
+						<SelectTrigger class="w-full" id="repo-type">
+							{artifactRepoTypeOptions.find((o) => o.value === newType)?.label ?? 'Select type'}
+						</SelectTrigger>
+						<SelectContent>
+							{#each artifactRepoTypeOptions as o (o.value)}
+								<SelectItem value={String(o.value)}>
+									<div>
+										<div>{o.label}</div>
+										<div class="text-xs text-muted-foreground">{o.description}</div>
+									</div>
+								</SelectItem>
+							{/each}
+						</SelectContent>
+					</Select>
+				</FormField>
+				<FormField label="Private" horizontal help="Visible only to you and admins">
 					<Switch bind:checked={newPrivate} />
 				</FormField>
 			</div>
 		</FormSection>
+
+		{#if isMirror}
+			<FormSection title="Mirror Source">
+				<MirrorConfigFields form={newMirror} kind={artifactMirrorKind(newType)} idPrefix="repo-mirror" />
+			</FormSection>
+		{/if}
 	</div>
 
 	{#snippet footer()}
 		<Button variant="outline" onclick={closeCreatePanel}>Cancel</Button>
-		<Button onclick={createRepo} disabled={creating || !newName.trim()}>
-			{creating ? 'Creating...' : 'Create Repository'}
+		<Button onclick={createRepo} disabled={creating || !newName.trim() || (isMirror && !newMirror.upstream.trim())}>
+			{creating ? (isMirror ? 'Validating...' : 'Creating...') : 'Create Repository'}
 		</Button>
 	{/snippet}
 </FormPanel>
 
 <ConfirmDialog bind:open={deleteDialogOpen} title="Delete Repository" confirmLabel="Delete" onConfirm={confirmDelete} loading={deleting}>
 	{#snippet description()}
-		Are you sure you want to delete <strong>{deleteTarget?.namespace}/{deleteTarget?.name}</strong>?
-		All artifacts in this repository will be permanently removed.
+		This permanently deletes <strong>{deleteTarget?.namespace}/{deleteTarget?.name}</strong> and all its artifacts.
 	{/snippet}
 </ConfirmDialog>

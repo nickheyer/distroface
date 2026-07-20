@@ -5,7 +5,7 @@
 	import {
 		Package, ArrowDown, ArrowUp, Eye, Lock, Pencil, Check, X,
 		Trash2, MoreHorizontal, EyeOff, ChevronRight,
-		Tags, Clock, Terminal, Star
+		Tags, Clock, Terminal, Star, HardDriveDownload, RefreshCw
 	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -31,13 +31,20 @@
 	} from '$lib/components/ui/sheet';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
+	import FormPanel from '$lib/components/form-panel.svelte';
+	import FormSection from '$lib/components/form-section.svelte';
+	import MirrorBadge from '$lib/components/mirror-badge.svelte';
+	import MirrorConfigFields, {
+		emptyMirrorForm, mirrorFormFrom, mirrorInit
+	} from '$lib/components/mirror-config-fields.svelte';
 	import DescriptorPanel from '$lib/components/descriptor-panel.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import WebhookManager from '$lib/components/webhook-manager.svelte';
+	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import type { Repository, Tag, Descriptor, HistoryEntry } from '$lib/proto/distroface/v1/types_pb';
-	import { Visibility, WebhookScope } from '$lib/proto/distroface/v1/types_pb';
+	import { RepositoryType, Visibility, WebhookScope } from '$lib/proto/distroface/v1/types_pb';
 	import { resolve } from '$app/paths';
 
 	const namespace = $derived(page.params.namespace);
@@ -69,6 +76,64 @@
 	let deleteRepoOpen = $state(false);
 	let deletingRepo = $state(false);
 	let starPending = $state(false);
+
+	// Mirror settings
+	let mirrorPanelOpen = $state(false);
+	let mirrorForm = $state(emptyMirrorForm());
+	let savingMirror = $state(false);
+	let syncingMirror = $state(false);
+	const repoIsMirror = $derived(repo?.type === RepositoryType.MIRROR);
+
+	async function syncMirrorNow() {
+		if (syncingMirror) return;
+		syncingMirror = true;
+		try {
+			await rpcClient.repository.syncRepository({ namespace, name });
+			toast.success('Sync started');
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			syncingMirror = false;
+		}
+	}
+
+	// Sync finish events refresh the page live
+	let syncSeqSeen = 0;
+	$effect(() => {
+		const seq = mirrorSyncStore.finishedSeq;
+		const ev = mirrorSyncStore.lastFinished;
+		if (seq === syncSeqSeen) return;
+		syncSeqSeen = seq;
+		if (ev?.kind === 'image' && repo && ev.repoId === repo.id) {
+			loadRepo();
+			loadTags();
+		}
+	});
+
+	function openMirrorSettings() {
+		if (!repo) return;
+		mirrorForm = mirrorFormFrom(repo.mirror);
+		mirrorPanelOpen = true;
+	}
+
+	async function saveMirrorSettings() {
+		if (!mirrorForm.upstream.trim()) return;
+		savingMirror = true;
+		try {
+			const resp = await rpcClient.repository.updateRepository({
+				namespace,
+				name,
+				mirror: mirrorInit(mirrorForm)
+			});
+			repo = resp.repository ?? repo;
+			toast.success('Mirror settings updated');
+			mirrorPanelOpen = false;
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			savingMirror = false;
+		}
+	}
 
 	const registryHost = $derived(
 		portalStore.host(configStore.publicHostname)
@@ -253,6 +318,7 @@
 	}
 
 	onMount(() => {
+		mirrorSyncStore.ensure();
 		loadRepo();
 		loadTags();
 		loadPullTag();
@@ -274,7 +340,7 @@
 	{:else if repo}
 		<!-- Breadcrumb -->
 		<nav class="flex items-center gap-1.5 text-sm text-muted-foreground">
-			<a href={resolve('/')} class="hover:text-foreground transition-colors">Explore</a>
+			<a href={resolve('/')} class="hover:text-foreground transition-colors">Images</a>
 			<span class="text-muted-foreground/30">/</span>
 			<a href={resolve(`/${namespaceHref}`)} class="hover:text-foreground transition-colors">{namespace}</a>
 			<span class="text-muted-foreground/30">/</span>
@@ -308,6 +374,14 @@
 									<Eye class="h-2.5 w-2.5" />Public
 								{/if}
 							</Badge>
+							{#if repoIsMirror}
+								<MirrorBadge
+									label="Mirror"
+									error={repo.mirrorLastError}
+									title={repo.mirror?.upstream ?? ''}
+									syncing={repo.mirrorSyncing || mirrorSyncStore.syncing('image', repo.id)}
+								/>
+							{/if}
 						</div>
 
 						<!-- Description -->
@@ -396,6 +470,14 @@
 											<EyeOff class="h-4 w-4 mr-2" />Make Private
 										{/if}
 									</DropdownMenuItem>
+									{#if repoIsMirror}
+										<DropdownMenuItem onclick={openMirrorSettings}>
+											<HardDriveDownload class="h-4 w-4 mr-2" />Mirror Settings
+										</DropdownMenuItem>
+										<DropdownMenuItem onclick={syncMirrorNow} disabled={syncingMirror}>
+											<RefreshCw class="h-4 w-4 mr-2 {syncingMirror ? 'animate-spin' : ''}" />Sync Now
+										</DropdownMenuItem>
+									{/if}
 								</PermissionGate>
 								<PermissionGate allowed={canDeleteRepo}>
 									<DropdownMenuSeparator />
@@ -484,13 +566,8 @@
 							{/each}
 						</TableBody>
 					</Table>
+					<DataPagination attached pager={tagsPager} onChange={loadTags} />
 				</div>
-
-				<DataPagination
-					page={tagsPager.page} pageSize={tagsPager.pageSize} totalCount={tagsPager.totalCount}
-					onPrev={() => { if (tagsPager.prev()) loadTags(); }}
-					onNext={() => { if (tagsPager.next()) loadTags(); }}
-				/>
 			{/if}
 		</div>
 		<!-- Webhooks section (visible to repo managers) -->
@@ -513,7 +590,7 @@
 			<p class="text-[13px] text-muted-foreground mt-1">
 				{namespace}/{name} does not exist or you don't have access.
 			</p>
-			<Button variant="outline" class="mt-4" onclick={() => goto(resolve('/'))}>Back to Explore</Button>
+			<Button variant="outline" class="mt-4" onclick={() => goto(resolve('/'))}>Back to Images</Button>
 		</div>
 	{/if}
 </div>
@@ -529,19 +606,21 @@
 			<div>
 				<SheetTitle class="text-lg font-semibold tracking-tight flex items-baseline gap-1.5 flex-wrap">
 					<span>
-						<span class="text-muted-foreground font-normal">{namespace}/{name}:</span><span 
-							class="transition-colors {panelStack.length > 1 ? 'cursor-pointer hover:text-muted-foreground' : ''}"
+						<span class="text-muted-foreground font-normal">{namespace}/{name}:</span><button
+							type="button"
+							class="transition-colors {panelStack.length > 1 ? 'cursor-pointer hover:text-muted-foreground' : 'cursor-default'}"
 							onclick={() => { if (panelStack.length > 1) panelStack = panelStack.slice(0, 1); }}>{panelStack[0]?.label ?? selectedTagName}
-						</span>
+						</button>
 					</span>
 					{#each panelStack as panel, i (panel.digest + i)}
 						{#if i > 0}
 							<ChevronRight class="h-3 w-3 shrink-0 text-muted-foreground/30 self-center" />
-							<span
+							<button
+								type="button"
 								class="text-sm font-normal font-mono transition-colors
-									{i === panelStack.length - 1 ? 'text-foreground' : 'text-muted-foreground cursor-pointer hover:text-foreground'}"
+									{i === panelStack.length - 1 ? 'text-foreground cursor-default' : 'text-muted-foreground cursor-pointer hover:text-foreground'}"
 								onclick={() => { if (i < panelStack.length - 1) panelStack = panelStack.slice(0, i + 1); }}
-							>{panel.label}</span>
+							>{panel.label}</button>
 						{/if}
 					{/each}
 				</SheetTitle>
@@ -556,7 +635,7 @@
 
 		</div>
 
-		<div bind:this={panelScroll} class="flex-1 flex overflow-x-hidden overflow-y-auto min-h-0">
+		<div bind:this={panelScroll} class="flex-1 flex overflow-x-auto overflow-y-hidden min-h-0">
 			{#each panelStack as panel, i (panel.digest + i)}
 				<div class="{panelStack.length === 1 ? 'flex-1' : 'w-lg shrink-0'} border-r border-border/30 overflow-y-auto last:border-r-0">
 					<DescriptorPanel
@@ -572,11 +651,40 @@
 	</SheetContent>
 </Sheet>
 
+<!-- Mirror settings panel -->
+<FormPanel
+	open={mirrorPanelOpen}
+	onOpenChange={(v) => (mirrorPanelOpen = v)}
+	title="Mirror Settings"
+	description="Upstream source for {namespace}/{name}."
+	icon={HardDriveDownload}
+>
+	<div class="space-y-6">
+		<FormSection title="Mirror Source">
+			<MirrorConfigFields
+				form={mirrorForm}
+				kind="oci"
+				tokenSet={repo?.mirror?.authTokenSet ?? false}
+				lastSync={repo?.mirrorLastSync}
+				lastError={repo?.mirrorLastError ?? ''}
+				nextAttempt={repo?.mirrorNextAttempt}
+				idPrefix="image-mirror"
+			/>
+		</FormSection>
+	</div>
+
+	{#snippet footer()}
+		<Button variant="outline" onclick={() => (mirrorPanelOpen = false)}>Cancel</Button>
+		<Button onclick={saveMirrorSettings} disabled={savingMirror || !mirrorForm.upstream.trim()}>
+			{savingMirror ? 'Validating...' : 'Save'}
+		</Button>
+	{/snippet}
+</FormPanel>
+
 <!-- Delete Repo -->
 <ConfirmDialog bind:open={deleteRepoOpen} title="Delete Repository" confirmLabel="Delete" onConfirm={confirmDeleteRepo} loading={deletingRepo} icon={Trash2}>
 	{#snippet description()}
-		Are you sure you want to delete <strong>{namespace}/{name}</strong>? This will permanently
-		remove all tags and images. This action cannot be undone.
+		This permanently deletes <strong>{namespace}/{name}</strong> and all its tags and images.
 	{/snippet}
 </ConfirmDialog>
 

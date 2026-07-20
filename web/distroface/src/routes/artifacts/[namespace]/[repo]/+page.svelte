@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -16,6 +17,10 @@
 	} from '$lib/components/ui/collapsible';
 	import FormPanel from '$lib/components/form-panel.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
+	import MirrorBadge from '$lib/components/mirror-badge.svelte';
+	import MirrorConfigFields, {
+		emptyMirrorForm, mirrorFormFrom, mirrorInit
+	} from '$lib/components/mirror-config-fields.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
@@ -24,9 +29,12 @@
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import {
-		Archive, ArrowLeft, ChevronDown, Download, Lock, Globe, Pencil,
-		Plus, Search, Settings, Tag, Tags, Trash2, Upload, X
+		Archive, ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, ChevronDown, Download,
+		Lock, Globe, Pencil, Plus, RefreshCw, Search, Settings, Tag, Tags, Trash2, Upload, X
 	} from '@lucide/svelte';
+	import {
+		Select, SelectContent, SelectItem, SelectTrigger
+	} from '$lib/components/ui/select';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -34,8 +42,10 @@
 	import { relativeTime, formatBytes, truncateDigest } from '$lib/utils';
 	import { Pager } from '$lib/pager.svelte';
 	import { QueryFilter } from '$lib/query.svelte';
+	import { ArtifactRepoType } from '$lib/proto/distroface/v1/types_pb';
 	import type { Artifact, ArtifactRepository } from '$lib/proto/distroface/v1/types_pb';
 	import type { ArtifactVersionGroup } from '$lib/proto/distroface/v1/artifact_pb';
+	import { artifactMirrorKind, artifactMirrorLabel } from '$lib/mirror';
 
 	const SESSION_KEY = 'distroface_session';
 	const repoName = $derived(page.params.repo ?? '');
@@ -47,6 +57,15 @@
 	let notFound = $state(false);
 	let expandedVersions = $state<Record<string, boolean>>({});
 	const versionPager = new Pager(10);
+
+	const versionSortOptions = [
+		{ value: 'version desc', label: 'Newest version' },
+		{ value: 'version asc', label: 'Oldest version' },
+		{ value: 'activity desc', label: 'Recently updated' },
+		{ value: 'activity asc', label: 'Least recently updated' }
+	];
+	let versionSort = $state('version desc');
+	let searchSort = $state('created_at desc');
 
 	// Search mode
 	const filter = new QueryFilter([
@@ -72,7 +91,12 @@
 	let settingsPanelOpen = $state(false);
 	let settingsDescription = $state('');
 	let settingsPrivate = $state(false);
+	let settingsMirror = $state(emptyMirrorForm());
 	let savingSettings = $state(false);
+
+	const repoIsMirror = $derived(
+		!!repo && repo.type !== ArtifactRepoType.FILE && repo.type !== ArtifactRepoType.UNSPECIFIED
+	);
 
 	// Properties editor
 	let propsPanelOpen = $state(false);
@@ -115,7 +139,7 @@
 
 	async function loadVersions() {
 		const resp = await rpcClient.artifact.listArtifactVersions({
-			page: versionPager.request(),
+			page: versionPager.request(undefined, versionSort),
 			repoName,
 			namespace
 		});
@@ -124,6 +148,24 @@
 		if (versions.length > 0 && Object.keys(expandedVersions).length === 0) {
 			expandedVersions = { [versions[0].version]: true };
 		}
+	}
+
+	function setVersionSort(v: string) {
+		if (v === versionSort) return;
+		versionSort = v;
+		versionPager.reset();
+		loadVersions();
+	}
+
+	// Release assets read best alphabetically within a version
+	function sortedFiles(list: Artifact[]) {
+		return [...list].sort((a, b) => a.path.localeCompare(b.path));
+	}
+
+	function toggleSearchSort(col: string) {
+		searchSort = searchSort === `${col} desc` ? `${col} asc` : `${col} desc`;
+		searchPager.reset();
+		fetchSearch();
 	}
 
 	async function runSearch() {
@@ -140,7 +182,7 @@
 		searching = true;
 		try {
 			const resp = await rpcClient.artifact.searchArtifacts({
-				page: searchPager.request(filter.request()),
+				page: searchPager.request(filter.request(), searchSort),
 				repoName,
 				namespace
 			});
@@ -246,6 +288,7 @@
 		if (!repo) return;
 		settingsDescription = repo.description;
 		settingsPrivate = repo.isPrivate;
+		settingsMirror = mirrorFormFrom(repo.mirror);
 		settingsPanelOpen = true;
 	}
 
@@ -256,7 +299,8 @@
 				name: repoName,
 				namespace,
 				description: settingsDescription,
-				isPrivate: settingsPrivate
+				isPrivate: settingsPrivate,
+				mirror: repoIsMirror ? mirrorInit(settingsMirror) : undefined
 			});
 			repo = resp.repository ?? repo;
 			toast.success('Repository updated');
@@ -358,22 +402,77 @@
 		if (searchResults !== null) await runSearch();
 	}
 
-	onMount(loadRepo);
+	// ── Sync now ─────────────────────────────────────────────────────────
+
+	let syncing = $state(false);
+
+	async function syncNow() {
+		if (syncing) return;
+		syncing = true;
+		try {
+			await rpcClient.artifact.syncArtifactRepository({ name: repoName, namespace });
+			toast.success('Sync started');
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			syncing = false;
+		}
+	}
+
+	// Sync finish events refresh the page live
+	let syncSeqSeen = 0;
+	$effect(() => {
+		const seq = mirrorSyncStore.finishedSeq;
+		const ev = mirrorSyncStore.lastFinished;
+		if (seq === syncSeqSeen) return;
+		syncSeqSeen = seq;
+		if (ev?.kind === 'artifact' && repo && ev.repoId === String(repo.id)) {
+			loadRepo();
+			loadVersions();
+		}
+	});
+
+	onMount(() => {
+		mirrorSyncStore.ensure();
+		loadRepo();
+	});
 </script>
 
 <svelte:head>
 	<title>{namespace}/{repoName} - Artifacts - Distroface</title>
 </svelte:head>
 
-{#snippet artifactTable(artifacts: Artifact[])}
+{#snippet sortHeader(label: string, col: string)}
+	<button type="button" class="inline-flex items-center gap-1 hover:text-foreground transition-colors" onclick={() => toggleSearchSort(col)}>
+		{label}
+		{#if searchSort === `${col} desc`}
+			<ArrowDown class="h-3 w-3" />
+		{:else if searchSort === `${col} asc`}
+			<ArrowUp class="h-3 w-3" />
+		{:else}
+			<ArrowUpDown class="h-3 w-3 opacity-40" />
+		{/if}
+	</button>
+{/snippet}
+
+{#snippet artifactTable(artifacts: Artifact[], sortable: boolean = false)}
 	<Table>
 		<TableHeader>
 			<TableRow class="bg-muted/30 hover:bg-muted/30">
-				<TableHead class="th">Path</TableHead>
-				<TableHead class="th">Size</TableHead>
+				<TableHead class="th">
+					{#if sortable}{@render sortHeader('Path', 'path')}{:else}Path{/if}
+				</TableHead>
+				{#if sortable}
+					<TableHead class="th">{@render sortHeader('Version', 'version')}</TableHead>
+				{/if}
+				<TableHead class="th">
+					{#if sortable}{@render sortHeader('Size', 'size')}{:else}Size{/if}
+				</TableHead>
 				<TableHead class="th">Type</TableHead>
 				<TableHead class="th">Digest</TableHead>
-				<TableHead class="th">Uploaded</TableHead>
+				<TableHead class="th">
+					{#if sortable}{@render sortHeader('Uploaded', 'created_at')}{:else}Uploaded{/if}
+				</TableHead>
 				<TableHead class="th w-32"></TableHead>
 			</TableRow>
 		</TableHeader>
@@ -390,6 +489,11 @@
 							</div>
 						{/if}
 					</TableCell>
+					{#if sortable}
+						<TableCell class="py-3 px-3">
+							<Badge variant="secondary" class="font-mono text-xs font-medium px-2 py-0.5">{artifact.version}</Badge>
+						</TableCell>
+					{/if}
 					<TableCell class="text-sm py-3 px-3 tabular-nums">{formatBytes(Number(artifact.size))}</TableCell>
 					<TableCell class="text-muted-foreground text-xs py-3 px-3 font-mono">{artifact.mimeType || '-'}</TableCell>
 					<TableCell class="py-3 px-3">
@@ -475,6 +579,14 @@
 							<Globe class="h-2.5 w-2.5" />Public
 						{/if}
 					</Badge>
+					{#if repoIsMirror}
+						<MirrorBadge
+							label={artifactMirrorLabel(repo.type)}
+							error={repo.mirrorLastError}
+							title={repo.mirror?.upstream ?? ''}
+							syncing={repo.mirrorSyncing || mirrorSyncStore.syncing('artifact', repo.id)}
+						/>
+					{/if}
 				</div>
 				<p class="text-[13px] text-muted-foreground mt-0.5">
 					{repo.description || 'No description'}
@@ -486,9 +598,24 @@
 						<span class="text-muted-foreground/50 mx-1.5">·</span>
 						by {repo.owner}
 					{/if}
+					{#if repoIsMirror && repo.mirror?.upstream}
+						<span class="text-muted-foreground/50 mx-1.5">·</span>
+						mirrors {repo.mirror.upstream}{repo.mirrorSyncing ||
+						mirrorSyncStore.syncing('artifact', repo.id)
+							? ', syncing now'
+							: repo.mirrorLastSync
+								? `, synced ${relativeTime(timestampDate(repo.mirrorLastSync))}`
+								: ', first sync queued'}
+					{/if}
 				</p>
 			</div>
 			<div class="flex items-center gap-2">
+				{#if repoIsMirror && canMutate}
+					<Button variant="outline" size="sm" onclick={syncNow} disabled={syncing}>
+						<RefreshCw class="h-4 w-4 mr-1.5 {syncing ? 'animate-spin' : ''}" />
+						Sync Now
+					</Button>
+				{/if}
 				{#if canMutate}
 					<Button variant="outline" size="sm" onclick={openSettings}>
 						<Settings class="h-4 w-4 mr-1.5" />
@@ -504,8 +631,22 @@
 			</div>
 		</div>
 
-		<div class="max-w-md">
-			<QueryFilterBar {filter} placeholder="Filter artifacts..." onchange={runSearch} />
+		<div class="flex items-center gap-3 flex-wrap">
+			<div class="max-w-md flex-1 min-w-64">
+				<QueryFilterBar {filter} placeholder="Filter artifacts..." onchange={runSearch} />
+			</div>
+			{#if searchResults === null}
+				<Select type="single" value={versionSort} onValueChange={(v) => { if (v) setVersionSort(v); }}>
+					<SelectTrigger class="h-9 w-52 text-[13px]" size="sm">
+						{versionSortOptions.find((o) => o.value === versionSort)?.label ?? 'Sort'}
+					</SelectTrigger>
+					<SelectContent>
+						{#each versionSortOptions as o (o.value)}
+							<SelectItem value={o.value}>{o.label}</SelectItem>
+						{/each}
+					</SelectContent>
+				</Select>
+			{/if}
 		</div>
 
 		{#if searchResults !== null}
@@ -515,13 +656,9 @@
 				<EmptyState icon={Search} message="No matching artifacts" description="No results match the current filter" />
 			{:else}
 				<div class="data-table transition-opacity duration-200 {searching ? 'opacity-60' : ''}">
-					{@render artifactTable(searchResults)}
+					{@render artifactTable(searchResults, true)}
+					<DataPagination attached pager={searchPager} onChange={fetchSearch} />
 				</div>
-				<DataPagination
-					page={searchPager.page} pageSize={searchPager.pageSize} totalCount={searchPager.totalCount}
-					onPrev={() => { if (searchPager.prev()) fetchSearch(); }}
-					onNext={() => { if (searchPager.next()) fetchSearch(); }}
-				/>
 			{/if}
 		{:else if versions.length === 0}
 			<EmptyState
@@ -557,18 +694,14 @@
 								</span>
 							</CollapsibleTrigger>
 							<CollapsibleContent>
-								{@render artifactTable(group.artifacts)}
+								{@render artifactTable(sortedFiles(group.artifacts))}
 							</CollapsibleContent>
 						</div>
 					</Collapsible>
 				{/each}
 			</div>
 
-			<DataPagination
-				page={versionPager.page} pageSize={versionPager.pageSize} totalCount={versionPager.totalCount}
-				onPrev={() => { if (versionPager.prev()) loadVersions(); }}
-				onNext={() => { if (versionPager.next()) loadVersions(); }}
-			/>
+			<DataPagination pager={versionPager} onChange={loadVersions} pageSizeOptions={[5, 10, 20, 50]} />
 		{/if}
 	{/if}
 </div>
@@ -578,7 +711,7 @@
 	open={uploadPanelOpen}
 	onOpenChange={(v) => { if (!v) closeUploadPanel(); }}
 	title="Upload Artifact"
-	description="Upload a file into {repoName}. Re-uploading the same version and path replaces the existing artifact."
+	description="Re-uploading the same version and path replaces the artifact."
 	icon={Upload}
 >
 	<div class="space-y-6">
@@ -590,10 +723,10 @@
 						<p class="text-xs text-muted-foreground mt-1">{uploadFile.name} · {formatBytes(uploadFile.size)}</p>
 					{/if}
 				</FormField>
-				<FormField label="Version" id="upload-version" required help="e.g. 1.0.0 or a build number.">
+				<FormField label="Version" id="upload-version" required>
 					<Input id="upload-version" bind:value={uploadVersion} placeholder="1.0.0" />
 				</FormField>
-				<FormField label="Path" id="upload-path" help="Relative path within the version. Defaults to the file name.">
+				<FormField label="Path" id="upload-path" help="Defaults to the file name">
 					<Input id="upload-path" bind:value={uploadPath} placeholder="dist/app.zip" />
 				</FormField>
 			</div>
@@ -643,11 +776,25 @@
 				<FormField label="Description" id="settings-description">
 					<Input id="settings-description" bind:value={settingsDescription} placeholder="What is stored here?" />
 				</FormField>
-				<FormField label="Private" help="Private repositories are only visible to you and admins.">
+				<FormField label="Private" horizontal help="Visible only to you and admins">
 					<Switch bind:checked={settingsPrivate} />
 				</FormField>
 			</div>
 		</FormSection>
+
+		{#if repoIsMirror && repo}
+			<FormSection title="Mirror Source">
+				<MirrorConfigFields
+					form={settingsMirror}
+					kind={artifactMirrorKind(repo.type)}
+					tokenSet={repo.mirror?.authTokenSet ?? false}
+					lastSync={repo.mirrorLastSync}
+					lastError={repo.mirrorLastError}
+					nextAttempt={repo.mirrorNextAttempt}
+					idPrefix="settings-mirror"
+				/>
+			</FormSection>
+		{/if}
 	</div>
 
 	{#snippet footer()}
@@ -663,7 +810,7 @@
 	open={propsPanelOpen}
 	onOpenChange={(v) => (propsPanelOpen = v)}
 	title="Edit Properties"
-	description="Key/value properties for {propsTarget?.path ?? ''}. Saving replaces the full set."
+	description="Saving replaces the full set for {propsTarget?.path ?? ''}."
 	icon={Tags}
 >
 	<div class="space-y-2">
@@ -720,7 +867,6 @@
 
 <ConfirmDialog bind:open={deleteDialogOpen} title="Delete Artifact" confirmLabel="Delete" onConfirm={confirmDelete} loading={deleting}>
 	{#snippet description()}
-		Are you sure you want to delete <strong>{deleteTarget?.path}</strong> ({deleteTarget?.version})?
-		This cannot be undone.
+		This permanently deletes <strong>{deleteTarget?.path}</strong> ({deleteTarget?.version}).
 	{/snippet}
 </ConfirmDialog>

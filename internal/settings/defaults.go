@@ -74,6 +74,19 @@ func Defaults() *v1.Settings {
 		Webhooks: &v1.WebhookSettings{
 			AllowPrivateNetworks: proto.Bool(false),
 		},
+		Mirror: &v1.MirrorSettings{
+			Enabled:                  proto.Bool(true),
+			DefaultIntervalMinutes:   proto.Int32(60),
+			AllowPrivateNetworks:     proto.Bool(false),
+			MinIntervalMinutes:       proto.Int32(5),
+			MaxConcurrentSyncs:       proto.Int32(3),
+			PerHostSpacingMs:         proto.Int32(750),
+			SyncTimeoutMinutes:       proto.Int32(45),
+			RateLimitCooldownMinutes: proto.Int32(15),
+			MaxCooldownMinutes:       proto.Int32(360),
+			FailureBackoffMinutes:    proto.Int32(5),
+			MaxSyncDepth:             proto.Int32(0),
+		},
 		Security: &v1.SecuritySettings{
 			Headers: &v1.SecurityHeadersSettings{
 				Enabled:               proto.Bool(true),

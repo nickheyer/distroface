@@ -329,7 +329,7 @@
 			/>
 			{#if material?.appCa}
 				<div class="mt-3 pt-3 border-t border-border/40">
-					<FormField label="Trust anchor" help="Clients fetch this CA to trust the registry's self-issued TLS">
+					<FormField label="Trust anchor" help="Clients fetch this to trust self-issued TLS">
 						<div class="flex items-center gap-2">
 							<code class="text-xs bg-muted px-2 py-1 rounded font-mono min-w-0 flex-1 truncate">{caEndpoint}</code>
 							<CopyButton text={caEndpoint} />
@@ -353,7 +353,7 @@
 				<FormField
 					label="Built-in ACME server"
 					horizontal
-					help={lockHint('acme.internal_enabled', 'Serve an ACME directory backed by the instance CA')}
+					help={lockHint('acme.internal_enabled', 'ACME directory backed by the instance CA')}
 					tag={internalAcmeAct.tag}
 					error={internalAcmeAct.error}
 				>
@@ -367,7 +367,7 @@
 					{#if !material?.appCa}
 						<p class="text-[13px] text-amber-600 dark:text-amber-400">Generate the instance CA above so issued certificates chain to a root</p>
 					{/if}
-					<FormField label="Directory URL" help="Point certbot, caddy, lego, or step at this endpoint">
+					<FormField label="Directory URL" help="Point certbot, caddy, lego, or step here">
 						<div class="flex items-center gap-2">
 							<code class="text-xs bg-muted px-2 py-1 rounded font-mono min-w-0 flex-1 truncate">{directoryURL}</code>
 							{#if directoryURL}<CopyButton text={directoryURL} />{/if}
@@ -498,7 +498,7 @@
 
 				<FormField
 					label="Certificate source"
-					help={lockHint('tls.primary_source', 'Where the served certificate comes from')}
+					help={lockHint('tls.primary_source', '')}
 					tag={primaryAct.tag}
 					error={primaryAct.error}
 				>
@@ -582,7 +582,7 @@
 		</FormCard>
 
 		<!-- Mutual TLS -->
-		<FormCard title="Mutual TLS" description="Require clients to present a certificate issued by this instance">
+		<FormCard title="Mutual TLS" description="Require client certificates issued by this instance">
 			<FormField
 				label="Client certificate policy"
 				help={lockHint('tls.mtls_mode', 'Applies to the primary hostname, portals can override')}

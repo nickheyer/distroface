@@ -18,6 +18,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import CertMaterialRow from '$lib/components/cert-material-row.svelte';
 	import CertUploadPanel from '$lib/components/cert-upload-panel.svelte';
+	import UnitInput from '$lib/components/unit-input.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Lock, RefreshCw, Loader2, Globe, Pencil } from '@lucide/svelte';
@@ -290,7 +291,7 @@
 			<p class="text-[13px] text-amber-600 dark:text-amber-400">Add a signing CA above before signing requests.</p>
 		{:else}
 			<div class="space-y-3">
-				<FormField label="Certificate request" id="csr-pem" help="Paste a PEM CSR, the private key never leaves your machine." tag={signAct.tag} error={signAct.error}>
+				<FormField label="Certificate request" id="csr-pem" help="Your private key never leaves your machine" tag={signAct.tag} error={signAct.error}>
 					<Textarea
 						id="csr-pem"
 						bind:value={csrPem}
@@ -301,8 +302,8 @@
 					/>
 				</FormField>
 				<div class="flex items-end gap-3">
-					<FormField label="Validity (days)" id="csr-days" bordered={false} class="w-32">
-						<Input id="csr-days" type="number" min="1" bind:value={validityDays} disabled={signAct.busy} />
+					<FormField label="Validity" id="csr-days" bordered={false} class="w-32">
+						<UnitInput id="csr-days" unit="days" min="1" bind:value={validityDays} disabled={signAct.busy} />
 					</FormField>
 					<Button variant="outline" size="sm" class="h-9" disabled={signAct.busy || !csrPem.trim()} onclick={signCsr}>
 						{#if signAct.busy}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}Sign{/if}
@@ -333,7 +334,7 @@
 			<FormField
 				label="Directory URL"
 				id="org-acme-dir"
-				help="Empty inherits the instance value."
+				help="Empty inherits the instance value"
 				tag={dirAct.tag}
 				error={dirAct.error}
 			>
@@ -350,7 +351,7 @@
 			<FormField
 				label="Account email"
 				id="org-acme-email"
-				help="Empty inherits the instance value."
+				help="Empty inherits the instance value"
 				tag={emailAct.tag}
 				error={emailAct.error}
 			>
@@ -490,17 +491,12 @@
 						{/each}
 					</TableBody>
 				</Table>
+				<DataPagination attached {pager} onChange={load} />
 			</div>
 
 			{#if renewAct.error}
 				<p class="text-[13px] text-destructive">{renewAct.error}</p>
 			{/if}
-
-			<DataPagination
-				page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-				onPrev={() => { if (pager.prev()) load(); }}
-				onNext={() => { if (pager.next()) load(); }}
-			/>
 		{/if}
 	</div>
 </div>

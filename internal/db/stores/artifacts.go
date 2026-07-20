@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/pkg/natsort"
 	"github.com/nickheyer/distroface/pkg/pages"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"gorm.io/gorm"
 )
 
@@ -109,8 +112,23 @@ func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoL
 	return repos, total, nil
 }
 
+// Mirror backed repos for the sync monitor
+func (s *Store) ListMirrorArtifactRepositories(ctx context.Context, types []v1.ArtifactRepoType) ([]*db.ArtifactRepository, error) {
+	var repos []*db.ArtifactRepository
+	err := s.db.WithContext(ctx).
+		Where("type IN ?", types).
+		Order("id ASC").Find(&repos).Error
+	return repos, err
+}
+
 func (s *Store) UpdateArtifactRepository(ctx context.Context, repo *db.ArtifactRepository) error {
 	return s.db.WithContext(ctx).Save(repo).Error
+}
+
+// Targeted write so syncs never clobber concurrent edits
+func (s *Store) SetArtifactRepoMirrorStatus(ctx context.Context, id int64, at time.Time, errMsg, state string) error {
+	return s.db.WithContext(ctx).Model(&db.ArtifactRepository{}).Where("id = ?", id).
+		Updates(map[string]any{"mirror_last_sync": at, "mirror_last_error": errMsg, "mirror_state": state}).Error
 }
 
 // Cascade delete, returns referenced digests for blob GC
@@ -271,8 +289,8 @@ func (s *Store) ListArtifacts(ctx context.Context, repoID int64, version string,
 	return artifacts, total, nil
 }
 
-// Pages distinct versions ordered by newest artifact first
-func (s *Store) ListArtifactVersionPage(ctx context.Context, repoID int64, limit, offset int) ([]string, int64, error) {
+// Pages distinct versions, byVersion sorts naturally else by newest artifact
+func (s *Store) ListArtifactVersionPage(ctx context.Context, repoID int64, byVersion, desc bool, limit, offset int) ([]string, int64, error) {
 	var total int64
 	if err := s.db.WithContext(ctx).Model(&db.Artifact{}).
 		Where("repo_id = ?", repoID).
@@ -281,11 +299,38 @@ func (s *Store) ListArtifactVersionPage(ctx context.Context, repoID int64, limit
 		return nil, 0, err
 	}
 
+	if byVersion {
+		// Natural version order needs the full set in memory
+		var versions []string
+		if err := s.db.WithContext(ctx).Model(&db.Artifact{}).
+			Where("repo_id = ?", repoID).
+			Distinct().Pluck("version", &versions).Error; err != nil {
+			return nil, 0, err
+		}
+		if desc {
+			natsort.SortDesc(versions)
+		} else {
+			natsort.SortAsc(versions)
+		}
+		if limit <= 0 {
+			return versions, total, nil
+		}
+		if offset >= len(versions) {
+			return nil, total, nil
+		}
+		end := min(offset+limit, len(versions))
+		return versions[offset:end], total, nil
+	}
+
+	dir := "ASC"
+	if desc {
+		dir = "DESC"
+	}
 	q := s.db.WithContext(ctx).Model(&db.Artifact{}).
 		Select("version, MAX(created_at) AS latest").
 		Where("repo_id = ?", repoID).
 		Group("version").
-		Order("latest DESC")
+		Order("latest " + dir)
 	if limit > 0 {
 		q = q.Limit(limit).Offset(offset)
 	}

@@ -97,7 +97,7 @@
 	type NavLink = { href: Pathname; label: string; icon: typeof Package };
 
 	const navLinks: NavLink[] = $derived([
-		{ href: '/', label: 'Explore', icon: Package },
+		{ href: '/', label: 'Images', icon: Package },
 		{ href: '/artifacts', label: 'Artifacts', icon: Archive },
 		...(authStore.isAuthenticated && !portalStore.isPortal
 			? [{ href: '/orgs', label: 'Organizations', icon: Building2 } satisfies NavLink]

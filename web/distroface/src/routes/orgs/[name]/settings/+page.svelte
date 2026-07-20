@@ -106,12 +106,12 @@
 	<div class="space-y-4">
 		<h2 class="section-title">Organization Settings</h2>
 
-		<FormCard title="Details" description="Public name and description for this organization." icon={Pencil}>
+		<FormCard title="Details" description="Public name and description." icon={Pencil}>
 			<div class="space-y-3">
-				<FormField label="Display Name" id="edit-org-display" help="The public name shown in the UI.">
+				<FormField label="Display Name" id="edit-org-display">
 					<Input id="edit-org-display" bind:value={editDisplayName} placeholder="Display name" />
 				</FormField>
-				<FormField label="Description" id="edit-org-desc" help="Tell people what this organization is about.">
+				<FormField label="Description" id="edit-org-desc">
 					<Textarea id="edit-org-desc" bind:value={editDescription} placeholder="What does this organization do?" rows={3} />
 				</FormField>
 			</div>
@@ -134,7 +134,7 @@
 					<div class="min-w-0">
 						<p class="text-sm font-medium">Transfer ownership</p>
 						<p class="text-[13px] text-muted-foreground mt-0.5">
-							Make another member the owner of this organization. You will be demoted to admin.
+							Make another member the owner, you become admin.
 						</p>
 					</div>
 					<Button
@@ -151,7 +151,7 @@
 						<div class="min-w-0">
 							<p class="text-sm font-medium">Delete this organization</p>
 							<p class="text-[13px] text-muted-foreground mt-0.5">
-								All repositories under this namespace will be deleted. This cannot be undone.
+								Deletes every repository under this namespace, permanently.
 							</p>
 						</div>
 						<Button
@@ -172,12 +172,12 @@
 <FormPanel
 	bind:open={transferOpen}
 	title="Transfer Ownership"
-	description="Hand this organization to another member. You will be demoted to admin."
+	description="Make another member the owner, you become admin."
 	icon={ArrowRightLeft}
 >
 	<div class="space-y-6">
 		<FormSection title="New Owner">
-			<FormField label="Member" id="transfer-member" required help="Only current members can receive ownership.">
+			<FormField label="Member" id="transfer-member" required help="Only current members can receive ownership">
 				<AsyncSelect
 					bind:selected={transferUserId}
 					placeholder="Select a member..."
@@ -209,7 +209,6 @@
 
 <ConfirmDialog bind:open={deleteOrgOpen} title="Delete Organization" confirmLabel="Delete" onConfirm={confirmDeleteOrg} loading={deletingOrg} icon={Trash2}>
 	{#snippet description()}
-		Are you sure you want to delete <strong>{orgName}</strong>? All repositories and artifacts under this
-		namespace will also be deleted. This action cannot be undone.
+		Deletes <strong>{orgName}</strong> and every repository and artifact under it, permanently.
 	{/snippet}
 </ConfirmDialog>

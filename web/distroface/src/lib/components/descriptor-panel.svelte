@@ -51,7 +51,7 @@
 {:else if descriptor}
 	{@const kind = descriptorKind(descriptor.mediaType)}
 	{@const cfg = descriptor.imageConfig}
-	<div class="h-full overflow-y-auto overflow-x-hidden">
+	<div class="overflow-x-hidden">
 		<div class="px-6 py-5 space-y-4">
 			<Badge variant="outline" class="text-xs {kindColor(kind)}">
 				{kind}

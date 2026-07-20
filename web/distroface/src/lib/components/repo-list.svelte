@@ -4,32 +4,25 @@
 	import RepoCard from './repo-card.svelte';
 	import EmptyState from './empty-state.svelte';
 	import DataPagination from './data-pagination.svelte';
+	import type { Pager } from '$lib/pager.svelte';
 	import type { Repository } from '$lib/proto/distroface/v1/types_pb';
 	import type { Snippet } from 'svelte';
 
 	let {
 		repos,
-		totalCount,
+		pager,
+		onChange,
 		loading,
 		loaded = undefined,
-		page,
-		pageSize = 20,
-		showCount = true,
-		onPrev,
-		onNext,
 		emptyMessage = 'No repositories yet',
 		emptyDescription,
 		emptyActions
 	}: {
 		repos: Repository[];
-		totalCount: number;
+		pager: Pager;
+		onChange: () => void;
 		loading: boolean;
 		loaded?: boolean;
-		page: number;
-		pageSize?: number;
-		showCount?: boolean;
-		onPrev: () => void;
-		onNext: () => void;
 		emptyMessage?: string;
 		emptyDescription?: string;
 		emptyActions?: Snippet;
@@ -61,22 +54,12 @@
 	{:else if repos.length === 0}
 		<EmptyState icon={Package} message={emptyMessage} description={emptyDescription} actions={emptyActions} />
 	{:else}
-		{#if totalCount > 0 && showCount}
-			<p class="text-[12px] text-muted-foreground/60 tabular-nums">{totalCount} repositor{totalCount === 1 ? 'y' : 'ies'}</p>
-		{/if}
-
 		<div class="space-y-2 transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			{#each repos as repo (repo.id)}
 				<RepoCard {repo} />
 			{/each}
 		</div>
 
-		<DataPagination
-			{page}
-			{pageSize}
-			{totalCount}
-			{onPrev}
-			{onNext}
-		/>
+		<DataPagination {pager} {onChange} />
 	{/if}
 </div>

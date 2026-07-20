@@ -101,7 +101,7 @@
 	<div class="space-y-6">
 		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			<StatCard label="Users" value={userCount} icon={Users} href="/admin/users" />
-			<StatCard label="Repositories" value={repoCount} icon={Package} />
+			<StatCard label="Image Repositories" value={repoCount} icon={Package} />
 			<StatCard label="Organizations" value={orgCount} icon={Building2} />
 			<StatCard label="Roles" value={roleCount} icon={Key} href="/admin/roles" />
 		</div>
@@ -167,11 +167,11 @@
 
 				<div class="rounded-xl border border-border/60 overflow-hidden">
 					<div class="px-4 py-3 bg-muted/20 border-b border-border/40">
-						<h3 class="text-sm font-semibold">Recent Repositories</h3>
+						<h3 class="text-sm font-semibold">Recent Image Repositories</h3>
 					</div>
 					{#if recentRepos.length === 0}
 						<div class="px-4 py-10 text-center text-sm text-muted-foreground">
-							No repositories yet
+							No image repositories yet
 						</div>
 					{:else}
 						<div class="divide-y divide-border/40">

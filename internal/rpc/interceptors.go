@@ -151,6 +151,49 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 	}
 }
 
+// Unary interceptors skip streams, streaming rpcs authenticate here
+type streamAuthInterceptor struct {
+	s *Server
+}
+
+func (a *streamAuthInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
+	return next
+}
+
+func (a *streamAuthInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
+	return next
+}
+
+func (a *streamAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
+	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
+		srv := a.s
+		if !srv.AuthManager.IsAnyAuthEnabled() {
+			ctx = auth.WithUser(ctx, &auth.AuthenticatedUser{
+				ID:       "admin",
+				Username: "admin",
+				Roles:    []string{"admin"},
+				Provider: "none",
+			})
+			return next(ctx, conn)
+		}
+		token := auth.ExtractToken(conn.RequestHeader())
+		if token == "" {
+			if srv.AuthManager.IsAnonymousAccessEnabled() && portalAllowsAnonymous(ctx) {
+				return next(auth.WithUser(ctx, srv.AuthManager.AnonymousUser()), conn)
+			}
+			return connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
+		}
+		user, err := srv.AuthManager.ValidateToken(ctx, token)
+		if err != nil {
+			return connect.NewError(connect.CodeUnauthenticated, err)
+		}
+		if user.MustChangePassword {
+			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("password change required before continuing"))
+		}
+		return next(auth.WithUser(ctx, user), conn)
+	}
+}
+
 // Auth interceptor denials never reach the audit interceptor
 func (s *Server) recordAuthDenial(ctx context.Context, req connect.AnyRequest, detail string) {
 	procedure := req.Spec().Procedure

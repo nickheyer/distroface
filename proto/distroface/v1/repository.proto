@@ -9,6 +9,10 @@ option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;dis
 
 // RepositoryService manages container image repositories.
 service RepositoryService {
+  // CreateRepository creates a repository ahead of any push, required for mirrors.
+  rpc CreateRepository(CreateRepositoryRequest) returns (CreateRepositoryResponse) {}
+  // SyncRepository starts an immediate mirror sync in the background.
+  rpc SyncRepository(SyncRepositoryRequest) returns (SyncRepositoryResponse) {}
   // GetRepository returns a repository by namespace and name.
   rpc GetRepository(GetRepositoryRequest) returns (GetRepositoryResponse) {}
   // ListRepositories returns a paginated list of repositories.
@@ -28,6 +32,39 @@ service RepositoryService {
   // ListStarredRepositories returns the current user's starred repositories.
   rpc ListStarredRepositories(ListStarredRepositoriesRequest) returns (ListStarredRepositoriesResponse) {}
 }
+
+// CreateRepositoryRequest describes a repository to create.
+message CreateRepositoryRequest {
+  // namespace is the org or username the repo lives under; empty defaults to the caller.
+  string namespace = 1;
+  // name is the repository name within the namespace.
+  string name = 2;
+  // description is the repository description.
+  string description = 3;
+  // visibility is the repository visibility.
+  Visibility visibility = 4;
+  // Unspecified defaults to standard
+  RepositoryType type = 5;
+  // Required for mirror type, validated against the upstream
+  MirrorConfig mirror = 6;
+}
+
+// CreateRepositoryResponse contains the created repository.
+message CreateRepositoryResponse {
+  // repository is the created repository.
+  Repository repository = 1;
+}
+
+// SyncRepositoryRequest identifies a mirror repository to sync now.
+message SyncRepositoryRequest {
+  // namespace is the repository namespace.
+  string namespace = 1;
+  // name is the repository name.
+  string name = 2;
+}
+
+// SyncRepositoryResponse is empty; poll the repository for sync status.
+message SyncRepositoryResponse {}
 
 // GetRepositoryRequest identifies a repository to retrieve.
 message GetRepositoryRequest {
@@ -112,6 +149,8 @@ message UpdateRepositoryRequest {
   optional string description = 3;
   // visibility is the new visibility, if provided.
   optional Visibility visibility = 4;
+  // Replaces mirror settings when present, absent token keeps the stored one
+  MirrorConfig mirror = 5;
 }
 
 // UpdateRepositoryResponse contains the updated repository.
