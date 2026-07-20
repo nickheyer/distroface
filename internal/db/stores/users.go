@@ -78,9 +78,10 @@ func (s *Store) GetUserByIdentifier(ctx context.Context, identifier string) (*db
 	return &user, nil
 }
 
-func (s *Store) GetUserByOIDCSubject(ctx context.Context, subject string) (*db.User, error) {
+// Subjects are only unique per issuer
+func (s *Store) GetUserByOIDCSubject(ctx context.Context, subject, issuer string) (*db.User, error) {
 	var user db.User
-	err := s.db.WithContext(ctx).First(&user, "oidc_subject = ?", subject).Error
+	err := s.db.WithContext(ctx).First(&user, "oidc_subject = ? AND oidc_issuer = ?", subject, issuer).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil

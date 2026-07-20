@@ -319,11 +319,25 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
-// FindOrCreateOIDCUser looks up a user by OIDC subject and creates them if new.
+// FindOrCreateOIDCUser looks up a user by OIDC subject - fallback to email
 func (h *OIDCHandler) findOrCreateOIDCUser(ctx context.Context, sub, username, email string) (*db.User, error) {
-	user, err := h.store.GetUserByOIDCSubject(ctx, sub)
+	issuer := h.oidcSettings(ctx).GetIssuerUri()
+	user, err := h.store.GetUserByOIDCSubject(ctx, sub, issuer)
 	if err != nil {
 		return nil, err
+	}
+
+	// Same email means same person link instead of colliding
+	if user == nil && email != "" {
+		user, err = h.store.GetUserByEmail(ctx, email)
+		if err != nil {
+			return nil, err
+		}
+		if user != nil {
+			user.OIDCSubject = sub
+			user.OIDCIssuer = issuer
+			h.log.Info("OIDC: linked existing user %s to subject %s", user.Username, sub)
+		}
 	}
 
 	if user != nil {
@@ -336,7 +350,9 @@ func (h *OIDCHandler) findOrCreateOIDCUser(ctx context.Context, sub, username, e
 		}
 		now := time.Now()
 		user.LastLogin = &now
-		_ = h.store.UpdateUser(ctx, user)
+		if err := h.store.UpdateUser(ctx, user); err != nil {
+			h.log.Error("OIDC: failed to update user %s: %v", user.Username, err)
+		}
 		return user, nil
 	}
 
@@ -352,7 +368,7 @@ func (h *OIDCHandler) findOrCreateOIDCUser(ctx context.Context, sub, username, e
 		Email:        emailPtr,
 		AuthProvider: "oidc",
 		OIDCSubject:  sub,
-		OIDCIssuer:   h.oidcSettings(ctx).GetIssuerUri(),
+		OIDCIssuer:   issuer,
 		IsActive:     true,
 	}
 
