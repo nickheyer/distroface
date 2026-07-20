@@ -151,7 +151,7 @@
 
 	<div class="space-y-4">
 		<div class="section-header">
-			<h2 class="section-title">Repositories</h2>
+			<h2 class="section-title">Image Repositories</h2>
 			{#if repoPager.totalCount > 0}
 				<span class="text-[12px] text-muted-foreground/60 tabular-nums">{repoPager.totalCount} total</span>
 			{/if}
@@ -159,13 +159,10 @@
 
 		<RepoList
 			{repos}
-			totalCount={repoPager.totalCount}
+			pager={repoPager}
+			onChange={loadRepos}
 			loading={repoLoading}
-			page={repoPager.page}
-			pageSize={repoPager.pageSize}
-			onPrev={() => { if (repoPager.prev()) loadRepos(); }}
-			onNext={() => { if (repoPager.next()) loadRepos(); }}
-			emptyMessage="No repositories yet"
+			emptyMessage="No image repositories yet"
 		/>
 	</div>
 
@@ -180,12 +177,9 @@
 
 			<RepoList
 				repos={starred}
-				totalCount={starredPager.totalCount}
+				pager={starredPager}
+				onChange={loadStarred}
 				loading={starredLoading}
-				page={starredPager.page}
-				pageSize={starredPager.pageSize}
-				onPrev={() => { if (starredPager.prev()) loadStarred(); }}
-				onNext={() => { if (starredPager.next()) loadStarred(); }}
 				emptyMessage="No starred repositories"
 				emptyDescription="Star repositories to keep track of them here."
 			/>

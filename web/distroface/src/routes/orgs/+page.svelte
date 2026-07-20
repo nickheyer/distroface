@@ -181,42 +181,31 @@
 			</a>
 		{/each}
 	</div>
-	<DataPagination
-		page={pager.page}
-		pageSize={pager.pageSize}
-		totalCount={pager.totalCount}
-		onPrev={() => { if (pager.prev()) loadOrgs(); }}
-		onNext={() => { if (pager.next()) loadOrgs(); }}
-	/>
+	<DataPagination {pager} onChange={loadOrgs} />
 {/if}
 
 <!-- Create Org Panel -->
 <FormPanel
 	bind:open={createPanelOpen}
 	title="Create Organization"
-	description="Organizations are team namespaces for shared repositories. The name becomes the Docker namespace for pushing images."
+	description="A team namespace for shared repositories."
 	icon={Building2}
 >
 	<div class="space-y-6">
 		<FormSection title="Identity">
 			<div class="space-y-3">
-				<FormField
-					label="Name"
-					id="org-name"
-					help="Lowercase letters, numbers, hyphens. Used as the Docker namespace (e.g., docker push host/name/image)."
-					required
-				>
+				<FormField label="Name" id="org-name" help="Lowercase, becomes the Docker push namespace" required>
 					<Input id="org-name" bind:value={orgName} placeholder="my-team" />
 				</FormField>
 
-				<FormField label="Display Name" id="org-display" help="A human-readable name shown in the UI.">
+				<FormField label="Display Name" id="org-display">
 					<Input id="org-display" bind:value={orgDisplayName} placeholder="My Team" />
 				</FormField>
 			</div>
 		</FormSection>
 
 		<FormSection title="About">
-			<FormField label="Description" id="org-desc" help="A brief description of what this organization does.">
+			<FormField label="Description" id="org-desc">
 				<Textarea id="org-desc" bind:value={orgDescription} placeholder="What does this organization do?" rows={3} />
 			</FormField>
 		</FormSection>

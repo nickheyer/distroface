@@ -427,11 +427,7 @@
 			{/each}
 		</div>
 
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) loadRoles(); }}
-			onNext={() => { if (pager.next()) loadRoles(); }}
-		/>
+		<DataPagination {pager} onChange={loadRoles} />
 	{/if}
 </div>
 

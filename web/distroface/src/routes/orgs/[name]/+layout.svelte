@@ -25,7 +25,7 @@
 	const navItems: NavItem[] = $derived.by(() => {
 		const name = page.params.name ?? '';
 		const items: NavItem[] = [
-			{ href: resolve('/orgs/[name]', { name }), label: 'Repositories', icon: Package },
+			{ href: resolve('/orgs/[name]', { name }), label: 'Images', icon: Package },
 			{ href: resolve('/orgs/[name]/artifacts', { name }), label: 'Artifacts', icon: Archive },
 			{ href: resolve('/orgs/[name]/members', { name }), label: 'Members', icon: Users }
 		];

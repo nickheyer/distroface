@@ -3,12 +3,16 @@ package services
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
+	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/mirror"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -25,11 +29,99 @@ type RepositoryService struct {
 	store    *stores.Store
 	registry *registry.RegistryAccess
 	enforcer *rbac.Enforcer
+	mirrors  *mirror.Monitor
 	log      *logger.Logger
 }
 
-func NewRepositoryService(store *stores.Store, reg *registry.RegistryAccess, enforcer *rbac.Enforcer, log *logger.Logger) *RepositoryService {
-	return &RepositoryService{store: store, registry: reg, enforcer: enforcer, log: log}
+func NewRepositoryService(store *stores.Store, reg *registry.RegistryAccess, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, log *logger.Logger) *RepositoryService {
+	return &RepositoryService{store: store, registry: reg, enforcer: enforcer, mirrors: mirrors, log: log}
+}
+
+var imageRepoNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
+
+// Namespace owners create at will, others need the manage grant
+func (s *RepositoryService) canCreateInNamespace(ctx context.Context, user *auth.AuthenticatedUser, namespace string) bool {
+	if namespace == user.Username {
+		return true
+	}
+	if isMember, role, _ := s.store.IsOrgMember(ctx, namespace, user.ID); isMember {
+		return role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin
+	}
+	return s.enforcer.HasPermission(user.Roles, rbac.ResourceRepositories, rbac.ActionManage)
+}
+
+func (s *RepositoryService) CreateRepository(ctx context.Context, req *connect.Request[v1.CreateRepositoryRequest]) (*connect.Response[v1.CreateRepositoryResponse], error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+
+	msg := req.Msg
+	ns := msg.Namespace
+	if ns == "" {
+		ns = user.Username
+	}
+	if portal.ForeignRef(ctx, ns) {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
+	}
+	if !imageRepoNamePattern.MatchString(msg.Name) {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repository name"))
+	}
+	if !s.canCreateInNamespace(ctx, user, ns) {
+		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("cannot create repository in namespace %q", ns))
+	}
+
+	existing, err := s.store.GetRepository(ctx, ns, msg.Name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if existing != nil {
+		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("repository %q already exists", ns+"/"+msg.Name))
+	}
+
+	repoType := msg.Type
+	if repoType == v1.RepositoryType_REPOSITORY_TYPE_UNSPECIFIED {
+		repoType = v1.RepositoryType_REPOSITORY_TYPE_STANDARD
+	}
+	mirrorCfg := ""
+	if repoType == v1.RepositoryType_REPOSITORY_TYPE_MIRROR {
+		if err := s.mirrors.ValidateRegistryMirror(ctx, msg.Mirror); err != nil {
+			return nil, mapMirrorErr(err)
+		}
+		if mirrorCfg, err = mirror.EncodeConfig(msg.Mirror); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+	} else if msg.Mirror != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("standard repositories do not take mirror settings"))
+	}
+
+	ownerID := user.ID
+	isOrgNamespace := false
+	if ns != user.Username {
+		if org, _ := s.store.GetOrganization(ctx, ns); org != nil {
+			ownerID = org.ID
+			isOrgNamespace = true
+		}
+	}
+
+	repo := &storage.Repository{
+		ID:             uuid.New().String(),
+		Namespace:      ns,
+		Name:           msg.Name,
+		Description:    msg.Description,
+		OwnerID:        ownerID,
+		IsPrivate:      msg.Visibility == v1.Visibility_VISIBILITY_PRIVATE,
+		IsOrgNamespace: isOrgNamespace,
+		Type:           repoType,
+		MirrorConfig:   mirrorCfg,
+	}
+	if err := s.store.CreateRepository(ctx, repo); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	return connect.NewResponse(&v1.CreateRepositoryResponse{
+		Repository: s.repoToProto(repo),
+	}), nil
 }
 
 // Checks if the requesting user can read the given repo via RBAC
@@ -66,7 +158,7 @@ func (s *RepositoryService) GetRepository(ctx context.Context, req *connect.Requ
 		return nil, connect.NewError(connect.CodeNotFound, nil)
 	}
 
-	proto := repoToProto(repo)
+	proto := s.repoToProto(repo)
 	s.attachStars(ctx, []*v1.Repository{proto})
 
 	return connect.NewResponse(&v1.GetRepositoryResponse{
@@ -105,7 +197,7 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *connect.R
 
 	protoRepos := make([]*v1.Repository, len(repos))
 	for i, r := range repos {
-		protoRepos[i] = repoToProto(r)
+		protoRepos[i] = s.repoToProto(r)
 	}
 	s.attachStars(ctx, protoRepos)
 
@@ -261,14 +353,63 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, req *connect.R
 	if req.Msg.Visibility != nil {
 		repo.IsPrivate = *req.Msg.Visibility == v1.Visibility_VISIBILITY_PRIVATE
 	}
+	if req.Msg.Mirror != nil {
+		if repo.Type != v1.RepositoryType_REPOSITORY_TYPE_MIRROR {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("standard repositories do not take mirror settings"))
+		}
+		merged, err := mirror.ApplyUpdate(repo.MirrorConfig, req.Msg.Mirror)
+		if err != nil {
+			return nil, mapMirrorErr(err)
+		}
+		full, err := mirror.ParseConfig(merged)
+		if err != nil {
+			return nil, mapMirrorErr(err)
+		}
+		if err := s.mirrors.ValidateRegistryMirror(ctx, full); err != nil {
+			return nil, mapMirrorErr(err)
+		}
+		repo.MirrorConfig = merged
+		// Fresh config invalidates the conditional request cursor
+		repo.MirrorState = ""
+	}
 
 	if err := s.store.UpdateRepository(ctx, repo); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 
 	return connect.NewResponse(&v1.UpdateRepositoryResponse{
-		Repository: repoToProto(repo),
+		Repository: s.repoToProto(repo),
 	}), nil
+}
+
+func (s *RepositoryService) SyncRepository(ctx context.Context, req *connect.Request[v1.SyncRepositoryRequest]) (*connect.Response[v1.SyncRepositoryResponse], error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil {
+		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+	}
+	repo, err := s.store.GetRepository(ctx, req.Msg.Namespace, req.Msg.Name)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if repo == nil {
+		return nil, connect.NewError(connect.CodeNotFound, nil)
+	}
+
+	objectID := repo.Namespace + "/" + repo.Name
+	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, objectID)
+	if !canManage {
+		if user.Username != repo.Namespace {
+			isMember, role, _ := s.store.IsOrgMember(ctx, repo.Namespace, user.ID)
+			if !isMember || (role != storage.OrgRoleOwner && role != storage.OrgRoleAdmin) {
+				return nil, connect.NewError(connect.CodePermissionDenied, nil)
+			}
+		}
+	}
+
+	if err := s.mirrors.SyncImageRepoNow(repo); err != nil {
+		return nil, mapSyncErr(err)
+	}
+	return connect.NewResponse(&v1.SyncRepositoryResponse{}), nil
 }
 
 func (s *RepositoryService) StarRepository(ctx context.Context, req *connect.Request[v1.StarRepositoryRequest]) (*connect.Response[v1.StarRepositoryResponse], error) {
@@ -334,7 +475,7 @@ func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *co
 
 	protoRepos := make([]*v1.Repository, len(repos))
 	for i, r := range repos {
-		protoRepos[i] = repoToProto(r)
+		protoRepos[i] = s.repoToProto(r)
 	}
 	s.attachStars(ctx, protoRepos)
 
@@ -392,29 +533,41 @@ func (s *RepositoryService) attachStars(ctx context.Context, repos []*v1.Reposit
 	}
 }
 
-func repoToProto(r *storage.Repository) *v1.Repository {
+func (s *RepositoryService) repoToProto(r *storage.Repository) *v1.Repository {
 	vis := v1.Visibility_VISIBILITY_PUBLIC
 	if r.IsPrivate {
 		vis = v1.Visibility_VISIBILITY_PRIVATE
 	}
 
 	repo := &v1.Repository{
-		Id:             r.ID,
-		Namespace:      r.Namespace,
-		Name:           r.Name,
-		FullName:       r.Namespace + "/" + r.Name,
-		Description:    r.Description,
-		Visibility:     vis,
-		OwnerId:        r.OwnerID,
-		PullCount:      r.PullCount,
-		PushCount:      r.PushCount,
-		CreatedAt:      timestamppb.New(r.CreatedAt),
-		UpdatedAt:      timestamppb.New(r.UpdatedAt),
-		IsOrgNamespace: r.IsOrgNamespace,
+		Id:              r.ID,
+		Namespace:       r.Namespace,
+		Name:            r.Name,
+		FullName:        r.Namespace + "/" + r.Name,
+		Description:     r.Description,
+		Visibility:      vis,
+		OwnerId:         r.OwnerID,
+		PullCount:       r.PullCount,
+		PushCount:       r.PushCount,
+		CreatedAt:       timestamppb.New(r.CreatedAt),
+		UpdatedAt:       timestamppb.New(r.UpdatedAt),
+		IsOrgNamespace:  r.IsOrgNamespace,
+		Type:            r.Type,
+		Mirror:          mirror.Redacted(r.MirrorConfig),
+		MirrorLastError: r.MirrorLastError,
 	}
 
 	if r.LastPush != nil {
 		repo.LastPushedAt = timestamppb.New(*r.LastPush)
+	}
+	if r.MirrorLastSync != nil {
+		repo.MirrorLastSync = timestamppb.New(*r.MirrorLastSync)
+	}
+	if st := mirror.ParseState(r.MirrorState); st.CoolingDown(time.Now()) {
+		repo.MirrorNextAttempt = timestamppb.New(st.CooldownUntil)
+	}
+	if s.mirrors != nil {
+		repo.MirrorSyncing = s.mirrors.IsSyncing("image:" + r.ID)
 	}
 
 	return repo

@@ -243,13 +243,8 @@
 					{/each}
 				</TableBody>
 			</Table>
+			<DataPagination attached {pager} onChange={load} />
 		</div>
-
-		<DataPagination
-			page={pager.page} pageSize={pager.pageSize} totalCount={pager.totalCount}
-			onPrev={() => { if (pager.prev()) load(); }}
-			onNext={() => { if (pager.next()) load(); }}
-		/>
 	{/if}
 </div>
 

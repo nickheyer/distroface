@@ -265,7 +265,7 @@
 	<div class="space-y-4 min-w-0">
 		<FormCard title="Portal" description="Label shown in the portal list.">
 			<FormField label="Name" id="portal-name" required>
-				<Input id="portal-name" bind:value={name} placeholder="e.g. public-mirror" class="max-w-sm" />
+				<Input id="portal-name" bind:value={name} placeholder="public-mirror" class="max-w-sm" autocomplete="off" />
 			</FormField>
 		</FormCard>
 
@@ -274,7 +274,7 @@
 				<FormField
 					label="Hostname"
 					id="portal-hostname"
-					help="DNS name for this portal, empty matches any."
+					help="Empty matches any hostname"
 					error={addressError && !addressError.startsWith('Port') ? addressError : ''}
 				>
 					<Input
@@ -282,12 +282,13 @@
 						bind:value={hostname}
 						class="font-mono"
 						placeholder="registry.example.com"
+						autocomplete="off"
 					/>
 				</FormField>
 				<FormField
 					label="Port"
 					id="portal-port"
-					help="Empty uses the app port{mainPort ? ` (${mainPort})` : ''}."
+					help="Empty uses the app port"
 					error={addressError.startsWith('Port') ? addressError : ''}
 				>
 					<Input
@@ -311,11 +312,7 @@
 						</span>
 					</div>
 				{/if}
-				<FormField
-					label="Certificate source"
-					id="portal-cert-source"
-					help="Picks what certificate this portal serves."
-				>
+				<FormField label="Certificate source" id="portal-cert-source">
 					<Select.Root
 						type="single"
 						value={String(certSource)}
@@ -333,10 +330,10 @@
 				</FormField>
 
 				{#if certSource !== CertSource.NONE}
-					<FormField label="Require HTTPS" horizontal help="Redirects cleartext requests to HTTPS.">
+					<FormField label="Require HTTPS" horizontal help="Redirects cleartext requests to HTTPS">
 						<Switch bind:checked={tls} />
 					</FormField>
-					<FormField label="Client certificates (mTLS)" id="portal-mtls" help="Inherit uses the instance policy.">
+					<FormField label="Client certificates (mTLS)" id="portal-mtls">
 						<Select.Root type="single" value={String(mtlsMode)} onValueChange={(v) => (mtlsMode = Number(v) as MTLSMode)}>
 							<Select.Trigger id="portal-mtls" class="w-64">{mtlsLabels[mtlsMode]}</Select.Trigger>
 							<Select.Content>
@@ -355,20 +352,16 @@
 
 				{#if certSource === CertSource.ACME}
 					{#if canProvision}
-						<FormField
-							label="Provision now"
-							horizontal
-							help="Requests the certificate right after creation."
-						>
+						<FormField label="Provision now" horizontal>
 							<Switch bind:checked={provisionCert} />
 						</FormField>
 					{/if}
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-						<FormField label="Directory URL" id="portal-acme-dir" help="Empty inherits the organization value.">
-							<Input id="portal-acme-dir" bind:value={acmeDirectory} class="font-mono text-xs" placeholder={acmeDirInherited || 'inherited'} />
+						<FormField label="Directory URL" id="portal-acme-dir" help="Empty inherits the org value">
+							<Input id="portal-acme-dir" bind:value={acmeDirectory} class="font-mono text-xs" placeholder={acmeDirInherited || 'inherited'} autocomplete="off" />
 						</FormField>
-						<FormField label="Account email" id="portal-acme-email" help="Empty inherits the organization value.">
-							<Input id="portal-acme-email" bind:value={acmeEmail} placeholder={acmeEmailInherited || 'inherited'} />
+						<FormField label="Account email" id="portal-acme-email" help="Empty inherits the org value">
+							<Input id="portal-acme-email" bind:value={acmeEmail} placeholder={acmeEmailInherited || 'inherited'} autocomplete="off" />
 						</FormField>
 					</div>
 					{#if builtinAcme}
@@ -410,11 +403,11 @@
 						</p>
 					{/if}
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-						<FormField label="Certificate (PEM)" id="portal-cert-pem" required={!portalCert} help="Full chain, leaf first.">
+						<FormField label="Certificate (PEM)" id="portal-cert-pem" required={!portalCert} help="Full chain, leaf first">
 							<Textarea id="portal-cert-pem" bind:value={certPem} class="font-mono text-xs" rows={5} placeholder="-----BEGIN CERTIFICATE-----" />
 						</FormField>
-						<FormField label="Private key (PEM)" id="portal-key-pem" required={!portalCert} help="Stored server side, never shown.">
-							<Textarea id="portal-key-pem" bind:value={keyPem} class="font-mono text-xs" rows={5} placeholder="-----BEGIN PRIVATE KEY-----" />
+						<FormField label="Private key (PEM)" id="portal-key-pem" required={!portalCert} help="Stored server side, never shown">
+							<Textarea id="portal-key-pem" bind:value={keyPem} class="font-mono text-xs" rows={5} placeholder="-----BEGIN PRIVATE KEY-----" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore />
 						</FormField>
 					</div>
 					{#if manualNeedsPems}
@@ -428,15 +421,15 @@
 
 		<FormCard title="Access" description="What clients on this address can do.">
 			<div class="space-y-3">
-				<FormField label="Allow push" horizontal help="Off makes the portal pull only.">
+				<FormField label="Allow push" horizontal help="Off makes the portal pull only">
 					<Switch bind:checked={allowPush} />
 				</FormField>
 
-				<FormField label="Require sign-in" horizontal help="On refuses anonymous pulls.">
+				<FormField label="Require sign-in" horizontal help="On refuses anonymous pulls">
 					<Switch bind:checked={requireAuth} />
 				</FormField>
 
-				<FormField label="Exit link" horizontal help="Off removes the portal UI's link back to the primary UI.">
+				<FormField label="Exit link" horizontal help="Off hides the link to the primary UI">
 					<Switch bind:checked={showExitLink} />
 				</FormField>
 			</div>
@@ -447,12 +440,12 @@
 				<FormField
 					label="Map bare names"
 					horizontal
-					help="Resolves {previewAddress || 'portal-host'}/myimage to {orgName}/myimage."
+					help="Resolves {previewAddress || 'portal-host'}/myimage to {orgName}/myimage"
 				>
 					<Switch bind:checked={mapUnqualified} />
 				</FormField>
 
-				<FormField label="Rewrite rules" help="Regex rewrites applied before bare name mapping.">
+				<FormField label="Rewrite rules" help="Regex rewrites before bare name mapping">
 					<div class="space-y-2">
 						{#each rules as rule, i (i)}
 							<div class="flex items-center gap-2">

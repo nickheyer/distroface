@@ -98,6 +98,49 @@ message APIToken {
   google.protobuf.Timestamp last_used_at = 6;
 }
 
+// Content source kinds for artifact repositories
+enum ArtifactRepoType {
+  ARTIFACT_REPO_TYPE_UNSPECIFIED = 0;
+  // Plain uploaded files
+  ARTIFACT_REPO_TYPE_FILE = 1;
+  // Mirrors release assets from a github repo
+  ARTIFACT_REPO_TYPE_GITHUB_RELEASES = 2;
+  // Mirrors release asset links from a gitlab project
+  ARTIFACT_REPO_TYPE_GITLAB_RELEASES = 3;
+  // Mirrors release assets from a gitea or forgejo repo
+  ARTIFACT_REPO_TYPE_GITEA_RELEASES = 4;
+}
+
+// Content source kinds for image repositories
+enum RepositoryType {
+  REPOSITORY_TYPE_UNSPECIFIED = 0;
+  // Populated by client pushes
+  REPOSITORY_TYPE_STANDARD = 1;
+  // Mirrors tags from an upstream oci repository
+  REPOSITORY_TYPE_MIRROR = 2;
+}
+
+// Upstream source settings for mirror repositories
+message MirrorConfig {
+  // Owner slash repo, project url, or oci reference
+  string upstream = 1;
+  // Write only, reads redact
+  optional string auth_token = 2;
+  // Output only
+  bool auth_token_set = 3;
+  // Basic auth pair for oci upstreams
+  string username = 4;
+  // Glob over asset names or tags, empty takes all
+  string pattern = 5;
+  bool include_prereleases = 6;
+  // Newest releases or tags kept in sync, zero takes all
+  int32 sync_depth = 7;
+  // Zero falls back to the system default
+  int32 sync_interval_minutes = 8;
+  // Suspends scheduled syncs, config kept
+  bool paused = 9;
+}
+
 // Repository represents a container image repository.
 message Repository {
   // id is the unique identifier for the repository.
@@ -134,6 +177,16 @@ message Repository {
   int64 star_count = 16;
   // is_starred indicates whether the requesting user starred the repository.
   bool is_starred = 17;
+  RepositoryType type = 18;
+  // Present only on mirror repositories
+  MirrorConfig mirror = 19;
+  google.protobuf.Timestamp mirror_last_sync = 20;
+  // Empty when the last sync succeeded
+  string mirror_last_error = 21;
+  // Set while the upstream has us in a rate limit or backoff cooldown
+  google.protobuf.Timestamp mirror_next_attempt = 22;
+  // True while a sync is running right now
+  bool mirror_syncing = 23;
 }
 
 // Platform describes the platform which the image in the manifest runs on.
@@ -280,6 +333,16 @@ message ArtifactRepository {
   string namespace = 10;
   // full_name is namespace/name.
   string full_name = 11;
+  ArtifactRepoType type = 12;
+  // Present only on mirror backed repositories
+  MirrorConfig mirror = 13;
+  google.protobuf.Timestamp mirror_last_sync = 14;
+  // Empty when the last sync succeeded
+  string mirror_last_error = 15;
+  // Set while the upstream has us in a rate limit or backoff cooldown
+  google.protobuf.Timestamp mirror_next_attempt = 16;
+  // True while a sync is running right now
+  bool mirror_syncing = 17;
 }
 
 // Artifact is a single stored artifact (file) within an artifact repository.

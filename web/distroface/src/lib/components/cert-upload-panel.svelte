@@ -59,6 +59,10 @@
 			<Textarea
 				id="upload-key-pem"
 				bind:value={keyPem}
+				autocomplete="new-password"
+				data-1p-ignore
+				data-lpignore="true"
+				data-bwignore
 				class="font-mono text-xs"
 				rows={6}
 				placeholder="-----BEGIN PRIVATE KEY-----"

@@ -20,6 +20,8 @@ service ArtifactService {
   rpc UpdateArtifactRepository(UpdateArtifactRepositoryRequest) returns (UpdateArtifactRepositoryResponse) {}
   // DeleteArtifactRepository removes a repository, its artifacts, and unreferenced blobs.
   rpc DeleteArtifactRepository(DeleteArtifactRepositoryRequest) returns (DeleteArtifactRepositoryResponse) {}
+  // SyncArtifactRepository starts an immediate mirror sync in the background.
+  rpc SyncArtifactRepository(SyncArtifactRepositoryRequest) returns (SyncArtifactRepositoryResponse) {}
 
   // InitiateArtifactUpload starts a chunked upload session and returns its ID.
   rpc InitiateArtifactUpload(InitiateArtifactUploadRequest) returns (InitiateArtifactUploadResponse) {}
@@ -50,6 +52,10 @@ message CreateArtifactRepositoryRequest {
   bool is_private = 3;
   // namespace is the org or username the repo lives under; empty defaults to the caller.
   string namespace = 4;
+  // Unspecified defaults to file
+  ArtifactRepoType type = 5;
+  // Required for mirror types, validated against the upstream
+  MirrorConfig mirror = 6;
 }
 
 // CreateArtifactRepositoryResponse is the response after creating a repository.
@@ -87,6 +93,8 @@ message UpdateArtifactRepositoryRequest {
   optional string description = 2;
   optional bool is_private = 3;
   string namespace = 4;
+  // Replaces mirror settings when present, absent token keeps the stored one
+  MirrorConfig mirror = 5;
 }
 
 // UpdateArtifactRepositoryResponse is the response after updating a repository.
@@ -102,6 +110,15 @@ message DeleteArtifactRepositoryRequest {
 
 // DeleteArtifactRepositoryResponse is the response after deleting a repository.
 message DeleteArtifactRepositoryResponse {}
+
+// SyncArtifactRepositoryRequest identifies a mirror repository to sync now.
+message SyncArtifactRepositoryRequest {
+  string name = 1;
+  string namespace = 2;
+}
+
+// SyncArtifactRepositoryResponse is empty; poll the repository for sync status.
+message SyncArtifactRepositoryResponse {}
 
 // InitiateArtifactUploadRequest is the request to start an upload session.
 message InitiateArtifactUploadRequest {

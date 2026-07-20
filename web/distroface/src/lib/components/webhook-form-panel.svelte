@@ -254,6 +254,7 @@
 							id="{idPrefix}-url"
 							bind:value={url}
 							type="url"
+							autocomplete="off"
 							placeholder="https://example.com/webhook"
 						/>
 					</FormField>
@@ -262,8 +263,8 @@
 						label="Secret"
 						id="{idPrefix}-secret"
 						help={formMode === 'create'
-							? 'Used to sign payloads with HMAC-SHA256. Optional.'
-							: 'Leave blank to keep existing secret. Enter a new value to replace it.'}
+							? 'Signs payloads with HMAC-SHA256'
+							: undefined}
 					>
 						<Input
 							id="{idPrefix}-secret"
@@ -272,6 +273,7 @@
 							autocomplete="new-password"
 							data-1p-ignore
 							data-lpignore="true"
+							data-bwignore
 							class="font-mono"
 							placeholder={formMode === 'create'
 								? 'Optional secret'
@@ -279,7 +281,7 @@
 						/>
 					</FormField>
 
-					<FormField label="Events" help="Select which events trigger this webhook.">
+					<FormField label="Events">
 						<div class="flex flex-wrap gap-3 pt-1">
 							{#each allEvents as ev (ev.toString())}
 								<label class="flex items-center gap-2 text-sm cursor-pointer">
@@ -296,7 +298,6 @@
 					<FormField
 						label="Custom template"
 						horizontal
-						help="Define a template to customize the webhook payload."
 					>
 						<Switch checked={templatePanelOpen} onCheckedChange={handleTemplatePanelToggle} />
 					</FormField>
@@ -335,7 +336,7 @@
 						<FormField
 							label="Template"
 							id="{idPrefix}-template"
-							help="Go text/template for the request body. Use template fields for dynamic values."
+							help="Go text/template for the request body"
 						>
 							<div class="rounded-md border border-border/60 overflow-hidden">
 								<CodeMirror

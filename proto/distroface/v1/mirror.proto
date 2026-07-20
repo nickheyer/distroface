@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// MirrorService streams live mirror sync activity.
+service MirrorService {
+  // WatchSyncs pushes sync lifecycle events until the client disconnects.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  rpc WatchSyncs(WatchSyncsRequest) returns (stream SyncEvent) {}
+}
+
+// WatchSyncsRequest subscribes to all visible mirror repositories.
+message WatchSyncsRequest {}
+
+// SyncPhase is one step of a mirror sync lifecycle.
+enum SyncPhase {
+  // Keepalive frames, clients ignore these
+  SYNC_PHASE_UNSPECIFIED = 0;
+  SYNC_PHASE_STARTED = 1;
+  SYNC_PHASE_COMPLETED = 2;
+  SYNC_PHASE_FAILED = 3;
+}
+
+// SyncEvent is one mirror repository changing sync state.
+message SyncEvent {
+  // Either "image" or "artifact"
+  string kind = 1;
+  // Uuid for image repos, numeric for artifact repos
+  string repo_id = 2;
+  string namespace = 3;
+  string name = 4;
+  SyncPhase phase = 5;
+  // Set only on SYNC_PHASE_FAILED
+  string error = 6;
+  google.protobuf.Timestamp at = 7;
+}

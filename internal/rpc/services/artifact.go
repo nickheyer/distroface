@@ -8,12 +8,14 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/mirror"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -31,11 +33,12 @@ type ArtifactService struct {
 	store   *stores.Store
 	manager *artifacts.Manager
 	access  *artifacts.Access
+	mirrors *mirror.Monitor
 	log     *logger.Logger
 }
 
-func NewArtifactService(store *stores.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, log *logger.Logger) *ArtifactService {
-	return &ArtifactService{store: store, manager: manager, access: artifacts.NewAccess(store, enforcer), log: log}
+func NewArtifactService(store *stores.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, log *logger.Logger) *ArtifactService {
+	return &ArtifactService{store: store, manager: manager, access: artifacts.NewAccess(store, enforcer), mirrors: mirrors, log: log}
 }
 
 // ── Repositories ─────────────────────────────────────────────────────────
@@ -63,16 +66,34 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *con
 		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("repository %q already exists", ns+"/"+name))
 	}
 
+	repoType := msg.Type
+	if repoType == v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_UNSPECIFIED {
+		repoType = v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE
+	}
+	mirrorCfg := ""
+	if repoType != v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE {
+		if err := s.mirrors.ValidateArtifactMirror(ctx, repoType, msg.Mirror); err != nil {
+			return nil, mapMirrorErr(err)
+		}
+		if mirrorCfg, err = mirror.EncodeConfig(msg.Mirror); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+	} else if msg.Mirror != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("file repositories do not take mirror settings"))
+	}
+
 	isPrivate := msg.IsPrivate
 	if !isPrivate && ns != user.Username {
 		isPrivate = s.manager.EffectivePrivateByDefault(ctx, ns)
 	}
 	repo := &storage.ArtifactRepository{
-		Namespace:   ns,
-		Name:        name,
-		Description: msg.Description,
-		OwnerID:     user.ID,
-		IsPrivate:   isPrivate,
+		Namespace:    ns,
+		Name:         name,
+		Description:  msg.Description,
+		OwnerID:      user.ID,
+		IsPrivate:    isPrivate,
+		Type:         repoType,
+		MirrorConfig: mirrorCfg,
 	}
 	if err := s.store.CreateArtifactRepository(ctx, repo); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
@@ -153,6 +174,25 @@ func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *con
 	if req.Msg.IsPrivate != nil {
 		repo.IsPrivate = *req.Msg.IsPrivate
 	}
+	if req.Msg.Mirror != nil {
+		if repo.Type == v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE {
+			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("file repositories do not take mirror settings"))
+		}
+		merged, err := mirror.ApplyUpdate(repo.MirrorConfig, req.Msg.Mirror)
+		if err != nil {
+			return nil, mapMirrorErr(err)
+		}
+		full, err := mirror.ParseConfig(merged)
+		if err != nil {
+			return nil, mapMirrorErr(err)
+		}
+		if err := s.mirrors.ValidateArtifactMirror(ctx, repo.Type, full); err != nil {
+			return nil, mapMirrorErr(err)
+		}
+		repo.MirrorConfig = merged
+		// Fresh config invalidates the conditional request cursor
+		repo.MirrorState = ""
+	}
 	if err := s.store.UpdateArtifactRepository(ctx, repo); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -173,6 +213,18 @@ func (s *ArtifactService) DeleteArtifactRepository(ctx context.Context, req *con
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
 	return connect.NewResponse(&v1.DeleteArtifactRepositoryResponse{}), nil
+}
+
+func (s *ArtifactService) SyncArtifactRepository(ctx context.Context, req *connect.Request[v1.SyncArtifactRepositoryRequest]) (*connect.Response[v1.SyncArtifactRepositoryResponse], error) {
+	user := auth.UserFromContext(ctx)
+	repo, err := s.mutableRepo(ctx, user, req.Msg.Namespace, req.Msg.Name, rbac.ActionUpdate)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.mirrors.SyncArtifactRepoNow(repo); err != nil {
+		return nil, mapSyncErr(err)
+	}
+	return connect.NewResponse(&v1.SyncArtifactRepositoryResponse{}), nil
 }
 
 // ── Uploads ──────────────────────────────────────────────────────────────
@@ -260,7 +312,8 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *connect
 	}
 
 	limit, offset := pages.Parse(req.Msg.Page)
-	order, total, err := s.store.ListArtifactVersionPage(ctx, repo.ID, limit, offset)
+	byVersion, desc := versionOrder(req.Msg.Page)
+	order, total, err := s.store.ListArtifactVersionPage(ctx, repo.ID, byVersion, desc, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -287,6 +340,21 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *connect
 		Versions: versions,
 		Page:     pages.Info(offset, limit, total),
 	}), nil
+}
+
+// Version groups default to natural version order newest first
+func versionOrder(p *v1.PageRequest) (byVersion, desc bool) {
+	fields := strings.Fields(strings.ToLower(p.GetOrderBy()))
+	if len(fields) == 0 {
+		return true, true
+	}
+	desc = len(fields) > 1 && fields[1] == "desc"
+	switch fields[0] {
+	case "activity", "created_at", "latest":
+		return false, desc
+	default:
+		return true, desc
+	}
 }
 
 func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Request[v1.SearchArtifactsRequest]) (*connect.Response[v1.SearchArtifactsResponse], error) {
@@ -566,6 +634,27 @@ func mapArtifactErr(err error) error {
 	}
 }
 
+// Config faults map to invalid, unreachable upstreams to unavailable
+func mapMirrorErr(err error) error {
+	if errors.Is(err, mirror.ErrInvalid) {
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	return connect.NewError(connect.CodeUnavailable, fmt.Errorf("upstream check failed: %w", err))
+}
+
+// Busy and cooling down map to precondition failures the ui can show
+func mapSyncErr(err error) error {
+	var cool *mirror.CooldownError
+	switch {
+	case errors.Is(err, mirror.ErrSyncInFlight), errors.Is(err, mirror.ErrDisabled), errors.As(err, &cool):
+		return connect.NewError(connect.CodeFailedPrecondition, err)
+	case errors.Is(err, mirror.ErrInvalid):
+		return connect.NewError(connect.CodeInvalidArgument, err)
+	default:
+		return connect.NewError(connect.CodeInternal, err)
+	}
+}
+
 // ── Proto mapping ────────────────────────────────────────────────────────
 
 func (s *ArtifactService) repoToProto(ctx context.Context, repo *storage.ArtifactRepository, stats map[int64]stores.ArtifactRepoStats) *v1.ArtifactRepository {
@@ -576,15 +665,27 @@ func (s *ArtifactService) repoToProto(ctx context.Context, repo *storage.Artifac
 		}
 	}
 	out := &v1.ArtifactRepository{
-		Id:          repo.ID,
-		Name:        repo.Name,
-		Namespace:   repo.Namespace,
-		FullName:    repo.Namespace + "/" + repo.Name,
-		Description: repo.Description,
-		Owner:       owner,
-		IsPrivate:   repo.IsPrivate,
-		CreatedAt:   timestamppb.New(repo.CreatedAt),
-		UpdatedAt:   timestamppb.New(repo.UpdatedAt),
+		Id:              repo.ID,
+		Name:            repo.Name,
+		Namespace:       repo.Namespace,
+		FullName:        repo.Namespace + "/" + repo.Name,
+		Description:     repo.Description,
+		Owner:           owner,
+		IsPrivate:       repo.IsPrivate,
+		Type:            repo.Type,
+		Mirror:          mirror.Redacted(repo.MirrorConfig),
+		MirrorLastError: repo.MirrorLastError,
+		CreatedAt:       timestamppb.New(repo.CreatedAt),
+		UpdatedAt:       timestamppb.New(repo.UpdatedAt),
+	}
+	if repo.MirrorLastSync != nil {
+		out.MirrorLastSync = timestamppb.New(*repo.MirrorLastSync)
+	}
+	if st := mirror.ParseState(repo.MirrorState); st.CoolingDown(time.Now()) {
+		out.MirrorNextAttempt = timestamppb.New(st.CooldownUntil)
+	}
+	if s.mirrors != nil {
+		out.MirrorSyncing = s.mirrors.IsSyncing(fmt.Sprintf("artifact:%d", repo.ID))
 	}
 	if st, ok := stats[repo.ID]; ok {
 		out.ArtifactCount = st.Count

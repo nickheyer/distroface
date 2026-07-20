@@ -310,7 +310,7 @@
 								<Input
 									id="login-id"
 									type="text"
-									placeholder="Enter your username or email"
+									placeholder="Username or email"
 									autocomplete="username"
 									bind:value={identifier}
 									aria-invalid={loginTouched.identifier && !!loginErrors.identifier}
@@ -325,7 +325,7 @@
 								<Label for="login-pw" class="text-sm font-medium">Password</Label>
 								<PasswordInput
 									id="login-pw"
-									placeholder="Enter your password"
+									placeholder="Password"
 									autocomplete="current-password"
 									bind:value={password}
 									error={loginTouched.password && !!loginErrors.password}
@@ -420,7 +420,7 @@
 					id="reg-pin"
 					type="text"
 					inputmode="numeric"
-					placeholder="Enter your invite PIN"
+					placeholder="Invite PIN"
 					bind:value={invitePin}
 					aria-invalid={regTouched.pin && !!regErrors.pin}
 					onblur={() => { regTouched.pin = true; validateRegistration(); }}

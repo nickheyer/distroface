@@ -96,7 +96,7 @@
 						<Label for="current-pw" class="text-sm font-medium">Current password</Label>
 						<PasswordInput
 							id="current-pw"
-							placeholder="Enter your current password"
+							placeholder="Current password"
 							autocomplete="current-password"
 							bind:value={currentPassword}
 							error={touched.current && !!errors.current}

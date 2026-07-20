@@ -101,18 +101,23 @@ type OrgMember struct {
 }
 
 type Repository struct {
-	ID             string     `json:"id" gorm:"primaryKey"`
-	Namespace      string     `json:"namespace" gorm:"uniqueIndex:idx_namespace_name;not null"`
-	Name           string     `json:"name" gorm:"uniqueIndex:idx_namespace_name;not null"`
-	Description    string     `json:"description"`
-	OwnerID        string     `json:"owner_id" gorm:"index"`
-	IsPrivate      bool       `json:"is_private" gorm:"default:false"`
-	IsOrgNamespace bool       `json:"is_org_namespace" gorm:"default:false"`
-	PullCount      int64      `json:"pull_count" gorm:"default:0"`
-	PushCount      int64      `json:"push_count" gorm:"default:0"`
-	LastPush       *time.Time `json:"last_push"`
-	CreatedAt      time.Time  `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt      time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
+	ID              string            `json:"id" gorm:"primaryKey"`
+	Namespace       string            `json:"namespace" gorm:"uniqueIndex:idx_namespace_name;not null"`
+	Name            string            `json:"name" gorm:"uniqueIndex:idx_namespace_name;not null"`
+	Description     string            `json:"description"`
+	OwnerID         string            `json:"owner_id" gorm:"index"`
+	IsPrivate       bool              `json:"is_private" gorm:"default:false"`
+	IsOrgNamespace  bool              `json:"is_org_namespace" gorm:"default:false"`
+	PullCount       int64             `json:"pull_count" gorm:"default:0"`
+	PushCount       int64             `json:"push_count" gorm:"default:0"`
+	LastPush        *time.Time        `json:"last_push"`
+	Type            v1.RepositoryType `json:"type" gorm:"not null;default:1"`
+	MirrorConfig    string            `json:"-" gorm:"type:text;not null;default:'';column:mirror_config"` // Protojson, token plaintext for upstream auth
+	MirrorState     string            `json:"-" gorm:"type:text;not null;default:'';column:mirror_state"`  // Sync cursor and cooldown bookkeeping
+	MirrorLastSync  *time.Time        `json:"mirror_last_sync" gorm:"column:mirror_last_sync"`
+	MirrorLastError string            `json:"mirror_last_error" gorm:"column:mirror_last_error"`
+	CreatedAt       time.Time         `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt       time.Time         `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type Star struct {
@@ -163,22 +168,22 @@ type WebhookDelivery struct {
 }
 
 type RegistryPortal struct { // Alternate org-owned registry host and/or proxy port
-	ID             string        `json:"id" gorm:"primaryKey"`
-	OrgID          string        `json:"org_id" gorm:"not null;index;column:org_id"`
-	Name           string        `json:"name" gorm:"not null"`
-	Hostname       string        `json:"hostname" gorm:"not null;index"` // Empty matches any host on Port
-	Port           int           `json:"port" gorm:"not null;index"`     // 0 serves on the main port only, ports may be shared
-	MapUnqualified bool          `json:"map_unqualified" gorm:"not null"`
-	Rules          string        `json:"rules" gorm:"not null;default:'[]'"` // JSON array of {pattern, replace}
-	AllowPush      bool          `json:"allow_push" gorm:"not null"`
-	RequireAuth    bool          `json:"require_auth" gorm:"not null"`
-	TLS             bool          `json:"tls" gorm:"not null;default:false;column:tls"`             // Https enforced for this portal, cleartext requests redirect
-	CertSource      v1.CertSource `json:"cert_source" gorm:"not null;default:1;column:cert_source"` // How the serving certificate materializes
+	ID              string        `json:"id" gorm:"primaryKey"`
+	OrgID           string        `json:"org_id" gorm:"not null;index;column:org_id"`
+	Name            string        `json:"name" gorm:"not null"`
+	Hostname        string        `json:"hostname" gorm:"not null;index"` // Empty matches any host on Port
+	Port            int           `json:"port" gorm:"not null;index"`     // 0 serves on the main port only, ports may be shared
+	MapUnqualified  bool          `json:"map_unqualified" gorm:"not null"`
+	Rules           string        `json:"rules" gorm:"not null;default:'[]'"` // JSON array of {pattern, replace}
+	AllowPush       bool          `json:"allow_push" gorm:"not null"`
+	RequireAuth     bool          `json:"require_auth" gorm:"not null"`
+	TLS             bool          `json:"tls" gorm:"not null;default:false;column:tls"`                             // Https enforced for this portal, cleartext requests redirect
+	CertSource      v1.CertSource `json:"cert_source" gorm:"not null;default:1;column:cert_source"`                 // How the serving certificate materializes
 	HidePrimaryLink bool          `json:"hide_primary_link" gorm:"not null;default:false;column:hide_primary_link"` // Portal UI drops the exit link
 	Enabled         bool          `json:"enabled" gorm:"not null"`
-	CreatedAt      time.Time     `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt      time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
-	Org            *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+	CreatedAt       time.Time     `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt       time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
+	Org             *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 }
 
 type TLSCertificate struct { // Uploaded pem material, keys never leave the db
@@ -194,14 +199,19 @@ type TLSCertificate struct { // Uploaded pem material, keys never leave the db
 }
 
 type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v1 parity
-	ID          int64     `json:"id" gorm:"primaryKey;autoIncrement"`
-	Namespace   string    `json:"namespace" gorm:"not null;default:'';uniqueIndex:idx_artifact_repo_namespace_name;column:namespace"` // Org name or owner username
-	Name        string    `json:"name" gorm:"not null;uniqueIndex:idx_artifact_repo_namespace_name"`
-	Description string    `json:"description"`
-	OwnerID     string    `json:"owner_id" gorm:"index;column:owner_id"`
-	IsPrivate   bool      `json:"private" gorm:"not null;default:false"`
-	CreatedAt   time.Time `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt   time.Time `json:"updated_at" gorm:"autoUpdateTime"`
+	ID              int64               `json:"id" gorm:"primaryKey;autoIncrement"`
+	Namespace       string              `json:"namespace" gorm:"not null;default:'';uniqueIndex:idx_artifact_repo_namespace_name;column:namespace"` // Org name or owner username
+	Name            string              `json:"name" gorm:"not null;uniqueIndex:idx_artifact_repo_namespace_name"`
+	Description     string              `json:"description"`
+	OwnerID         string              `json:"owner_id" gorm:"index;column:owner_id"`
+	IsPrivate       bool                `json:"private" gorm:"not null;default:false"`
+	Type            v1.ArtifactRepoType `json:"type" gorm:"not null;default:1"`
+	MirrorConfig    string              `json:"-" gorm:"type:text;not null;default:'';column:mirror_config"` // Protojson, token plaintext for upstream auth
+	MirrorState     string              `json:"-" gorm:"type:text;not null;default:'';column:mirror_state"`  // Sync cursor and cooldown bookkeeping
+	MirrorLastSync  *time.Time          `json:"mirror_last_sync" gorm:"column:mirror_last_sync"`
+	MirrorLastError string              `json:"mirror_last_error" gorm:"column:mirror_last_error"`
+	CreatedAt       time.Time           `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt       time.Time           `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
 type Artifact struct {

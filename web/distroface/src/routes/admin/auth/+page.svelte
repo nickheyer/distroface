@@ -5,6 +5,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
+	import UnitInput from '$lib/components/unit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -131,7 +132,7 @@
 	</div>
 {:else if eff}
 	<div class="space-y-6">
-		<FormCard title="Sign-in" description="How people access this instance, changes apply live">
+		<FormCard title="Sign-in" description="How people access this instance">
 			<div class="-my-3 divide-y divide-border/50">
 				<div>
 					<FormField
@@ -191,25 +192,22 @@
 					tag={timeoutAct.tag}
 					error={timeoutAct.error}
 				>
-					<div class="flex items-center gap-2">
-						<Input
-							id="session-timeout"
-							type="number"
-							bind:value={timeoutMinutes}
-							min={5}
-							max={10080}
-							class="w-24 text-right tabular-nums"
-							disabled={!canEdit || timeoutAct.busy || locked('auth.session_timeout_seconds')}
-							onblur={commitTimeout}
-							onkeydown={(e) => { if (e.key === 'Enter') commitTimeout(); }}
-						/>
-						<span class="text-[13px] text-muted-foreground">minutes</span>
-					</div>
+					<UnitInput
+						id="session-timeout"
+						unit="min"
+						bind:value={timeoutMinutes}
+						min={5}
+						max={10080}
+						class="w-32"
+						disabled={!canEdit || timeoutAct.busy || locked('auth.session_timeout_seconds')}
+						onblur={commitTimeout}
+						onkeydown={(e) => { if (e.key === 'Enter') commitTimeout(); }}
+					/>
 				</FormField>
 			</div>
 		</FormCard>
 
-		<FormCard title="OIDC / SSO" description="Single sign-on through an external identity provider">
+		<FormCard title="OIDC / SSO" description="External identity provider sign-in">
 			<FormField
 				label="Enabled"
 				horizontal
@@ -257,6 +255,7 @@
 							id="oidc-client-id"
 							bind:value={oidcClientId}
 							class="font-mono text-xs"
+							autocomplete="off"
 							disabled={!canEdit || clientIdAct.busy || locked('auth.oidc.client_id')}
 							onblur={() => commitOidc(clientIdAct, 'auth.oidc.client_id', oidcClientId, eff?.auth?.oidc?.clientId ?? '')}
 						/>
@@ -265,7 +264,7 @@
 						label="Client secret"
 						id="oidc-client-secret"
 						bordered={false}
-						help={lockHelp('auth.oidc.client_secret', oidcSecretSet ? 'A secret is stored, type to replace it' : 'Stored server side, never shown')}
+						help={lockHelp('auth.oidc.client_secret', oidcSecretSet ? 'Type to replace the stored secret' : 'Stored server side, never shown')}
 						tag={secretAct.tag}
 						error={secretAct.error}
 					>
@@ -274,6 +273,10 @@
 							type="password"
 							bind:value={oidcClientSecret}
 							placeholder={oidcSecretSet ? '••••••••' : ''}
+							autocomplete="new-password"
+							data-1p-ignore
+							data-lpignore="true"
+							data-bwignore
 							disabled={!canEdit || secretAct.busy || locked('auth.oidc.client_secret')}
 							onblur={commitOidcSecret}
 						/>

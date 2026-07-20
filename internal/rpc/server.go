@@ -13,6 +13,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/certs"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/mirror"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -47,6 +48,7 @@ type ServerDeps struct {
 	AuthLimiter         *admin.Limiter    // Lockout limiter nil disables
 	ArtifactManager     *artifacts.Manager
 	ArtifactV1Facade    *artifacts.V1API
+	MirrorMonitor       *mirror.Monitor
 	GCCollector         *admin.Collector
 	CertService         *certs.Service  // Nil hides the certificate api
 	AuditRecorder       *audit.Recorder // Nil disables the audit trail
@@ -70,6 +72,7 @@ func (s *Server) setupHandler() {
 	interceptors := []connect.Interceptor{
 		connect.UnaryInterceptorFunc(s.rateLimitInterceptor()),
 		connect.UnaryInterceptorFunc(s.authInterceptor()),
+		&streamAuthInterceptor{s: s},
 		&loggingInterceptor{log: s.Log},
 	}
 	if s.AuditRecorder != nil {
@@ -135,7 +138,7 @@ func (s *Server) setupHandler() {
 	userPath, userHandler := distrofacev1connect.NewUserServiceHandler(userService, opts...)
 	mux.Handle(userPath, userHandler)
 
-	repoService := services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.Log)
+	repoService := services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.MirrorMonitor, s.Log)
 	repoPath, repoHandler := distrofacev1connect.NewRepositoryServiceHandler(repoService, opts...)
 	mux.Handle(repoPath, repoHandler)
 
@@ -165,9 +168,15 @@ func (s *Server) setupHandler() {
 	}
 
 	if s.ArtifactManager != nil {
-		artifactService := services.NewArtifactService(s.Store, s.ArtifactManager, s.Enforcer, s.Log)
+		artifactService := services.NewArtifactService(s.Store, s.ArtifactManager, s.Enforcer, s.MirrorMonitor, s.Log)
 		artifactPath, artifactHandler := distrofacev1connect.NewArtifactServiceHandler(artifactService, opts...)
 		mux.Handle(artifactPath, artifactHandler)
+	}
+
+	if s.MirrorMonitor != nil {
+		mirrorService := services.NewMirrorService(s.MirrorMonitor, s.Enforcer, artifacts.NewAccess(s.Store, s.Enforcer), s.Log)
+		mirrorPath, mirrorHandler := distrofacev1connect.NewMirrorServiceHandler(mirrorService, opts...)
+		mux.Handle(mirrorPath, mirrorHandler)
 	}
 
 	// Registered even without a collector, it also serves storage usage
@@ -198,6 +207,7 @@ func (s *Server) setupHandler() {
 		distrofacev1connect.WebhookServiceName,
 		distrofacev1connect.PortalServiceName,
 		distrofacev1connect.ArtifactServiceName,
+		distrofacev1connect.MirrorServiceName,
 		distrofacev1connect.GCServiceName,
 		distrofacev1connect.CertificateServiceName,
 		distrofacev1connect.AuditServiceName,

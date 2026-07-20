@@ -7,7 +7,7 @@
 		value = $bindable(''),
 		error,
 		id,
-		placeholder = 'Enter password',
+		placeholder = 'Password',
 		autocomplete = 'current-password',
 		...restProps
 	}: {
