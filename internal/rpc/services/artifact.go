@@ -547,6 +547,7 @@ func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.Authentica
 	if name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repository name is required"))
 	}
+	bare := namespace == ""
 	ns, name := repoRef(ctx, user, namespace, name)
 	if portal.ForeignRef(ctx, ns) {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
@@ -555,6 +556,12 @@ func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.Authentica
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
+	// Portal traffic resolves by mapping alone, never fuzzy
+	if repo == nil && bare && portal.FromContext(ctx) == nil {
+		if repo, err = s.visibleRepoByName(ctx, user, name); err != nil {
+			return nil, err
+		}
+	}
 	if repo == nil {
 		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
 	}
@@ -562,6 +569,33 @@ func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.Authentica
 		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
 	}
 	return repo, nil
+}
+
+// Bare refs fall back to the unique visible match anywhere
+func (s *ArtifactService) visibleRepoByName(ctx context.Context, user *auth.AuthenticatedUser, name string) (*storage.ArtifactRepository, error) {
+	repos, _, err := s.store.ListArtifactRepositories(ctx, s.access.ListOptions(user, ""))
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	var matches []*storage.ArtifactRepository
+	for _, r := range repos {
+		if r.Name == name {
+			matches = append(matches, r)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		return matches[0], nil
+	default:
+		var full []string
+		for _, m := range matches {
+			full = append(full, m.Namespace+"/"+m.Name)
+		}
+		return nil, connect.NewError(connect.CodeInvalidArgument,
+			fmt.Errorf("repository name %q is ambiguous, qualify it as one of: %s", name, strings.Join(full, ", ")))
+	}
 }
 
 // Upload access, private repos need owner or grant

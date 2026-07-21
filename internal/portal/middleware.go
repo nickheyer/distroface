@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/nickheyer/distroface/internal/auth"
 )
 
 // Extracts repo name from OCI path, filters OCI keywords
@@ -74,7 +76,7 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 			if !res.allowMethod(w, r, p) {
 				return
 			}
-			if p.RequireAuth && !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			if p.RequireAuth && auth.ExtractToken(r.Header) == "" {
 				w.Header().Set("Www-Authenticate", fmt.Sprintf(`Bearer realm="%s://%s/api/v1/auth/login"`, requestScheme(r), r.Host))
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
@@ -83,11 +85,15 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 			if r.URL.Path == "/api/v1/artifacts/repos" || r.URL.Path == "/api/v1/artifacts/search" {
 				q := r.URL.Query()
 				if repoName := q.Get("repo"); repoName != "" {
-					if mapped := p.MapName(repoName); strings.HasPrefix(mapped, p.OrgName+"/") {
-						q.Set("namespace", p.OrgName)
-						q.Set("repo", strings.TrimPrefix(mapped, p.OrgName+"/"))
-					} else if p.Isolated {
-						q.Set("namespace", p.OrgName)
+					mapped := p.MapName(repoName)
+					if ns, base, ok := strings.Cut(mapped, "/"); ok && p.InScope(mapped) {
+						q.Set("namespace", ns)
+						q.Set("repo", base)
+					} else {
+						q.Set("repo", mapped)
+						if p.Isolated {
+							q.Set("namespace", p.OrgName)
+						}
 					}
 				} else {
 					q.Set("namespace", p.OrgName)
@@ -103,7 +109,11 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 						r.URL.RawPath = ""
 					} else if mapped := p.MapName(repo); mapped != repo {
 						res.log.Debug("artifact path mapping: %s -> %s (host %s, %s %s)", repo, mapped, r.Host, r.Method, r.URL.Path)
-						r.URL.Path = "/api/v1/artifacts/_ns/" + mapped + "/" + suffix
+						if strings.Contains(mapped, "/") {
+							r.URL.Path = "/api/v1/artifacts/_ns/" + mapped + "/" + suffix
+						} else {
+							r.URL.Path = "/api/v1/artifacts/" + mapped + "/" + suffix
+						}
 						r.URL.RawPath = ""
 					} else if p.Isolated {
 						http.Error(w, "repository not found", http.StatusNotFound)

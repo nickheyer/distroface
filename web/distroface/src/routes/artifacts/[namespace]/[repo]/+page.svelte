@@ -218,28 +218,19 @@
 
 	// ── Download ─────────────────────────────────────────────────────────
 
-	async function downloadArtifact(artifact: Artifact) {
+	// Browser streams the file itself, a scoped cookie carries auth
+	function downloadArtifact(artifact: Artifact) {
 		const prefix = `/api/v1/artifacts/_ns/${encodeURIComponent(namespace)}/${encodeURIComponent(repoName)}`;
 		const url = `${prefix}/${encodeURIComponent(artifact.version)}/${artifact.path.split('/').map(encodeURIComponent).join('/')}`;
-		try {
-			const token = localStorage.getItem(SESSION_KEY);
-			const resp = await fetch(url, {
-				headers: token ? { Authorization: `Bearer ${token}` } : {}
-			});
-			if (!resp.ok) {
-				toast.error(`Download failed (${resp.status})`);
-				return;
-			}
-			const blob = await resp.blob();
-			const objectUrl = URL.createObjectURL(blob);
-			const a = document.createElement('a');
-			a.href = objectUrl;
-			a.download = artifact.name;
-			a.click();
-			URL.revokeObjectURL(objectUrl);
-		} catch {
-			toast.error('Download failed');
+		const token = localStorage.getItem(SESSION_KEY);
+		if (token) {
+			const secure = location.protocol === 'https:' ? '; Secure' : '';
+			document.cookie = `${SESSION_KEY}=${token}; Path=/api/v1/artifacts; Max-Age=60; SameSite=Strict${secure}`;
 		}
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = artifact.name;
+		a.click();
 	}
 
 	// ── Upload ───────────────────────────────────────────────────────────

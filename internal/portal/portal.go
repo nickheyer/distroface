@@ -26,15 +26,12 @@ type Portal struct {
 }
 
 // Resolves a requested repo name to its canonical path, custom rules run
-// first (results must land in the org namespace), then unqualified names
-// get the org prefix when map_unqualified is set
+// first and may target any namespace, then unqualified names get the org
+// prefix when map_unqualified is set
 func (p *Portal) MapName(name string) string {
 	if p.rules != nil {
 		if mapped := p.rules.MapName(name); mapped != name {
-			if strings.HasPrefix(mapped, p.OrgName+"/") {
-				return mapped
-			}
-			return name
+			return mapped
 		}
 	}
 	if p.MapUnqualified && !strings.Contains(name, "/") {
@@ -45,16 +42,22 @@ func (p *Portal) MapName(name string) string {
 
 // InScope reports whether a canonical repo path may serve here
 func (p *Portal) InScope(name string) bool {
-	if !p.Isolated {
+	if !p.Isolated || strings.HasPrefix(name, p.OrgName+"/") {
 		return true
 	}
-	return strings.HasPrefix(name, p.OrgName+"/")
+	ns, _, ok := strings.Cut(name, "/")
+	return ok && p.ruleNamespace(ns)
+}
+
+// Admin rules extend an isolated portal into their target namespaces
+func (p *Portal) ruleNamespace(namespace string) bool {
+	return p.rules != nil && p.rules.namespaces[namespace]
 }
 
 // ForeignRef reports an isolated portal hiding this namespace
 func ForeignRef(ctx context.Context, namespace string) bool {
 	p := FromContext(ctx)
-	return p != nil && p.Isolated && namespace != p.OrgName
+	return p != nil && p.Isolated && namespace != p.OrgName && !p.ruleNamespace(namespace)
 }
 
 type ctxKey struct{}
@@ -83,8 +86,9 @@ func ScopeRepoRef(ctx context.Context, namespace, name string) (string, string) 
 	if p == nil || namespace != "" {
 		return namespace, name
 	}
-	if mapped := p.MapName(name); strings.HasPrefix(mapped, p.OrgName+"/") {
-		return p.OrgName, strings.TrimPrefix(mapped, p.OrgName+"/")
+	mapped := p.MapName(name)
+	if ns, base, ok := strings.Cut(mapped, "/"); ok {
+		return ns, base
 	}
-	return namespace, name
+	return namespace, mapped
 }

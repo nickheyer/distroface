@@ -17,7 +17,9 @@ type mappingRule struct {
 // Ordered first-match-wins rule set for rewriting repo names
 type pathMapper struct {
 	rules []mappingRule
-	log   *logger.Logger
+	// Literal target namespaces stay reachable on isolated portals
+	namespaces map[string]bool
+	log        *logger.Logger
 }
 
 // Compiles mapping rules, nil when no rules are given
@@ -26,7 +28,7 @@ func newPathMapper(rules []*v1.PortalRule, log *logger.Logger) (*pathMapper, err
 		return nil, nil
 	}
 
-	m := &pathMapper{log: log}
+	m := &pathMapper{namespaces: map[string]bool{}, log: log}
 	for i, r := range rules {
 		if r.Pattern == "" || r.Replace == "" {
 			return nil, fmt.Errorf("rules[%d]: pattern and replace are both required", i)
@@ -36,6 +38,9 @@ func newPathMapper(rules []*v1.PortalRule, log *logger.Logger) (*pathMapper, err
 			return nil, fmt.Errorf("rules[%d]: invalid pattern %q: %w", i, r.Pattern, err)
 		}
 		m.rules = append(m.rules, mappingRule{pattern: re, replace: r.Replace})
+		if ns, _, ok := strings.Cut(r.Replace, "/"); ok && !strings.Contains(ns, "$") {
+			m.namespaces[ns] = true
+		}
 	}
 	return m, nil
 }

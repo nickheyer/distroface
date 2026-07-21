@@ -54,6 +54,8 @@ dfcli artifact upload builds ./api-server.tar.gz -v 2.3.1 --property os=linux
 dfcli artifact download builds -v 2.3.1 --property os=linux -o api-server.tar.gz
 ```
 
+Repos are addressed as `[namespace/]name` — bare names resolve to your own namespace first, then the unique visible match; qualify the name if it's ambiguous.
+
 ## Config
 
 One `config.yaml` — every default is in [`config.example.yaml`](config.example.yaml). Any key works as a `DISTROFACE_*` env var. Seed users and orgs on first boot with the `bootstrap:` block.

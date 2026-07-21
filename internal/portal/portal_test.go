@@ -82,7 +82,7 @@ func TestResolverMapName(t *testing.T) {
 		{"acme.example.com", "myimg", "acme/myimg"},      // unqualified prefixed into org
 		{"ACME.example.com:8080", "myimg", "acme/myimg"}, // case/port-insensitive host match
 		{"acme.example.com", "legacy/foo", "acme/foo"},   // custom rule
-		{"acme.example.com", "grab/foo", "grab/foo"},     // rule result outside org namespace refused
+		{"acme.example.com", "grab/foo", "evil/foo"},     // rules may target foreign namespaces
 		{"acme.example.com", "other/foo", "other/foo"},   // qualified names pass through
 		{"acme.example.com", "acme/foo", "acme/foo"},     // canonical names untouched
 		{"other.example.com", "myimg", "myimg"},          // non-portal host
@@ -293,9 +293,92 @@ func TestMiddlewareSearchUnmappedPortal(t *testing.T) {
 	}
 }
 
+func TestMiddlewareRuleToUserNamespace(t *testing.T) {
+	store := newTestStore(t)
+	createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "ruled", Hostname: "ruled.example.com", MapUnqualified: false,
+		Rules:     `[{"pattern":"ci-cache","replace":"jenkins/ci-cache"}]`,
+		AllowPush: true, Enabled: true,
+	})
+	res := NewResolver(store, nil, logger.New())
+
+	var gotPath, gotNS, gotRepo string
+	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotNS = r.URL.Query().Get("namespace")
+		gotRepo = r.URL.Query().Get("repo")
+	}))
+
+	// Repo lookups resolve into the rule's target namespace
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/search?repo=ci-cache", "ruled.example.com", 0))
+	if gotNS != "jenkins" || gotRepo != "ci-cache" {
+		t.Errorf("ruled search = ns %q repo %q, want jenkins/ci-cache", gotNS, gotRepo)
+	}
+
+	// Data plane paths land on the marker path for the target namespace
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/ci-cache/query", "ruled.example.com", 0))
+	if gotPath != "/api/v1/artifacts/_ns/jenkins/ci-cache/query" {
+		t.Errorf("ruled data plane path = %q", gotPath)
+	}
+
+	// OCI paths rewrite to the target namespace too
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/v2/ci-cache/manifests/latest", "ruled.example.com", 0))
+	if gotPath != "/v2/jenkins/ci-cache/manifests/latest" {
+		t.Errorf("ruled oci path = %q", gotPath)
+	}
+}
+
+func TestMiddlewareIsolatedRuleTarget(t *testing.T) {
+	store := newTestStore(t)
+	org, _ := createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "ruled", Hostname: "ruled.example.com", MapUnqualified: false,
+		Rules:     `[{"pattern":"ci-cache","replace":"jenkins/ci-cache"}]`,
+		AllowPush: true, Enabled: true,
+	})
+	res := isolatedResolver(t, store, org.ID)
+
+	var gotPath, gotNS, gotRepo string
+	reached := false
+	h := res.Middleware(func() string { return "" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		gotPath = r.URL.Path
+		gotNS = r.URL.Query().Get("namespace")
+		gotRepo = r.URL.Query().Get("repo")
+	}))
+
+	// Rule targets stay reachable when the portal is isolated
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/search?repo=ci-cache", "ruled.example.com", 0))
+	if gotNS != "jenkins" || gotRepo != "ci-cache" {
+		t.Errorf("isolated ruled search = ns %q repo %q, want jenkins/ci-cache", gotNS, gotRepo)
+	}
+
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/api/v1/artifacts/ci-cache/query", "ruled.example.com", 0))
+	if gotPath != "/api/v1/artifacts/_ns/jenkins/ci-cache/query" {
+		t.Errorf("isolated ruled data plane path = %q", gotPath)
+	}
+
+	h.ServeHTTP(httptest.NewRecorder(), portalRequest(http.MethodGet, "/v2/ci-cache/manifests/latest", "ruled.example.com", 0))
+	if gotPath != "/v2/jenkins/ci-cache/manifests/latest" {
+		t.Errorf("isolated ruled oci path = %q", gotPath)
+	}
+
+	// Namespaces no rule targets stay hidden
+	reached = false
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, portalRequest(http.MethodGet, "/v2/other/thing/manifests/latest", "ruled.example.com", 0))
+	if reached || rec.Code != http.StatusNotFound {
+		t.Errorf("foreign oci name: reached=%v code=%d, want hidden 404", reached, rec.Code)
+	}
+}
+
 func TestScopeRepoRef(t *testing.T) {
 	mapping := WithPortal(context.Background(), &Portal{OrgName: "acme", MapUnqualified: true})
 	plain := WithPortal(context.Background(), &Portal{OrgName: "acme"})
+	mapper, err := newPathMapper([]*v1.PortalRule{{Pattern: "ci-cache", Replace: "jenkins/ci-cache"}}, logger.New())
+	if err != nil {
+		t.Fatalf("newPathMapper: %v", err)
+	}
+	ruled := WithPortal(context.Background(), &Portal{OrgName: "acme", rules: mapper})
 
 	cases := []struct {
 		ctx              context.Context
@@ -306,6 +389,10 @@ func TestScopeRepoRef(t *testing.T) {
 		{mapping, "", "repo", "acme", "repo"},
 		{mapping, "team", "repo", "team", "repo"},
 		{plain, "", "repo", "", "repo"},
+		// Rules may resolve into user namespaces
+		{ruled, "", "ci-cache", "jenkins", "ci-cache"},
+		{ruled, "", "other", "", "other"},
+		{ruled, "team", "ci-cache", "team", "ci-cache"},
 	}
 	for _, c := range cases {
 		ns, name := ScopeRepoRef(c.ctx, c.ns, c.name)
@@ -736,6 +823,11 @@ func TestResolverAllowRepoIsolated(t *testing.T) {
 func TestForeignRef(t *testing.T) {
 	iso := &Portal{OrgName: "acme", Isolated: true}
 	open := &Portal{OrgName: "acme"}
+	mapper, err := newPathMapper([]*v1.PortalRule{{Pattern: "ci-cache", Replace: "jenkins/ci-cache"}}, logger.New())
+	if err != nil {
+		t.Fatalf("newPathMapper: %v", err)
+	}
+	ruled := &Portal{OrgName: "acme", Isolated: true, rules: mapper}
 
 	if !ForeignRef(WithPortal(context.Background(), iso), "other") {
 		t.Error("isolated portal must hide foreign namespaces")
@@ -748,5 +840,11 @@ func TestForeignRef(t *testing.T) {
 	}
 	if ForeignRef(context.Background(), "other") {
 		t.Error("no portal means no isolation")
+	}
+	if ForeignRef(WithPortal(context.Background(), ruled), "jenkins") {
+		t.Error("rule target namespaces stay reachable on isolated portals")
+	}
+	if !ForeignRef(WithPortal(context.Background(), ruled), "other") {
+		t.Error("isolated ruled portal still hides unrelated namespaces")
 	}
 }
