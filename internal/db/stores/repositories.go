@@ -62,7 +62,7 @@ func (s *Store) ListRepositories(ctx context.Context, namespace string, q pages.
 		if userID != "" {
 			// Authenticated user: public + owned + org membership + RBAC grants
 			conditions := "is_private = ? OR owner_id = ? OR namespace IN (SELECT o.name FROM organizations o JOIN org_members om ON o.id = om.org_id WHERE om.user_id = ?)"
-			args := []interface{}{false, userID, userID}
+			args := []any{false, userID, userID}
 
 			if len(grantedRepos) > 0 {
 				conditions += " OR (namespace || '/' || name) IN ?"

@@ -734,9 +734,9 @@ func TestV1OrgNamespaceAccess(t *testing.T) {
 	addMember("orgowner", storage.OrgRoleOwner)
 	addMember("orgmember", storage.OrgRoleMember)
 
-	// Plain members cannot create org repos
-	if rec := e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", member, map[string]any{"name": "kits", "namespace": "acme", "private": true}); rec.Code != http.StatusForbidden {
-		t.Fatalf("member create in org: got %d", rec.Code)
+	// Plain members create org repos too
+	if rec := e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", member, map[string]any{"name": "membertools", "namespace": "acme", "private": true}); rec.Code != http.StatusCreated {
+		t.Fatalf("member create in org: got %d body %q", rec.Code, rec.Body.String())
 	}
 	// Unknown namespaces reject creation outright
 	if rec := e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", owner, map[string]any{"name": "kits", "namespace": "ghost"}); rec.Code != http.StatusForbidden {
@@ -750,13 +750,11 @@ func TestV1OrgNamespaceAccess(t *testing.T) {
 	// Upload follows the namespaced Location header end to end
 	e.uploadArtifact(owner, "_ns/acme/kits", "1.0.0", "kit.bin", "data", nil)
 
-	// Members read private org repos, plain push stays denied
+	// Members read and push private org repos
 	if rec := e.do(http.MethodGet, "/api/v1/artifacts/_ns/acme/kits/1.0.0/kit.bin", member, nil); rec.Code != http.StatusOK {
 		t.Fatalf("member download: got %d body %q", rec.Code, rec.Body.String())
 	}
-	if rec := e.do(http.MethodPost, "/api/v1/artifacts/_ns/acme/kits/upload", member, nil); rec.Code != http.StatusForbidden {
-		t.Fatalf("member upload: got %d", rec.Code)
-	}
+	e.uploadArtifact(member, "_ns/acme/kits", "1.1.0", "kit2.bin", "data", nil)
 	if rec := e.do(http.MethodGet, "/api/v1/artifacts/_ns/acme/kits/1.0.0/kit.bin", outsider, nil); rec.Code != http.StatusForbidden {
 		t.Fatalf("outsider download: got %d", rec.Code)
 	}

@@ -570,9 +570,9 @@
 					<Table class="table-fixed">
 						<TableHeader>
 							<TableRow>
-								<TableHead class="th w-40">{@render tagSortHeader('Tag', 'version')}</TableHead>
-								<TableHead class="th">Digest</TableHead>
-								<TableHead class="th w-32 hidden md:table-cell">Platform</TableHead>
+								<TableHead class="th">{@render tagSortHeader('Tag', 'version')}</TableHead>
+								<TableHead class="th w-56 hidden sm:table-cell">Digest</TableHead>
+								<TableHead class="th w-40 hidden md:table-cell">Platform</TableHead>
 								<TableHead class="th text-right w-24">
 									<div class="flex justify-end">{@render tagSortHeader('Size', 'size')}</div>
 								</TableHead>
@@ -582,12 +582,14 @@
 							{#each tags as tag (tag.name)}
 								<TableRow class="cursor-pointer group/row" onclick={() => openTagDetail(tag.name)}>
 									<TableCell class="py-3 px-3">
-										<div class="flex items-center gap-1">
-											<Badge variant="secondary" class="font-mono text-xs font-medium px-2 py-0.5">{tag.name}</Badge>
+										<div class="flex items-center gap-1 min-w-0">
+											<Badge variant="secondary" class="font-mono text-xs font-medium px-2 py-0.5 min-w-0 shrink">
+												<span class="truncate">{tag.name}</span>
+											</Badge>
 											<CopyButton text="docker pull {pullCommand}:{tag.name}" label="Pull command copied!" />
 										</div>
 									</TableCell>
-									<TableCell class="py-3 px-3">
+									<TableCell class="py-3 px-3 hidden sm:table-cell">
 										<span class="font-mono text-xs text-muted-foreground/70 block truncate">
 											{truncateDigest(tag.digest)}
 										</span>

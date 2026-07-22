@@ -310,9 +310,9 @@ func (h *TokenHandler) canPush(r *http.Request, user *AuthenticatedUser, namespa
 	if user.Username == namespace {
 		return true
 	}
-	// Org member with admin/owner role can push
-	isMember, role, _ := h.store.IsOrgMember(r.Context(), namespace, user.ID)
-	if isMember && (role == storage.OrgRoleOwner || role == storage.OrgRoleAdmin) {
+	// Any org member can push
+	isMember, _, _ := h.store.IsOrgMember(r.Context(), namespace, user.ID)
+	if isMember {
 		return true
 	}
 	// Admin-level override: users with manage permission can push to any valid namespace

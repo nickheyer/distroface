@@ -36,7 +36,7 @@ func (a *Access) HasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser
 	}
 	if isMember, role, _ := a.store.IsOrgMember(ctx, repo.Namespace, user.ID); isMember {
 		switch action {
-		case rbac.ActionRead, rbac.ActionPull:
+		case rbac.ActionRead, rbac.ActionPull, rbac.ActionPush:
 			return true
 		default:
 			return role == db.OrgRoleOwner || role == db.OrgRoleAdmin
@@ -50,7 +50,7 @@ func (a *Access) CanSee(ctx context.Context, user *auth.AuthenticatedUser, repo 
 	return !repo.IsPrivate || a.HasRepoAccess(ctx, user, repo, rbac.ActionRead)
 }
 
-// Owner username, org owner/admin, or manage into an existing namespace
+// Owner username, org membership, or manage into an existing namespace
 func (a *Access) CanCreateInNamespace(ctx context.Context, user *auth.AuthenticatedUser, namespace string) bool {
 	if user == nil {
 		return false
@@ -58,8 +58,8 @@ func (a *Access) CanCreateInNamespace(ctx context.Context, user *auth.Authentica
 	if namespace == user.Username {
 		return true
 	}
-	if isMember, role, _ := a.store.IsOrgMember(ctx, namespace, user.ID); isMember {
-		return role == db.OrgRoleOwner || role == db.OrgRoleAdmin
+	if isMember, _, _ := a.store.IsOrgMember(ctx, namespace, user.ID); isMember {
+		return true
 	}
 	if !a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
 		return false
