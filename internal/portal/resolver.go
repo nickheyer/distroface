@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -161,6 +162,14 @@ func (res *Resolver) reloadLocked() {
 		}
 		if res.settings != nil {
 			entry.Isolated = res.settings.Org(context.Background(), p.OrgID).GetPortals().GetIsolated()
+		}
+		if p.BackendURL != "" {
+			if target, err := url.Parse(p.BackendURL); err != nil || target.Host == "" {
+				res.log.Error("portal %s (%s): stored backend url invalid, serving errors: %v", p.Name, p.Hostname, err)
+				entry.backendProxy = http.HandlerFunc(brokenBackend)
+			} else {
+				entry.backendProxy = newBackendProxy(target, p.BackendRewriteHost, p.BackendInsecure, res.log)
+			}
 		}
 		if rules, err := ParseRules(p.Rules); err != nil {
 			res.log.Error("portal %s (%s): stored rules invalid, custom rules disabled: %v", p.Name, p.Hostname, err)

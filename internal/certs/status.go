@@ -94,6 +94,11 @@ func (e *Engine) checkACME(ctx context.Context, st *v1.GetCertStatusResponse, ho
 		problem(st, v1.CertState_CERT_STATE_ERROR, "hostname %q is not publicly issuable", host)
 		return
 	}
+	if e.managerForHost(ctx, host) == nil {
+		problem(st, v1.CertState_CERT_STATE_ERROR,
+			"acme directory url points at this instance, use the org ca source instead")
+		return
+	}
 	if err := e.policy.Allowed(ctx, host, orgID); err != nil {
 		state := v1.CertState_CERT_STATE_ERROR
 		// A registered entry awaiting approval reads as pending, not broken

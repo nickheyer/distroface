@@ -10,6 +10,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/distribution/distribution/v3 v3.0.0
 	github.com/distribution/reference v0.6.0
+	github.com/go-gormigrate/gormigrate/v2 v2.1.6
 	github.com/go-jose/go-jose/v4 v4.1.3
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-containerregistry v0.21.7

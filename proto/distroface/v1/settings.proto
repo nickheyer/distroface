@@ -62,6 +62,7 @@ message Settings {
   WebhookSettings webhooks = 9;
   SecuritySettings security = 10;
   MirrorSettings mirror = 11;
+  CASettings ca = 12;
 }
 
 // Instance identity as clients reach it
@@ -118,14 +119,18 @@ message TLSSettings {
   optional MTLSMode mtls_mode = 3; // Client certificate policy for the tier
 }
 
-// Acme issuance, org and portal scopes override email and directory
+// Acme certs from external ca, org and portal scopes override email and directory
 message ACMESettings {
   optional bool enabled = 1;
   optional string email = 2;
   optional string directory_url = 3; // Empty means lets encrypt production
   optional string challenge_port = 4; // System only, empty disables http-01
   optional bool redirect_http = 5; // System only, challenge listener redirects to https
-  optional bool internal_enabled = 6; // System only, serve the built in acme directory
+}
+
+// Instance certificate authority exposure, system only
+message CASettings {
+  optional bool acme_enabled = 1; // Serve the built in acme directory
 }
 
 // Instance rules for org claimed hostnames

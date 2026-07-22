@@ -8,16 +8,18 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import * as Popover from '$lib/components/ui/popover';
+	import * as RadioGroup from '$lib/components/ui/radio-group';
 	import * as Select from '$lib/components/ui/select';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
-	import { Plus, X } from '@lucide/svelte';
+	import { Info, Plus, X } from '@lucide/svelte';
 	import { Act } from '$lib/act.svelte';
 	import { effectiveAddress, placementError, portalScheme } from '$lib/portal-address';
 	import { certDate, certSourceLabels, certStateBadge, isIssuableHostname } from '$lib/cert-utils';
-	import { acmeDirectoryURL, orgScope, patchSettings, portalScope } from '$lib/settings-utils';
-	import { configStore } from '$lib/stores/config.svelte';
+	import { orgScope, patchSettings, portalScope } from '$lib/settings-utils';
+	import { authStore } from '$lib/stores/auth.svelte';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { CertSource, TLSScope, type TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
 	import { MTLSMode } from '$lib/proto/distroface/v1/settings_pb';
@@ -35,8 +37,11 @@
 	} = $props();
 
 	type RuleDraft = { pattern: string; replace: string };
+	type PortalMode = 'registry' | 'proxy';
 
 	// Draft snapshot on mount, parent keys this component per portal
+	/* svelte-ignore state_referenced_locally */
+	let mode = $state<PortalMode>(portal?.backendUrl ? 'proxy' : 'registry');
 	/* svelte-ignore state_referenced_locally */
 	let name = $state(portal?.name ?? '');
 	/* svelte-ignore state_referenced_locally */
@@ -54,6 +59,12 @@
 	/* svelte-ignore state_referenced_locally */
 	let tls = $state(portal?.tls ?? false);
 	/* svelte-ignore state_referenced_locally */
+	let backendUrl = $state(portal?.backendUrl ?? '');
+	/* svelte-ignore state_referenced_locally */
+	let backendRewriteHost = $state(portal?.backendRewriteHost ?? false);
+	/* svelte-ignore state_referenced_locally */
+	let backendInsecure = $state(portal?.backendInsecure ?? false);
+	/* svelte-ignore state_referenced_locally */
 	let certSource = $state<CertSource>(portal?.certSource || CertSource.NONE);
 	let acmeEmail = $state('');
 	let acmeDirectory = $state('');
@@ -67,10 +78,8 @@
 	let portalCert = $state<TLSMaterialInfo | null>(null);
 	let acmeDirInherited = $state('');
 	let acmeEmailInherited = $state('');
-	let builtinAcme = $state(false);
 	let mtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_UNSPECIFIED);
 	let savedMtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_UNSPECIFIED);
-	const builtinDirectory = $derived(acmeDirectoryURL(configStore.publicHostname));
 	/* svelte-ignore state_referenced_locally */
 	let rules = $state<RuleDraft[]>(
 		portal?.rules.map((r) => ({ pattern: r.pattern, replace: r.replace })) ?? []
@@ -119,7 +128,6 @@
 			const eff = await rpcClient.settings.getEffectiveSettings({ scope: orgScope(orgId) }, silentCallOptions);
 			acmeDirInherited = eff.settings?.acme?.directoryUrl ?? '';
 			acmeEmailInherited = eff.settings?.acme?.email ?? '';
-			builtinAcme = eff.settings?.acme?.internalEnabled ?? false;
 		} catch {
 			// Placeholders stay generic
 		}
@@ -156,13 +164,35 @@
 		goto(resolve('/orgs/[name]/portals', { name: orgName }));
 	}
 
+	// Mirrors the server's backend url shape check
+	function backendUrlError(raw: string): string {
+		const trimmed = raw.trim();
+		if (trimmed === '') return '';
+		let u: URL;
+		try {
+			u = new URL(trimmed);
+		} catch {
+			return 'Must look like http(s)://host[:port][/path]';
+		}
+		if ((u.protocol !== 'http:' && u.protocol !== 'https:') || u.username !== '' || u.search !== '' || u.hash !== '') {
+			return 'Must look like http(s)://host[:port][/path]';
+		}
+		return '';
+	}
+
 	const addressError = $derived(
 		hostname.trim() === '' && portText.trim() === '' ? '' : placementError(hostname, portText)
 	);
+	const isProxy = $derived(mode === 'proxy');
+	const httpsBackend = $derived(backendUrl.trim().startsWith('https://'));
+	const backendError = $derived(backendUrlError(backendUrl));
+	// Same check the server runs before accepting a backend change
+	const canEditBackend = $derived(authStore.canManageSettings);
 	const formValid = $derived(
 		name.trim() !== '' &&
 		(hostname.trim() !== '' || portText.trim() !== '') &&
-		placementError(hostname, portText) === ''
+		placementError(hostname, portText) === '' &&
+		(!isProxy || (backendUrl.trim() !== '' && backendError === ''))
 	);
 	const previewAddress = $derived(
 		placementError(hostname, portText) === '' && (hostname.trim() !== '' || portText.trim() !== '')
@@ -214,18 +244,35 @@
 		const cleanedRules = rules
 			.map((r) => ({ pattern: r.pattern.trim(), replace: r.replace.trim() }))
 			.filter((r) => r.pattern !== '' || r.replace !== '');
+		// Modes are exclusive, the other mode's knobs reset on save
 		const common = {
 			orgId,
 			name: name.trim(),
 			hostname: hostname.trim().toLowerCase(),
 			port: Number(portText.trim()) || 0,
-			mapUnqualified,
-			allowPush,
-			requireAuth,
-			hidePrimaryLink: !showExitLink,
 			tls,
 			certSource,
-			rules: cleanedRules
+			...(isProxy
+				? {
+						mapUnqualified: false,
+						allowPush: false,
+						requireAuth: false,
+						hidePrimaryLink: false,
+						rules: [],
+						backendUrl: backendUrl.trim(),
+						backendRewriteHost,
+						backendInsecure: httpsBackend && backendInsecure
+					}
+				: {
+						mapUnqualified,
+						allowPush,
+						requireAuth,
+						hidePrimaryLink: !showExitLink,
+						rules: cleanedRules,
+						backendUrl: '',
+						backendRewriteHost: false,
+						backendInsecure: false
+					})
 		};
 		let redirected = false;
 		const ok = await submitAct.run(async () => {
@@ -269,6 +316,58 @@
 			</FormField>
 		</FormCard>
 
+		<FormCard title="Mode" description="What this portal serves. Everything below follows from this choice.">
+			<RadioGroup.Root
+				value={mode}
+				onValueChange={(v) => (mode = v as PortalMode)}
+				disabled={!canEditBackend}
+				class="grid grid-cols-1 sm:grid-cols-2 gap-3"
+			>
+				<label
+					for="portal-mode-registry"
+					class="flex flex-col gap-1 rounded-lg border p-3.5 transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring
+						{mode === 'registry' ? 'border-primary bg-primary/5' : 'border-border/60'}
+						{canEditBackend ? 'cursor-pointer hover:border-border' : 'cursor-not-allowed opacity-60'}"
+				>
+					<RadioGroup.Item value="registry" id="portal-mode-registry" class="sr-only" />
+					<span class="text-sm font-medium">Org Registry</span>
+					<span class="text-xs text-muted-foreground">
+						Provides a dedicated access point & web-ui for organization resources
+					</span>
+				</label>
+				<div class="relative">
+					<label
+						for="portal-mode-proxy"
+						class="flex h-full flex-col gap-1 rounded-lg border p-3.5 transition-colors has-focus-visible:ring-2 has-focus-visible:ring-ring
+							{mode === 'proxy' ? 'border-primary bg-primary/5' : 'border-border/60'}
+							{canEditBackend ? 'cursor-pointer hover:border-border' : 'cursor-not-allowed opacity-60'}"
+					>
+						<RadioGroup.Item value="proxy" id="portal-mode-proxy" class="sr-only" />
+						<span class="pr-6 text-sm font-medium">Service Proxy</span>
+						<span class="text-xs text-muted-foreground">
+							Proxies a local service with access to portal edge-server(s) and PKI
+						</span>
+					</label>
+					<Popover.Root>
+						<Popover.Trigger
+							class="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+							aria-label="More about service proxies"
+						>
+							<Info class="h-3.5 w-3.5" />
+						</Popover.Trigger>
+						<Popover.Content side="top" align="end" class="w-72 p-3 text-xs text-muted-foreground">
+							Registry services will not be accessible through this portal.
+						</Popover.Content>
+					</Popover.Root>
+				</div>
+			</RadioGroup.Root>
+			{#if !canEditBackend}
+				<p class="text-[13px] text-muted-foreground mt-2">
+					Changing the mode requires instance admin rights.
+				</p>
+			{/if}
+		</FormCard>
+
 		<FormCard title="Address" description="Where the portal answers.">
 			<div class="grid grid-cols-1 sm:grid-cols-[1fr_9rem] gap-3">
 				<FormField
@@ -281,7 +380,7 @@
 						id="portal-hostname"
 						bind:value={hostname}
 						class="font-mono"
-						placeholder="registry.example.com"
+						placeholder={isProxy ? 'app.example.com' : 'registry.example.com'}
 						autocomplete="off"
 					/>
 				</FormField>
@@ -301,6 +400,41 @@
 				</FormField>
 			</div>
 		</FormCard>
+
+		{#if isProxy}
+			<FormCard title="Backend" description="Where every request on this address goes.">
+				<div class="space-y-3">
+					<FormField
+						label="Backend URL"
+						id="portal-backend"
+						required
+						help="A service reachable from this server"
+						error={backendError}
+					>
+						<Input
+							id="portal-backend"
+							bind:value={backendUrl}
+							class="font-mono max-w-sm"
+							placeholder="http://127.0.0.1:3000"
+							autocomplete="off"
+							disabled={!canEditBackend}
+						/>
+					</FormField>
+					<FormField label="Rewrite Host header" horizontal help="Send the backend's own hostname instead of the client's">
+						<Switch bind:checked={backendRewriteHost} disabled={!canEditBackend} />
+					</FormField>
+					{#if httpsBackend}
+						<FormField label="Skip certificate verification" horizontal help="Accept the backend's certificate without verifying it">
+							<Switch bind:checked={backendInsecure} disabled={!canEditBackend} />
+						</FormField>
+					{/if}
+					<p class="text-[13px] text-muted-foreground">
+						Requests forward unchanged with standard X-Forwarded headers. HTTPS still terminates
+						at this portal with the certificate configured below.
+					</p>
+				</div>
+			</FormCard>
+		{/if}
 
 		<FormCard title="HTTPS" description="Certificate source for this portal.">
 			<div class="space-y-3">
@@ -364,15 +498,10 @@
 							<Input id="portal-acme-email" bind:value={acmeEmail} placeholder={acmeEmailInherited || 'inherited'} autocomplete="off" />
 						</FormField>
 					</div>
-					{#if builtinAcme}
-						<p class="text-[13px] text-muted-foreground">
-							The built-in CA at <span class="font-mono">{builtinDirectory}</span> issues this portal's certificate, chaining to the instance root.
-						</p>
-					{:else}
-						<p class="text-[13px] text-muted-foreground">
-							Issuance needs the hostname reachable from the internet.
-						</p>
-					{/if}
+					<p class="text-[13px] text-muted-foreground">
+						Issuance needs the hostname reachable by the CA. For certificates issued by this
+						instance's own CA, use the Organization CA source instead.
+					</p>
 				{:else if certSource === CertSource.ORG_CA}
 					{#if orgCA}
 						<p class="text-[13px] text-muted-foreground">
@@ -419,66 +548,68 @@
 			</div>
 		</FormCard>
 
-		<FormCard title="Access" description="What clients on this address can do.">
-			<div class="space-y-3">
-				<FormField label="Allow push" horizontal help="Off makes the portal pull only">
-					<Switch bind:checked={allowPush} />
-				</FormField>
+		{#if !isProxy}
+			<FormCard title="Access" description="What clients on this address can do.">
+				<div class="space-y-3">
+					<FormField label="Allow push" horizontal help="Off makes the portal pull only">
+						<Switch bind:checked={allowPush} />
+					</FormField>
 
-				<FormField label="Require sign-in" horizontal help="On refuses anonymous pulls">
-					<Switch bind:checked={requireAuth} />
-				</FormField>
+					<FormField label="Require sign-in" horizontal help="On refuses anonymous pulls">
+						<Switch bind:checked={requireAuth} />
+					</FormField>
 
-				<FormField label="Exit link" horizontal help="Off hides the link to the primary UI">
-					<Switch bind:checked={showExitLink} />
-				</FormField>
-			</div>
-		</FormCard>
+					<FormField label="Exit link" horizontal help="Off hides the link to the primary UI">
+						<Switch bind:checked={showExitLink} />
+					</FormField>
+				</div>
+			</FormCard>
 
-		<FormCard title="Image names" description="How requested names map into {orgName}.">
-			<div class="space-y-3">
-				<FormField
-					label="Map bare names"
-					horizontal
-					help="Resolves {previewAddress || 'portal-host'}/myimage to {orgName}/myimage"
-				>
-					<Switch bind:checked={mapUnqualified} />
-				</FormField>
+			<FormCard title="Image names" description="How requested names map into {orgName}.">
+				<div class="space-y-3">
+					<FormField
+						label="Map bare names"
+						horizontal
+						help="Resolves {previewAddress || 'portal-host'}/myimage to {orgName}/myimage"
+					>
+						<Switch bind:checked={mapUnqualified} />
+					</FormField>
 
-				<FormField label="Rewrite rules" help="Regex rewrites before bare name mapping">
-					<div class="space-y-2">
-						{#each rules as rule, i (i)}
-							<div class="flex items-center gap-2">
-								<Input
-									bind:value={rule.pattern}
-									class="font-mono text-xs"
-									placeholder="legacy/(.+)"
-									aria-label="Rule pattern"
-								/>
-								<span class="text-xs text-muted-foreground shrink-0">&rarr;</span>
-								<Input
-									bind:value={rule.replace}
-									class="font-mono text-xs"
-									placeholder="{orgName}/$1"
-									aria-label="Rule replacement"
-								/>
-								<Button
-									variant="ghost"
-									size="icon"
-									class="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
-									onclick={() => (rules = rules.filter((_, idx) => idx !== i))}
-								>
-									<X class="h-3.5 w-3.5" />
-								</Button>
-							</div>
-						{/each}
-						<Button variant="outline" size="sm" onclick={() => (rules = [...rules, { pattern: '', replace: '' }])}>
-							<Plus class="h-3.5 w-3.5 mr-1.5" />Add Rule
-						</Button>
-					</div>
-				</FormField>
-			</div>
-		</FormCard>
+					<FormField label="Rewrite rules" help="Regex rewrites before bare name mapping">
+						<div class="space-y-2">
+							{#each rules as rule, i (i)}
+								<div class="flex items-center gap-2">
+									<Input
+										bind:value={rule.pattern}
+										class="font-mono text-xs"
+										placeholder="legacy/(.+)"
+										aria-label="Rule pattern"
+									/>
+									<span class="text-xs text-muted-foreground shrink-0">&rarr;</span>
+									<Input
+										bind:value={rule.replace}
+										class="font-mono text-xs"
+										placeholder="{orgName}/$1"
+										aria-label="Rule replacement"
+									/>
+									<Button
+										variant="ghost"
+										size="icon"
+										class="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
+										onclick={() => (rules = rules.filter((_, idx) => idx !== i))}
+									>
+										<X class="h-3.5 w-3.5" />
+									</Button>
+								</div>
+							{/each}
+							<Button variant="outline" size="sm" onclick={() => (rules = [...rules, { pattern: '', replace: '' }])}>
+								<Plus class="h-3.5 w-3.5 mr-1.5" />Add Rule
+							</Button>
+						</div>
+					</FormField>
+				</div>
+			</FormCard>
+		{/if}
 
 		<div class="flex items-center justify-end gap-3 pt-1">
 			{#if submitAct.error}
@@ -517,19 +648,30 @@
 				</div>
 
 				<div class="space-y-2.5 text-[13px]">
-					<div>
-						<p class="detail-label mb-0.5">Web UI</p>
-						<p class="font-mono break-all">{scheme}://{previewAddress}</p>
-					</div>
-					<div>
-						<p class="detail-label mb-0.5">Pull</p>
-						<p class="font-mono break-all">docker pull {previewAddress}/{previewImage}</p>
-					</div>
-					{#if allowPush}
+					{#if isProxy}
 						<div>
-							<p class="detail-label mb-0.5">Push</p>
-							<p class="font-mono break-all">docker push {previewAddress}/{previewImage}</p>
+							<p class="detail-label mb-0.5">Every request forwards to</p>
+							{#if backendUrl.trim() !== '' && backendError === ''}
+								<p class="font-mono break-all">{backendUrl.trim()}</p>
+							{:else}
+								<p class="text-muted-foreground">Set a backend URL.</p>
+							{/if}
 						</div>
+					{:else}
+						<div>
+							<p class="detail-label mb-0.5">Web UI</p>
+							<p class="font-mono break-all">{scheme}://{previewAddress}</p>
+						</div>
+						<div>
+							<p class="detail-label mb-0.5">Pull</p>
+							<p class="font-mono break-all">docker pull {previewAddress}/{previewImage}</p>
+						</div>
+						{#if allowPush}
+							<div>
+								<p class="detail-label mb-0.5">Push</p>
+								<p class="font-mono break-all">docker push {previewAddress}/{previewImage}</p>
+							</div>
+						{/if}
 					{/if}
 				</div>
 			{:else}
@@ -539,19 +681,32 @@
 			{/if}
 
 			<div class="flex flex-wrap gap-1 pt-1 border-t border-border/40">
-				<Badge variant="outline" class="text-xs font-normal mt-2">Scoped to {orgName}</Badge>
-				{#if httpsOn}
-					<Badge variant="outline" class="text-xs font-normal mt-2">HTTPS</Badge>
-				{/if}
-				<Badge variant="outline" class="text-xs font-normal mt-2">{allowPush ? 'Push enabled' : 'Pull only'}</Badge>
-				{#if requireAuth}
-					<Badge variant="outline" class="text-xs font-normal mt-2">Sign-in required</Badge>
-				{/if}
-				{#if mapUnqualified}
-					<Badge variant="outline" class="text-xs font-normal mt-2">Bare names</Badge>
-				{/if}
-				{#if ruleCount > 0}
-					<Badge variant="outline" class="text-xs font-normal mt-2">{ruleCount} rewrite{ruleCount !== 1 ? 's' : ''}</Badge>
+				{#if isProxy}
+					<Badge variant="outline" class="text-xs font-normal mt-2">Service proxy</Badge>
+					{#if httpsOn}
+						<Badge variant="outline" class="text-xs font-normal mt-2">HTTPS</Badge>
+					{/if}
+					{#if backendRewriteHost}
+						<Badge variant="outline" class="text-xs font-normal mt-2">Host rewritten</Badge>
+					{/if}
+					{#if httpsBackend && backendInsecure}
+						<Badge variant="outline" class="text-xs font-normal mt-2 text-amber-600 dark:text-amber-400">Backend TLS unverified</Badge>
+					{/if}
+				{:else}
+					<Badge variant="outline" class="text-xs font-normal mt-2">Scoped to {orgName}</Badge>
+					{#if httpsOn}
+						<Badge variant="outline" class="text-xs font-normal mt-2">HTTPS</Badge>
+					{/if}
+					<Badge variant="outline" class="text-xs font-normal mt-2">{allowPush ? 'Push enabled' : 'Pull only'}</Badge>
+					{#if requireAuth}
+						<Badge variant="outline" class="text-xs font-normal mt-2">Sign-in required</Badge>
+					{/if}
+					{#if mapUnqualified}
+						<Badge variant="outline" class="text-xs font-normal mt-2">Bare names</Badge>
+					{/if}
+					{#if ruleCount > 0}
+						<Badge variant="outline" class="text-xs font-normal mt-2">{ruleCount} rewrite{ruleCount !== 1 ? 's' : ''}</Badge>
+					{/if}
 				{/if}
 			</div>
 		</div>

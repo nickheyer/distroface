@@ -2,6 +2,7 @@ package portal
 
 import (
 	"context"
+	"net/http"
 	"strings"
 
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -23,6 +24,7 @@ type Portal struct {
 	Isolated        bool
 	HidePrimaryLink bool
 	rules           *pathMapper
+	backendProxy    http.Handler
 }
 
 // Resolves a requested repo name to its canonical path, custom rules run

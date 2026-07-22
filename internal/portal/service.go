@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -136,6 +137,44 @@ func (s *Service) validatePlacement(ctx context.Context, hostname string, port i
 	return hostname, port, nil
 }
 
+// Backend urls must be plain http(s) service addresses
+func parseBackendURL(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("backend url must look like http(s)://host[:port][/path]")
+	}
+	return u.String(), nil
+}
+
+// Fronting internal services with the public edge needs instance rights
+func (s *Service) authorizeBackend(ctx context.Context) error {
+	if user := auth.UserFromContext(ctx); user != nil {
+		if allowed, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceSettings, rbac.ActionManage, "*"); allowed {
+			return nil
+		}
+	}
+	return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("changing a portal backend requires instance admin rights"))
+}
+
+// Proxy portals expose no registry surface, inert flags stay zeroed
+func scrubProxyPortal(p *storage.RegistryPortal) {
+	if p.BackendURL == "" {
+		p.BackendRewriteHost = false
+		p.BackendInsecure = false
+		return
+	}
+	p.MapUnqualified = false
+	p.AllowPush = false
+	p.RequireAuth = false
+	p.HidePrimaryLink = false
+	p.Rules = "[]"
+}
+
 // Portal sources exclude the app only config pair and instance root
 func portalCertSource(src v1.CertSource) (v1.CertSource, error) {
 	switch src {
@@ -248,21 +287,34 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 	if err != nil {
 		return nil, err
 	}
+	backendURL, err := parseBackendURL(msg.BackendUrl)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
+	if backendURL != "" {
+		if err := s.authorizeBackend(ctx); err != nil {
+			return nil, err
+		}
+	}
 
 	portal := &storage.RegistryPortal{
-		OrgID:           org.ID,
-		Name:            msg.Name,
-		Hostname:        hostname,
-		Port:            port,
-		MapUnqualified:  msg.MapUnqualified,
-		Rules:           rulesJSON,
-		AllowPush:       msg.AllowPush,
-		RequireAuth:     msg.RequireAuth,
-		TLS:             msg.Tls,
-		CertSource:      certSource,
-		HidePrimaryLink: msg.HidePrimaryLink,
-		Enabled:         true,
+		OrgID:              org.ID,
+		Name:               msg.Name,
+		Hostname:           hostname,
+		Port:               port,
+		MapUnqualified:     msg.MapUnqualified,
+		Rules:              rulesJSON,
+		AllowPush:          msg.AllowPush,
+		RequireAuth:        msg.RequireAuth,
+		TLS:                msg.Tls,
+		CertSource:         certSource,
+		HidePrimaryLink:    msg.HidePrimaryLink,
+		BackendURL:         backendURL,
+		BackendRewriteHost: msg.BackendRewriteHost,
+		BackendInsecure:    msg.BackendInsecure,
+		Enabled:            true,
 	}
+	scrubProxyPortal(portal)
 	if err := s.store.CreateRegistryPortal(ctx, portal); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -393,6 +445,30 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 	if msg.Enabled != nil {
 		portal.Enabled = *msg.Enabled
 	}
+	if msg.BackendUrl != nil || msg.BackendRewriteHost != nil || msg.BackendInsecure != nil {
+		backendURL, rewrite, insecure := portal.BackendURL, portal.BackendRewriteHost, portal.BackendInsecure
+		if msg.BackendUrl != nil {
+			var err error
+			if backendURL, err = parseBackendURL(*msg.BackendUrl); err != nil {
+				return nil, connect.NewError(connect.CodeInvalidArgument, err)
+			}
+		}
+		if msg.BackendRewriteHost != nil {
+			rewrite = *msg.BackendRewriteHost
+		}
+		if msg.BackendInsecure != nil {
+			insecure = *msg.BackendInsecure
+		}
+		changed := backendURL != portal.BackendURL ||
+			(backendURL != "" && (rewrite != portal.BackendRewriteHost || insecure != portal.BackendInsecure))
+		if changed {
+			if err := s.authorizeBackend(ctx); err != nil {
+				return nil, err
+			}
+		}
+		portal.BackendURL, portal.BackendRewriteHost, portal.BackendInsecure = backendURL, rewrite, insecure
+	}
+	scrubProxyPortal(portal)
 	if portal.CertSource == v1.CertSource_CERT_SOURCE_UNSPECIFIED {
 		portal.CertSource = v1.CertSource_CERT_SOURCE_NONE
 	}
@@ -481,20 +557,23 @@ func (s *Service) reconcile(ctx context.Context) {
 
 func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {
 	proto := &v1.RegistryPortal{
-		Id:              p.ID,
-		OrgId:           p.OrgID,
-		Name:            p.Name,
-		Hostname:        p.Hostname,
-		Port:            int32(p.Port),
-		MapUnqualified:  p.MapUnqualified,
-		AllowPush:       p.AllowPush,
-		RequireAuth:     p.RequireAuth,
-		Tls:             p.TLS,
-		CertSource:      p.CertSource,
-		HidePrimaryLink: p.HidePrimaryLink,
-		Enabled:         p.Enabled,
-		CreatedAt:       timestamppb.New(p.CreatedAt),
-		UpdatedAt:       timestamppb.New(p.UpdatedAt),
+		Id:                 p.ID,
+		OrgId:              p.OrgID,
+		Name:               p.Name,
+		Hostname:           p.Hostname,
+		Port:               int32(p.Port),
+		MapUnqualified:     p.MapUnqualified,
+		AllowPush:          p.AllowPush,
+		RequireAuth:        p.RequireAuth,
+		Tls:                p.TLS,
+		CertSource:         p.CertSource,
+		HidePrimaryLink:    p.HidePrimaryLink,
+		BackendUrl:         p.BackendURL,
+		BackendRewriteHost: p.BackendRewriteHost,
+		BackendInsecure:    p.BackendInsecure,
+		Enabled:            p.Enabled,
+		CreatedAt:          timestamppb.New(p.CreatedAt),
+		UpdatedAt:          timestamppb.New(p.UpdatedAt),
 	}
 	if rules, err := ParseRules(p.Rules); err == nil {
 		proto.Rules = rules

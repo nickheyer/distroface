@@ -14,6 +14,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -186,10 +187,23 @@ func (e *Engine) managerFor(directory, email string) *autocert.Manager {
 	return m
 }
 
+// A stored directory pointing back at this instance would dial itself
+// in a loop the tls layer can never bootstrap
+func (e *Engine) selfDirectory(ctx context.Context, directory string) bool {
+	if directory == "" {
+		return false
+	}
+	u, err := url.Parse(directory)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Hostname(), e.primaryHost(ctx))
+}
+
 // Client for the system tier account, nil when acme is off
 func (e *Engine) defaultManager(ctx context.Context) *autocert.Manager {
 	eff := e.res.System(ctx).GetAcme()
-	if !eff.GetEnabled() {
+	if !eff.GetEnabled() || e.selfDirectory(ctx, eff.GetDirectoryUrl()) {
 		return nil
 	}
 	return e.managerFor(eff.GetDirectoryUrl(), eff.GetEmail())
@@ -199,10 +213,34 @@ func (e *Engine) defaultManager(ctx context.Context) *autocert.Manager {
 // a system only kill switch
 func (e *Engine) portalManager(ctx context.Context, portalID string) *autocert.Manager {
 	eff := e.res.Portal(ctx, portalID).GetAcme()
-	if !eff.GetEnabled() {
+	if !eff.GetEnabled() || e.selfDirectory(ctx, eff.GetDirectoryUrl()) {
 		return nil
 	}
 	return e.managerFor(eff.GetDirectoryUrl(), eff.GetEmail())
+}
+
+// Client for an org tier account, nil when acme is off
+func (e *Engine) orgManager(ctx context.Context, orgID string) *autocert.Manager {
+	eff := e.res.Org(ctx, orgID).GetAcme()
+	if !eff.GetEnabled() || e.selfDirectory(ctx, eff.GetDirectoryUrl()) {
+		return nil
+	}
+	return e.managerFor(eff.GetDirectoryUrl(), eff.GetEmail())
+}
+
+// Account for the tier owning host, portal over org domain over system
+func (e *Engine) managerForHost(ctx context.Context, host string) *autocert.Manager {
+	if portals, err := e.store.ListPortalsByHostname(ctx, host); err == nil {
+		for _, p := range portals {
+			if p.CertSource == v1.CertSource_CERT_SOURCE_ACME {
+				return e.portalManager(ctx, p.ID)
+			}
+		}
+	}
+	if d, err := e.store.GetCertificateDomainByName(ctx, host); err == nil && d != nil && d.OrgID != nil && *d.OrgID != "" {
+		return e.orgManager(ctx, *d.OrgID)
+	}
+	return e.defaultManager(ctx)
 }
 
 // Shared server config, sni picks the right cert per hostname and
@@ -514,7 +552,9 @@ func (e *Engine) HTTPChallengeHandler() http.Handler {
 		if !redirect {
 			fallback = forbid
 		}
-		if m := e.defaultManager(ctx); m != nil {
+		// Challenges route to the account that initiated them, the shared
+		// db cache still answers tokens minted by a sibling manager
+		if m := e.managerForHost(ctx, bareHost(r.Host)); m != nil {
 			m.HTTPHandler(fallback).ServeHTTP(w, r)
 			return
 		}
@@ -600,18 +640,9 @@ func (e *Engine) EnsureCertificate(ctx context.Context, domain string) (*v1.Cert
 	if !issuableHost(domain) {
 		return nil, fmt.Errorf("domain %q is not a publicly issuable hostname", domain)
 	}
-	manager := e.defaultManager(ctx)
-	// An acme sourced portal issues through its resolved account
-	if portals, err := e.store.ListPortalsByHostname(ctx, domain); err == nil {
-		for _, p := range portals {
-			if p.CertSource == v1.CertSource_CERT_SOURCE_ACME {
-				manager = e.portalManager(ctx, p.ID)
-				break
-			}
-		}
-	}
+	manager := e.managerForHost(ctx, domain)
 	if manager == nil {
-		return nil, fmt.Errorf("acme is not enabled")
+		return nil, fmt.Errorf("acme is disabled or the directory url points back at this instance")
 	}
 	if _, err := manager.GetCertificate(syntheticHello(domain)); err != nil {
 		return nil, err

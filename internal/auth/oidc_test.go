@@ -116,6 +116,42 @@ func TestFindOrCreateOIDCUserCreatesNew(t *testing.T) {
 	}
 }
 
+func TestFindOrCreateOIDCUserSuffixesCollisions(t *testing.T) {
+	h, store := newOIDCTestHandler(t, "https://idp.example.com")
+	ctx := context.Background()
+
+	if err := store.CreateUser(ctx, &db.User{
+		ID:           uuid.New().String(),
+		Username:     "nick",
+		AuthProvider: "local",
+		IsActive:     true,
+	}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if err := store.CreateOrganization(ctx, &db.Organization{
+		Name:      "acme",
+		CreatedBy: uuid.New().String(),
+	}); err != nil {
+		t.Fatalf("CreateOrganization: %v", err)
+	}
+
+	user, err := h.findOrCreateOIDCUser(ctx, "sub-a", "nick", "")
+	if err != nil {
+		t.Fatalf("findOrCreateOIDCUser: %v", err)
+	}
+	if user.Username != "nick2" {
+		t.Fatalf("got username %q, want nick2", user.Username)
+	}
+
+	user, err = h.findOrCreateOIDCUser(ctx, "sub-b", "acme", "")
+	if err != nil {
+		t.Fatalf("findOrCreateOIDCUser: %v", err)
+	}
+	if user.Username != "acme2" {
+		t.Fatalf("got username %q, want acme2", user.Username)
+	}
+}
+
 func TestFindOrCreateOIDCUserRejectsInactive(t *testing.T) {
 	h, store := newOIDCTestHandler(t, "https://idp.example.com")
 	ctx := context.Background()

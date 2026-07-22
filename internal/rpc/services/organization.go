@@ -511,34 +511,6 @@ func (s *OrganizationService) TransferOrgOwnership(ctx context.Context, req *con
 	return connect.NewResponse(&v1.TransferOrgOwnershipResponse{}), nil
 }
 
-// Manage bypass, otherwise membership, adminOnly wants owner or admin rank
-func (s *OrganizationService) orgWithAccess(ctx context.Context, user *auth.AuthenticatedUser, orgID string, adminOnly bool) (*storage.Organization, error) {
-	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
-	}
-	if orgID == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("org id is required"))
-	}
-	org, err := s.store.GetOrganizationByID(ctx, orgID)
-	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
-	}
-	if org == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("organization not found"))
-	}
-	if canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID); canManage {
-		return org, nil
-	}
-	member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
-	if member == nil {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
-	}
-	if adminOnly && member.Role != storage.OrgRoleOwner && member.Role != storage.OrgRoleAdmin {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
-	}
-	return org, nil
-}
-
 func orgToProto(o *storage.Organization, memberCount int32, currentRole string) *v1.Organization {
 	proto := &v1.Organization{
 		Id:          o.ID,

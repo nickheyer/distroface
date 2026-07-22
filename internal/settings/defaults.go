@@ -33,12 +33,14 @@ func Defaults() *v1.Settings {
 			MtlsMode:      v1.MTLSMode_MTLS_MODE_OFF.Enum(),
 		},
 		Acme: &v1.ACMESettings{
-			Enabled:         proto.Bool(false),
-			Email:           proto.String(""),
-			DirectoryUrl:    proto.String(""),
-			ChallengePort:   proto.String("80"),
-			RedirectHttp:    proto.Bool(true),
-			InternalEnabled: proto.Bool(false),
+			Enabled:       proto.Bool(false),
+			Email:         proto.String(""),
+			DirectoryUrl:  proto.String(""),
+			ChallengePort: proto.String("80"),
+			RedirectHttp:  proto.Bool(true),
+		},
+		Ca: &v1.CASettings{
+			AcmeEnabled: proto.Bool(false),
 		},
 		Portals: &v1.PortalPolicySettings{
 			RequireHostnameApproval: proto.Bool(false),

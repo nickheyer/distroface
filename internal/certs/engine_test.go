@@ -574,6 +574,76 @@ func TestRuntimeACMESettings(t *testing.T) {
 	}
 }
 
+func TestManagerForHostTierResolution(t *testing.T) {
+	store := newTestStore(t)
+	res := settings.NewResolver(store, nil)
+	seedSystem(t, res, &v1.Settings{
+		Server: &v1.ServerSettings{PublicHostname: proto.String("registry.example.com:443")},
+		Acme: &v1.ACMESettings{
+			Enabled:      proto.Bool(true),
+			DirectoryUrl: proto.String("https://sys.example.com/dir"),
+		},
+	}, "server.public_hostname", "acme.enabled", "acme.directory_url")
+	e := newTestEngine(t, store, res, "", "")
+	ctx := context.Background()
+
+	org := &storage.Organization{Name: "acme", CreatedBy: "t"}
+	if err := store.CreateOrganization(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := res.Update(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, org.ID, &v1.Settings{
+		Acme: &v1.ACMESettings{DirectoryUrl: proto.String("https://org.example.com/dir")},
+	}, []string{"acme.directory_url"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.CreateCertificateDomain(ctx, &storage.CertificateDomain{
+		Domain: "www.acme.io", Scope: v1.CertificateDomainScope_CERTIFICATE_DOMAIN_SCOPE_ORG,
+		OrgID: &org.ID, Approved: true, CreatedBy: "t",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	portal := &storage.RegistryPortal{
+		OrgID: org.ID, Name: "p", Hostname: "portal.acme.io", Rules: "[]",
+		CertSource: v1.CertSource_CERT_SOURCE_ACME, Enabled: true,
+	}
+	if err := store.CreateRegistryPortal(ctx, portal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := res.Update(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL, portal.ID, &v1.Settings{
+		Acme: &v1.ACMESettings{DirectoryUrl: proto.String("https://portal.example.com/dir")},
+	}, []string{"acme.directory_url"}); err != nil {
+		t.Fatal(err)
+	}
+
+	dir := func(m *autocert.Manager) string {
+		if m == nil || m.Client == nil {
+			return ""
+		}
+		return m.Client.DirectoryURL
+	}
+	if got := dir(e.managerForHost(ctx, "portal.acme.io")); got != "https://portal.example.com/dir" {
+		t.Errorf("portal host resolved directory %q", got)
+	}
+	if got := dir(e.managerForHost(ctx, "www.acme.io")); got != "https://org.example.com/dir" {
+		t.Errorf("org domain resolved directory %q", got)
+	}
+	if got := dir(e.managerForHost(ctx, "registry.example.com")); got != "https://sys.example.com/dir" {
+		t.Errorf("unclaimed host resolved directory %q", got)
+	}
+
+	// A directory pointing back at the instance never gets a client
+	if _, err := res.Update(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, org.ID, &v1.Settings{
+		Acme: &v1.ACMESettings{DirectoryUrl: proto.String("https://registry.example.com/acme/directory")},
+	}, []string{"acme.directory_url"}); err != nil {
+		t.Fatal(err)
+	}
+	if m := e.managerForHost(ctx, "www.acme.io"); m != nil {
+		t.Error("self referential org directory produced a manager")
+	}
+}
+
 func TestHTTPChallengeHandlerRedirects(t *testing.T) {
 	store := newTestStore(t)
 	res := newTestResolver(t, store)

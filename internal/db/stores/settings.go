@@ -178,6 +178,48 @@ func settingsFromLegacyKV(kv map[string]string) *v1.Settings {
 	return out
 }
 
+// Moves acme.internal_enabled to ca.acme_enabled
+func (s *Store) migrateInternalACMEFlag() error {
+	var rows []db.SettingsRow
+	if err := s.db.Where("value LIKE ?", "%internal_enabled%").Find(&rows).Error; err != nil {
+		return err
+	}
+	for _, row := range rows {
+		var doc map[string]json.RawMessage
+		if json.Unmarshal([]byte(row.Value), &doc) != nil {
+			continue
+		}
+		var acme map[string]json.RawMessage
+		if json.Unmarshal(doc["acme"], &acme) != nil {
+			continue
+		}
+		flag, ok := acme["internal_enabled"]
+		if !ok {
+			continue
+		}
+		delete(acme, "internal_enabled")
+		if len(acme) == 0 {
+			delete(doc, "acme")
+		} else {
+			doc["acme"], _ = json.Marshal(acme)
+		}
+		ca := map[string]json.RawMessage{}
+		json.Unmarshal(doc["ca"], &ca)
+		ca["acme_enabled"] = flag
+		doc["ca"], _ = json.Marshal(ca)
+		value, err := json.Marshal(doc)
+		if err != nil {
+			continue
+		}
+		if err := s.db.Model(&db.SettingsRow{}).
+			Where("scope_type = ? AND scope_id = ?", row.ScopeType, row.ScopeID).
+			Update("value", string(value)).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Store) saveLegacySettings(scope v1.SettingsScopeType, scopeID string, doc *v1.Settings) error {
 	if proto.Size(doc) == 0 {
 		return nil
@@ -238,6 +280,10 @@ func (s *Store) migrateLegacySettings() error {
 		if err := s.db.Migrator().DropTable("org_settings"); err != nil {
 			return err
 		}
+	}
+
+	if err := s.migrateInternalACMEFlag(); err != nil {
+		return err
 	}
 
 	// Portal acme override columns

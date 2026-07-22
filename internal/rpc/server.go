@@ -220,15 +220,15 @@ func (s *Server) setupHandler() {
 	// Serve frontend for non-RPC routes
 	s.setupFrontend(mux)
 
+	// Headers stay app only, proxied backends own their responses
+	inner := utils.Headers(s.Resolver, s.httpsOnlyRedirect(mux))
 	// Portal hosts get the whole app, org scoped by the resolved portal
-	inner := s.httpsOnlyRedirect(mux)
 	var root http.Handler = inner
 	if s.PortalResolver != nil {
 		root = s.PortalResolver.Middleware(s.primaryHostname, inner)
 	}
 	// Verified mtls identity rides the request context for auth and audit
 	root = certs.ClientCertMiddleware(root)
-	root = utils.Headers(s.Resolver, root)
 	s.handler = h2c.NewHandler(root, &http2.Server{})
 }
 

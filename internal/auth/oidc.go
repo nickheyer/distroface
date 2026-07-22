@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/utils"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"golang.org/x/oauth2"
 )
@@ -262,16 +264,10 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	// Extract user info
 	sub := idToken.Subject
 	email, _ := claims["email"].(string)
-	username, _ := claims["preferred_username"].(string)
-	if username == "" {
-		username, _ = claims["name"].(string)
-	}
-	if username == "" {
-		username = email
-	}
-	if username == "" {
-		username = sub
-	}
+	preferred, _ := claims["preferred_username"].(string)
+	name, _ := claims["name"].(string)
+	// Raw emails and display names never become usernames
+	username := utils.UsernameFromClaims(sub, preferred, name, email)
 
 	// Find or create user
 	user, err := h.findOrCreateOIDCUser(ctx, sub, username, email)
@@ -357,6 +353,14 @@ func (h *OIDCHandler) findOrCreateOIDCUser(ctx context.Context, sub, username, e
 	}
 
 	// Create new OIDC user
+	if username == "" {
+		return nil, fmt.Errorf("no valid username derived for subject %q", sub)
+	}
+	username, err = h.uniqueUsername(ctx, username)
+	if err != nil {
+		return nil, err
+	}
+
 	var emailPtr *string
 	if email != "" {
 		emailPtr = &email
@@ -384,6 +388,33 @@ func (h *OIDCHandler) findOrCreateOIDCUser(ctx context.Context, sub, username, e
 
 	h.log.Info("OIDC: created new user %s (sub: %s)", username, sub)
 	return user, nil
+}
+
+// Counter suffix until no user or org owns it
+func (h *OIDCHandler) uniqueUsername(ctx context.Context, base string) (string, error) {
+	name := base
+	for i := 2; i < 100; i++ {
+		user, err := h.store.GetUserByUsername(ctx, name)
+		if err != nil {
+			return "", err
+		}
+		if user == nil {
+			org, err := h.store.GetOrganization(ctx, name)
+			if err != nil {
+				return "", err
+			}
+			if org == nil {
+				return name, nil
+			}
+		}
+		suffix := strconv.Itoa(i)
+		name = base
+		if len(name)+len(suffix) > 40 {
+			name = name[:40-len(suffix)]
+		}
+		name += suffix
+	}
+	return "", fmt.Errorf("no available username for %q", base)
 }
 
 // Claim value as strings accepting array or json string

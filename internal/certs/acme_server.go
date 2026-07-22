@@ -92,12 +92,7 @@ func NewACMEServer(e *Engine) *ACMEServer {
 
 // Enabled reflects the live built in acme kill switch
 func (s *ACMEServer) Enabled(ctx context.Context) bool {
-	return s.e.res.System(ctx).GetAcme().GetInternalEnabled()
-}
-
-// DirectoryURL is the public url clients point their acme client at
-func (s *ACMEServer) DirectoryURL(ctx context.Context) string {
-	return "https://" + bareHost(s.e.res.System(ctx).GetServer().GetPublicHostname()) + "/acme/directory"
+	return s.e.res.System(ctx).GetCa().GetAcmeEnabled()
 }
 
 // Absolute urls follow how the client reached us so signatures and

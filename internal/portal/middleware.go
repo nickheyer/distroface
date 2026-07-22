@@ -22,26 +22,31 @@ var artifactReservedRepo = map[string]bool{"repos": true, "search": true, "_ns":
 
 const oidcLoginPath = "/api/v1/auth/oidc/login"
 
-// Serves the whole app per portal, resolves the portal into the request
-// context, enforces read-only and require-auth on the data planes, rewrites
-// repo names, and points 401 challenge realms at the requesting host
+// Serves the whole app per portal, resolves the portal into the request ctx
 func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := res.Resolve(r)
+		if p != nil {
+			r = r.WithContext(WithPortal(r.Context(), p))
+
+			// Https enforced portals bounce cleartext once a cert can serve
+			if p.TLS && requestScheme(r) != "https" && res.tlsEnforceable(r, p) {
+				http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusFound)
+				return
+			}
+
+			// Backend portals hand the request to their service untouched
+			if p.ServeBackend(w, r) {
+				return
+			}
+		}
+
 		// Docker bearer challenges must point at the host being asked
 		if strings.HasPrefix(r.URL.Path, "/v2/") {
 			w = &realmRewriter{ResponseWriter: w, req: r}
 		}
-
-		p := res.Resolve(r)
 		if p == nil {
 			next.ServeHTTP(w, r)
-			return
-		}
-		r = r.WithContext(WithPortal(r.Context(), p))
-
-		// Https enforced portals bounce cleartext once a cert can serve
-		if p.TLS && requestScheme(r) != "https" && res.tlsEnforceable(r, p) {
-			http.Redirect(w, r, "https://"+r.Host+r.URL.RequestURI(), http.StatusFound)
 			return
 		}
 

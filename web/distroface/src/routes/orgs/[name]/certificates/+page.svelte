@@ -29,8 +29,7 @@
 	import { QueryFilter } from '$lib/query.svelte';
 	import { downloadBlob } from '$lib/download';
 	import CopyButton from '$lib/components/copy-button.svelte';
-	import { configStore } from '$lib/stores/config.svelte';
-	import { acmeDirectoryURL, orgScope, patchSettings, systemScope } from '$lib/settings-utils';
+	import { orgScope, patchSettings, systemScope } from '$lib/settings-utils';
 	import { CertSource, CertState, TLSScope, type CertificateInfo, type TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
@@ -50,13 +49,11 @@
 	const emailAct = new Act();
 	const renewAct = new Act();
 	const signAct = new Act();
-	const builtinAct = new Act();
 
 	let csrPem = $state('');
 	let validityDays = $state(90);
 	let signedPem = $state('');
 	let signedCert = $state<CertificateInfo | null>(null);
-	const builtinDirectory = $derived(acmeDirectoryURL(configStore.publicHostname));
 
 	let uploadOpen = $state(false);
 	let uploadScope = $state<TLSScope>(TLSScope.TLS_SCOPE_ORG);
@@ -69,6 +66,7 @@
 	let savedAcmeDir = $state('');
 	let acmeEmailInherited = $state('');
 	let acmeDirInherited = $state('');
+	let sysAcmeEnabled = $state(true);
 
 	let portals = $state<RegistryPortal[]>([]);
 	let loading = $state(true);
@@ -104,6 +102,7 @@
 			savedAcmeDir = orgAcmeDir;
 			acmeEmailInherited = sys.settings?.acme?.email ?? '';
 			acmeDirInherited = sys.settings?.acme?.directoryUrl ?? '';
+			sysAcmeEnabled = sys.settings?.acme?.enabled ?? false;
 		} catch {
 			// Fields keep their placeholders
 		}
@@ -151,15 +150,6 @@
 
 	function downloadSigned() {
 		if (signedPem) downloadBlob(signedPem, `${orgName}-signed.pem`);
-	}
-
-	// Points the org's ACME default at the instance's own directory
-	function useBuiltinACME() {
-		builtinAct.run(async () => {
-			await patchSettings(orgScope(orgId), { acme: { directoryUrl: builtinDirectory } }, ['acme.directory_url']);
-			orgAcmeDir = builtinDirectory;
-			savedAcmeDir = builtinDirectory;
-		});
 	}
 
 	function issueICA() {
@@ -330,6 +320,11 @@
 
 	<!-- ACME defaults -->
 	<FormCard title="ACME Defaults" description="Overrides for this org's ACME portals, applied live.">
+		{#if !sysAcmeEnabled}
+			<p class="mb-3 text-[13px] text-amber-600 dark:text-amber-400">
+				ACME is turned off at the instance level, these values apply once an admin enables it.
+			</p>
+		{/if}
 		<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 			<FormField
 				label="Directory URL"
@@ -365,13 +360,6 @@
 				/>
 			</FormField>
 		</div>
-		<div class="mt-3 flex items-center gap-3">
-			<Button variant="outline" size="sm" class="h-8" disabled={builtinAct.busy || orgAcmeDir === builtinDirectory} onclick={useBuiltinACME}>
-				{#if builtinAct.busy}<Loader2 class="h-3.5 w-3.5 animate-spin" />{:else}Use built-in ACME{/if}
-			</Button>
-			<span class="text-[13px] text-muted-foreground">Point this org's portals at the instance's own ACME directory.</span>
-		</div>
-		{#if builtinAct.error}<p class="mt-1 text-[13px] text-destructive">{builtinAct.error}</p>{/if}
 	</FormCard>
 
 	<!-- Portal HTTPS health -->

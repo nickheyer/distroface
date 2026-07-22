@@ -37,8 +37,8 @@ func newACMEEngine(t *testing.T) (*Engine, *settings.Resolver, string) {
 	res := settings.NewResolver(store, nil)
 	seedSystem(t, res, &v1.Settings{
 		Server: &v1.ServerSettings{PublicHostname: proto.String("ca.example.com")},
-		Acme:   &v1.ACMESettings{InternalEnabled: proto.Bool(true)},
-	}, "server.public_hostname", "acme.internal_enabled")
+		Ca:     &v1.CASettings{AcmeEnabled: proto.Bool(true)},
+	}, "server.public_hostname", "ca.acme_enabled")
 	e := newTestEngine(t, store, res, "", "")
 
 	rootPEM, rootKey, err := GenerateRootCA("distroface test root")
@@ -247,8 +247,8 @@ func TestACMETLSALPN01Digest(t *testing.T) {
 func TestACMEDisabledReturnsProblem(t *testing.T) {
 	e, res, _ := newACMEEngine(t)
 	seedSystem(t, res, &v1.Settings{
-		Acme: &v1.ACMESettings{InternalEnabled: proto.Bool(false)},
-	}, "acme.internal_enabled")
+		Ca: &v1.CASettings{AcmeEnabled: proto.Bool(false)},
+	}, "ca.acme_enabled")
 	srv := NewACMEServer(e)
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()

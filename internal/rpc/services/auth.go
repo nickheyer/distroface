@@ -6,7 +6,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
 	"time"
 
@@ -19,13 +18,14 @@ import (
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	"github.com/nickheyer/distroface/pkg/utils"
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 var _ distrofacev1connect.AuthServiceHandler = (*AuthService)(nil)
 
-var usernameRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{1,38}[a-z0-9]$`)
+var usernameRegex = utils.UsernameRegex
 
 type AuthService struct {
 	store       *stores.Store

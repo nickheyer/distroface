@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/migrations"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -185,6 +186,10 @@ func (s *Store) Migrate() error {
 
 	if err := s.SeedSystemRoles(); err != nil {
 		return fmt.Errorf("failed to seed system roles: %w", err)
+	}
+
+	if err := migrations.Run(s.db); err != nil {
+		return fmt.Errorf("failed to run data migrations: %w", err)
 	}
 
 	return nil

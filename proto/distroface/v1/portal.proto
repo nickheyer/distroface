@@ -49,6 +49,9 @@ message RegistryPortal {
   CertState cert_state = 17; // Computed serving state
   string cert_detail = 18; // Computed, first blocker when not ready
   bool hide_primary_link = 19; // Hide the portal UI's link back to the primary UI
+  string backend_url = 20; // Proxies all portal traffic to this local service
+  bool backend_rewrite_host = 21; // Send the backend's host instead of the client's Host header
+  bool backend_insecure = 22; // Skip tls verification for an https backend
 }
 
 // Fields to create a portal, hostname or port required
@@ -64,6 +67,9 @@ message CreatePortalRequest {
   bool tls = 9;
   CertSource cert_source = 10; // Unspecified behaves as none
   bool hide_primary_link = 11;
+  string backend_url = 12; // Requires instance admin rights
+  bool backend_rewrite_host = 13;
+  bool backend_insecure = 14;
 }
 
 // The newly created portal
@@ -127,6 +133,9 @@ message UpdatePortalRequest {
   optional bool tls = 12;
   CertSource cert_source = 13; // Unspecified keeps the current source
   optional bool hide_primary_link = 14;
+  optional string backend_url = 15; // Setting or changing requires instance admin rights
+  optional bool backend_rewrite_host = 16;
+  optional bool backend_insecure = 17;
 }
 
 // The updated portal

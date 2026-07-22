@@ -3,7 +3,10 @@ package services
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -181,6 +184,9 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, req *connect.Reque
 	if err := validateSettingsPatch(patch); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
+	if err := s.checkDirectoryNotSelf(ctx, patch); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+	}
 
 	stored, err := s.resolver.Update(ctx, scope.GetType(), scope.GetScopeId(), patch, req.Msg.GetUpdateMask().GetPaths())
 	if err != nil {
@@ -204,6 +210,26 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, req *connect.Reque
 		Stored:    &v1.GetSettingsResponse{Settings: storedOut, LockedPaths: s.resolver.LockedPaths()},
 		Effective: &v1.GetEffectiveSettingsResponse{Settings: effOut, Provenance: prov},
 	}), nil
+}
+
+// An acme client pointed at this instance dials itself
+func (s *SettingsService) checkDirectoryNotSelf(ctx context.Context, patch *v1.Settings) error {
+	dir := patch.GetAcme().GetDirectoryUrl()
+	if dir == "" {
+		return nil
+	}
+	u, err := url.Parse(dir)
+	if err != nil || u.Hostname() == "" {
+		return fmt.Errorf("acme directory url must be absolute")
+	}
+	self := s.resolver.System(ctx).GetServer().GetPublicHostname()
+	if host, _, err := net.SplitHostPort(self); err == nil {
+		self = host
+	}
+	if strings.EqualFold(u.Hostname(), strings.TrimSpace(self)) {
+		return fmt.Errorf("acme directory cannot point at this instance, use the org ca or instance ca certificate source instead")
+	}
+	return nil
 }
 
 // Cross field sanity on values present in a patch
