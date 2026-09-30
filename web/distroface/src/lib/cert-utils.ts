@@ -1,5 +1,9 @@
 import { timestampDate, type Timestamp } from '@bufbuild/protobuf/wkt';
-import { CertSource, CertState, type CertificateInfo } from '$lib/proto/distroface/v1/certificate_pb';
+import {
+	CertSource,
+	CertState,
+	type CertificateInfo
+} from '$lib/proto/distroface/v1/certificate_pb';
 import { hostnamePattern } from '$lib/portal-address';
 
 export const certSourceLabels: Record<CertSource, string> = {
@@ -19,9 +23,15 @@ export type CertStateBadge = { label: string; cls: string };
 export function certStateBadge(state: CertState | undefined): CertStateBadge | null {
 	switch (state) {
 		case CertState.READY:
-			return { label: 'https', cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400' };
+			return {
+				label: 'https',
+				cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
+			};
 		case CertState.PENDING:
-			return { label: 'https pending', cls: 'border-amber-500/40 text-amber-600 dark:text-amber-400' };
+			return {
+				label: 'https pending',
+				cls: 'border-amber-500/40 text-amber-600 dark:text-amber-400'
+			};
 		case CertState.ERROR:
 			return { label: 'https broken', cls: 'border-red-500/40 text-red-600 dark:text-red-400' };
 		default:

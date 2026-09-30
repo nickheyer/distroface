@@ -16,27 +16,26 @@ const giteaPageSize = 50
 // Speaks the gitea api, covers forgejo and codeberg too
 type giteaDriver struct{}
 
-// Accepts owner/repo (codeberg.org assumed) or a full instance url
+// Accepts owner/repo (codeberg.org assumed) or any page url under the repo
 func giteaProject(upstream string) (apiBase, slug string, err error) {
 	s := strings.TrimSpace(upstream)
-	scheme := "https"
-	if strings.HasPrefix(s, "http://") {
-		scheme = "http"
-	}
-	s = strings.TrimPrefix(s, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	s = strings.TrimSuffix(strings.Trim(s, "/"), ".git")
-
-	host := "codeberg.org"
-	if i := strings.Index(s, "/"); i > 0 && strings.Contains(s[:i], ".") {
+	scheme, host := "https", "codeberg.org"
+	if strings.Contains(s, "://") {
+		u, perr := url.Parse(s)
+		if perr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return "", "", fmt.Errorf("%w: %q is not an http(s) url", ErrInvalid, upstream)
+		}
+		scheme, host, s = u.Scheme, strings.ToLower(u.Host), u.Path
+	} else if i := strings.Index(s, "/"); i > 0 && strings.Contains(s[:i], ".") && strings.Count(s, "/") >= 2 {
 		host, s = s[:i], s[i+1:]
 	}
-	parts := strings.Split(s, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", "", fmt.Errorf("%w: upstream must be owner/repo or a gitea instance url", ErrInvalid)
+	parts := strings.Split(strings.Trim(s, "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", fmt.Errorf("%w: upstream must be owner/repo or a repository url on the instance", ErrInvalid)
 	}
+	owner, repo := parts[0], strings.TrimSuffix(parts[1], ".git")
 	return fmt.Sprintf("%s://%s/api/v1", scheme, host),
-		url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]), nil
+		url.PathEscape(owner) + "/" + url.PathEscape(repo), nil
 }
 
 func giteaHeaders(cfg *v1.MirrorConfig) map[string]string {
@@ -74,10 +73,12 @@ func (giteaDriver) validate(ctx context.Context, c *http.Client, cfg *v1.MirrorC
 }
 
 type giteaRelease struct {
-	TagName    string `json:"tag_name"`
-	Draft      bool   `json:"draft"`
-	Prerelease bool   `json:"prerelease"`
-	Assets     []struct {
+	TagName    string     `json:"tag_name"`
+	Draft      bool       `json:"draft"`
+	Prerelease bool       `json:"prerelease"`
+	ZipballURL string     `json:"zipball_url"`
+	TarballURL string     `json:"tarball_url"`
+	Assets     []struct { // the tar/zip src not included in assets
 		Name               string `json:"name"`
 		Size               int64  `json:"size"`
 		BrowserDownloadURL string `json:"browser_download_url"`
@@ -91,10 +92,17 @@ func (giteaDriver) releases(ctx context.Context, c *http.Client, cfg *v1.MirrorC
 	}
 	apiHost := ""
 	if bu, err := url.Parse(base); err == nil {
-		apiHost = bu.Host
+		apiHost = bu.Hostname()
 	}
+	repoName, _ := url.PathUnescape(slug[strings.LastIndex(slug, "/")+1:])
 
 	headers := giteaHeaders(cfg)
+	tokenFor := func(u string) map[string]string {
+		if du, err := url.Parse(u); err == nil && strings.EqualFold(du.Hostname(), apiHost) {
+			return headers
+		}
+		return map[string]string{}
+	}
 	var out releaseList
 	for page := 1; page <= maxReleasePages; page++ {
 		var batch []giteaRelease
@@ -120,15 +128,19 @@ func (giteaDriver) releases(ctx context.Context, c *http.Client, cfg *v1.MirrorC
 				if a.BrowserDownloadURL == "" {
 					continue
 				}
-				// Token stays on the gitea host, attachments live there
-				dlHeaders := map[string]string{}
-				if du, err := url.Parse(a.BrowserDownloadURL); err == nil && du.Host == apiHost {
-					dlHeaders = headers
-				}
 				rel.assets = append(rel.assets, asset{
 					name:    a.Name,
 					size:    a.Size,
-					sources: []assetSource{{url: a.BrowserDownloadURL, headers: dlHeaders}},
+					sources: []assetSource{{url: a.BrowserDownloadURL, headers: tokenFor(a.BrowserDownloadURL)}},
+				})
+			}
+			for _, src := range []struct{ ext, url string }{{".zip", gr.ZipballURL}, {".tar.gz", gr.TarballURL}} {
+				if src.url == "" {
+					continue
+				}
+				rel.assets = append(rel.assets, asset{
+					name:    repoName + "-" + gr.TagName + src.ext,
+					sources: []assetSource{{url: src.url, headers: tokenFor(src.url)}},
 				})
 			}
 			out.releases = append(out.releases, rel)

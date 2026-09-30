@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -12,23 +13,25 @@ import (
 
 type gitlabDriver struct{}
 
-// Accepts group/project, gitlab.com/group/project, or a self hosted url
+// Accepts group/project (gitlab.com assumed) or any page url under the project
 func gitlabProject(upstream string) (apiBase, project string, err error) {
 	s := strings.TrimSpace(upstream)
-	scheme := "https"
-	if strings.HasPrefix(s, "http://") {
-		scheme = "http"
-	}
-	s = strings.TrimPrefix(s, "https://")
-	s = strings.TrimPrefix(s, "http://")
-	s = strings.TrimSuffix(strings.Trim(s, "/"), ".git")
-
-	host := "gitlab.com"
-	if i := strings.Index(s, "/"); i > 0 && strings.Contains(s[:i], ".") {
+	scheme, host := "https", "gitlab.com"
+	if strings.Contains(s, "://") {
+		u, perr := url.Parse(s)
+		if perr != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+			return "", "", fmt.Errorf("%w: %q is not an http(s) url", ErrInvalid, upstream)
+		}
+		scheme, host, s = u.Scheme, strings.ToLower(u.Host), u.Path
+	} else if i := strings.Index(s, "/"); i > 0 && strings.Contains(s[:i], ".") && strings.Count(s, "/") >= 2 {
+		// instance name is dotted first segment
 		host, s = s[:i], s[i+1:]
 	}
+	// Pages hang off a dash segment below the project path
+	s, _, _ = strings.Cut(strings.Trim(s, "/"), "/-/")
+	s = strings.TrimSuffix(strings.TrimSuffix(s, "/-"), ".git")
 	if s == "" || !strings.Contains(s, "/") {
-		return "", "", fmt.Errorf("%w: upstream must be group/project or a gitlab url", ErrInvalid)
+		return "", "", fmt.Errorf("%w: upstream must be group/project or a gitlab project url", ErrInvalid)
 	}
 	return fmt.Sprintf("%s://%s/api/v4", scheme, host), url.PathEscape(s), nil
 }
@@ -76,6 +79,11 @@ type gitlabRelease struct {
 			DirectAssetURL string `json:"direct_asset_url"`
 			URL            string `json:"url"`
 		} `json:"links"`
+		// Source archives, the url ends in the download filename
+		Sources []struct {
+			Format string `json:"format"`
+			URL    string `json:"url"`
+		} `json:"sources"`
 	} `json:"assets"`
 }
 
@@ -86,10 +94,16 @@ func (gitlabDriver) releases(ctx context.Context, c *http.Client, cfg *v1.Mirror
 	}
 	apiHost := ""
 	if bu, err := url.Parse(base); err == nil {
-		apiHost = bu.Host
+		apiHost = bu.Hostname()
 	}
 
 	headers := gitlabHeaders(cfg)
+	tokenFor := func(u string) map[string]string {
+		if du, err := url.Parse(u); err == nil && strings.EqualFold(du.Hostname(), apiHost) {
+			return headers
+		}
+		return map[string]string{}
+	}
 	var out releaseList
 	for page := 1; page <= maxReleasePages; page++ {
 		var batch []gitlabRelease
@@ -119,14 +133,22 @@ func (gitlabDriver) releases(ctx context.Context, c *http.Client, cfg *v1.Mirror
 				if dl == "" {
 					continue
 				}
-				// Asset links point anywhere, the token stays on our instance
-				dlHeaders := map[string]string{}
-				if du, err := url.Parse(dl); err == nil && du.Host == apiHost {
-					dlHeaders = headers
-				}
 				rel.assets = append(rel.assets, asset{
 					name:    l.Name,
-					sources: []assetSource{{url: dl, headers: dlHeaders}},
+					sources: []assetSource{{url: dl, headers: tokenFor(dl)}},
+				})
+			}
+			for _, src := range gr.Assets.Sources {
+				if src.URL == "" {
+					continue
+				}
+				name := path.Base(src.URL)
+				if name == "." || name == "/" {
+					continue
+				}
+				rel.assets = append(rel.assets, asset{
+					name:    name,
+					sources: []assetSource{{url: src.URL, headers: tokenFor(src.URL)}},
 				})
 			}
 			out.releases = append(out.releases, rel)

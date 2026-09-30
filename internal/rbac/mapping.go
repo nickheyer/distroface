@@ -17,11 +17,11 @@ type ProcedurePermission struct {
 
 // PublicProcedures lists RPC procedures that require no authentication.
 var PublicProcedures = map[string]bool{
-	distrofacev1connect.AuthServiceRegisterProcedure:                  true,
-	distrofacev1connect.AuthServiceLoginProcedure:                     true,
-	distrofacev1connect.AuthServiceGetAuthStatusProcedure:             true,
-	distrofacev1connect.AuthServiceGetOIDCLoginURLProcedure:           true,
-	distrofacev1connect.HealthServiceHealthCheckProcedure: true,
+	distrofacev1connect.AuthServiceRegisterProcedure:        true,
+	distrofacev1connect.AuthServiceLoginProcedure:           true,
+	distrofacev1connect.AuthServiceGetAuthStatusProcedure:   true,
+	distrofacev1connect.AuthServiceGetOIDCLoginURLProcedure: true,
+	distrofacev1connect.HealthServiceHealthCheckProcedure:   true,
 	// Anonymous callers receive the redacted public subset only
 	distrofacev1connect.SettingsServiceGetEffectiveSettingsProcedure: true,
 	// Public repo browsing (visibility filtering handled in service)
@@ -102,11 +102,11 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.GCServiceGetStorageUsageProcedure: {Resource: ResourceSettings, Action: ActionRead},
 
 	// ── AuthService (admin) ───────────────────────────────────────────
-	distrofacev1connect.AuthServiceCreateInviteProcedure: {Resource: ResourceSettings, Action: ActionCreate},
-	distrofacev1connect.AuthServiceListInvitesProcedure:        {Resource: ResourceSettings, Action: ActionRead},
-	distrofacev1connect.AuthServiceGetInviteProcedure:          {Resource: ResourceSettings, Action: ActionRead},
-	distrofacev1connect.AuthServiceDeleteInviteProcedure:       {Resource: ResourceSettings, Action: ActionDelete},
-	distrofacev1connect.AuthServiceBulkDeleteInvitesProcedure:  {Resource: ResourceSettings, Action: ActionDelete},
+	distrofacev1connect.AuthServiceCreateInviteProcedure:      {Resource: ResourceSettings, Action: ActionCreate},
+	distrofacev1connect.AuthServiceListInvitesProcedure:       {Resource: ResourceSettings, Action: ActionRead},
+	distrofacev1connect.AuthServiceGetInviteProcedure:         {Resource: ResourceSettings, Action: ActionRead},
+	distrofacev1connect.AuthServiceDeleteInviteProcedure:      {Resource: ResourceSettings, Action: ActionDelete},
+	distrofacev1connect.AuthServiceBulkDeleteInvitesProcedure: {Resource: ResourceSettings, Action: ActionDelete},
 
 	// ── TokenService ────────────────────────────────────────────────
 	distrofacev1connect.TokenServiceCreateAPITokenProcedure: {Resource: ResourceTokens, Action: ActionCreate},
@@ -136,12 +136,12 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.CertificateServiceAddCertificateDomainProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
 	distrofacev1connect.CertificateServiceApproveCertificateDomainProcedure: {Resource: ResourceSettings, Action: ActionManage},
 	distrofacev1connect.CertificateServiceUploadTLSCertificateProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceDeleteTLSCertificateProcedure:         {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceGetTLSMaterialProcedure:               {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceGenerateOrgCAProcedure:                {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceGenerateAppCAProcedure:                {Resource: ResourceSettings, Action: ActionManage},
-	distrofacev1connect.CertificateServiceIssueOrgICAProcedure:                  {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
-	distrofacev1connect.CertificateServiceGetCertStatusProcedure:                {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceDeleteTLSCertificateProcedure:     {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceGetTLSMaterialProcedure:           {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceGenerateOrgCAProcedure:            {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceGenerateAppCAProcedure:            {Resource: ResourceSettings, Action: ActionManage},
+	distrofacev1connect.CertificateServiceIssueOrgICAProcedure:              {Resource: ResourceOrganizations, Action: ActionUpdate, ObjectIDField: "org_id"},
+	distrofacev1connect.CertificateServiceGetCertStatusProcedure:            {Resource: ResourceOrganizations, Action: ActionRead, ObjectIDField: "org_id"},
 
 	// ── AuditService (admin) ──────────────────────────────────────────
 	distrofacev1connect.AuditServiceListAuditEventsProcedure: {Resource: ResourceSettings, Action: ActionRead},

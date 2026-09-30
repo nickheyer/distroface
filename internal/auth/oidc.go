@@ -21,8 +21,8 @@ import (
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
-	"github.com/nickheyer/distroface/pkg/utils"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"github.com/nickheyer/distroface/pkg/utils"
 	"golang.org/x/oauth2"
 )
 

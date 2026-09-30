@@ -17,7 +17,10 @@ export class Pager {
 	}
 
 	// PageRequest fields for the current page
-	request(query?: QueryRequest, orderBy = ''): { pageSize: number; pageToken: string; query?: QueryRequest; orderBy: string } {
+	request(
+		query?: QueryRequest,
+		orderBy = ''
+	): { pageSize: number; pageToken: string; query?: QueryRequest; orderBy: string } {
 		const offset = (this.page - 1) * this.pageSize;
 		return {
 			pageSize: this.pageSize,

@@ -32,7 +32,11 @@ export function portalScheme(certSource: CertSource | undefined): 'http' | 'http
 	return certSource && certSource !== CertSource.NONE ? 'https' : 'http';
 }
 
-export function portalUrl(hostname: string, port: number, certSource: CertSource | undefined): string {
+export function portalUrl(
+	hostname: string,
+	port: number,
+	certSource: CertSource | undefined
+): string {
 	return `${portalScheme(certSource)}://${effectiveAddress(hostname, port)}`;
 }
 

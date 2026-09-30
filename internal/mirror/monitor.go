@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -28,6 +30,11 @@ var ErrNoActiveSync = errors.New("no sync is running for this repository")
 
 // ErrSyncStopped marks a sync an operator cancelled
 var ErrSyncStopped = errors.New("sync stopped by user")
+
+// Sync finished but found nothing usable, shown without failure accounting
+type nothingMirroredError struct{ reason string }
+
+func (e *nothingMirroredError) Error() string { return e.reason }
 
 // CooldownError rejects a manual sync during an upstream rate limit
 type CooldownError struct {
@@ -81,12 +88,12 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		oci.upstreamTransport = &pacedTransport{inner: safeTransport(allowPrivate), pace: pace}
 	}
 	return &Monitor{
-		store:     store,
-		res:       res,
-		artifacts: mgr,
-		oci:       oci,
-		log:       log,
-		client:    client,
+		store:       store,
+		res:         res,
+		artifacts:   mgr,
+		oci:         oci,
+		log:         log,
+		client:      client,
 		baseCtx:     context.Background(),
 		inflight:    make(map[string]bool),
 		cancels:     make(map[string]context.CancelFunc),
@@ -365,8 +372,11 @@ func (m *Monitor) execArtifactSync(ctx context.Context, repo *db.ArtifactReposit
 	}
 
 	state, msg := nextState(state, syncErr)
+	var nothing *nothingMirroredError
 	if errors.Is(syncErr, ErrSyncStopped) {
 		m.log.Info("mirror sync for artifact repo %s/%s stopped by user", repo.Namespace, repo.Name)
+	} else if errors.As(syncErr, &nothing) {
+		m.log.Warn("mirror sync for artifact repo %s/%s: %v", repo.Namespace, repo.Name, syncErr)
 	} else if syncErr != nil {
 		m.log.Error("mirror sync for artifact repo %s/%s: %v", repo.Namespace, repo.Name, syncErr)
 	}
@@ -419,11 +429,15 @@ func statusCtx(ctx context.Context) context.Context {
 
 // Folds a sync outcome into cooldown bookkeeping and a status line
 func nextState(state SyncState, syncErr error) (SyncState, string) {
+	var nothing *nothingMirroredError
 	switch until, limited := RetryAfter(syncErr); {
-	case syncErr == nil:
+	case syncErr == nil, errors.As(syncErr, &nothing):
 		state.Failures = 0
 		state.CooldownUntil = time.Time{}
 		state.RateLimited = false
+		if nothing != nil {
+			return state, nothing.reason
+		}
 		return state, ""
 	// Operator stops skip failure accounting and cooldowns
 	case errors.Is(syncErr, ErrSyncStopped):
@@ -473,23 +487,27 @@ func (m *Monitor) syncArtifactRepo(ctx context.Context, repo *db.ArtifactReposit
 
 	maxBytes := m.artifacts.EffectiveMaxFileSizeBytes(ctx, repo.Namespace)
 	var errs []error
-	synced := 0
+	var synced, present, attachments, badTags, badNames, unmatched int
 	// Oldest first so ingest order matches release chronology
-	for i := len(rels) - 1; i >= 0; i-- {
-		rel := rels[i]
+	for _, rel := range slices.Backward(rels) {
 		// Unusable tags and names are permanent, skip without failing
 		if artifacts.ValidateVersion(rel.version) != nil {
+			badTags++
 			continue
 		}
 		for _, a := range rel.assets {
+			attachments++
 			if !matchesPattern(cfg.GetPattern(), a.name) {
+				unmatched++
 				continue
 			}
 			if artifacts.ValidatePath(a.name) != nil {
+				badNames++
 				continue
 			}
 			existing, err := m.store.GetArtifactByPathVersion(ctx, repo.ID, rel.version, a.name)
 			if err == nil && existing != nil && (a.size == 0 || existing.Size == a.size) {
+				present++
 				continue
 			}
 			if maxBytes > 0 && a.size > maxBytes {
@@ -516,7 +534,28 @@ func (m *Monitor) syncArtifactRepo(ctx context.Context, repo *db.ArtifactReposit
 		state.ListETag = ""
 		return errors.Join(errs...)
 	}
+	if synced == 0 && present == 0 {
+		return &nothingMirroredError{reason: describeEmptySync(len(list.releases), len(rels), attachments, badTags, badNames, unmatched, cfg)}
+	}
 	return nil
+}
+
+// Names the filter that ate every release so an empty sync is never blank
+func describeEmptySync(listed, kept, attachments, badTags, badNames, unmatched int, cfg *v1.MirrorConfig) string {
+	switch {
+	case listed == 0:
+		return "upstream lists no published releases (tags without a release and drafts are not included)"
+	case kept == 0:
+		return fmt.Sprintf("all %d releases are prereleases, enable include prereleases to mirror them", listed)
+	case badTags == kept:
+		return fmt.Sprintf("all %d release tags contain slashes and cannot be used as versions", kept)
+	case attachments == 0:
+		return fmt.Sprintf("%d releases listed but none has downloadable files", kept)
+	case unmatched == attachments:
+		return fmt.Sprintf("none of %d assets match pattern %q", attachments, cfg.GetPattern())
+	default:
+		return fmt.Sprintf("%d releases and %d assets listed, none usable: %d unusable tags, %d unusable names, %d outside pattern %q", kept, attachments, badTags, badNames, unmatched, cfg.GetPattern())
+	}
 }
 
 // Streams one upstream asset into the blob store as an artifact
@@ -562,6 +601,10 @@ func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository
 	defer resp.Body.Close()
 	if err := classifyResponse(resp, src.url); err != nil {
 		return err
+	}
+	// Sign in walls answer anonymous downloads with a 200 html page
+	if p := resp.Request.URL.Path; strings.HasSuffix(p, "/user/login") || strings.HasSuffix(p, "/users/sign_in") {
+		return fmt.Errorf("%s redirected to the sign in page, the upstream did not accept the token for downloads", src.url)
 	}
 
 	blobs := m.artifacts.Blobs()
