@@ -12,6 +12,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -45,7 +46,7 @@ func (s *SettingsService) isSystemAdmin(ctx context.Context) bool {
 // Write access, org and portal scopes need an org admin
 func (s *SettingsService) requireScopeAdmin(ctx context.Context, scope *v1.SettingsScope) error {
 	user := auth.UserFromContext(ctx)
-	if user == nil {
+	if user == nil || user.IsAnonymous() {
 		return connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 	orgID, err := s.scopeOrgID(ctx, scope)
@@ -71,7 +72,7 @@ func (s *SettingsService) requireScopeAdmin(ctx context.Context, scope *v1.Setti
 // Read access, org and portal scopes need membership
 func (s *SettingsService) requireScopeRead(ctx context.Context, scope *v1.SettingsScope) error {
 	user := auth.UserFromContext(ctx)
-	if user == nil {
+	if user == nil || user.IsAnonymous() {
 		return connect.NewError(connect.CodeUnauthenticated, nil)
 	}
 	orgID, err := s.scopeOrgID(ctx, scope)
@@ -112,15 +113,15 @@ func (s *SettingsService) scopeOrgID(ctx context.Context, scope *v1.SettingsScop
 	}
 }
 
-// Fields anonymous callers may read from system effective settings
-func publicSubset(eff *v1.Settings) *v1.Settings {
+// Signed out readable fields, anonymous reflects the host
+func publicSubset(ctx context.Context, eff *v1.Settings) *v1.Settings {
 	return &v1.Settings{
 		Server: &v1.ServerSettings{PublicHostname: proto.String(eff.GetServer().GetPublicHostname())},
 		Tls:    &v1.TLSSettings{Mode: eff.GetTls().GetMode().Enum()},
 		Auth: &v1.AuthSettings{
 			LocalEnabled:           proto.Bool(eff.GetAuth().GetLocalEnabled()),
 			LocalAllowRegistration: proto.Bool(eff.GetAuth().GetLocalAllowRegistration()),
-			AnonymousAccess:        proto.Bool(eff.GetAuth().GetAnonymousAccess()),
+			AnonymousAccess:        proto.Bool(portal.AnonymousAllowed(ctx, eff.GetAuth().GetAnonymousAccess())),
 			Oidc:                   &v1.OIDCSettings{Enabled: proto.Bool(eff.GetAuth().GetOidc().GetEnabled())},
 		},
 	}
@@ -148,8 +149,8 @@ func (s *SettingsService) GetEffectiveSettings(ctx context.Context, req *connect
 		scope = &v1.SettingsScope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM}
 	}
 
-	// Anonymous callers get the public system subset only
-	if auth.UserFromContext(ctx) == nil {
+	// Signed out and anonymous callers get the public subset
+	if user := auth.UserFromContext(ctx); user == nil || user.IsAnonymous() {
 		if scope.GetType() != v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM {
 			return nil, connect.NewError(connect.CodeUnauthenticated, nil)
 		}
@@ -157,7 +158,7 @@ func (s *SettingsService) GetEffectiveSettings(ctx context.Context, req *connect
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err)
 		}
-		return connect.NewResponse(&v1.GetEffectiveSettingsResponse{Settings: publicSubset(eff)}), nil
+		return connect.NewResponse(&v1.GetEffectiveSettingsResponse{Settings: publicSubset(ctx, eff)}), nil
 	}
 
 	if err := s.requireScopeRead(ctx, scope); err != nil {

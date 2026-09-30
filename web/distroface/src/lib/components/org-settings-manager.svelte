@@ -6,6 +6,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
+	import * as Select from '$lib/components/ui/select';
 	import UnitInput from '$lib/components/unit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
@@ -24,10 +25,22 @@
 		excludeLatest: 'artifacts.retention.exclude_latest',
 		maxFileSizeMb: 'artifacts.max_file_size_mb',
 		privateByDefault: 'artifacts.private_by_default',
-		portalsIsolated: 'portals.isolated'
+		portalsIsolated: 'portals.isolated',
+		anonymousAccess: 'auth.anonymous_access'
 	} as const;
-	// The isolation toggle applies on interaction, the save flow skips it
-	const ALL_PATHS = Object.values(PATHS).filter((p) => p !== PATHS.portalsIsolated);
+	// Portal policy controls apply live, the save flow skips them
+	type LivePath = typeof PATHS.portalsIsolated | typeof PATHS.anonymousAccess;
+	type SavePath = Exclude<(typeof PATHS)[keyof typeof PATHS], LivePath>;
+	const ALL_PATHS = Object.values(PATHS).filter(
+		(p): p is SavePath => p !== PATHS.portalsIsolated && p !== PATHS.anonymousAccess
+	);
+
+	type AnonymousMode = 'inherit' | 'allow' | 'deny';
+	const anonymousOptions: { value: AnonymousMode; label: string }[] = [
+		{ value: 'inherit', label: 'Inherit from instance' },
+		{ value: 'allow', label: 'Allow' },
+		{ value: 'deny', label: 'Deny' }
+	];
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -47,7 +60,16 @@
 	let maxFileSizeMb = $state(0);
 	let privateByDefault = $state(false);
 	let portalsIsolated = $state(false);
+	let anonymousMode = $state<AnonymousMode>('inherit');
 	const isolatedAct = new Act();
+	const anonymousAct = new Act();
+
+	const instanceAnonymous = $derived(inherited?.auth?.anonymousAccess ?? false);
+	const anonymousLabel = $derived(
+		anonymousMode === 'inherit'
+			? `Inherit from instance (${instanceAnonymous ? 'allowed' : 'denied'})`
+			: anonymousMode === 'allow' ? 'Allow' : 'Deny'
+	);
 
 	function seed(eff: Settings) {
 		retentionEnabled = eff.artifacts?.retention?.enabled ?? false;
@@ -58,6 +80,34 @@
 		maxFileSizeMb = Number(eff.artifacts?.maxFileSizeMb ?? 0n);
 		privateByDefault = eff.artifacts?.privateByDefault ?? false;
 		portalsIsolated = eff.portals?.isolated ?? false;
+	}
+
+	// Org tier only, effective values cannot show inherit
+	function seedAnonymous(p: FieldProvenance[], eff: Settings) {
+		if (tierOf(p, PATHS.anonymousAccess) !== SettingsTier.ORG) {
+			anonymousMode = 'inherit';
+			return;
+		}
+		anonymousMode = eff.auth?.anonymousAccess ? 'allow' : 'deny';
+	}
+
+	// Applies live, inherit clears the org row
+	async function applyAnonymous(v: string) {
+		const prev = anonymousMode;
+		anonymousMode = v as AnonymousMode;
+		const ok = await anonymousAct.run(async () => {
+			const res = await patchSettings(
+				orgScope(orgId),
+				anonymousMode === 'inherit' ? {} : { auth: { anonymousAccess: anonymousMode === 'allow' } },
+				[PATHS.anonymousAccess]
+			);
+			prov = res.provenance;
+			if (res.effective) {
+				seed(res.effective);
+				seedAnonymous(res.provenance, res.effective);
+			}
+		});
+		if (!ok) anonymousMode = prev;
 	}
 
 	// Applies live, values matching the instance tier clear back to inherit
@@ -85,7 +135,10 @@
 			]);
 			prov = org.provenance;
 			inherited = sys.settings ?? null;
-			if (org.settings) seed(org.settings);
+			if (org.settings) {
+				seed(org.settings);
+				seedAnonymous(org.provenance, org.settings);
+			}
 		} catch {
 			toast.error('Failed to load organization settings');
 		} finally {
@@ -179,6 +232,23 @@
 				disabled={isolatedAct.busy}
 				onCheckedChange={applyIsolated}
 			/>
+		</FormField>
+		<FormField
+			label="Anonymous access"
+			id="org-anonymous"
+			horizontal
+			tag={anonymousAct.tag ?? customTag(PATHS.anonymousAccess)}
+			error={anonymousAct.error}
+			help="Default for this organization's portals, each portal may override. Signed out visitors get the anonymous role grants"
+		>
+			<Select.Root type="single" value={anonymousMode} onValueChange={applyAnonymous} disabled={anonymousAct.busy}>
+				<Select.Trigger id="org-anonymous" class="w-64">{anonymousLabel}</Select.Trigger>
+				<Select.Content>
+					{#each anonymousOptions as option (option.value)}
+						<Select.Item value={option.value} label={option.label} />
+					{/each}
+				</Select.Content>
+			</Select.Root>
 		</FormField>
 	</FormCard>
 

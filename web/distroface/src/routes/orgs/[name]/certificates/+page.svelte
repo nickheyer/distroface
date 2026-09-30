@@ -21,6 +21,7 @@
 	import UnitInput from '$lib/components/unit-input.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
+	import PemInput from '$lib/components/pem-input.svelte';
 	import { Lock, RefreshCw, Loader2, Globe, Pencil } from '@lucide/svelte';
 	import { certDate, certSourceLabels, certStateBadge } from '$lib/cert-utils';
 	import { effectiveAddress } from '$lib/portal-address';
@@ -282,10 +283,9 @@
 		{:else}
 			<div class="space-y-3">
 				<FormField label="Certificate request" id="csr-pem" help="Your private key never leaves your machine" tag={signAct.tag} error={signAct.error}>
-					<Textarea
+					<PemInput
 						id="csr-pem"
 						bind:value={csrPem}
-						class="font-mono text-xs"
 						rows={5}
 						placeholder="-----BEGIN CERTIFICATE REQUEST-----"
 						disabled={signAct.busy}

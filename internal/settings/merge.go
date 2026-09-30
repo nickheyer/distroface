@@ -25,11 +25,13 @@ var scopeAllowed = map[v1.SettingsScopeType][]string{
 		"artifacts.private_by_default",
 		"artifacts.retention",
 		"portals.isolated",
+		"auth.anonymous_access",
 	},
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: {
 		"acme.email",
 		"acme.directory_url",
 		"tls.mtls_mode",
+		"auth.anonymous_access",
 	},
 }
 

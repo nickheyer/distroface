@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync"
 	"syscall"
 	"time"
 
@@ -106,11 +105,9 @@ func New() (*App, error) {
 	if err != nil {
 		return fail("initializing RBAC enforcer", err)
 	}
-	anonymous := resolver.System(ctx).GetAuth().GetAnonymousAccess()
-	if err := enforcer.SeedDefaultPolicies(anonymous); err != nil {
+	if err := seedPolicies(ctx, store, enforcer, log); err != nil {
 		return fail("seeding RBAC policies", err)
 	}
-	subscribeAnonymousReseed(resolver, enforcer, anonymous, log)
 	log.Info("RBAC enforcer initialized")
 
 	authManager, err := auth.NewManager(store, enforcer, cfg.Auth.JWTSecret, resolver)
@@ -306,22 +303,21 @@ func New() (*App, error) {
 	}, nil
 }
 
-// Reseeds the anonymous policy tier when the toggle flips
-func subscribeAnonymousReseed(resolver *settings.Resolver, enforcer *rbac.Enforcer, initial bool, log *logger.Logger) {
-	var mu sync.Mutex
-	last := initial
-	resolver.Subscribe(func() {
-		current := resolver.System(context.Background()).GetAuth().GetAnonymousAccess()
-		mu.Lock()
-		defer mu.Unlock()
-		if current == last {
-			return
-		}
-		last = current
-		if err := enforcer.SeedDefaultPolicies(current); err != nil {
-			log.Error("reseeding anonymous policies: %v", err)
-		}
-	})
+const policySeedMarker = "rbac_policies_seeded"
+
+// Default grants land once, later restarts never undo admin edits
+func seedPolicies(ctx context.Context, store *stores.Store, enforcer *rbac.Enforcer, log *logger.Logger) error {
+	if err := enforcer.EnsureAdminPolicy(); err != nil {
+		return err
+	}
+	if seeded, _ := store.GetSystemSetting(ctx, policySeedMarker); seeded != "" {
+		return nil
+	}
+	if err := enforcer.SeedDefaultPolicies(); err != nil {
+		return err
+	}
+	log.Info("Seeded default role policies")
+	return store.SetSystemSetting(ctx, policySeedMarker, "1")
 }
 
 // Seeds retired static acme domains as approved system rows

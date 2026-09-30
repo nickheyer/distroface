@@ -173,7 +173,7 @@
 					label="Anonymous access"
 					horizontal
 					bordered={false}
-					help={lockHelp('auth.anonymous_access', 'Browse public repos signed out')}
+					help={lockHelp('auth.anonymous_access', 'Signed out visitors get the anonymous role grants, orgs may override for their portals')}
 					tag={anonymousAct.tag}
 					error={anonymousAct.error}
 				>

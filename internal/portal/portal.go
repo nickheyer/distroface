@@ -17,7 +17,7 @@ type Portal struct {
 	OrgDisplayName  string
 	MapUnqualified  bool
 	AllowPush       bool
-	RequireAuth     bool
+	AllowAnonymous  bool // Effective anon policy, portal over org over instance
 	TLS             bool
 	CertSource      v1.CertSource
 	CatchAll        bool
@@ -72,6 +72,14 @@ func WithPortal(ctx context.Context, p *Portal) context.Context {
 func FromContext(ctx context.Context) *Portal {
 	p, _ := ctx.Value(ctxKey{}).(*Portal)
 	return p
+}
+
+// Portal policy on portal traffic, the instance toggle elsewhere
+func AnonymousAllowed(ctx context.Context, instance bool) bool {
+	if p := FromContext(ctx); p != nil {
+		return p.AllowAnonymous
+	}
+	return instance
 }
 
 // Forces the portal org namespace on portal traffic

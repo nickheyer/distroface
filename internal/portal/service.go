@@ -330,6 +330,7 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 // Proto portal annotated with its computed certificate state
 func (s *Service) portalWithStatus(ctx context.Context, p *storage.RegistryPortal) *v1.RegistryPortal {
 	proto := portalToProto(p)
+	proto.AnonymousAccess = !p.RequireAuth && s.res.Portal(ctx, p.ID).GetAuth().GetAnonymousAccess()
 	st := s.engine.PortalStatus(ctx, p)
 	proto.CertState = st.State
 	if len(st.Problems) > 0 {
@@ -529,7 +530,7 @@ func (s *Service) ResolvePortal(ctx context.Context, _ *connect.Request[v1.Resol
 		OrgDisplayName:  p.OrgDisplayName,
 		PortalName:      p.Name,
 		AllowPush:       p.AllowPush,
-		RequireAuth:     p.RequireAuth,
+		RequireAuth:     !p.AllowAnonymous,
 		MapUnqualified:  p.MapUnqualified,
 		PrimaryHost:     s.res.System(ctx).GetServer().GetPublicHostname(),
 		PrimaryScheme:   s.primaryScheme(ctx),

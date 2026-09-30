@@ -2,7 +2,8 @@
 	import { onMount } from 'svelte';
 	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
 	import { Package, Plus } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { Code, ConnectError } from '@connectrpc/connect';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
@@ -32,6 +33,8 @@
 	let repos = $state<Repository[]>([]);
 	let repoLoading = $state(true);
 	let repoLoaded = $state(false);
+	// Anonymous role lacks the read grant, the list stays quiet
+	let browseDenied = $state(false);
 	const repoPager = new Pager(20);
 	const filter = new QueryFilter([
 		{ key: 'name', label: 'Name' },
@@ -97,15 +100,21 @@
 
 	async function loadRepos() {
 		repoLoading = true;
+		browseDenied = false;
 		try {
-			const response = await rpcClient.repository.listRepositories({
-				page: repoPager.request(filter.request())
-			});
+			const response = await rpcClient.repository.listRepositories(
+				{ page: repoPager.request(filter.request()) },
+				authStore.isAuthenticated ? undefined : silentCallOptions
+			);
 			repos = response.repositories;
 			repoPager.apply(response.page);
-		} catch {
+		} catch (err) {
 			repos = [];
 			repoPager.apply();
+			browseDenied =
+				!authStore.isAuthenticated &&
+				err instanceof ConnectError &&
+				err.code === Code.PermissionDenied;
 		} finally {
 			repoLoading = false;
 			repoLoaded = true;
@@ -118,10 +127,14 @@
 	}
 
 	const emptyMessage = $derived(
-		filter.active ? 'No image repositories found' : 'No image repositories yet'
+		browseDenied
+			? 'Sign in to browse images'
+			: filter.active ? 'No image repositories found' : 'No image repositories yet'
 	);
 	const emptyDescription = $derived(
-		filter.active ? 'No results match the current filter' : undefined
+		browseDenied
+			? 'Anonymous browsing is not permitted here'
+			: filter.active ? 'No results match the current filter' : undefined
 	);
 
 	onMount(loadRepos);
@@ -171,7 +184,7 @@
 		{emptyDescription}
 	>
 		{#snippet emptyActions()}
-			{#if !filter.active}
+			{#if !filter.active && !browseDenied}
 				{#if authStore.isAuthenticated}
 					<div class="text-center space-y-3">
 						<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>

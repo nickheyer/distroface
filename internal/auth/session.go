@@ -19,6 +19,16 @@ type AuthenticatedUser struct {
 	MustChangePassword bool   // rpc access pending pw rotation
 }
 
+// Signed out visitors carry the anonymous role only
+func (u *AuthenticatedUser) IsAnonymous() bool {
+	return u != nil && u.Provider == "anonymous"
+}
+
+// Identity used when no auth provider is enabled
+func NoAuthAdmin() *AuthenticatedUser {
+	return &AuthenticatedUser{ID: "admin", Username: "admin", Roles: []string{"admin"}, Provider: "none"}
+}
+
 // WithUser attaches an authenticated user to the context.
 func WithUser(ctx context.Context, user *AuthenticatedUser) context.Context {
 	return context.WithValue(ctx, userContextKey, user)

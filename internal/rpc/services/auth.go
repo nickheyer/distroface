@@ -13,6 +13,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
@@ -262,7 +263,7 @@ func (s *AuthService) GetAuthStatus(ctx context.Context, req *connect.Request[v1
 		LocalEnabled:        authCfg.GetLocalEnabled(),
 		OidcEnabled:         authCfg.GetOidc().GetEnabled(),
 		RegistrationEnabled: authCfg.GetLocalEnabled() && authCfg.GetLocalAllowRegistration(),
-		AnonymousAccess:     authCfg.GetAnonymousAccess(),
+		AnonymousAccess:     portal.AnonymousAllowed(ctx, authCfg.GetAnonymousAccess()),
 		FirstUserSetup:      count == 0,
 	}), nil
 }

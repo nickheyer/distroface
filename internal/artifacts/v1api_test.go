@@ -55,7 +55,7 @@ func newTestEnv(t *testing.T, retention *v1proto.ArtifactRetentionSettings) *tes
 	if err != nil {
 		t.Fatalf("NewEnforcer: %v", err)
 	}
-	if err := enforcer.SeedDefaultPolicies(false); err != nil {
+	if err := enforcer.SeedDefaultPolicies(); err != nil {
 		t.Fatalf("SeedDefaultPolicies: %v", err)
 	}
 

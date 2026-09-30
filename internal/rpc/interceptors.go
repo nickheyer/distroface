@@ -75,13 +75,7 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 
 			// If no auth providers are enabled, bypass auth entirely
 			if !s.AuthManager.IsAnyAuthEnabled() {
-				ctx = auth.WithUser(ctx, &auth.AuthenticatedUser{
-					ID:       "admin",
-					Username: "admin",
-					Roles:    []string{"admin"},
-					Provider: "none",
-				})
-				return next(ctx, req)
+				return next(auth.WithUser(ctx, auth.NoAuthAdmin()), req)
 			}
 
 			// Resolve user from token or anonymous access - always, for every request
@@ -98,7 +92,7 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 					}
 					// Public route with bad token - proceed without user
 				}
-			} else if s.AuthManager.IsAnonymousAccessEnabled() && portalAllowsAnonymous(ctx) {
+			} else if s.anonymousAllowed(ctx) {
 				user = s.AuthManager.AnonymousUser()
 			} else if !isPublic {
 				return nil, connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
@@ -117,38 +111,60 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 				return next(ctx, req)
 			}
 
-			// Forced rotation blocks everything but session and password rpcs
-			if user != nil && user.MustChangePassword && !mustChangeExemptProcedures[procedure] {
-				return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("password change required before continuing"))
+			if err := s.authorize(ctx, req, user, procedure); err != nil {
+				return nil, err
 			}
-
-			// Authenticated-only procedures - no specific resource permission needed
-			if rbac.AuthenticatedOnlyProcedures[procedure] {
-				return next(ctx, req)
-			}
-
-			// RBAC permission check
-			if perm, ok := rbac.ProcedurePermissions[procedure]; ok {
-				if s.Enforcer != nil {
-					objectID := "*"
-					if perm.ObjectIDField != "" {
-						objectID = rbac.ExtractObjectID(req, perm.ObjectIDField)
-					}
-					allowed, err := s.Enforcer.Enforce(user.Roles, perm.Resource, perm.Action, objectID)
-					if err != nil {
-						s.Log.Error("RBAC enforcement error: %v", err)
-						return nil, connect.NewError(connect.CodeInternal, err)
-					}
-					if !allowed {
-						s.recordAuthDenial(ctx, req, fmt.Sprintf("rbac %s/%s on %s", perm.Resource, perm.Action, objectID))
-						return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("insufficient permissions for %s/%s", perm.Resource, perm.Action))
-					}
-				}
-			}
-
 			return next(ctx, req)
 		}
 	}
+}
+
+// Identity tier and rbac grant checks for one resolved caller
+func (s *Server) authorize(ctx context.Context, req connect.AnyRequest, user *auth.AuthenticatedUser, procedure string) error {
+	if user == nil {
+		return connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
+	}
+
+	// Forced rotation blocks everything but session and password rpcs
+	if user.MustChangePassword && !mustChangeExemptProcedures[procedure] {
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("password change required before continuing"))
+	}
+
+	if rbac.IdentityProcedures[procedure] {
+		return nil
+	}
+
+	// Account only rpcs refuse the anonymous identity
+	if rbac.AuthenticatedOnlyProcedures[procedure] {
+		if user.IsAnonymous() {
+			return connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
+		}
+		return nil
+	}
+
+	perm, ok := rbac.ProcedurePermissions[procedure]
+	if !ok || s.Enforcer == nil {
+		return nil
+	}
+	objectID := "*"
+	if perm.ObjectIDField != "" {
+		objectID = rbac.ExtractObjectID(req, perm.ObjectIDField)
+	}
+	var allowed bool
+	if perm.AnyGrant {
+		allowed = s.Enforcer.HasPermission(user.Roles, perm.Resource, perm.Action)
+	} else {
+		var err error
+		if allowed, err = s.Enforcer.Enforce(user.Roles, perm.Resource, perm.Action, objectID); err != nil {
+			s.Log.Error("RBAC enforcement error: %v", err)
+			return connect.NewError(connect.CodeInternal, err)
+		}
+	}
+	if !allowed {
+		s.recordAuthDenial(ctx, req, fmt.Sprintf("rbac %s/%s on %s", perm.Resource, perm.Action, objectID))
+		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("insufficient permissions for %s/%s", perm.Resource, perm.Action))
+	}
+	return nil
 }
 
 // Unary interceptors skip streams, streaming rpcs authenticate here
@@ -168,17 +184,11 @@ func (a *streamAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandl
 	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
 		srv := a.s
 		if !srv.AuthManager.IsAnyAuthEnabled() {
-			ctx = auth.WithUser(ctx, &auth.AuthenticatedUser{
-				ID:       "admin",
-				Username: "admin",
-				Roles:    []string{"admin"},
-				Provider: "none",
-			})
-			return next(ctx, conn)
+			return next(auth.WithUser(ctx, auth.NoAuthAdmin()), conn)
 		}
 		token := auth.ExtractToken(conn.RequestHeader())
 		if token == "" {
-			if srv.AuthManager.IsAnonymousAccessEnabled() && portalAllowsAnonymous(ctx) {
+			if srv.anonymousAllowed(ctx) {
 				return next(auth.WithUser(ctx, srv.AuthManager.AnonymousUser()), conn)
 			}
 			return connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
@@ -315,9 +325,9 @@ func procedureAction(procedure string) string {
 	return strings.TrimPrefix(procedure, "/distroface.v1.")
 }
 
-func portalAllowsAnonymous(ctx context.Context) bool {
-	p := portal.FromContext(ctx)
-	return p == nil || !p.RequireAuth
+// Portal tier on portal hosts, instance toggle on the primary
+func (s *Server) anonymousAllowed(ctx context.Context) bool {
+	return portal.AnonymousAllowed(ctx, s.AuthManager.IsAnonymousAccessEnabled())
 }
 
 // Read-only portals refuse content mutations on the RPC surface too

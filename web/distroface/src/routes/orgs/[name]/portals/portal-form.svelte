@@ -7,7 +7,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
-	import { Textarea } from '$lib/components/ui/textarea';
+	import PemInput from '$lib/components/pem-input.svelte';
 	import * as Popover from '$lib/components/ui/popover';
 	import * as RadioGroup from '$lib/components/ui/radio-group';
 	import * as Select from '$lib/components/ui/select';
@@ -52,8 +52,10 @@
 	let mapUnqualified = $state(portal?.mapUnqualified ?? true);
 	/* svelte-ignore state_referenced_locally */
 	let allowPush = $state(portal?.allowPush ?? true);
-	/* svelte-ignore state_referenced_locally */
-	let requireAuth = $state(portal?.requireAuth ?? false);
+	type AnonymousMode = 'inherit' | 'allow' | 'deny';
+	let anonymousMode = $state<AnonymousMode>('inherit');
+	let savedAnonymousMode = $state<AnonymousMode>('inherit');
+	let orgAnonymous = $state(false);
 	/* svelte-ignore state_referenced_locally */
 	let showExitLink = $state(!(portal?.hidePrimaryLink ?? false));
 	/* svelte-ignore state_referenced_locally */
@@ -100,6 +102,21 @@
 		mtlsOptions.map((o) => [o.value, o.label])
 	);
 
+	const anonymousOptions: { value: AnonymousMode; label: string }[] = [
+		{ value: 'inherit', label: 'Inherit from organization' },
+		{ value: 'allow', label: 'Allow' },
+		{ value: 'deny', label: 'Deny' }
+	];
+	const anonymousLabel = $derived(
+		anonymousMode === 'inherit'
+			? `Inherit from organization (${orgAnonymous ? 'allowed' : 'denied'})`
+			: anonymousMode === 'allow' ? 'Allow' : 'Deny'
+	);
+	// What signed out visitors get once this form is saved
+	const effectiveAnonymous = $derived(
+		anonymousMode === 'inherit' ? orgAnonymous : anonymousMode === 'allow'
+	);
+
 	async function loadMaterial() {
 		try {
 			const resp = await rpcClient.certificate.getTLSMaterial({
@@ -124,10 +141,14 @@
 				savedAcmeDir = acmeDirectory;
 				mtlsMode = stored.settings?.tls?.mtlsMode ?? MTLSMode.MTLS_MODE_UNSPECIFIED;
 				savedMtlsMode = mtlsMode;
+				const anon = stored.settings?.auth?.anonymousAccess;
+				anonymousMode = anon === undefined ? 'inherit' : anon ? 'allow' : 'deny';
+				savedAnonymousMode = anonymousMode;
 			}
 			const eff = await rpcClient.settings.getEffectiveSettings({ scope: orgScope(orgId) }, silentCallOptions);
 			acmeDirInherited = eff.settings?.acme?.directoryUrl ?? '';
 			acmeEmailInherited = eff.settings?.acme?.email ?? '';
+			orgAnonymous = eff.settings?.auth?.anonymousAccess ?? false;
 		} catch {
 			// Placeholders stay generic
 		}
@@ -143,6 +164,15 @@
 		}, ['acme.email', 'acme.directory_url']);
 		savedAcmeEmail = email;
 		savedAcmeDir = dir;
+	}
+
+	// Portal anonymous override, inherit falls back to the org
+	async function saveAnonymous(portalId: string) {
+		if (anonymousMode === savedAnonymousMode) return;
+		await patchSettings(portalScope(portalId), {
+			auth: anonymousMode === 'inherit' ? {} : { anonymousAccess: anonymousMode === 'allow' }
+		}, ['auth.anonymous_access']);
+		savedAnonymousMode = anonymousMode;
 	}
 
 	// Portal mtls override, inherit clears it back to the instance policy
@@ -256,7 +286,6 @@
 				? {
 						mapUnqualified: false,
 						allowPush: false,
-						requireAuth: false,
 						hidePrimaryLink: false,
 						rules: [],
 						backendUrl: backendUrl.trim(),
@@ -266,7 +295,6 @@
 				: {
 						mapUnqualified,
 						allowPush,
-						requireAuth,
 						hidePrimaryLink: !showExitLink,
 						rules: cleanedRules,
 						backendUrl: '',
@@ -280,6 +308,7 @@
 				await rpcClient.portal.updatePortal({ ...common, id: portal.id, setRules: true }, silentCallOptions);
 				await saveAcme(portal.id);
 				await saveMtls(portal.id);
+				await saveAnonymous(portal.id);
 				if (certSource === CertSource.MANUAL && pemsFilled) {
 					await uploadPortalCert(portal.id);
 				}
@@ -290,6 +319,7 @@
 			if (!created) return;
 			await saveAcme(created.id);
 			await saveMtls(created.id);
+			await saveAnonymous(created.id);
 			if (certSource === CertSource.MANUAL && pemsFilled) {
 				try {
 					await uploadPortalCert(created.id);
@@ -528,20 +558,20 @@
 					{#if portalCert}
 						<p class="text-[13px] text-muted-foreground">
 							Uploaded <span class="font-medium">{portalCert.subject || 'certificate'}</span>,
-							expires {certDate(portalCert)}. Paste a new pair to replace it.
+							expires {certDate(portalCert)}. Paste or upload a new pair to replace it.
 						</p>
 					{/if}
 					<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
 						<FormField label="Certificate (PEM)" id="portal-cert-pem" required={!portalCert} help="Full chain, leaf first">
-							<Textarea id="portal-cert-pem" bind:value={certPem} class="font-mono text-xs" rows={5} placeholder="-----BEGIN CERTIFICATE-----" />
+							<PemInput id="portal-cert-pem" bind:value={certPem} rows={5} placeholder="-----BEGIN CERTIFICATE-----" />
 						</FormField>
 						<FormField label="Private key (PEM)" id="portal-key-pem" required={!portalCert} help="Stored server side, never shown">
-							<Textarea id="portal-key-pem" bind:value={keyPem} class="font-mono text-xs" rows={5} placeholder="-----BEGIN PRIVATE KEY-----" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore />
+							<PemInput id="portal-key-pem" bind:value={keyPem} rows={5} placeholder="-----BEGIN PRIVATE KEY-----" secret />
 						</FormField>
 					</div>
 					{#if manualNeedsPems}
 						<p class="text-[13px] text-amber-600 dark:text-amber-400">
-							Paste a certificate and key or handshakes fail.
+							Add a certificate and key or handshakes fail.
 						</p>
 					{/if}
 				{/if}
@@ -555,8 +585,15 @@
 						<Switch bind:checked={allowPush} />
 					</FormField>
 
-					<FormField label="Require sign-in" horizontal help="On refuses anonymous pulls">
-						<Switch bind:checked={requireAuth} />
+					<FormField label="Anonymous access" id="portal-anonymous" help="Signed out visitors get the anonymous role grants, deny requires sign-in for every pull">
+						<Select.Root type="single" value={anonymousMode} onValueChange={(v) => (anonymousMode = v as AnonymousMode)}>
+							<Select.Trigger id="portal-anonymous" class="w-64">{anonymousLabel}</Select.Trigger>
+							<Select.Content>
+								{#each anonymousOptions as option (option.value)}
+									<Select.Item value={option.value} label={option.label} />
+								{/each}
+							</Select.Content>
+						</Select.Root>
 					</FormField>
 
 					<FormField label="Exit link" horizontal help="Off hides the link to the primary UI">
@@ -698,7 +735,7 @@
 						<Badge variant="outline" class="text-xs font-normal mt-2">HTTPS</Badge>
 					{/if}
 					<Badge variant="outline" class="text-xs font-normal mt-2">{allowPush ? 'Push enabled' : 'Pull only'}</Badge>
-					{#if requireAuth}
+					{#if !effectiveAnonymous}
 						<Badge variant="outline" class="text-xs font-normal mt-2">Sign-in required</Badge>
 					{/if}
 					{#if mapUnqualified}

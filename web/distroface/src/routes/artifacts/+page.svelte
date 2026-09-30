@@ -29,7 +29,8 @@
 	import PageHeader from '$lib/components/page-header.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import { Archive, Plus, Trash2, Lock, Globe } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { Code, ConnectError } from '@connectrpc/connect';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -64,21 +65,30 @@
 
 	const ownNamespace = $derived(authStore.user?.username ?? '');
 
+	// Anonymous role lacks the read grant, the list stays quiet
+	let browseDenied = $state(false);
+
 	let deleteDialogOpen = $state(false);
 	let deleteTarget = $state<ArtifactRepository | null>(null);
 	let deleting = $state(false);
 
 	async function loadRepos() {
 		loading = true;
+		browseDenied = false;
 		try {
-			const resp = await rpcClient.artifact.listArtifactRepositories({
-				page: pager.request(filter.request())
-			});
+			const resp = await rpcClient.artifact.listArtifactRepositories(
+				{ page: pager.request(filter.request()) },
+				authStore.isAuthenticated ? undefined : silentCallOptions
+			);
 			repos = resp.repositories;
 			pager.apply(resp.page);
-		} catch {
+		} catch (err) {
 			repos = [];
 			pager.apply();
+			browseDenied =
+				!authStore.isAuthenticated &&
+				err instanceof ConnectError &&
+				err.code === Code.PermissionDenied;
 		} finally {
 			loading = false;
 			loaded = true;
@@ -198,13 +208,17 @@
 	{:else if repos.length === 0}
 		<EmptyState
 			icon={Archive}
-			message={filter.active ? 'No artifact repositories found' : 'No artifact repositories yet'}
-			description={filter.active
-				? 'No results match the current filter'
-				: 'Create a repository to store build artifacts, packages, and other files.'}
+			message={browseDenied
+				? 'Sign in to browse artifacts'
+				: filter.active ? 'No artifact repositories found' : 'No artifact repositories yet'}
+			description={browseDenied
+				? 'Anonymous browsing is not permitted here'
+				: filter.active
+					? 'No results match the current filter'
+					: 'Create a repository to store build artifacts, packages, and other files.'}
 		>
 			{#snippet actions()}
-				{#if !filter.active}
+				{#if !filter.active && !browseDenied}
 					<PermissionGate resource="artifacts" action="create">
 						<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>
 							<Plus class="h-4 w-4 mr-1.5" />New Artifact Repository

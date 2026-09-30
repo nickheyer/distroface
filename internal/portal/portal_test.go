@@ -731,6 +731,14 @@ func isolatedResolver(t *testing.T, store *stores.Store, orgID string) *Resolver
 	if err != nil {
 		t.Fatalf("settings update: %v", err)
 	}
+	// Routing cases run signed out, instance must admit anonymous
+	anon := true
+	_, err = sr.Update(context.Background(), v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "", &v1.Settings{
+		Auth: &v1.AuthSettings{AnonymousAccess: &anon},
+	}, []string{"auth.anonymous_access"})
+	if err != nil {
+		t.Fatalf("settings update: %v", err)
+	}
 	return NewResolver(store, sr, logger.New())
 }
 
@@ -847,4 +855,80 @@ func TestForeignRef(t *testing.T) {
 	if !ForeignRef(WithPortal(context.Background(), ruled), "other") {
 		t.Error("isolated ruled portal still hides unrelated namespaces")
 	}
+}
+
+func TestResolverAnonymousTiers(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	org, inherit := createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "inherit", Hostname: "inherit.example.com", Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	_, deny := createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "deny", Hostname: "deny.example.com", Rules: "[]", AllowPush: true, Enabled: true,
+	})
+	_, legacy := createTestPortal(t, store, &storage.RegistryPortal{
+		Name: "legacy", Hostname: "legacy.example.com", Rules: "[]", AllowPush: true, RequireAuth: true, Enabled: true,
+	})
+	sr := settings.NewResolver(store, nil)
+	res := NewResolver(store, sr, logger.New())
+
+	set := func(scope v1.SettingsScopeType, id string, allow *bool) {
+		t.Helper()
+		patch := &v1.Settings{}
+		if allow != nil {
+			patch.Auth = &v1.AuthSettings{AnonymousAccess: allow}
+		}
+		if _, err := sr.Update(ctx, scope, id, patch, []string{"auth.anonymous_access"}); err != nil {
+			t.Fatalf("settings update %v/%s: %v", scope, id, err)
+		}
+		res.Invalidate()
+	}
+	allowed := func(host string) bool {
+		return res.AllowAnonymous(portalRequest(http.MethodGet, "/", host, 0))
+	}
+	yes, no := true, false
+
+	// Instance off, nothing overrides
+	if allowed("inherit.example.com") || allowed("primary.example.com") {
+		t.Error("instance default denies everywhere")
+	}
+
+	// Org opts in, portals follow, the primary does not
+	set(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, org.ID, &yes)
+	if !allowed("inherit.example.com") {
+		t.Error("org tier must admit anonymous on the org's portal")
+	}
+	if allowed("primary.example.com") {
+		t.Error("org tier must not touch the primary host")
+	}
+
+	// Portal opts out of the org default
+	set(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL, deny.ID, &no)
+	if allowed("deny.example.com") {
+		t.Error("portal tier deny must win over the org")
+	}
+	if !allowed("inherit.example.com") {
+		t.Error("sibling portal keeps the org default")
+	}
+
+	// Legacy require_auth stays a hard deny under an allowing org
+	if allowed("legacy.example.com") {
+		t.Error("legacy require_auth portal must still deny")
+	}
+	_ = legacy
+
+	// Instance on, org opts out, portal opts back in
+	set(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "", &yes)
+	set(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, org.ID, &no)
+	set(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL, deny.ID, &yes)
+	if !allowed("primary.example.com") {
+		t.Error("primary host follows the instance toggle")
+	}
+	if allowed("inherit.example.com") {
+		t.Error("org deny must override the instance for its portals")
+	}
+	if !allowed("deny.example.com") {
+		t.Error("portal allow must override the org deny")
+	}
+	_ = inherit
 }

@@ -13,31 +13,31 @@ type ProcedurePermission struct {
 	Resource      string
 	Action        string
 	ObjectIDField string // Protobuf field name to extract for per-object RBAC (empty = "*")
+	AnyGrant      bool   // Wildcard or scoped grant passes, the service filters visibility
 }
 
-// PublicProcedures lists RPC procedures that require no authentication.
+// Reachable with no identity at all, the pre login surface
 var PublicProcedures = map[string]bool{
 	distrofacev1connect.AuthServiceRegisterProcedure:        true,
 	distrofacev1connect.AuthServiceLoginProcedure:           true,
 	distrofacev1connect.AuthServiceGetAuthStatusProcedure:   true,
 	distrofacev1connect.AuthServiceGetOIDCLoginURLProcedure: true,
 	distrofacev1connect.HealthServiceHealthCheckProcedure:   true,
-	// Anonymous callers receive the redacted public subset only
+	// Signed out callers receive the redacted public subset only
 	distrofacev1connect.SettingsServiceGetEffectiveSettingsProcedure: true,
-	// Public repo browsing (visibility filtering handled in service)
-	distrofacev1connect.RepositoryServiceGetRepositoryProcedure:    true,
-	distrofacev1connect.RepositoryServiceListRepositoriesProcedure: true,
-	distrofacev1connect.RepositoryServiceListTagsProcedure:         true,
-	distrofacev1connect.RepositoryServiceResolveTagProcedure:       true,
-	distrofacev1connect.UserServiceGetUserProcedure:                true,
 	// Invite validation is public (used during registration)
 	distrofacev1connect.AuthServiceValidateInviteProcedure: true,
 	// Portal identity for the serving host, needed pre-login
 	distrofacev1connect.PortalServiceResolvePortalProcedure: true,
 }
 
-// AuthenticatedOnlyProcedures lists RPC procedures that require authentication
-// but no specific resource permission.
+// Any resolved identity including anonymous, no resource grant needed
+var IdentityProcedures = map[string]bool{
+	// Public profile fields, private fields gated in-service
+	distrofacev1connect.UserServiceGetUserProcedure: true,
+}
+
+// Real accounts only, the anonymous identity is refused
 var AuthenticatedOnlyProcedures = map[string]bool{
 	// Auth - user operations
 	distrofacev1connect.AuthServiceGetCurrentUserProcedure: true,
@@ -72,6 +72,11 @@ var AuthenticatedOnlyProcedures = map[string]bool{
 // required to invoke it, plus an optional ObjectIDField for per-object scoping.
 var ProcedurePermissions = map[string]ProcedurePermission{
 	// ── RepositoryService ─────────────────────────────────────────────
+	// Browsing needs the read capability, private visibility is filtered in-service
+	distrofacev1connect.RepositoryServiceListRepositoriesProcedure: {Resource: ResourceRepositories, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.RepositoryServiceGetRepositoryProcedure:    {Resource: ResourceRepositories, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.RepositoryServiceListTagsProcedure:         {Resource: ResourceRepositories, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.RepositoryServiceResolveTagProcedure:       {Resource: ResourceRepositories, Action: ActionRead, AnyGrant: true},
 	distrofacev1connect.RepositoryServiceDeleteRepositoryProcedure: {Resource: ResourceRepositories, Action: ActionDelete, ObjectIDField: "namespace+name"},
 	distrofacev1connect.RepositoryServiceUpdateRepositoryProcedure: {Resource: ResourceRepositories, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 

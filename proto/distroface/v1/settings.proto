@@ -48,8 +48,9 @@ message FieldProvenance {
   SettingsTier tier = 2;
 }
 
-// Every runtime tunable, org scope accepts acme and artifacts,
-// portal scope accepts acme, system scope accepts everything
+// Every runtime tunable, org scope accepts acme, artifacts, portal isolation
+// and the anonymous toggle, portal scope accepts acme, mtls and the anonymous
+// toggle, system scope accepts everything
 message Settings {
   ServerSettings server = 1;
   AuthSettings auth = 2;
@@ -74,7 +75,7 @@ message ServerSettings {
 message AuthSettings {
   optional int32 session_timeout_seconds = 1;
   optional int32 token_expiry_seconds = 2;
-  optional bool anonymous_access = 3;
+  optional bool anonymous_access = 3; // Signed out visitors run as the anonymous role, org and portal tiers override for portals
   optional bool local_enabled = 4;
   optional bool local_allow_registration = 5;
   OIDCSettings oidc = 6;

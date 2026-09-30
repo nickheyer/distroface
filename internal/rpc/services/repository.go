@@ -30,12 +30,20 @@ type RepositoryService struct {
 	store    *stores.Store
 	registry *registry.RegistryAccess
 	enforcer *rbac.Enforcer
+	access   *auth.RepoAccess
 	mirrors  *mirror.Monitor
 	log      *logger.Logger
 }
 
 func NewRepositoryService(store *stores.Store, reg *registry.RegistryAccess, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, log *logger.Logger) *RepositoryService {
-	return &RepositoryService{store: store, registry: reg, enforcer: enforcer, mirrors: mirrors, log: log}
+	return &RepositoryService{
+		store:    store,
+		registry: reg,
+		enforcer: enforcer,
+		access:   auth.NewRepoAccess(store, enforcer),
+		mirrors:  mirrors,
+		log:      log,
+	}
 }
 
 var imageRepoNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
@@ -125,21 +133,12 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, req *connect.R
 	}), nil
 }
 
-// Checks if the requesting user can read the given repo via RBAC
+// Public repos show, private ones need an explicit relationship
 func (s *RepositoryService) canReadRepo(ctx context.Context, repo *storage.Repository) bool {
 	if portal.ForeignRef(ctx, repo.Namespace) {
 		return false
 	}
-	if !repo.IsPrivate {
-		return true
-	}
-	user := auth.UserFromContext(ctx)
-	if user == nil {
-		return false
-	}
-	objectID := repo.Namespace + "/" + repo.Name
-	allowed, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionRead, objectID)
-	return allowed
+	return s.access.CanSee(ctx, auth.UserFromContext(ctx), repo)
 }
 
 func (s *RepositoryService) GetRepository(ctx context.Context, req *connect.Request[v1.GetRepositoryRequest]) (*connect.Response[v1.GetRepositoryResponse], error) {

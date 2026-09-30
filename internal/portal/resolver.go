@@ -154,7 +154,7 @@ func (res *Resolver) reloadLocked() {
 			OrgDisplayName:  p.Org.DisplayName,
 			MapUnqualified:  p.MapUnqualified,
 			AllowPush:       p.AllowPush,
-			RequireAuth:     p.RequireAuth,
+			AllowAnonymous:  !p.RequireAuth,
 			TLS:             p.TLS,
 			CertSource:      p.CertSource,
 			CatchAll:        p.Hostname == "",
@@ -162,6 +162,9 @@ func (res *Resolver) reloadLocked() {
 		}
 		if res.settings != nil {
 			entry.Isolated = res.settings.Org(context.Background(), p.OrgID).GetPortals().GetIsolated()
+			// Legacy require_auth stays a hard deny, the tiers decide otherwise
+			entry.AllowAnonymous = entry.AllowAnonymous &&
+				res.settings.Portal(context.Background(), p.ID).GetAuth().GetAnonymousAccess()
 		}
 		if p.BackendURL != "" {
 			if target, err := url.Parse(p.BackendURL); err != nil || target.Host == "" {
@@ -231,12 +234,15 @@ func (res *Resolver) MapName(r *http.Request, name string) string {
 	return name
 }
 
-// Check if anon access permitted for the request
+// Portal policy on portal hosts, the instance toggle on the primary
 func (res *Resolver) AllowAnonymous(r *http.Request) bool {
 	if p := res.Resolve(r); p != nil {
-		return !p.RequireAuth
+		return p.AllowAnonymous
 	}
-	return true
+	if res.settings == nil {
+		return true
+	}
+	return res.settings.System(r.Context()).GetAuth().GetAnonymousAccess()
 }
 
 // Check if push permitted for the request

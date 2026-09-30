@@ -74,7 +74,7 @@
 			return badges;
 		}
 		if (!portal.allowPush) badges.push('Pull only');
-		if (portal.requireAuth) badges.push('Sign-in required');
+		if (!portal.anonymousAccess) badges.push('Sign-in required');
 		if (portal.mapUnqualified) badges.push('Bare names');
 		if (portal.rules.length > 0) {
 			badges.push(`${portal.rules.length} rewrite${portal.rules.length !== 1 ? 's' : ''}`);

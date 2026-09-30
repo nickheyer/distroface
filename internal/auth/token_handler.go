@@ -18,7 +18,7 @@ import (
 // Applies portal rules at the token endpoint, portals resolve by hostnames/ports
 type RegistryAccessPolicy interface {
 	MapName(r *http.Request, name string) string // Rewrites repo name
-	AllowAnonymous(r *http.Request) bool         // Check if anon access permitted
+	AllowAnonymous(r *http.Request) bool         // Effective anon policy for the request host
 	AllowPush(r *http.Request) bool              // Check if push permitted
 	AllowRepo(r *http.Request, name string) bool // Check if mapped repo serves on this host
 	IsPortalHost(host string) bool               // Check if host is an enabled portal hostname
@@ -30,6 +30,7 @@ type TokenHandler struct {
 	store        *stores.Store
 	authManager  *Manager
 	enforcer     *rbac.Enforcer
+	repoAccess   *RepoAccess
 	policy       RegistryAccessPolicy
 	authLimiter  *admin.Limiter // Failed-credential lockout per client IP, nil disables
 	recorder     *audit.Recorder
@@ -50,6 +51,7 @@ func NewTokenHandler(ts *TokenService, store *stores.Store, manager *Manager, en
 		store:        store,
 		authManager:  manager,
 		enforcer:     enforcer,
+		repoAccess:   NewRepoAccess(store, enforcer),
 		policy:       policy,
 		authLimiter:  authLimiter,
 		recorder:     recorder,
@@ -130,18 +132,18 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Refuse anon token when anon access turned off
-	if authUser == nil && h.authManager.IsAnyAuthEnabled() && !h.authManager.IsAnonymousAccessEnabled() {
-		w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Portals may require auth for all access
-	if authUser == nil && h.policy != nil && !h.policy.AllowAnonymous(r) {
-		w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
+	// No credentials, run as anonymous where the host allows
+	if authUser == nil {
+		switch {
+		case !h.authManager.IsAnyAuthEnabled():
+			authUser = NoAuthAdmin()
+		case !h.anonymousAllowed(r):
+			w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		default:
+			authUser = h.authManager.AnonymousUser()
+		}
 	}
 
 	var access []*ResourceActions
@@ -170,6 +172,14 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+}
+
+// Portal policy when one resolves, the instance toggle otherwise
+func (h *TokenHandler) anonymousAllowed(r *http.Request) bool {
+	if h.policy != nil {
+		return h.policy.AllowAnonymous(r)
+	}
+	return h.authManager.IsAnonymousAccessEnabled()
 }
 
 func (h *TokenHandler) recordAuthFailure(clientIP string) {
@@ -275,35 +285,18 @@ func (h *TokenHandler) filterActions(r *http.Request, user *AuthenticatedUser, r
 }
 
 func (h *TokenHandler) canPull(r *http.Request, user *AuthenticatedUser, namespace string, repo *storage.Repository) bool {
-	// Repo doesn't exist yet, only authenticated users can pull (will get 404 from registry)
-	if repo == nil {
-		return user != nil
-	}
-	// Public repos are pullable by anyone
-	if !repo.IsPrivate {
-		return true
-	}
 	if user == nil {
 		return false
 	}
-	// Use RBAC: check if user has pull permission on repositories
-	if h.enforcer != nil {
-		allowed, _ := h.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionPull, namespace)
-		if allowed {
-			return true
-		}
+	// Unknown repo, accounts get the registry's 404, anonymous gets denied
+	if repo == nil {
+		return !user.IsAnonymous()
 	}
-	// Namespace owner can always pull their own repos
-	if user.Username == namespace {
-		return true
-	}
-	// Org member can pull org repos
-	isMember, _, _ := h.store.IsOrgMember(r.Context(), namespace, user.ID)
-	return isMember
+	return h.repoAccess.Can(r.Context(), user, repo, rbac.ActionPull)
 }
 
 func (h *TokenHandler) canPush(r *http.Request, user *AuthenticatedUser, namespace string) bool {
-	if user == nil {
+	if user == nil || user.IsAnonymous() {
 		return false
 	}
 	// Namespace owner can always push

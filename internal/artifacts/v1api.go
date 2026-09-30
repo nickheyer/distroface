@@ -222,12 +222,12 @@ func (a *V1API) auditDetail(user *auth.AuthenticatedUser, vars map[string]string
 // V1 middleware semantics on the v2 auth stack
 func (a *V1API) resolveUser(w http.ResponseWriter, r *http.Request) (*auth.AuthenticatedUser, bool) {
 	if !a.authMgr.IsAnyAuthEnabled() {
-		return &auth.AuthenticatedUser{ID: "admin", Username: "admin", Roles: []string{"admin"}, Provider: "none"}, true
+		return auth.NoAuthAdmin(), true
 	}
 
 	token := auth.ExtractToken(r.Header)
 	if token == "" {
-		if a.authMgr.IsAnonymousAccessEnabled() {
+		if portal.AnonymousAllowed(r.Context(), a.authMgr.IsAnonymousAccessEnabled()) {
 			return a.authMgr.AnonymousUser(), true
 		}
 		http.Error(w, "INVALID TOKEN", http.StatusUnauthorized)

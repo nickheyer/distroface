@@ -39,7 +39,7 @@ message RegistryPortal {
   bool map_unqualified = 5; // Map single-segment names into the org namespace
   repeated PortalRule rules = 6; // Custom rules, evaluated before map_unqualified
   bool allow_push = 7; // False makes the portal read-only
-  bool require_auth = 8; // Require auth for all access, including public pulls
+  bool require_auth = 8; // Legacy hard deny, prefer auth.anonymous_access at the portal settings scope
   bool enabled = 9;
   int32 port = 10; // Dedicated proxy port, 0 serves on the main port only, ports may be shared
   google.protobuf.Timestamp created_at = 11;
@@ -52,6 +52,7 @@ message RegistryPortal {
   string backend_url = 20; // Proxies all portal traffic to this local service
   bool backend_rewrite_host = 21; // Send the backend's host instead of the client's Host header
   bool backend_insecure = 22; // Skip tls verification for an https backend
+  bool anonymous_access = 23; // Computed, signed out visitors admitted on this portal
 }
 
 // Fields to create a portal, hostname or port required
@@ -62,7 +63,7 @@ message CreatePortalRequest {
   bool map_unqualified = 4;
   repeated PortalRule rules = 5;
   bool allow_push = 6;
-  bool require_auth = 7;
+  bool require_auth = 7; // Legacy hard deny, prefer auth.anonymous_access at the portal settings scope
   int32 port = 8;
   bool tls = 9;
   CertSource cert_source = 10; // Unspecified behaves as none
@@ -88,7 +89,7 @@ message ResolvePortalResponse {
   string org_display_name = 3;
   string portal_name = 4;
   bool allow_push = 5;
-  bool require_auth = 6;
+  bool require_auth = 6; // Effective, sign-in needed to browse this host
   bool map_unqualified = 7;
   string primary_host = 8;
   bool hide_primary_link = 10; // Portal asks the UI to drop the exit link
@@ -127,7 +128,7 @@ message UpdatePortalRequest {
   bool set_rules = 6; // When true, rules replaces the existing rule list
   repeated PortalRule rules = 7;
   optional bool allow_push = 8;
-  optional bool require_auth = 9;
+  optional bool require_auth = 9; // Legacy hard deny, prefer auth.anonymous_access at the portal settings scope
   optional bool enabled = 10;
   optional int32 port = 11;
   optional bool tls = 12;

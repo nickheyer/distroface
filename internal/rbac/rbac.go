@@ -62,8 +62,8 @@ m = g(r.sub, p.sub) && (p.res == "*" || r.res == p.res) && (p.act == "*" || r.ac
 	return &Enforcer{enforcer: e}, nil
 }
 
-// SeedDefaultPolicies ensures default roles have their base permissions.
-func (e *Enforcer) SeedDefaultPolicies(anonymousEnabled bool) error {
+// Runs once per install, admins own every grant afterwards
+func (e *Enforcer) SeedDefaultPolicies() error {
 	policies := map[string][][]string{
 		"admin": {
 			{"admin", "*", "*", "*"},
@@ -128,6 +128,29 @@ func (e *Enforcer) SeedDefaultPolicies(anonymousEnabled bool) error {
 	// AutoSave persisted every mutation, SavePolicy would deadlock
 	// sqlite through the adapter's cross connection rewrite
 	return nil
+}
+
+// Admin keeps the wildcard grant whatever the tables say
+func (e *Enforcer) EnsureAdminPolicy() error {
+	has, err := e.enforcer.HasPolicy("admin", "*", "*", "*")
+	if err != nil || has {
+		return err
+	}
+	_, err = e.enforcer.AddPolicy("admin", "*", "*", "*")
+	return err
+}
+
+// Grant naming one of the objects, wildcards never count
+func (e *Enforcer) HasScopedGrant(roles []string, resource, action string, objectIDs ...string) bool {
+	granted := e.GetGrantedObjects(roles, resource, action)
+	for _, obj := range granted {
+		for _, want := range objectIDs {
+			if obj == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // Enforce checks if any of the given roles allows the specified action on a

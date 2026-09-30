@@ -174,7 +174,8 @@ func (s *Server) setupHandler() {
 	}
 
 	if s.MirrorMonitor != nil {
-		mirrorService := services.NewMirrorService(s.MirrorMonitor, s.Enforcer, artifacts.NewAccess(s.Store, s.Enforcer), s.Log)
+		mirrorService := services.NewMirrorService(s.MirrorMonitor, s.Enforcer,
+			artifacts.NewAccess(s.Store, s.Enforcer), auth.NewRepoAccess(s.Store, s.Enforcer), s.Log)
 		mirrorPath, mirrorHandler := distrofacev1connect.NewMirrorServiceHandler(mirrorService, opts...)
 		mux.Handle(mirrorPath, mirrorHandler)
 	}

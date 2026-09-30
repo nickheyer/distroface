@@ -81,7 +81,7 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 			if !res.allowMethod(w, r, p) {
 				return
 			}
-			if p.RequireAuth && auth.ExtractToken(r.Header) == "" {
+			if !p.AllowAnonymous && auth.ExtractToken(r.Header) == "" {
 				w.Header().Set("Www-Authenticate", fmt.Sprintf(`Bearer realm="%s://%s/api/v1/auth/login"`, requestScheme(r), r.Host))
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return

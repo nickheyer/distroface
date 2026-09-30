@@ -26,11 +26,12 @@ type MirrorService struct {
 	monitor  *mirror.Monitor
 	enforcer *rbac.Enforcer
 	access   *artifacts.Access
+	repos    *auth.RepoAccess
 	log      *logger.Logger
 }
 
-func NewMirrorService(monitor *mirror.Monitor, enforcer *rbac.Enforcer, access *artifacts.Access, log *logger.Logger) *MirrorService {
-	return &MirrorService{monitor: monitor, enforcer: enforcer, access: access, log: log}
+func NewMirrorService(monitor *mirror.Monitor, enforcer *rbac.Enforcer, access *artifacts.Access, repos *auth.RepoAccess, log *logger.Logger) *MirrorService {
+	return &MirrorService{monitor: monitor, enforcer: enforcer, access: access, repos: repos, log: log}
 }
 
 func (s *MirrorService) WatchSyncs(ctx context.Context, req *connect.Request[v1.WatchSyncsRequest], stream *connect.ServerStream[v1.SyncEvent]) error {
@@ -86,8 +87,8 @@ func (s *MirrorService) visible(ctx context.Context, ev mirror.Event) bool {
 	}
 	switch ev.Kind {
 	case "image":
-		allowed, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionRead, ev.Namespace+"/"+ev.Name)
-		return allowed
+		repo := &db.Repository{Namespace: ev.Namespace, Name: ev.Name, OwnerID: ev.OwnerID, IsPrivate: true}
+		return s.repos.HasRepoAccess(ctx, user, repo, rbac.ActionRead)
 	case "artifact":
 		repo := &db.ArtifactRepository{Namespace: ev.Namespace, Name: ev.Name, OwnerID: ev.OwnerID, IsPrivate: true}
 		return s.access.HasRepoAccess(ctx, user, repo, rbac.ActionRead)
