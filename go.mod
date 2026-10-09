@@ -1,10 +1,10 @@
 module github.com/nickheyer/distroface
 
-go 1.25.0
+go 1.26.0
 
 require (
-	connectrpc.com/connect v1.19.1
-	connectrpc.com/grpcreflect v1.3.0
+	connectrpc.com/connect/v2 v2.0.0
+	connectrpc.com/grpcreflect/v2 v2.0.0
 	github.com/casbin/casbin/v3 v3.8.1
 	github.com/casbin/gorm-adapter/v3 v3.41.0
 	github.com/coreos/go-oidc/v3 v3.17.0

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
@@ -43,27 +43,27 @@ func NewArtifactService(store *stores.Store, manager *artifacts.Manager, enforce
 
 // ── Repositories ─────────────────────────────────────────────────────────
 
-func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *connect.Request[v1.CreateArtifactRepositoryRequest]) (*connect.Response[v1.CreateArtifactRepositoryResponse], error) {
+func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *v1.CreateArtifactRepositoryRequest) (*v1.CreateArtifactRepositoryResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	msg := req.Msg
+	msg := req
 	ns, name := repoRef(ctx, user, msg.Namespace, msg.Name)
 	if !artifactRepoNamePattern.MatchString(name) {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid repository name"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid repository name")
 	}
 	if !s.access.CanCreateInNamespace(ctx, user, ns) {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("cannot create repository in namespace %q", ns))
+		return nil, connect.Errorf(connect.CodePermissionDenied, "cannot create repository in namespace %q", ns)
 	}
 
 	existing, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if existing != nil {
-		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("repository %q already exists", ns+"/"+name))
+		return nil, connect.Errorf(connect.CodeAlreadyExists, "repository %q already exists", ns+"/"+name)
 	}
 
 	repoType := msg.Type
@@ -76,10 +76,10 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *con
 			return nil, mapMirrorErr(err)
 		}
 		if mirrorCfg, err = mirror.EncodeConfig(msg.Mirror); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 	} else if msg.Mirror != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("file repositories do not take mirror settings"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "file repositories do not take mirror settings")
 	}
 
 	isPrivate := msg.IsPrivate
@@ -96,39 +96,39 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *con
 		MirrorConfig: mirrorCfg,
 	}
 	if err := s.store.CreateArtifactRepository(ctx, repo); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.CreateArtifactRepositoryResponse{
+	return &v1.CreateArtifactRepositoryResponse{
 		Repository: s.repoToProto(ctx, repo, nil),
-	}), nil
+	}, nil
 }
 
-func (s *ArtifactService) GetArtifactRepository(ctx context.Context, req *connect.Request[v1.GetArtifactRepositoryRequest]) (*connect.Response[v1.GetArtifactRepositoryResponse], error) {
+func (s *ArtifactService) GetArtifactRepository(ctx context.Context, req *v1.GetArtifactRepositoryRequest) (*v1.GetArtifactRepositoryResponse, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.visibleRepo(ctx, user, req.Msg.Namespace, req.Msg.Name)
+	repo, err := s.visibleRepo(ctx, user, req.Namespace, req.Name)
 	if err != nil {
 		return nil, err
 	}
 
 	stats, err := s.store.GetArtifactRepoStats(ctx, []int64{repo.ID})
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.GetArtifactRepositoryResponse{
+	return &v1.GetArtifactRepositoryResponse{
 		Repository: s.repoToProto(ctx, repo, stats),
-	}), nil
+	}, nil
 }
 
-func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *connect.Request[v1.ListArtifactRepositoriesRequest]) (*connect.Response[v1.ListArtifactRepositoriesResponse], error) {
+func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *v1.ListArtifactRepositoriesRequest) (*v1.ListArtifactRepositoriesResponse, error) {
 	user := auth.UserFromContext(ctx)
-	msg := req.Msg
+	msg := req
 	limit, offset := pages.Parse(msg.Page)
 
 	q := pages.ParseQuery(msg.Page)
 	if err := stores.ArtifactReposQuery.Validate(q); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
 	opts := s.access.ListOptions(user, portal.ScopeNamespace(ctx, msg.Namespace))
@@ -138,7 +138,7 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *con
 
 	repos, total, err := s.store.ListArtifactRepositories(ctx, opts)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	ids := make([]int64, len(repos))
@@ -147,7 +147,7 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *con
 	}
 	stats, err := s.store.GetArtifactRepoStats(ctx, ids)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	protoRepos := make([]*v1.ArtifactRepository, len(repos))
@@ -155,30 +155,30 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *con
 		protoRepos[i] = s.repoToProto(ctx, r, stats)
 	}
 
-	return connect.NewResponse(&v1.ListArtifactRepositoriesResponse{
+	return &v1.ListArtifactRepositoriesResponse{
 		Repositories: protoRepos,
 		Page:         pages.Info(offset, limit, total),
-	}), nil
+	}, nil
 }
 
-func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *connect.Request[v1.UpdateArtifactRepositoryRequest]) (*connect.Response[v1.UpdateArtifactRepositoryResponse], error) {
+func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *v1.UpdateArtifactRepositoryRequest) (*v1.UpdateArtifactRepositoryResponse, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.mutableRepo(ctx, user, req.Msg.Namespace, req.Msg.Name, rbac.ActionUpdate)
+	repo, err := s.mutableRepo(ctx, user, req.Namespace, req.Name, rbac.ActionUpdate)
 	if err != nil {
 		return nil, err
 	}
 
-	if req.Msg.Description != nil {
-		repo.Description = *req.Msg.Description
+	if req.Description != nil {
+		repo.Description = *req.Description
 	}
-	if req.Msg.IsPrivate != nil {
-		repo.IsPrivate = *req.Msg.IsPrivate
+	if req.IsPrivate != nil {
+		repo.IsPrivate = *req.IsPrivate
 	}
-	if req.Msg.Mirror != nil {
+	if req.Mirror != nil {
 		if repo.Type == v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("file repositories do not take mirror settings"))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "file repositories do not take mirror settings")
 		}
-		merged, err := mirror.ApplyUpdate(repo.MirrorConfig, req.Msg.Mirror)
+		merged, err := mirror.ApplyUpdate(repo.MirrorConfig, req.Mirror)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}
@@ -194,74 +194,74 @@ func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *con
 		repo.MirrorState = ""
 	}
 	if err := s.store.UpdateArtifactRepository(ctx, repo); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.UpdateArtifactRepositoryResponse{
+	return &v1.UpdateArtifactRepositoryResponse{
 		Repository: s.repoToProto(ctx, repo, nil),
-	}), nil
+	}, nil
 }
 
-func (s *ArtifactService) DeleteArtifactRepository(ctx context.Context, req *connect.Request[v1.DeleteArtifactRepositoryRequest]) (*connect.Response[v1.DeleteArtifactRepositoryResponse], error) {
+func (s *ArtifactService) DeleteArtifactRepository(ctx context.Context, req *v1.DeleteArtifactRepositoryRequest) (*v1.DeleteArtifactRepositoryResponse, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.mutableRepo(ctx, user, req.Msg.Namespace, req.Msg.Name, rbac.ActionDelete)
+	repo, err := s.mutableRepo(ctx, user, req.Namespace, req.Name, rbac.ActionDelete)
 	if err != nil {
 		return nil, err
 	}
 
 	if err := s.manager.DeleteRepository(ctx, repo); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
-	return connect.NewResponse(&v1.DeleteArtifactRepositoryResponse{}), nil
+	return &v1.DeleteArtifactRepositoryResponse{}, nil
 }
 
-func (s *ArtifactService) SyncArtifactRepository(ctx context.Context, req *connect.Request[v1.SyncArtifactRepositoryRequest]) (*connect.Response[v1.SyncArtifactRepositoryResponse], error) {
+func (s *ArtifactService) SyncArtifactRepository(ctx context.Context, req *v1.SyncArtifactRepositoryRequest) (*v1.SyncArtifactRepositoryResponse, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.mutableRepo(ctx, user, req.Msg.Namespace, req.Msg.Name, rbac.ActionUpdate)
+	repo, err := s.mutableRepo(ctx, user, req.Namespace, req.Name, rbac.ActionUpdate)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.mirrors.SyncArtifactRepoNow(repo); err != nil {
 		return nil, mapSyncErr(err)
 	}
-	return connect.NewResponse(&v1.SyncArtifactRepositoryResponse{}), nil
+	return &v1.SyncArtifactRepositoryResponse{}, nil
 }
 
-func (s *ArtifactService) StopArtifactRepositorySync(ctx context.Context, req *connect.Request[v1.StopArtifactRepositorySyncRequest]) (*connect.Response[v1.StopArtifactRepositorySyncResponse], error) {
+func (s *ArtifactService) StopArtifactRepositorySync(ctx context.Context, req *v1.StopArtifactRepositorySyncRequest) (*v1.StopArtifactRepositorySyncResponse, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.mutableRepo(ctx, user, req.Msg.Namespace, req.Msg.Name, rbac.ActionUpdate)
+	repo, err := s.mutableRepo(ctx, user, req.Namespace, req.Name, rbac.ActionUpdate)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.mirrors.StopArtifactSync(repo); err != nil {
 		return nil, mapSyncErr(err)
 	}
-	return connect.NewResponse(&v1.StopArtifactRepositorySyncResponse{}), nil
+	return &v1.StopArtifactRepositorySyncResponse{}, nil
 }
 
 // ── Uploads ──────────────────────────────────────────────────────────────
 
-func (s *ArtifactService) InitiateArtifactUpload(ctx context.Context, req *connect.Request[v1.InitiateArtifactUploadRequest]) (*connect.Response[v1.InitiateArtifactUploadResponse], error) {
+func (s *ArtifactService) InitiateArtifactUpload(ctx context.Context, req *v1.InitiateArtifactUploadRequest) (*v1.InitiateArtifactUploadResponse, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.pushableRepo(ctx, user, req.Msg.Namespace, req.Msg.RepoName)
+	repo, err := s.pushableRepo(ctx, user, req.Namespace, req.RepoName)
 	if err != nil {
 		return nil, err
 	}
 
 	uploadID, err := s.manager.Blobs().InitiateUpload()
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.InitiateArtifactUploadResponse{
+	return &v1.InitiateArtifactUploadResponse{
 		UploadId:  uploadID,
 		UploadUrl: artifactUploadURL(user, repo.Namespace, repo.Name, uploadID),
-	}), nil
+	}, nil
 }
 
-func (s *ArtifactService) CompleteArtifactUpload(ctx context.Context, req *connect.Request[v1.CompleteArtifactUploadRequest]) (*connect.Response[v1.CompleteArtifactUploadResponse], error) {
+func (s *ArtifactService) CompleteArtifactUpload(ctx context.Context, req *v1.CompleteArtifactUploadRequest) (*v1.CompleteArtifactUploadResponse, error) {
 	user := auth.UserFromContext(ctx)
-	msg := req.Msg
+	msg := req
 	repo, err := s.pushableRepo(ctx, user, msg.Namespace, msg.RepoName)
 	if err != nil {
 		return nil, err
@@ -272,33 +272,33 @@ func (s *ArtifactService) CompleteArtifactUpload(ctx context.Context, req *conne
 		return nil, mapArtifactErr(err)
 	}
 
-	return connect.NewResponse(&v1.CompleteArtifactUploadResponse{
+	return &v1.CompleteArtifactUploadResponse{
 		Artifact: artifactToProto(artifact),
-	}), nil
+	}, nil
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────
 
-func (s *ArtifactService) GetArtifact(ctx context.Context, req *connect.Request[v1.GetArtifactRequest]) (*connect.Response[v1.GetArtifactResponse], error) {
+func (s *ArtifactService) GetArtifact(ctx context.Context, req *v1.GetArtifactRequest) (*v1.GetArtifactResponse, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.visibleRepo(ctx, user, req.Msg.Namespace, req.Msg.RepoName)
+	repo, err := s.visibleRepo(ctx, user, req.Namespace, req.RepoName)
 	if err != nil {
 		return nil, err
 	}
 
-	artifact, err := s.repoArtifact(ctx, repo, req.Msg.Id)
+	artifact, err := s.repoArtifact(ctx, repo, req.Id)
 	if err != nil {
 		return nil, err
 	}
 
-	return connect.NewResponse(&v1.GetArtifactResponse{
+	return &v1.GetArtifactResponse{
 		Artifact: artifactToProto(artifact),
-	}), nil
+	}, nil
 }
 
-func (s *ArtifactService) ListArtifacts(ctx context.Context, req *connect.Request[v1.ListArtifactsRequest]) (*connect.Response[v1.ListArtifactsResponse], error) {
+func (s *ArtifactService) ListArtifacts(ctx context.Context, req *v1.ListArtifactsRequest) (*v1.ListArtifactsResponse, error) {
 	user := auth.UserFromContext(ctx)
-	msg := req.Msg
+	msg := req
 	repo, err := s.visibleRepo(ctx, user, msg.Namespace, msg.RepoName)
 	if err != nil {
 		return nil, err
@@ -307,32 +307,32 @@ func (s *ArtifactService) ListArtifacts(ctx context.Context, req *connect.Reques
 	limit, offset := pages.Parse(msg.Page)
 	list, total, err := s.store.ListArtifacts(ctx, repo.ID, msg.Version, limit, offset)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.ListArtifactsResponse{
+	return &v1.ListArtifactsResponse{
 		Artifacts: artifactsToProto(list),
 		Page:      pages.Info(offset, limit, total),
-	}), nil
+	}, nil
 }
 
-func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *connect.Request[v1.ListArtifactVersionsRequest]) (*connect.Response[v1.ListArtifactVersionsResponse], error) {
+func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *v1.ListArtifactVersionsRequest) (*v1.ListArtifactVersionsResponse, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.visibleRepo(ctx, user, req.Msg.Namespace, req.Msg.RepoName)
+	repo, err := s.visibleRepo(ctx, user, req.Namespace, req.RepoName)
 	if err != nil {
 		return nil, err
 	}
 
-	limit, offset := pages.Parse(req.Msg.Page)
-	byVersion, desc := versionOrder(req.Msg.Page)
+	limit, offset := pages.Parse(req.Page)
+	byVersion, desc := versionOrder(req.Page)
 	order, total, err := s.store.ListArtifactVersionPage(ctx, repo.ID, byVersion, desc, limit, offset)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	list, err := s.store.ListArtifactsByVersions(ctx, repo.ID, order)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	grouped := make(map[string][]*storage.Artifact)
@@ -348,10 +348,10 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *connect
 		}
 	}
 
-	return connect.NewResponse(&v1.ListArtifactVersionsResponse{
+	return &v1.ListArtifactVersionsResponse{
 		Versions: versions,
 		Page:     pages.Info(offset, limit, total),
-	}), nil
+	}, nil
 }
 
 // Version groups default to natural version order newest first
@@ -369,14 +369,14 @@ func versionOrder(p *v1.PageRequest) (byVersion, desc bool) {
 	}
 }
 
-func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Request[v1.SearchArtifactsRequest]) (*connect.Response[v1.SearchArtifactsResponse], error) {
+func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *v1.SearchArtifactsRequest) (*v1.SearchArtifactsResponse, error) {
 	user := auth.UserFromContext(ctx)
-	msg := req.Msg
+	msg := req
 	limit, offset := pages.Parse(msg.Page)
 
 	q := pages.ParseQuery(msg.Page)
 	if err := stores.ArtifactsQuery.Validate(q); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
 	criteria := stores.ArtifactSearchCriteria{
@@ -396,30 +396,30 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *connect.Requ
 	} else {
 		repoIDs, err := s.visibleRepoIDs(ctx, user, portal.ScopeNamespace(ctx, msg.Namespace))
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if len(repoIDs) == 0 {
-			return connect.NewResponse(&v1.SearchArtifactsResponse{Artifacts: []*v1.Artifact{}, Page: &v1.PageInfo{}}), nil
+			return &v1.SearchArtifactsResponse{Artifacts: []*v1.Artifact{}, Page: &v1.PageInfo{}}, nil
 		}
 		criteria.RepoIDs = repoIDs
 	}
 
 	list, total, err := s.store.SearchArtifacts(ctx, criteria)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.SearchArtifactsResponse{
+	return &v1.SearchArtifactsResponse{
 		Artifacts: artifactsToProto(list),
 		Page:      pages.Info(offset, limit, total),
-	}), nil
+	}, nil
 }
 
 // ── Mutations ────────────────────────────────────────────────────────────
 
-func (s *ArtifactService) UpdateArtifact(ctx context.Context, req *connect.Request[v1.UpdateArtifactRequest]) (*connect.Response[v1.UpdateArtifactResponse], error) {
+func (s *ArtifactService) UpdateArtifact(ctx context.Context, req *v1.UpdateArtifactRequest) (*v1.UpdateArtifactResponse, error) {
 	user := auth.UserFromContext(ctx)
-	msg := req.Msg
+	msg := req
 	repo, err := s.mutableRepo(ctx, user, msg.Namespace, msg.RepoName, rbac.ActionUpdate)
 	if err != nil {
 		return nil, err
@@ -462,19 +462,19 @@ func (s *ArtifactService) UpdateArtifact(ctx context.Context, req *connect.Reque
 
 	if err := s.store.UpdateArtifact(ctx, artifact); err != nil {
 		if strings.Contains(err.Error(), "UNIQUE constraint") {
-			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("an artifact with that version and path already exists"))
+			return nil, connect.Errorf(connect.CodeAlreadyExists, "an artifact with that version and path already exists")
 		}
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.UpdateArtifactResponse{
+	return &v1.UpdateArtifactResponse{
 		Artifact: artifactToProto(artifact),
-	}), nil
+	}, nil
 }
 
-func (s *ArtifactService) SetArtifactProperties(ctx context.Context, req *connect.Request[v1.SetArtifactPropertiesRequest]) (*connect.Response[v1.SetArtifactPropertiesResponse], error) {
+func (s *ArtifactService) SetArtifactProperties(ctx context.Context, req *v1.SetArtifactPropertiesRequest) (*v1.SetArtifactPropertiesResponse, error) {
 	user := auth.UserFromContext(ctx)
-	msg := req.Msg
+	msg := req
 	repo, err := s.mutableRepo(ctx, user, msg.Namespace, msg.RepoName, rbac.ActionUpdate)
 	if err != nil {
 		return nil, err
@@ -487,20 +487,20 @@ func (s *ArtifactService) SetArtifactProperties(ctx context.Context, req *connec
 
 	if err := s.store.SetArtifactProperties(ctx, artifact.ID, msg.Properties); err != nil {
 		if errors.Is(err, stores.ErrDuplicateIdentity) {
-			return nil, connect.NewError(connect.CodeAlreadyExists, err)
+			return nil, connect.NewError(connect.CodeAlreadyExists, err.Error()).WithCause(err)
 		}
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	artifact.Properties = msg.Properties
 
-	return connect.NewResponse(&v1.SetArtifactPropertiesResponse{
+	return &v1.SetArtifactPropertiesResponse{
 		Artifact: artifactToProto(artifact),
-	}), nil
+	}, nil
 }
 
-func (s *ArtifactService) DeleteArtifact(ctx context.Context, req *connect.Request[v1.DeleteArtifactRequest]) (*connect.Response[v1.DeleteArtifactResponse], error) {
+func (s *ArtifactService) DeleteArtifact(ctx context.Context, req *v1.DeleteArtifactRequest) (*v1.DeleteArtifactResponse, error) {
 	user := auth.UserFromContext(ctx)
-	msg := req.Msg
+	msg := req
 	repo, err := s.mutableRepo(ctx, user, msg.Namespace, msg.RepoName, rbac.ActionDelete)
 	if err != nil {
 		return nil, err
@@ -514,21 +514,21 @@ func (s *ArtifactService) DeleteArtifact(ctx context.Context, req *connect.Reque
 		}
 	} else {
 		if msg.Version == "" || msg.Path == "" {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("id or version+path is required"))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "id or version+path is required")
 		}
 		artifact, err = s.store.GetArtifactByPathVersion(ctx, repo.ID, msg.Version, msg.Path)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if artifact == nil {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact not found"))
+			return nil, connect.Errorf(connect.CodeNotFound, "artifact not found")
 		}
 	}
 
 	if err := s.manager.DeleteArtifact(ctx, artifact); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
-	return connect.NewResponse(&v1.DeleteArtifactResponse{}), nil
+	return &v1.DeleteArtifactResponse{}, nil
 }
 
 // ── Access helpers ───────────────────────────────────────────────────────
@@ -545,16 +545,16 @@ func repoRef(ctx context.Context, user *auth.AuthenticatedUser, namespace, name 
 // Fetches repo and enforces read visibility
 func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.AuthenticatedUser, namespace, name string) (*storage.ArtifactRepository, error) {
 	if name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repository name is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "repository name is required")
 	}
 	bare := namespace == ""
 	ns, name := repoRef(ctx, user, namespace, name)
 	if portal.ForeignRef(ctx, ns) {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "artifact repository not found")
 	}
 	repo, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	// Portal traffic resolves by mapping alone, never fuzzy
 	if repo == nil && bare && portal.FromContext(ctx) == nil {
@@ -563,10 +563,10 @@ func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.Authentica
 		}
 	}
 	if repo == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "artifact repository not found")
 	}
 	if repo.IsPrivate && !s.access.HasRepoAccess(ctx, user, repo, rbac.ActionRead) {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
+		return nil, connect.Errorf(connect.CodePermissionDenied, "access denied")
 	}
 	return repo, nil
 }
@@ -575,7 +575,7 @@ func (s *ArtifactService) visibleRepo(ctx context.Context, user *auth.Authentica
 func (s *ArtifactService) visibleRepoByName(ctx context.Context, user *auth.AuthenticatedUser, name string) (*storage.ArtifactRepository, error) {
 	repos, _, err := s.store.ListArtifactRepositories(ctx, s.access.ListOptions(user, ""))
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	var matches []*storage.ArtifactRepository
 	for _, r := range repos {
@@ -593,8 +593,8 @@ func (s *ArtifactService) visibleRepoByName(ctx context.Context, user *auth.Auth
 		for _, m := range matches {
 			full = append(full, m.Namespace+"/"+m.Name)
 		}
-		return nil, connect.NewError(connect.CodeInvalidArgument,
-			fmt.Errorf("repository name %q is ambiguous, qualify it as one of: %s", name, strings.Join(full, ", ")))
+		return nil, connect.Errorf(connect.CodeInvalidArgument,
+			"repository name %q is ambiguous, qualify it as one of: %s", name, strings.Join(full, ", "))
 	}
 }
 
@@ -605,7 +605,7 @@ func (s *ArtifactService) pushableRepo(ctx context.Context, user *auth.Authentic
 		return nil, cerr
 	}
 	if repo.IsPrivate && !s.access.HasRepoAccess(ctx, user, repo, rbac.ActionPush) {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
+		return nil, connect.Errorf(connect.CodePermissionDenied, "access denied")
 	}
 	return repo, nil
 }
@@ -613,21 +613,21 @@ func (s *ArtifactService) pushableRepo(ctx context.Context, user *auth.Authentic
 // Owner level access for destructive operations like v1
 func (s *ArtifactService) mutableRepo(ctx context.Context, user *auth.AuthenticatedUser, namespace, name, action string) (*storage.ArtifactRepository, error) {
 	if name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repository name is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "repository name is required")
 	}
 	ns, name := repoRef(ctx, user, namespace, name)
 	if portal.ForeignRef(ctx, ns) {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "artifact repository not found")
 	}
 	repo, err := s.store.GetArtifactRepository(ctx, ns, name)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if repo == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact repository not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "artifact repository not found")
 	}
 	if !s.access.HasRepoAccess(ctx, user, repo, action) {
-		return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("access denied"))
+		return nil, connect.Errorf(connect.CodePermissionDenied, "access denied")
 	}
 	return repo, nil
 }
@@ -657,14 +657,14 @@ func artifactUploadURL(user *auth.AuthenticatedUser, namespace, name, uploadID s
 // Fetches artifact and checks repo membership
 func (s *ArtifactService) repoArtifact(ctx context.Context, repo *storage.ArtifactRepository, id string) (*storage.Artifact, error) {
 	if id == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("artifact id is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "artifact id is required")
 	}
 	artifact, err := s.store.GetArtifact(ctx, id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if artifact == nil || artifact.RepoID != repo.ID {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("artifact not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "artifact not found")
 	}
 	return artifact, nil
 }
@@ -672,20 +672,20 @@ func (s *ArtifactService) repoArtifact(ctx context.Context, repo *storage.Artifa
 func mapArtifactErr(err error) error {
 	switch {
 	case errors.Is(err, artifacts.ErrInvalid):
-		return connect.NewError(connect.CodeInvalidArgument, err)
+		return connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	case errors.Is(err, artifacts.ErrUploadNotFound):
-		return connect.NewError(connect.CodeNotFound, err)
+		return connect.NewError(connect.CodeNotFound, err.Error()).WithCause(err)
 	default:
-		return connect.NewError(connect.CodeInternal, err)
+		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 }
 
 // Config faults map to invalid, unreachable upstreams to unavailable
 func mapMirrorErr(err error) error {
 	if errors.Is(err, mirror.ErrInvalid) {
-		return connect.NewError(connect.CodeInvalidArgument, err)
+		return connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
-	return connect.NewError(connect.CodeUnavailable, fmt.Errorf("upstream check failed: %w", err))
+	return connect.NewError(connect.CodeUnavailable, fmt.Errorf("upstream check failed: %w", err).Error())
 }
 
 // Busy and cooling down map to precondition failures the ui can show
@@ -693,11 +693,11 @@ func mapSyncErr(err error) error {
 	var cool *mirror.CooldownError
 	switch {
 	case errors.Is(err, mirror.ErrSyncInFlight), errors.Is(err, mirror.ErrDisabled), errors.Is(err, mirror.ErrNoActiveSync), errors.As(err, &cool):
-		return connect.NewError(connect.CodeFailedPrecondition, err)
+		return connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 	case errors.Is(err, mirror.ErrInvalid):
-		return connect.NewError(connect.CodeInvalidArgument, err)
+		return connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	default:
-		return connect.NewError(connect.CodeInternal, err)
+		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 }
 

@@ -17,6 +17,8 @@ service UserService {
   rpc ChangePassword(ChangePasswordRequest) returns (ChangePasswordResponse) {}
   // ListUsers returns all users (admin).
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse) {}
+  // Public profile subset of active accounts for member pickers
+  rpc SearchUsers(SearchUsersRequest) returns (SearchUsersResponse) {}
   // AdminUpdateUser updates a user's status and roles (admin).
   rpc AdminUpdateUser(AdminUpdateUserRequest) returns (AdminUpdateUserResponse) {}
   // AdminDeleteUser deletes a user (admin).
@@ -66,6 +68,17 @@ message ListUsersRequest {
 
 // ListUsersResponse contains a page of users.
 message ListUsersResponse {
+  repeated User users = 1;
+  PageInfo page = 2;
+}
+
+// Paginated public profile lookup
+message SearchUsersRequest {
+  PageRequest page = 1;
+}
+
+// Page of public profiles
+message SearchUsersResponse {
   repeated User users = 1;
   PageInfo page = 2;
 }

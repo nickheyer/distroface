@@ -2,17 +2,15 @@ package rpc
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/certs"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
-	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 )
 
@@ -39,47 +37,77 @@ var mustChangeExemptProcedures = map[string]bool{
 	distrofacev1connect.UserServiceChangePasswordProcedure: true,
 }
 
+// Peer address of the in flight call, empty off the wire
+func peerAddr(ctx context.Context) string {
+	if info, ok := connect.CallInfoForServerContext(ctx); ok {
+		return info.PeerAddr
+	}
+	return ""
+}
+
+// Client ip honoring trusted proxy headers
+func clientIP(ctx context.Context) string {
+	info, ok := connect.CallInfoForServerContext(ctx)
+	if !ok {
+		return ""
+	}
+	return admin.ClientIP(info.PeerAddr, info.RequestHeader())
+}
+
+// Bearer or basic token from the request headers
+func bearerToken(ctx context.Context) string {
+	info, ok := connect.CallInfoForServerContext(ctx)
+	if !ok {
+		return ""
+	}
+	return auth.ExtractToken(info.RequestHeader())
+}
+
+func unauthenticated() error {
+	return connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken.Error()).WithCause(auth.ErrInvalidToken)
+}
+
 // Failed auth counts toward lockout success clears it
-func (s *Server) rateLimitInterceptor() connect.UnaryInterceptorFunc {
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			if s.AuthLimiter == nil || !throttledProcedures[req.Spec().Procedure] {
-				return next(ctx, req)
+func (s *Server) rateLimitInterceptor() connect.ServerInterceptor {
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			if s.AuthLimiter == nil || !throttledProcedures[spec.Procedure] {
+				return next(ctx, spec, stream)
 			}
 
-			clientIP := admin.ClientIP(req.Peer().Addr, req.Header())
-			if s.AuthLimiter.Blocked(clientIP) {
-				return nil, connect.NewError(connect.CodeResourceExhausted, fmt.Errorf("too many failed attempts, try again later"))
+			ip := clientIP(ctx)
+			if s.AuthLimiter.Blocked(ip) {
+				return connect.Errorf(connect.CodeResourceExhausted, "too many failed attempts, try again later")
 			}
 
-			resp, err := next(ctx, req)
+			err := next(ctx, spec, stream)
 			if err != nil {
 				switch connect.CodeOf(err) {
 				case connect.CodeUnauthenticated, connect.CodePermissionDenied:
-					s.AuthLimiter.Record(clientIP)
+					s.AuthLimiter.Record(ip)
 				}
 			} else {
-				s.AuthLimiter.Reset(clientIP)
+				s.AuthLimiter.Reset(ip)
 			}
-			return resp, err
+			return err
 		}
 	}
 }
 
-// Creates a Connect interceptor for authentication and authorization.
-func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			procedure := req.Spec().Procedure
+// Resolves the caller then gates the procedure, unary and streaming alike
+func (s *Server) authInterceptor() connect.ServerInterceptor {
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			procedure := spec.Procedure
 			isPublic := rbac.PublicProcedures[procedure]
 
 			// If no auth providers are enabled, bypass auth entirely
 			if !s.AuthManager.IsAnyAuthEnabled() {
-				return next(auth.WithUser(ctx, auth.NoAuthAdmin()), req)
+				return next(auth.WithUser(ctx, auth.NoAuthAdmin()), spec, stream)
 			}
 
 			// Resolve user from token or anonymous access - always, for every request
-			token := auth.ExtractToken(req.Header())
+			token := bearerToken(ctx)
 			var user *auth.AuthenticatedUser
 
 			if token != "" {
@@ -87,15 +115,15 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 				user, err = s.AuthManager.ValidateToken(ctx, token)
 				if err != nil {
 					if !isPublic {
-						s.recordAuthDenial(ctx, req, "invalid token")
-						return nil, connect.NewError(connect.CodeUnauthenticated, err)
+						s.recordAuthDenial(ctx, procedure, "invalid token")
+						return connect.NewError(connect.CodeUnauthenticated, err.Error()).WithCause(err)
 					}
 					// Public route with bad token - proceed without user
 				}
 			} else if s.anonymousAllowed(ctx) {
 				user = s.AuthManager.AnonymousUser()
 			} else if !isPublic {
-				return nil, connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
+				return unauthenticated()
 			}
 
 			if user != nil {
@@ -103,31 +131,59 @@ func (s *Server) authInterceptor() connect.UnaryInterceptorFunc {
 			}
 
 			if err := portalAllowsProcedure(ctx, procedure); err != nil {
-				return nil, err
+				return err
 			}
 
 			// Public procedures - no further checks
 			if isPublic {
-				return next(ctx, req)
+				return next(ctx, spec, stream)
 			}
 
-			if err := s.authorize(ctx, req, user, procedure); err != nil {
-				return nil, err
+			// Object scoped grants wait for the decoded request
+			if perm, ok := rbac.ProcedurePermissions[procedure]; ok && perm.ObjectIDField != "" {
+				return next(ctx, spec, &gatedStream{ServerStream: stream, gate: func(msg any) error {
+					return s.authorize(ctx, msg, user, procedure)
+				}})
 			}
-			return next(ctx, req)
+
+			if err := s.authorize(ctx, nil, user, procedure); err != nil {
+				if connect.CodeOf(err) == connect.CodePermissionDenied {
+					s.recordAuthDenial(ctx, procedure, err.Error())
+				}
+				return err
+			}
+			return next(ctx, spec, stream)
 		}
 	}
 }
 
+// Runs the grant check once the first request message is decoded
+type gatedStream struct {
+	connect.ServerStream
+	gate    func(msg any) error
+	checked bool
+}
+
+func (g *gatedStream) Receive(msg any) error {
+	if err := g.ServerStream.Receive(msg); err != nil {
+		return err
+	}
+	if g.checked {
+		return nil
+	}
+	g.checked = true
+	return g.gate(msg)
+}
+
 // Identity tier and rbac grant checks for one resolved caller
-func (s *Server) authorize(ctx context.Context, req connect.AnyRequest, user *auth.AuthenticatedUser, procedure string) error {
+func (s *Server) authorize(_ context.Context, req any, user *auth.AuthenticatedUser, procedure string) error {
 	if user == nil {
-		return connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
+		return unauthenticated()
 	}
 
 	// Forced rotation blocks everything but session and password rpcs
 	if user.MustChangePassword && !mustChangeExemptProcedures[procedure] {
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("password change required before continuing"))
+		return connect.Errorf(connect.CodePermissionDenied, "password change required before continuing")
 	}
 
 	if rbac.IdentityProcedures[procedure] {
@@ -137,7 +193,7 @@ func (s *Server) authorize(ctx context.Context, req connect.AnyRequest, user *au
 	// Account only rpcs refuse the anonymous identity
 	if rbac.AuthenticatedOnlyProcedures[procedure] {
 		if user.IsAnonymous() {
-			return connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
+			return unauthenticated()
 		}
 		return nil
 	}
@@ -157,56 +213,36 @@ func (s *Server) authorize(ctx context.Context, req connect.AnyRequest, user *au
 		var err error
 		if allowed, err = s.Enforcer.Enforce(user.Roles, perm.Resource, perm.Action, objectID); err != nil {
 			s.Log.Error("RBAC enforcement error: %v", err)
-			return connect.NewError(connect.CodeInternal, err)
+			return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 	}
 	if !allowed {
-		s.recordAuthDenial(ctx, req, fmt.Sprintf("rbac %s/%s on %s", perm.Resource, perm.Action, objectID))
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("insufficient permissions for %s/%s", perm.Resource, perm.Action))
+		return connect.Errorf(connect.CodePermissionDenied, "insufficient permissions for %s/%s on %s", perm.Resource, perm.Action, objectID)
 	}
 	return nil
 }
 
-// Unary interceptors skip streams, streaming rpcs authenticate here
-type streamAuthInterceptor struct {
-	s *Server
-}
-
-func (a *streamAuthInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return next
-}
-
-func (a *streamAuthInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return next
-}
-
-func (a *streamAuthInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		srv := a.s
-		if !srv.AuthManager.IsAnyAuthEnabled() {
-			return next(auth.WithUser(ctx, auth.NoAuthAdmin()), conn)
-		}
-		token := auth.ExtractToken(conn.RequestHeader())
-		if token == "" {
-			if srv.anonymousAllowed(ctx) {
-				return next(auth.WithUser(ctx, srv.AuthManager.AnonymousUser()), conn)
+// Reflection needs a real token, anonymous never browses the schema
+func (s *Server) reflectionAuthInterceptor() connect.ServerInterceptor {
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			if !s.AuthManager.IsAnyAuthEnabled() {
+				return next(ctx, spec, stream)
 			}
-			return connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken)
+			token := bearerToken(ctx)
+			if token == "" {
+				return unauthenticated()
+			}
+			if _, err := s.AuthManager.ValidateToken(ctx, token); err != nil {
+				return unauthenticated()
+			}
+			return next(ctx, spec, stream)
 		}
-		user, err := srv.AuthManager.ValidateToken(ctx, token)
-		if err != nil {
-			return connect.NewError(connect.CodeUnauthenticated, err)
-		}
-		if user.MustChangePassword {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("password change required before continuing"))
-		}
-		return next(auth.WithUser(ctx, user), conn)
 	}
 }
 
-// Auth interceptor denials never reach the audit interceptor
-func (s *Server) recordAuthDenial(ctx context.Context, req connect.AnyRequest, detail string) {
-	procedure := req.Spec().Procedure
+// Denials raised ahead of the audit interceptor still land in the trail
+func (s *Server) recordAuthDenial(ctx context.Context, procedure, detail string) {
 	resource, ok := auditableResource(procedure)
 	if !ok {
 		return
@@ -216,7 +252,7 @@ func (s *Server) recordAuthDenial(ctx context.Context, req connect.AnyRequest, d
 		Resource: resource,
 		Outcome:  audit.OutcomeDenied,
 		Detail:   detail,
-		SourceIP: admin.ClientIP(req.Peer().Addr, req.Header()),
+		SourceIP: clientIP(ctx),
 	}
 	if user := auth.UserFromContext(ctx); user != nil {
 		ev.Actor, ev.ActorID = user.Username, user.ID
@@ -232,25 +268,36 @@ func mtlsDetail(ctx context.Context) string {
 	return ""
 }
 
-func (s *Server) auditInterceptor(recorder *audit.Recorder) connect.UnaryInterceptorFunc {
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-			resp, err := next(ctx, req)
-			if recorder == nil {
-				return resp, err
-			}
+// Keeps the first request message for audit details, even when gated
+type capturedStream struct {
+	connect.ServerStream
+	first any
+}
 
-			procedure := req.Spec().Procedure
+func (c *capturedStream) Receive(msg any) error {
+	if c.first == nil {
+		c.first = msg
+	}
+	return c.ServerStream.Receive(msg)
+}
+
+func (s *Server) auditInterceptor(recorder *audit.Recorder) connect.ServerInterceptor {
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			procedure := spec.Procedure
 			resource, ok := auditableResource(procedure)
 			if !ok {
-				return resp, err
+				return next(ctx, spec, stream)
 			}
+
+			captured := &capturedStream{ServerStream: stream}
+			err := next(ctx, spec, captured)
 
 			ev := audit.Event{
 				Action:   procedureAction(procedure),
 				Resource: resource,
 				Outcome:  audit.OutcomeSuccess,
-				SourceIP: admin.ClientIP(req.Peer().Addr, req.Header()),
+				SourceIP: clientIP(ctx),
 				Detail:   mtlsDetail(ctx),
 			}
 			if user := auth.UserFromContext(ctx); user != nil {
@@ -265,46 +312,39 @@ func (s *Server) auditInterceptor(recorder *audit.Recorder) connect.UnaryInterce
 				}
 			}
 			if perm, ok := rbac.ProcedurePermissions[procedure]; ok && perm.ObjectIDField != "" {
-				if obj := rbac.ExtractObjectID(req, perm.ObjectIDField); obj != "*" {
+				if obj := rbac.ExtractObjectID(captured.first, perm.ObjectIDField); obj != "*" {
 					ev.Detail = obj
 				}
 			}
 			// Credential rpcs carry the subject in the request
 			if auditedAuthProcedures[procedure] && ev.Detail == "" {
 				for _, field := range []string{"username", "identifier"} {
-					if subject := rbac.ExtractObjectID(req, field); subject != "*" {
+					if subject := rbac.ExtractObjectID(captured.first, field); subject != "*" {
 						ev.Detail = subject
 						break
 					}
 				}
 			}
 			recorder.Record(ctx, ev)
-			return resp, err
+			return err
 		}
 	}
 }
 
-type loggingInterceptor struct {
-	log *logger.Logger
-}
-
-func (i *loggingInterceptor) WrapUnary(next connect.UnaryFunc) connect.UnaryFunc {
-	return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
-		i.log.Info("RPC %s %s", req.Peer().Addr, req.Spec().Procedure)
-		return next(ctx, req)
-	}
-}
-
-func (i *loggingInterceptor) WrapStreamingClient(next connect.StreamingClientFunc) connect.StreamingClientFunc {
-	return next
-}
-
-func (i *loggingInterceptor) WrapStreamingHandler(next connect.StreamingHandlerFunc) connect.StreamingHandlerFunc {
-	return func(ctx context.Context, conn connect.StreamingHandlerConn) error {
-		i.log.Info("RPC Stream open %s %s", conn.Peer().Addr, conn.Spec().Procedure)
-		err := next(ctx, conn)
-		i.log.Info("RPC Stream closed %s %s", conn.Peer().Addr, conn.Spec().Procedure)
-		return err
+// One line per call, streams log open and close
+func (s *Server) loggingInterceptor() connect.ServerInterceptor {
+	return func(next connect.ServerFunc) connect.ServerFunc {
+		return func(ctx context.Context, spec connect.Spec, stream connect.ServerStream) error {
+			peer := peerAddr(ctx)
+			if spec.StreamType == connect.StreamTypeUnary {
+				s.Log.Info("RPC %s %s", peer, spec.Procedure)
+				return next(ctx, spec, stream)
+			}
+			s.Log.Info("RPC Stream open %s %s", peer, spec.Procedure)
+			err := next(ctx, spec, stream)
+			s.Log.Info("RPC Stream closed %s %s", peer, spec.Procedure)
+			return err
+		}
 	}
 }
 
@@ -343,5 +383,5 @@ func portalAllowsProcedure(ctx context.Context, procedure string) error {
 	if perm.Action == rbac.ActionRead || perm.Action == rbac.ActionPull {
 		return nil
 	}
-	return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("portal is read-only"))
+	return connect.Errorf(connect.CodePermissionDenied, "portal is read-only")
 }

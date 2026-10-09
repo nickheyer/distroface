@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -28,17 +28,17 @@ func NewUserService(store *stores.Store, manager *auth.Manager, enforcer *rbac.E
 	return &UserService{store: store, authManager: manager, enforcer: enforcer, log: log}
 }
 
-func (s *UserService) GetUser(ctx context.Context, req *connect.Request[v1.GetUserRequest]) (*connect.Response[v1.GetUserResponse], error) {
-	if req.Msg.Username == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+func (s *UserService) GetUser(ctx context.Context, req *v1.GetUserRequest) (*v1.GetUserResponse, error) {
+	if req.Username == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	user, err := s.store.GetUserByUsername(ctx, req.Msg.Username)
+	user, err := s.store.GetUserByUsername(ctx, req.Username)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if user == nil {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 
 	// Only self or users read permission sees private fields
@@ -53,88 +53,88 @@ func (s *UserService) GetUser(ctx context.Context, req *connect.Request[v1.GetUs
 	}
 
 	if !privileged {
-		return connect.NewResponse(&v1.GetUserResponse{
+		return &v1.GetUserResponse{
 			User: publicUserToProto(user),
-		}), nil
+		}, nil
 	}
 
 	roles, _ := s.store.GetUserRoles(ctx, user.ID)
 
-	return connect.NewResponse(&v1.GetUserResponse{
+	return &v1.GetUserResponse{
 		User: userToProto(user, roles),
-	}), nil
+	}, nil
 }
 
-func (s *UserService) UpdateUser(ctx context.Context, req *connect.Request[v1.UpdateUserRequest]) (*connect.Response[v1.UpdateUserResponse], error) {
+func (s *UserService) UpdateUser(ctx context.Context, req *v1.UpdateUserRequest) (*v1.UpdateUserResponse, error) {
 	currentUser := auth.UserFromContext(ctx)
 	if currentUser == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
 	user, err := s.store.GetUserByID(ctx, currentUser.ID)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if user == nil {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 
-	if req.Msg.DisplayName != nil {
-		user.DisplayName = *req.Msg.DisplayName
+	if req.DisplayName != nil {
+		user.DisplayName = *req.DisplayName
 	}
-	if req.Msg.Email != nil {
-		existing, err := s.store.GetUserByEmail(ctx, *req.Msg.Email)
+	if req.Email != nil {
+		existing, err := s.store.GetUserByEmail(ctx, *req.Email)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if existing != nil && existing.ID != user.ID {
-			return nil, connect.NewError(connect.CodeAlreadyExists, nil)
+			return nil, connect.NewError(connect.CodeAlreadyExists, "")
 		}
-		user.Email = req.Msg.Email
+		user.Email = req.Email
 	}
 
 	if err := s.store.UpdateUser(ctx, user); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	roles, _ := s.store.GetUserRoles(ctx, user.ID)
 
-	return connect.NewResponse(&v1.UpdateUserResponse{
+	return &v1.UpdateUserResponse{
 		User: userToProto(user, roles),
-	}), nil
+	}, nil
 }
 
-func (s *UserService) ChangePassword(ctx context.Context, req *connect.Request[v1.ChangePasswordRequest]) (*connect.Response[v1.ChangePasswordResponse], error) {
+func (s *UserService) ChangePassword(ctx context.Context, req *v1.ChangePasswordRequest) (*v1.ChangePasswordResponse, error) {
 	currentUser := auth.UserFromContext(ctx)
 	if currentUser == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	if req.Msg.CurrentPassword == "" || req.Msg.NewPassword == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	if req.CurrentPassword == "" || req.NewPassword == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	if len(req.Msg.NewPassword) < 8 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	if len(req.NewPassword) < 8 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	if err := s.authManager.ChangePassword(ctx, currentUser.ID, req.Msg.CurrentPassword, req.Msg.NewPassword); err != nil {
-		return nil, connect.NewError(connect.CodePermissionDenied, err)
+	if err := s.authManager.ChangePassword(ctx, currentUser.ID, req.CurrentPassword, req.NewPassword); err != nil {
+		return nil, connect.NewError(connect.CodePermissionDenied, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.ChangePasswordResponse{}), nil
+	return &v1.ChangePasswordResponse{}, nil
 }
 
-func (s *UserService) ListUsers(ctx context.Context, req *connect.Request[v1.ListUsersRequest]) (*connect.Response[v1.ListUsersResponse], error) {
-	limit, offset := pages.Parse(req.Msg.Page)
-	q := pages.ParseQuery(req.Msg.Page)
+func (s *UserService) ListUsers(ctx context.Context, req *v1.ListUsersRequest) (*v1.ListUsersResponse, error) {
+	limit, offset := pages.Parse(req.Page)
+	q := pages.ParseQuery(req.Page)
 	if err := stores.UsersQuery.Validate(q); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
 	users, total, err := s.store.ListUsers(ctx, q, limit, offset)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	protoUsers := make([]*v1.User, len(users))
@@ -143,33 +143,56 @@ func (s *UserService) ListUsers(ctx context.Context, req *connect.Request[v1.Lis
 		protoUsers[i] = userToProto(u, roles)
 	}
 
-	return connect.NewResponse(&v1.ListUsersResponse{
+	return &v1.ListUsersResponse{
 		Users: protoUsers,
 		Page:  pages.Info(offset, limit, total),
-	}), nil
+	}, nil
 }
 
-func (s *UserService) AdminUpdateUser(ctx context.Context, req *connect.Request[v1.AdminUpdateUserRequest]) (*connect.Response[v1.AdminUpdateUserResponse], error) {
-	msg := req.Msg
+func (s *UserService) SearchUsers(ctx context.Context, req *v1.SearchUsersRequest) (*v1.SearchUsersResponse, error) {
+	limit, offset := pages.Parse(req.Page)
+	q := pages.ParseQuery(req.Page)
+	if err := stores.UserSearchQuery.Validate(q); err != nil {
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
+	}
+
+	users, total, err := s.store.SearchUsers(ctx, q, limit, offset)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+
+	protoUsers := make([]*v1.User, len(users))
+	for i, u := range users {
+		protoUsers[i] = publicUserToProto(u)
+	}
+
+	return &v1.SearchUsersResponse{
+		Users: protoUsers,
+		Page:  pages.Info(offset, limit, total),
+	}, nil
+}
+
+func (s *UserService) AdminUpdateUser(ctx context.Context, req *v1.AdminUpdateUserRequest) (*v1.AdminUpdateUserResponse, error) {
+	msg := req
 	if msg.UserId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
 	user, err := s.store.GetUserByID(ctx, msg.UserId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if user == nil {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 
 	if msg.Email != nil && *msg.Email != "" {
 		existing, err := s.store.GetUserByEmail(ctx, *msg.Email)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if existing != nil && existing.ID != user.ID {
-			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("email already in use"))
+			return nil, connect.Errorf(connect.CodeAlreadyExists, "email already in use")
 		}
 	}
 	if msg.Email != nil {
@@ -186,7 +209,7 @@ func (s *UserService) AdminUpdateUser(ctx context.Context, req *connect.Request[
 	}
 
 	if err := s.store.UpdateUser(ctx, user); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	// Update roles if provided
@@ -205,7 +228,7 @@ func (s *UserService) AdminUpdateUser(ctx context.Context, req *connect.Request[
 		for _, r := range currentRoles {
 			if !newSet[r] {
 				if err := s.store.UnassignRole(ctx, user.ID, r); err != nil {
-					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unassign role %q: %w", r, err))
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("unassign role %q: %w", r, err).Error())
 				}
 			}
 		}
@@ -213,7 +236,7 @@ func (s *UserService) AdminUpdateUser(ctx context.Context, req *connect.Request[
 		for _, r := range newRoles {
 			if !currentSet[r.Name] {
 				if err := s.store.AssignRole(ctx, user.ID, r.Name, "local"); err != nil {
-					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("assign role %q: %w", r.Name, err))
+					return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("assign role %q: %w", r.Name, err).Error())
 				}
 			}
 		}
@@ -221,9 +244,9 @@ func (s *UserService) AdminUpdateUser(ctx context.Context, req *connect.Request[
 
 	roles, _ := s.store.GetUserRoles(ctx, user.ID)
 
-	return connect.NewResponse(&v1.AdminUpdateUserResponse{
+	return &v1.AdminUpdateUserResponse{
 		User: userToProto(user, roles),
-	}), nil
+	}, nil
 }
 
 // Resolves role ids to rows, invalid argument on unknown ids
@@ -232,60 +255,60 @@ func (s *UserService) resolveRoleIDs(ctx context.Context, ids []string) ([]*stor
 	for _, id := range ids {
 		role, err := s.store.GetRole(ctx, id)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if role == nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("role %q does not exist", id))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "role %q does not exist", id)
 		}
 		roles = append(roles, role)
 	}
 	return roles, nil
 }
 
-func (s *UserService) AdminDeleteUser(ctx context.Context, req *connect.Request[v1.AdminDeleteUserRequest]) (*connect.Response[v1.AdminDeleteUserResponse], error) {
-	if req.Msg.UserId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+func (s *UserService) AdminDeleteUser(ctx context.Context, req *v1.AdminDeleteUserRequest) (*v1.AdminDeleteUserResponse, error) {
+	if req.UserId == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
 	// Don't allow deleting self
 	currentUser := auth.UserFromContext(ctx)
-	if currentUser != nil && currentUser.ID == req.Msg.UserId {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot delete your own account"))
+	if currentUser != nil && currentUser.ID == req.UserId {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "cannot delete your own account")
 	}
 
-	if err := s.store.DeleteUser(ctx, req.Msg.UserId); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+	if err := s.store.DeleteUser(ctx, req.UserId); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.AdminDeleteUserResponse{}), nil
+	return &v1.AdminDeleteUserResponse{}, nil
 }
 
-func (s *UserService) AdminCreateUser(ctx context.Context, req *connect.Request[v1.AdminCreateUserRequest]) (*connect.Response[v1.AdminCreateUserResponse], error) {
-	msg := req.Msg
+func (s *UserService) AdminCreateUser(ctx context.Context, req *v1.AdminCreateUserRequest) (*v1.AdminCreateUserResponse, error) {
+	msg := req
 	if msg.Username == "" || msg.Password == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("username and password are required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "username and password are required")
 	}
 	if !usernameRegex.MatchString(msg.Username) {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid username"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid username")
 	}
 	if len(msg.Password) < 8 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("password must be at least 8 characters"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "password must be at least 8 characters")
 	}
 
 	existing, err := s.store.GetUserByUsername(ctx, msg.Username)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if existing != nil {
-		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("username already taken"))
+		return nil, connect.Errorf(connect.CodeAlreadyExists, "username already taken")
 	}
 	if msg.Email != "" {
 		existing, err = s.store.GetUserByEmail(ctx, msg.Email)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if existing != nil {
-			return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("email already in use"))
+			return nil, connect.Errorf(connect.CodeAlreadyExists, "email already in use")
 		}
 	}
 
@@ -297,13 +320,13 @@ func (s *UserService) AdminCreateUser(ctx context.Context, req *connect.Request[
 
 	user, err := s.authManager.AdminCreateLocalUser(ctx, msg.Username, msg.Email, msg.DisplayName, msg.Password, msg.MustChangePassword)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	if len(requestedRoles) > 0 {
 		for _, r := range requestedRoles {
 			if err := s.store.AssignRole(ctx, user.ID, r.Name, "local"); err != nil {
-				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("assign role %q: %w", r.Name, err))
+				return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("assign role %q: %w", r.Name, err).Error())
 			}
 		}
 	} else {
@@ -315,18 +338,18 @@ func (s *UserService) AdminCreateUser(ctx context.Context, req *connect.Request[
 
 	roles, _ := s.store.GetUserRoles(ctx, user.ID)
 
-	return connect.NewResponse(&v1.AdminCreateUserResponse{
+	return &v1.AdminCreateUserResponse{
 		User: userToProto(user, roles),
-	}), nil
+	}, nil
 }
 
-func (s *UserService) AdminBulkUpdateUsers(ctx context.Context, req *connect.Request[v1.AdminBulkUpdateUsersRequest]) (*connect.Response[v1.AdminBulkUpdateUsersResponse], error) {
-	msg := req.Msg
+func (s *UserService) AdminBulkUpdateUsers(ctx context.Context, req *v1.AdminBulkUpdateUsersRequest) (*v1.AdminBulkUpdateUsersResponse, error) {
+	msg := req
 	if len(msg.UserIds) == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no user ids provided"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "no user ids provided")
 	}
 	if msg.IsActive == nil && len(msg.AddRoleIds) == 0 && len(msg.RemoveRoleIds) == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no changes requested"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "no changes requested")
 	}
 
 	// Validate roles before mutating anything
@@ -341,7 +364,7 @@ func (s *UserService) AdminBulkUpdateUsers(ctx context.Context, req *connect.Req
 
 	existing, err := s.store.FilterExistingUserIDs(ctx, msg.UserIds)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	currentUser := auth.UserFromContext(ctx)
@@ -362,7 +385,7 @@ func (s *UserService) AdminBulkUpdateUsers(ctx context.Context, req *connect.Req
 
 	if msg.IsActive != nil {
 		if err := s.store.BulkSetUsersActive(ctx, targets, *msg.IsActive); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 	}
 	for _, id := range targets {
@@ -379,23 +402,23 @@ func (s *UserService) AdminBulkUpdateUsers(ctx context.Context, req *connect.Req
 	}
 
 	resp.UpdatedCount = int32(len(targets))
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }
 
-func (s *UserService) AdminBulkDeleteUsers(ctx context.Context, req *connect.Request[v1.AdminBulkDeleteUsersRequest]) (*connect.Response[v1.AdminBulkDeleteUsersResponse], error) {
-	if len(req.Msg.UserIds) == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no user ids provided"))
+func (s *UserService) AdminBulkDeleteUsers(ctx context.Context, req *v1.AdminBulkDeleteUsersRequest) (*v1.AdminBulkDeleteUsersResponse, error) {
+	if len(req.UserIds) == 0 {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "no user ids provided")
 	}
 
-	existing, err := s.store.FilterExistingUserIDs(ctx, req.Msg.UserIds)
+	existing, err := s.store.FilterExistingUserIDs(ctx, req.UserIds)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	currentUser := auth.UserFromContext(ctx)
 	resp := &v1.AdminBulkDeleteUsersResponse{}
 	var targets []string
-	for _, id := range req.Msg.UserIds {
+	for _, id := range req.UserIds {
 		if !existing[id] {
 			resp.Errors = append(resp.Errors, &v1.BulkOperationError{Id: id, Error: "user not found"})
 			continue
@@ -408,9 +431,9 @@ func (s *UserService) AdminBulkDeleteUsers(ctx context.Context, req *connect.Req
 	}
 
 	if err := s.store.BulkDeleteUsers(ctx, targets); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	resp.DeletedCount = int32(len(targets))
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }

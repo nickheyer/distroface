@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
@@ -20,7 +20,7 @@ func newAuthorizeServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
 		t.Fatalf("NewEnforcer: %v", err)
@@ -39,7 +39,7 @@ func TestAuthorizeAnonymousBrowsing(t *testing.T) {
 	s := newAuthorizeServer(t)
 	ctx := context.Background()
 	list := distrofacev1connect.RepositoryServiceListRepositoriesProcedure
-	req := connect.NewRequest(&v1.ListRepositoriesRequest{})
+	req := &v1.ListRepositoriesRequest{}
 
 	if err := s.authorize(ctx, req, anonymousUser(), list); err != nil {
 		t.Fatalf("seeded anonymous role must list repositories: %v", err)
@@ -54,7 +54,7 @@ func TestAuthorizeAnonymousBrowsing(t *testing.T) {
 	if err := s.authorize(ctx, req, anonymousUser(), list); connect.CodeOf(err) != connect.CodePermissionDenied {
 		t.Fatalf("stripped anonymous role must be denied, got %v", err)
 	}
-	tags := connect.NewRequest(&v1.ListTagsRequest{Namespace: "acme", Name: "app"})
+	tags := &v1.ListTagsRequest{Namespace: "acme", Name: "app"}
 	if err := s.authorize(ctx, tags, anonymousUser(), distrofacev1connect.RepositoryServiceListTagsProcedure); connect.CodeOf(err) != connect.CodePermissionDenied {
 		t.Fatalf("stripped anonymous role must not list tags, got %v", err)
 	}
@@ -74,7 +74,7 @@ func TestAuthorizeAnonymousTiers(t *testing.T) {
 	s := newAuthorizeServer(t)
 	ctx := context.Background()
 
-	star := connect.NewRequest(&v1.StarRepositoryRequest{Namespace: "acme", Name: "app"})
+	star := &v1.StarRepositoryRequest{Namespace: "acme", Name: "app"}
 	if err := s.authorize(ctx, star, anonymousUser(), distrofacev1connect.RepositoryServiceStarRepositoryProcedure); connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Fatalf("account only rpc must refuse anonymous, got %v", err)
 	}
@@ -83,13 +83,32 @@ func TestAuthorizeAnonymousTiers(t *testing.T) {
 		t.Fatalf("account passes account only rpc: %v", err)
 	}
 
-	settings := connect.NewRequest(&v1.GetSettingsRequest{})
+	settings := &v1.GetSettingsRequest{}
 	if err := s.authorize(ctx, settings, anonymousUser(), distrofacev1connect.SettingsServiceGetSettingsProcedure); connect.CodeOf(err) != connect.CodeUnauthenticated {
 		t.Fatalf("stored settings must refuse anonymous, got %v", err)
 	}
 
-	user := connect.NewRequest(&v1.GetUserRequest{Username: "alice"})
+	user := &v1.GetUserRequest{Username: "alice"}
 	if err := s.authorize(ctx, user, anonymousUser(), distrofacev1connect.UserServiceGetUserProcedure); err != nil {
 		t.Fatalf("identity rpc admits anonymous: %v", err)
+	}
+}
+
+func TestAuthorizeSearchUsersIsAccountTier(t *testing.T) {
+	s := newAuthorizeServer(t)
+	ctx := context.Background()
+	search := &v1.SearchUsersRequest{}
+	proc := distrofacev1connect.UserServiceSearchUsersProcedure
+
+	if err := s.authorize(ctx, search, anonymousUser(), proc); connect.CodeOf(err) != connect.CodeUnauthenticated {
+		t.Fatalf("anonymous must not search users, got %v", err)
+	}
+	member := &auth.AuthenticatedUser{ID: "u1", Username: "alice", Roles: []string{"user"}, Provider: "local"}
+	if err := s.authorize(ctx, search, member, proc); err != nil {
+		t.Fatalf("plain account searches users without users/read: %v", err)
+	}
+	list := &v1.ListUsersRequest{}
+	if err := s.authorize(ctx, list, member, distrofacev1connect.UserServiceListUsersProcedure); connect.CodeOf(err) != connect.CodePermissionDenied {
+		t.Fatalf("admin listing still needs users/read, got %v", err)
 	}
 }

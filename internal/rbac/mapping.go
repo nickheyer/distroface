@@ -47,6 +47,8 @@ var AuthenticatedOnlyProcedures = map[string]bool{
 	// User - self-service
 	distrofacev1connect.UserServiceUpdateUserProcedure:     true,
 	distrofacev1connect.UserServiceChangePasswordProcedure: true,
+	// Public profile subset only, powers member pickers
+	distrofacev1connect.UserServiceSearchUsersProcedure: true,
 
 	// Stars - read access enforced in-service
 	distrofacev1connect.RepositoryServiceStarRepositoryProcedure:          true,
@@ -177,11 +179,9 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.WebhookServiceRedeliverWebhookProcedure:      {Resource: ResourceWebhooks, Action: ActionUpdate},
 }
 
-// ExtractObjectID extracts a field value from a protobuf request using reflection.
-// If field contains "+", it splits on "+", extracts each proto field, and joins
-// with "/" to form a composite ID (e.g., "namespace+name" → "nick/myimage").
-func ExtractObjectID(req interface{ Any() any }, field string) string {
-	msg, ok := req.Any().(proto.Message)
+// Field value by proto name, plus joined parts become a composite id
+func ExtractObjectID(req any, field string) string {
+	msg, ok := req.(proto.Message)
 	if !ok {
 		return "*"
 	}

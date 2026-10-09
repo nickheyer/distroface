@@ -24,7 +24,8 @@ import (
 	"syscall"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	"github.com/nickheyer/distroface/internal/rbac"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
@@ -472,23 +473,23 @@ func randomPerms() []*v1.Permission {
 }
 
 func (s *seeder) createRole(ctx context.Context, i int) (roleRef, error) {
-	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.CreateRoleResponse], error) {
-		return s.client.roles.CreateRole(ctx, connect.NewRequest(&v1.CreateRoleRequest{
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateRoleResponse, error) {
+		return s.client.roles.CreateRole(ctx, &v1.CreateRoleRequest{
 			Name:        s.name("role", i),
 			Description: "seeder generated role",
 			Permissions: randomPerms(),
-		}))
+		})
 	})
 	if err != nil {
 		return roleRef{}, err
 	}
-	return roleRef{id: resp.Msg.Role.GetId(), name: resp.Msg.Role.GetName()}, nil
+	return roleRef{id: resp.Role.GetId(), name: resp.Role.GetName()}, nil
 }
 
 // Grants seeded users enough access for later phases
 func (s *seeder) ensureMemberRole(ctx context.Context) error {
-	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.CreateRoleResponse], error) {
-		return s.client.roles.CreateRole(ctx, connect.NewRequest(&v1.CreateRoleRequest{
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateRoleResponse, error) {
+		return s.client.roles.CreateRole(ctx, &v1.CreateRoleRequest{
 			Name:        fmt.Sprintf("%s-member-%s", s.cfg.NamePrefix, s.runID),
 			Description: "seeder member baseline role",
 			Permissions: []*v1.Permission{
@@ -502,12 +503,12 @@ func (s *seeder) ensureMemberRole(ctx context.Context) error {
 				{Resource: rbac.ResourceOrganizations, Action: rbac.ActionRead},
 				{Resource: rbac.ResourceWebhooks, Action: rbac.ActionRead},
 			},
-		}))
+		})
 	})
 	if err != nil {
 		return err
 	}
-	s.memberRole = roleRef{id: resp.Msg.Role.GetId(), name: resp.Msg.Role.GetName()}
+	s.memberRole = roleRef{id: resp.Role.GetId(), name: resp.Role.GetName()}
 	return nil
 }
 
@@ -518,33 +519,33 @@ func (s *seeder) createUser(ctx context.Context, i int) (userRef, error) {
 	if len(s.roles) > 0 && mrand.IntN(2) == 0 {
 		roleIDs = append(roleIDs, sample(s.roles).id)
 	}
-	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.AdminCreateUserResponse], error) {
-		return s.client.users.AdminCreateUser(ctx, connect.NewRequest(&v1.AdminCreateUserRequest{
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.AdminCreateUserResponse, error) {
+		return s.client.users.AdminCreateUser(ctx, &v1.AdminCreateUserRequest{
 			Username:    username,
 			Password:    password,
 			Email:       username + "@seed-distroface.localdomain",
 			DisplayName: fmt.Sprintf("Seed User %d", i),
 			RoleIds:     roleIDs,
-		}))
+		})
 	})
 	if err != nil {
 		return userRef{}, err
 	}
-	return userRef{id: resp.Msg.User.GetId(), username: username, password: password}, nil
+	return userRef{id: resp.User.GetId(), username: username, password: password}, nil
 }
 
 func (s *seeder) createOrg(ctx context.Context, i int) (orgRef, error) {
-	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.CreateOrganizationResponse], error) {
-		return s.client.orgs.CreateOrganization(ctx, connect.NewRequest(&v1.CreateOrganizationRequest{
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateOrganizationResponse, error) {
+		return s.client.orgs.CreateOrganization(ctx, &v1.CreateOrganizationRequest{
 			Name:        s.name("org", i),
 			DisplayName: fmt.Sprintf("Seed Org %d", i),
 			Description: "seeder generated organization",
-		}))
+		})
 	})
 	if err != nil {
 		return orgRef{}, err
 	}
-	org := orgRef{id: resp.Msg.Organization.GetId(), name: resp.Msg.Organization.GetName()}
+	org := orgRef{id: resp.Organization.GetId(), name: resp.Organization.GetName()}
 
 	n := min(s.cfg.OrgMembers, len(s.users))
 	for j, idx := range mrand.Perm(len(s.users))[:n] {
@@ -553,12 +554,12 @@ func (s *seeder) createOrg(ctx context.Context, i int) (orgRef, error) {
 			role = v1.OrgRole_ORG_ROLE_ADMIN
 		}
 		u := s.users[idx]
-		_, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.AddOrgMemberResponse], error) {
-			return s.client.orgs.AddOrgMember(ctx, connect.NewRequest(&v1.AddOrgMemberRequest{
+		_, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.AddOrgMemberResponse, error) {
+			return s.client.orgs.AddOrgMember(ctx, &v1.AddOrgMemberRequest{
 				OrgId:  org.id,
 				UserId: u.id,
 				Role:   role,
-			}))
+			})
 		})
 		if err != nil && connect.CodeOf(err) != connect.CodeAlreadyExists {
 			return orgRef{}, fmt.Errorf("add member %s: %w", u.username, err)
@@ -579,8 +580,8 @@ func (s *seeder) createInvite(ctx context.Context, i int) error {
 	if i%3 == 0 {
 		req.Pin = ptr("1234")
 	}
-	_, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.CreateInviteResponse], error) {
-		return s.client.auth.CreateInvite(ctx, connect.NewRequest(req))
+	_, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateInviteResponse, error) {
+		return s.client.auth.CreateInvite(ctx, req)
 	})
 	return err
 }
@@ -613,8 +614,8 @@ func (s *seeder) ensurePushPortals(ctx context.Context) error {
 		} else {
 			req.Rules = []*v1.PortalRule{{Pattern: "([^/]+)", Replace: org.name + "/$1"}}
 		}
-		if _, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.CreatePortalResponse], error) {
-			return s.client.portals.CreatePortal(ctx, connect.NewRequest(req))
+		if _, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreatePortalResponse, error) {
+			return s.client.portals.CreatePortal(ctx, req)
 		}); err != nil {
 			return fmt.Errorf("portal on port %d: %w", port, err)
 		}
@@ -672,11 +673,11 @@ func (s *seeder) starRepo(ctx context.Context, i int) error {
 		return fmt.Errorf("login %s: %w", u.username, err)
 	}
 	img := sample(s.images)
-	_, err = retry(withToken(ctx, tok), s.cfg, func(ctx context.Context) (*connect.Response[v1.StarRepositoryResponse], error) {
-		return s.client.repos.StarRepository(ctx, connect.NewRequest(&v1.StarRepositoryRequest{
+	_, err = retry(withToken(ctx, tok), s.cfg, func(ctx context.Context) (*v1.StarRepositoryResponse, error) {
+		return s.client.repos.StarRepository(ctx, &v1.StarRepositoryRequest{
 			Namespace: img.namespace,
 			Name:      img.name,
-		}))
+		})
 	})
 	if connect.CodeOf(err) == connect.CodeAlreadyExists {
 		return nil
@@ -690,11 +691,11 @@ func (s *seeder) createToken(ctx context.Context, i int) error {
 	if err != nil {
 		return fmt.Errorf("login %s: %w", u.username, err)
 	}
-	_, err = retry(withToken(ctx, tok), s.cfg, func(ctx context.Context) (*connect.Response[v1.CreateAPITokenResponse], error) {
-		return s.client.tokens.CreateAPIToken(ctx, connect.NewRequest(&v1.CreateAPITokenRequest{
+	_, err = retry(withToken(ctx, tok), s.cfg, func(ctx context.Context) (*v1.CreateAPITokenResponse, error) {
+		return s.client.tokens.CreateAPIToken(ctx, &v1.CreateAPITokenRequest{
 			Name:          s.name("token", i),
 			ExpiresInDays: ptr(int32(1 + mrand.IntN(90))),
-		}))
+		})
 	})
 	return err
 }
@@ -728,8 +729,8 @@ func (s *seeder) createWebhook(ctx context.Context, i int) error {
 		req.Scope = v1.WebhookScope_WEBHOOK_SCOPE_ORGANIZATION
 		req.OrgId = sample(s.orgs).id
 	}
-	_, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.CreateWebhookResponse], error) {
-		return s.client.webhooks.CreateWebhook(ctx, connect.NewRequest(req))
+	_, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateWebhookResponse, error) {
+		return s.client.webhooks.CreateWebhook(ctx, req)
 	})
 	return err
 }
@@ -739,18 +740,18 @@ func (s *seeder) createArtifactRepo(ctx context.Context, i int) (artifactRepoRef
 	if len(s.orgs) > 0 && i%2 == 1 {
 		ns = s.orgs[(i/2)%len(s.orgs)].name
 	}
-	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.CreateArtifactRepositoryResponse], error) {
-		return s.client.artifacts.CreateArtifactRepository(ctx, connect.NewRequest(&v1.CreateArtifactRepositoryRequest{
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateArtifactRepositoryResponse, error) {
+		return s.client.artifacts.CreateArtifactRepository(ctx, &v1.CreateArtifactRepositoryRequest{
 			Name:        s.name("art", i),
 			Description: "seeder artifact repository",
 			IsPrivate:   i%4 == 0,
 			Namespace:   ns,
-		}))
+		})
 	})
 	if err != nil {
 		return artifactRepoRef{}, err
 	}
-	repo := resp.Msg.Repository
+	repo := resp.Repository
 	return artifactRepoRef{namespace: repo.GetNamespace(), name: repo.GetName()}, nil
 }
 
@@ -777,30 +778,30 @@ func (s *seeder) uploadArtifact(ctx context.Context, i int) error {
 	}
 
 	repo := s.artifactRepos[i%len(s.artifactRepos)]
-	initResp, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.InitiateArtifactUploadResponse], error) {
-		return s.client.artifacts.InitiateArtifactUpload(ctx, connect.NewRequest(&v1.InitiateArtifactUploadRequest{
+	initResp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.InitiateArtifactUploadResponse, error) {
+		return s.client.artifacts.InitiateArtifactUpload(ctx, &v1.InitiateArtifactUploadRequest{
 			RepoName:  repo.name,
 			Namespace: repo.namespace,
-		}))
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("initiate: %w", err)
 	}
 
-	if err := s.client.patchChunk(ctx, s.regEntries[0], initResp.Msg.UploadUrl, payload); err != nil {
+	if err := s.client.patchChunk(ctx, s.regEntries[0], initResp.UploadUrl, payload); err != nil {
 		return fmt.Errorf("chunk: %w", err)
 	}
 
-	_, err = retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.CompleteArtifactUploadResponse], error) {
-		return s.client.artifacts.CompleteArtifactUpload(ctx, connect.NewRequest(&v1.CompleteArtifactUploadRequest{
+	_, err = retry(ctx, s.cfg, func(ctx context.Context) (*v1.CompleteArtifactUploadResponse, error) {
+		return s.client.artifacts.CompleteArtifactUpload(ctx, &v1.CompleteArtifactUploadRequest{
 			RepoName:   repo.name,
 			Namespace:  repo.namespace,
-			UploadId:   initResp.Msg.UploadId,
+			UploadId:   initResp.UploadId,
 			Version:    version,
 			Path:       fmt.Sprintf("pkg/%s-%d.bin", repo.name, i),
 			Properties: props,
 			Metadata:   fmt.Sprintf(`{"seeder":%q}`, s.runID),
-		}))
+		})
 	})
 	if err != nil {
 		return fmt.Errorf("complete: %w", err)
@@ -829,8 +830,8 @@ func (s *seeder) createPortal(ctx context.Context, i int) error {
 		req.Hostname = hostname
 		req.Port = int32(ports[slot-1])
 	}
-	_, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.CreatePortalResponse], error) {
-		return s.client.portals.CreatePortal(ctx, connect.NewRequest(req))
+	_, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreatePortalResponse, error) {
+		return s.client.portals.CreatePortal(ctx, req)
 	})
 	return err
 }
@@ -838,18 +839,18 @@ func (s *seeder) createPortal(ctx context.Context, i int) error {
 func (s *seeder) loadDockerRepos(ctx context.Context) error {
 	pageToken := ""
 	for {
-		resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*connect.Response[v1.ListRepositoriesResponse], error) {
-			return s.client.repos.ListRepositories(ctx, connect.NewRequest(&v1.ListRepositoriesRequest{
+		resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.ListRepositoriesResponse, error) {
+			return s.client.repos.ListRepositories(ctx, &v1.ListRepositoriesRequest{
 				Page: &v1.PageRequest{PageSize: 500, PageToken: pageToken},
-			}))
+			})
 		})
 		if err != nil {
 			return err
 		}
-		for _, r := range resp.Msg.Repositories {
+		for _, r := range resp.Repositories {
 			s.dockerRepos = append(s.dockerRepos, repoRef{id: r.GetId(), namespace: r.GetNamespace(), name: r.GetName()})
 		}
-		pageToken = resp.Msg.Page.GetNextPageToken()
+		pageToken = resp.Page.GetNextPageToken()
 		if pageToken == "" {
 			return nil
 		}
@@ -940,33 +941,34 @@ func newClient(cfg *Config) (*client, error) {
 			IdleConnTimeout:     90 * time.Second,
 		}},
 	}
-	c.auth = distrofacev1connect.NewAuthServiceClient(c.httpc, baseURL)
-	c.users = distrofacev1connect.NewUserServiceClient(c.httpc, baseURL)
-	c.roles = distrofacev1connect.NewRoleServiceClient(c.httpc, baseURL)
-	c.orgs = distrofacev1connect.NewOrganizationServiceClient(c.httpc, baseURL)
-	c.tokens = distrofacev1connect.NewTokenServiceClient(c.httpc, baseURL)
-	c.webhooks = distrofacev1connect.NewWebhookServiceClient(c.httpc, baseURL)
-	c.artifacts = distrofacev1connect.NewArtifactServiceClient(c.httpc, baseURL)
-	c.portals = distrofacev1connect.NewPortalServiceClient(c.httpc, baseURL)
-	c.repos = distrofacev1connect.NewRepositoryServiceClient(c.httpc, baseURL)
-	c.health = distrofacev1connect.NewHealthServiceClient(c.httpc, baseURL)
+	rpc := connect.NewClient(connecthttp.NewTransport(c.httpc, baseURL))
+	c.auth = distrofacev1connect.NewAuthServiceClient(rpc)
+	c.users = distrofacev1connect.NewUserServiceClient(rpc)
+	c.roles = distrofacev1connect.NewRoleServiceClient(rpc)
+	c.orgs = distrofacev1connect.NewOrganizationServiceClient(rpc)
+	c.tokens = distrofacev1connect.NewTokenServiceClient(rpc)
+	c.webhooks = distrofacev1connect.NewWebhookServiceClient(rpc)
+	c.artifacts = distrofacev1connect.NewArtifactServiceClient(rpc)
+	c.portals = distrofacev1connect.NewPortalServiceClient(rpc)
+	c.repos = distrofacev1connect.NewRepositoryServiceClient(rpc)
+	c.health = distrofacev1connect.NewHealthServiceClient(rpc)
 	return c, nil
 }
 
 func (c *client) login(ctx context.Context, identifier, password string) (string, error) {
-	resp, err := retry(ctx, c.cfg, func(ctx context.Context) (*connect.Response[v1.LoginResponse], error) {
-		return c.auth.Login(ctx, connect.NewRequest(&v1.LoginRequest{Identifier: identifier, Password: password}))
+	resp, err := retry(ctx, c.cfg, func(ctx context.Context) (*v1.LoginResponse, error) {
+		return c.auth.Login(ctx, &v1.LoginRequest{Identifier: identifier, Password: password})
 	})
 	if err != nil {
 		return "", err
 	}
-	return resp.Msg.SessionToken, nil
+	return resp.SessionToken, nil
 }
 
 func (c *client) waitHealthy(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for {
-		_, err := c.health.HealthCheck(ctx, connect.NewRequest(&v1.HealthCheckRequest{}))
+		_, err := c.health.HealthCheck(ctx, &v1.HealthCheckRequest{})
 		if err == nil {
 			return nil
 		}

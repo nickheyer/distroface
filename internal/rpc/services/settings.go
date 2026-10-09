@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -47,7 +47,7 @@ func (s *SettingsService) isSystemAdmin(ctx context.Context) bool {
 func (s *SettingsService) requireScopeAdmin(ctx context.Context, scope *v1.SettingsScope) error {
 	user := auth.UserFromContext(ctx)
 	if user == nil || user.IsAnonymous() {
-		return connect.NewError(connect.CodeUnauthenticated, nil)
+		return connect.NewError(connect.CodeUnauthenticated, "")
 	}
 	orgID, err := s.scopeOrgID(ctx, scope)
 	if err != nil {
@@ -55,7 +55,7 @@ func (s *SettingsService) requireScopeAdmin(ctx context.Context, scope *v1.Setti
 	}
 	if orgID == "" {
 		if !s.isSystemAdmin(ctx) {
-			return connect.NewError(connect.CodePermissionDenied, nil)
+			return connect.NewError(connect.CodePermissionDenied, "")
 		}
 		return nil
 	}
@@ -63,7 +63,7 @@ func (s *SettingsService) requireScopeAdmin(ctx context.Context, scope *v1.Setti
 	if !canManage {
 		member, _ := s.store.GetOrgMember(ctx, orgID, user.ID)
 		if member == nil || (member.Role != storage.OrgRoleOwner && member.Role != storage.OrgRoleAdmin) {
-			return connect.NewError(connect.CodePermissionDenied, nil)
+			return connect.NewError(connect.CodePermissionDenied, "")
 		}
 	}
 	return nil
@@ -73,7 +73,7 @@ func (s *SettingsService) requireScopeAdmin(ctx context.Context, scope *v1.Setti
 func (s *SettingsService) requireScopeRead(ctx context.Context, scope *v1.SettingsScope) error {
 	user := auth.UserFromContext(ctx)
 	if user == nil || user.IsAnonymous() {
-		return connect.NewError(connect.CodeUnauthenticated, nil)
+		return connect.NewError(connect.CodeUnauthenticated, "")
 	}
 	orgID, err := s.scopeOrgID(ctx, scope)
 	if err != nil {
@@ -84,7 +84,7 @@ func (s *SettingsService) requireScopeRead(ctx context.Context, scope *v1.Settin
 	}
 	member, _ := s.store.GetOrgMember(ctx, orgID, user.ID)
 	if member == nil {
-		return connect.NewError(connect.CodePermissionDenied, nil)
+		return connect.NewError(connect.CodePermissionDenied, "")
 	}
 	return nil
 }
@@ -96,20 +96,20 @@ func (s *SettingsService) scopeOrgID(ctx context.Context, scope *v1.SettingsScop
 		return "", nil
 	case v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG:
 		if scope.GetScopeId() == "" {
-			return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("scope_id required"))
+			return "", connect.Errorf(connect.CodeInvalidArgument, "scope_id required")
 		}
 		return scope.GetScopeId(), nil
 	case v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL:
 		if scope.GetScopeId() == "" {
-			return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("scope_id required"))
+			return "", connect.Errorf(connect.CodeInvalidArgument, "scope_id required")
 		}
 		orgID, err := s.store.GetPortalOrgID(ctx, scope.GetScopeId())
 		if err != nil {
-			return "", connect.NewError(connect.CodeNotFound, fmt.Errorf("portal not found"))
+			return "", connect.Errorf(connect.CodeNotFound, "portal not found")
 		}
 		return orgID, nil
 	default:
-		return "", connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("scope type required"))
+		return "", connect.Errorf(connect.CodeInvalidArgument, "scope type required")
 	}
 }
 
@@ -127,24 +127,24 @@ func publicSubset(ctx context.Context, eff *v1.Settings) *v1.Settings {
 	}
 }
 
-func (s *SettingsService) GetSettings(ctx context.Context, req *connect.Request[v1.GetSettingsRequest]) (*connect.Response[v1.GetSettingsResponse], error) {
-	if err := s.requireScopeRead(ctx, req.Msg.GetScope()); err != nil {
+func (s *SettingsService) GetSettings(ctx context.Context, req *v1.GetSettingsRequest) (*v1.GetSettingsResponse, error) {
+	if err := s.requireScopeRead(ctx, req.GetScope()); err != nil {
 		return nil, err
 	}
-	stored, err := s.resolver.Stored(ctx, req.Msg.GetScope().GetType(), req.Msg.GetScope().GetScopeId())
+	stored, err := s.resolver.Stored(ctx, req.GetScope().GetType(), req.GetScope().GetScopeId())
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	out := proto.Clone(stored).(*v1.Settings)
 	settings.Redact(out)
-	return connect.NewResponse(&v1.GetSettingsResponse{
+	return &v1.GetSettingsResponse{
 		Settings:    out,
 		LockedPaths: s.resolver.LockedPaths(),
-	}), nil
+	}, nil
 }
 
-func (s *SettingsService) GetEffectiveSettings(ctx context.Context, req *connect.Request[v1.GetEffectiveSettingsRequest]) (*connect.Response[v1.GetEffectiveSettingsResponse], error) {
-	scope := req.Msg.GetScope()
+func (s *SettingsService) GetEffectiveSettings(ctx context.Context, req *v1.GetEffectiveSettingsRequest) (*v1.GetEffectiveSettingsResponse, error) {
+	scope := req.GetScope()
 	if scope.GetType() == v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_UNSPECIFIED {
 		scope = &v1.SettingsScope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM}
 	}
@@ -152,13 +152,13 @@ func (s *SettingsService) GetEffectiveSettings(ctx context.Context, req *connect
 	// Signed out and anonymous callers get the public subset
 	if user := auth.UserFromContext(ctx); user == nil || user.IsAnonymous() {
 		if scope.GetType() != v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM {
-			return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+			return nil, connect.NewError(connect.CodeUnauthenticated, "")
 		}
 		eff, _, err := s.resolver.Effective(ctx, scope.GetType(), "")
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
-		return connect.NewResponse(&v1.GetEffectiveSettingsResponse{Settings: publicSubset(ctx, eff)}), nil
+		return &v1.GetEffectiveSettingsResponse{Settings: publicSubset(ctx, eff)}, nil
 	}
 
 	if err := s.requireScopeRead(ctx, scope); err != nil {
@@ -166,51 +166,51 @@ func (s *SettingsService) GetEffectiveSettings(ctx context.Context, req *connect
 	}
 	eff, prov, err := s.resolver.Effective(ctx, scope.GetType(), scope.GetScopeId())
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	out := proto.Clone(eff).(*v1.Settings)
 	settings.Redact(out)
-	return connect.NewResponse(&v1.GetEffectiveSettingsResponse{Settings: out, Provenance: prov}), nil
+	return &v1.GetEffectiveSettingsResponse{Settings: out, Provenance: prov}, nil
 }
 
-func (s *SettingsService) UpdateSettings(ctx context.Context, req *connect.Request[v1.UpdateSettingsRequest]) (*connect.Response[v1.UpdateSettingsResponse], error) {
-	scope := req.Msg.GetScope()
+func (s *SettingsService) UpdateSettings(ctx context.Context, req *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error) {
+	scope := req.GetScope()
 	if err := s.requireScopeAdmin(ctx, scope); err != nil {
 		return nil, err
 	}
-	patch := req.Msg.GetSettings()
+	patch := req.GetSettings()
 	if patch == nil {
 		patch = &v1.Settings{}
 	}
 	if err := validateSettingsPatch(patch); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 	if err := s.checkDirectoryNotSelf(ctx, patch); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
-	stored, err := s.resolver.Update(ctx, scope.GetType(), scope.GetScopeId(), patch, req.Msg.GetUpdateMask().GetPaths())
+	stored, err := s.resolver.Update(ctx, scope.GetType(), scope.GetScopeId(), patch, req.GetUpdateMask().GetPaths())
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
 	if user := auth.UserFromContext(ctx); user != nil {
 		s.log.Info("settings updated scope=%v/%s by=%s paths=%v",
-			scope.GetType(), scope.GetScopeId(), user.Username, req.Msg.GetUpdateMask().GetPaths())
+			scope.GetType(), scope.GetScopeId(), user.Username, req.GetUpdateMask().GetPaths())
 	}
 
 	eff, prov, err := s.resolver.Effective(ctx, scope.GetType(), scope.GetScopeId())
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	storedOut := proto.Clone(stored).(*v1.Settings)
 	effOut := proto.Clone(eff).(*v1.Settings)
 	settings.Redact(storedOut)
 	settings.Redact(effOut)
-	return connect.NewResponse(&v1.UpdateSettingsResponse{
+	return &v1.UpdateSettingsResponse{
 		Stored:    &v1.GetSettingsResponse{Settings: storedOut, LockedPaths: s.resolver.LockedPaths()},
 		Effective: &v1.GetEffectiveSettingsResponse{Settings: effOut, Provenance: prov},
-	}), nil
+	}, nil
 }
 
 // An acme client pointed at this instance dials itself

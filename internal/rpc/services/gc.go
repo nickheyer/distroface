@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/settings"
@@ -32,17 +32,17 @@ func NewGCService(collector *admin.Collector, store *stores.Store, registryPath 
 	return &GCService{collector: collector, store: store, registryPath: registryPath, res: res, log: log}
 }
 
-func (s *GCService) RunGC(ctx context.Context, req *connect.Request[v1.RunGCRequest]) (*connect.Response[v1.RunGCResponse], error) {
-	if err := s.collector.Start(req.Msg.DryRun, req.Msg.RemoveUntagged); err != nil {
+func (s *GCService) RunGC(ctx context.Context, req *v1.RunGCRequest) (*v1.RunGCResponse, error) {
+	if err := s.collector.Start(req.DryRun, req.RemoveUntagged); err != nil {
 		if errors.Is(err, admin.ErrAlreadyRunning) {
-			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 		}
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
-	return connect.NewResponse(&v1.RunGCResponse{}), nil
+	return &v1.RunGCResponse{}, nil
 }
 
-func (s *GCService) GetGCStatus(ctx context.Context, req *connect.Request[v1.GetGCStatusRequest]) (*connect.Response[v1.GetGCStatusResponse], error) {
+func (s *GCService) GetGCStatus(ctx context.Context, req *v1.GetGCStatusRequest) (*v1.GetGCStatusResponse, error) {
 	running, last := s.collector.Status()
 	gc := s.res.System(ctx).GetGc()
 
@@ -62,25 +62,25 @@ func (s *GCService) GetGCStatus(ctx context.Context, req *connect.Request[v1.Get
 			Error:          last.Err,
 		}
 	}
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }
 
-func (s *GCService) GetStorageUsage(ctx context.Context, req *connect.Request[v1.GetStorageUsageRequest]) (*connect.Response[v1.GetStorageUsageResponse], error) {
+func (s *GCService) GetStorageUsage(ctx context.Context, req *v1.GetStorageUsageRequest) (*v1.GetStorageUsageResponse, error) {
 	resp := &v1.GetStorageUsageResponse{}
 
 	registryBytes, namespaces, err := registryUsage(s.registryPath)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("scanning registry storage: %w", err))
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("scanning registry storage: %w", err).Error())
 	}
 	resp.RegistryBytes = registryBytes
 	resp.RegistryNamespaces = namespaces
 
 	if resp.ArtifactBytes, err = s.store.ArtifactUniqueBlobBytes(ctx); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	repos, _, err := s.store.ListArtifactRepositories(ctx, stores.ArtifactRepoListOptions{IncludePrivate: true})
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	ids := make([]int64, 0, len(repos))
 	for _, r := range repos {
@@ -88,7 +88,7 @@ func (s *GCService) GetStorageUsage(ctx context.Context, req *connect.Request[v1
 	}
 	stats, err := s.store.GetArtifactRepoStats(ctx, ids)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	for _, r := range repos {
 		st := stats[r.ID]
@@ -98,7 +98,7 @@ func (s *GCService) GetStorageUsage(ctx context.Context, req *connect.Request[v1
 	}
 	resp.ArtifactRepos = largestUsageEntries(resp.ArtifactRepos)
 
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }
 
 // Walks distribution v3 filesystem layout attributing blob bytes per namespace

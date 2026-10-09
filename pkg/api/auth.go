@@ -8,7 +8,7 @@ import (
 	"syscall"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"github.com/spf13/cobra"
@@ -17,49 +17,51 @@ import (
 
 // Stored tokens must not leak into login, use a bare client
 func bareAuthClient() distrofacev1connect.AuthServiceClient {
-	return distrofacev1connect.NewAuthServiceClient(client.HTTPClient, client.BaseURL)
+	return distrofacev1connect.NewAuthServiceClient(client.bareRPC())
 }
 
 // Exchanges credentials for a session with a known expiry
 func login(ctx context.Context, username, password string) (token string, canonical string, expiry time.Time, err error) {
 	auth := bareAuthClient()
 
-	resp, err := auth.Login(ctx, connect.NewRequest(&v1.LoginRequest{
+	resp, err := auth.Login(ctx, &v1.LoginRequest{
 		Identifier: username,
 		Password:   password,
-	}))
+	})
 	if err != nil {
 		return "", "", time.Time{}, rpcErr(err)
 	}
-	token = resp.Msg.GetSessionToken()
+	token = resp.GetSessionToken()
 	if token == "" {
 		return "", "", time.Time{}, fmt.Errorf("no token in login response")
 	}
-	canonical = resp.Msg.GetUser().GetUsername()
+	canonical = resp.GetUser().GetUsername()
 	if canonical == "" {
 		canonical = username
 	}
 
 	// Login carries no expiry, an immediate refresh does
-	refReq := connect.NewRequest(&v1.RefreshSessionRequest{})
-	refReq.Header().Set("Authorization", "Bearer "+token)
+	refReq := &v1.RefreshSessionRequest{}
+	ctx, info := connect.NewClientContext(ctx)
+	info.RequestHeader().Set("Authorization", "Bearer "+token)
 	refResp, err := auth.RefreshSession(ctx, refReq)
 	if err != nil {
 		debugf("Post-login refresh failed (%v), assuming a short session", err)
 		return token, canonical, time.Now().Add(time.Hour), nil
 	}
-	return refResp.Msg.GetSessionToken(), canonical, time.Unix(refResp.Msg.GetExpiresAt(), 0), nil
+	return refResp.GetSessionToken(), canonical, time.Unix(refResp.GetExpiresAt(), 0), nil
 }
 
 // Validates the pat and returns its owner
 func whoami(ctx context.Context, token string) (string, error) {
-	req := connect.NewRequest(&v1.GetCurrentUserRequest{})
-	req.Header().Set("Authorization", "Bearer "+token)
+	req := &v1.GetCurrentUserRequest{}
+	ctx, info := connect.NewClientContext(ctx)
+	info.RequestHeader().Set("Authorization", "Bearer "+token)
 	resp, err := bareAuthClient().GetCurrentUser(ctx, req)
 	if err != nil {
 		return "", rpcErr(err)
 	}
-	return resp.Msg.GetUser().GetUsername(), nil
+	return resp.GetUser().GetUsername(), nil
 }
 
 func newLoginCmd() *cobra.Command {
@@ -148,9 +150,9 @@ func newLogoutCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Best effort server side session revoke, PATs stay valid
 			if token := client.Tokens.GetToken(); token != "" && !client.Tokens.IsPAT() {
-				req := connect.NewRequest(&v1.LogoutRequest{})
-				req.Header().Set("Authorization", "Bearer "+token)
-				if _, err := bareAuthClient().Logout(cmd.Context(), req); err != nil {
+				ctx, info := connect.NewClientContext(cmd.Context())
+				info.RequestHeader().Set("Authorization", "Bearer "+token)
+				if _, err := bareAuthClient().Logout(ctx, &v1.LogoutRequest{}); err != nil {
 					debugf("Server side logout failed: %v", err)
 				}
 			}

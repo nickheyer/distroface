@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
@@ -34,9 +34,9 @@ func NewMirrorService(monitor *mirror.Monitor, enforcer *rbac.Enforcer, access *
 	return &MirrorService{monitor: monitor, enforcer: enforcer, access: access, repos: repos, log: log}
 }
 
-func (s *MirrorService) WatchSyncs(ctx context.Context, req *connect.Request[v1.WatchSyncsRequest], stream *connect.ServerStream[v1.SyncEvent]) error {
+func (s *MirrorService) WatchSyncs(ctx context.Context, req *v1.WatchSyncsRequest, stream distrofacev1connect.MirrorServiceWatchSyncsServerStream) error {
 	if s.monitor == nil {
-		return connect.NewError(connect.CodeUnavailable, nil)
+		return connect.NewError(connect.CodeUnavailable, "")
 	}
 	ch, cancel := s.monitor.Subscribe()
 	defer cancel()
@@ -66,7 +66,7 @@ func (s *MirrorService) WatchSyncs(ctx context.Context, req *connect.Request[v1.
 	}
 }
 
-func (s *MirrorService) sendVisible(ctx context.Context, stream *connect.ServerStream[v1.SyncEvent], ev mirror.Event) error {
+func (s *MirrorService) sendVisible(ctx context.Context, stream distrofacev1connect.MirrorServiceWatchSyncsServerStream, ev mirror.Event) error {
 	if !s.visible(ctx, ev) {
 		return nil
 	}

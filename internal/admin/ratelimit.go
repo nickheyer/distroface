@@ -3,7 +3,6 @@ package admin
 import (
 	"fmt"
 	"net"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -174,8 +173,13 @@ func parseHop(hop string) string {
 	return ""
 }
 
+// Multi valued header map
+type HeaderValues interface {
+	Values(key string) []string
+}
+
 // Rightmost untrusted xff hop from trusted peers else remote addr
-func ClientIP(remoteAddr string, h http.Header) string {
+func ClientIP(remoteAddr string, h HeaderValues) string {
 	remoteIP := remoteAddr
 	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
 		remoteIP = host

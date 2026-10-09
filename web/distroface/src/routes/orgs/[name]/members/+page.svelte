@@ -234,7 +234,7 @@
 					placeholder="Select a user..."
 					searchPlaceholder="Search users..."
 					fetchPage={async (query, pageToken) => {
-						const resp = await rpcClient.user.listUsers({
+						const resp = await rpcClient.user.searchUsers({
 							page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 }
 						});
 						return {

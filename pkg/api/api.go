@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -135,16 +134,16 @@ func (r RepoRef) basePath() string {
 // ── Repositories ─────────────────────────────────────────────────────────
 
 func (c *Client) createArtifactRepo(ctx context.Context, ref RepoRef, description string, private bool) (ArtifactRepository, error) {
-	resp, err := c.Artifacts().CreateArtifactRepository(ctx, connect.NewRequest(&v1.CreateArtifactRepositoryRequest{
+	resp, err := c.Artifacts().CreateArtifactRepository(ctx, &v1.CreateArtifactRepositoryRequest{
 		Name:        ref.Name,
 		Namespace:   ref.Namespace,
 		Description: description,
 		IsPrivate:   private,
-	}))
+	})
 	if err != nil {
 		return ArtifactRepository{}, rpcErr(err)
 	}
-	return repoFromProto(resp.Msg.GetRepository()), nil
+	return repoFromProto(resp.GetRepository()), nil
 }
 
 func (c *Client) listArtifactRepos(ctx context.Context, namespace string) ([]ArtifactRepository, error) {
@@ -152,17 +151,17 @@ func (c *Client) listArtifactRepos(ctx context.Context, namespace string) ([]Art
 	var repos []ArtifactRepository
 	token := ""
 	for {
-		resp, err := rpc.ListArtifactRepositories(ctx, connect.NewRequest(&v1.ListArtifactRepositoriesRequest{
+		resp, err := rpc.ListArtifactRepositories(ctx, &v1.ListArtifactRepositoriesRequest{
 			Namespace: namespace,
 			Page:      &v1.PageRequest{PageSize: maxPageSize, PageToken: token},
-		}))
+		})
 		if err != nil {
 			return nil, rpcErr(err)
 		}
-		for _, r := range resp.Msg.Repositories {
+		for _, r := range resp.Repositories {
 			repos = append(repos, repoFromProto(r))
 		}
-		token = resp.Msg.GetPage().GetNextPageToken()
+		token = resp.GetPage().GetNextPageToken()
 		if token == "" {
 			return repos, nil
 		}
@@ -175,14 +174,14 @@ func (c *Client) listArtifactRepos(ctx context.Context, namespace string) ([]Art
 func (c *Client) uploadArtifact(ctx context.Context, ref RepoRef, filePath, version, artifactPath string, properties map[string]string) error {
 	rpc := c.Artifacts()
 
-	initResp, err := rpc.InitiateArtifactUpload(ctx, connect.NewRequest(&v1.InitiateArtifactUploadRequest{
+	initResp, err := rpc.InitiateArtifactUpload(ctx, &v1.InitiateArtifactUploadRequest{
 		RepoName:  ref.Name,
 		Namespace: ref.Namespace,
-	}))
+	})
 	if err != nil {
 		return rpcErr(err)
 	}
-	uploadURL := initResp.Msg.GetUploadUrl()
+	uploadURL := initResp.GetUploadUrl()
 	if uploadURL == "" {
 		return fmt.Errorf("server did not return an upload location")
 	}
@@ -199,14 +198,14 @@ func (c *Client) uploadArtifact(ctx context.Context, ref RepoRef, filePath, vers
 	}
 	resp.Body.Close()
 
-	_, err = rpc.CompleteArtifactUpload(ctx, connect.NewRequest(&v1.CompleteArtifactUploadRequest{
+	_, err = rpc.CompleteArtifactUpload(ctx, &v1.CompleteArtifactUploadRequest{
 		RepoName:   ref.Name,
 		Namespace:  ref.Namespace,
-		UploadId:   initResp.Msg.GetUploadId(),
+		UploadId:   initResp.GetUploadId(),
 		Version:    version,
 		Path:       artifactPath,
 		Properties: properties,
-	}))
+	})
 	if err != nil {
 		return rpcErr(err)
 	}
@@ -256,12 +255,12 @@ func (c *Client) downloadArtifacts(ctx context.Context, ref RepoRef, q url.Value
 }
 
 func (c *Client) deleteArtifact(ctx context.Context, ref RepoRef, version, path string) error {
-	_, err := c.Artifacts().DeleteArtifact(ctx, connect.NewRequest(&v1.DeleteArtifactRequest{
+	_, err := c.Artifacts().DeleteArtifact(ctx, &v1.DeleteArtifactRequest{
 		RepoName:  ref.Name,
 		Namespace: ref.Namespace,
 		Version:   version,
 		Path:      path,
-	}))
+	})
 	if err != nil {
 		return rpcErr(err)
 	}
@@ -327,7 +326,7 @@ func (c *Client) searchArtifacts(ctx context.Context, opts SearchOptions) (*Sear
 	rpc := c.Artifacts()
 	results := []Artifact{}
 	for {
-		resp, err := rpc.SearchArtifacts(ctx, connect.NewRequest(&v1.SearchArtifactsRequest{
+		resp, err := rpc.SearchArtifacts(ctx, &v1.SearchArtifactsRequest{
 			RepoName:   opts.Ref.Name,
 			Namespace:  opts.Ref.Namespace,
 			Properties: opts.Properties,
@@ -337,15 +336,15 @@ func (c *Client) searchArtifacts(ctx context.Context, opts SearchOptions) (*Sear
 				Query:     opts.query(),
 				OrderBy:   strings.ToLower(sortField + " " + order),
 			},
-		}))
+		})
 		if err != nil {
 			return nil, rpcErr(err)
 		}
 
-		for _, a := range resp.Msg.Artifacts {
+		for _, a := range resp.Artifacts {
 			results = append(results, artifactFromProto(a))
 		}
-		token = resp.Msg.GetPage().GetNextPageToken()
+		token = resp.GetPage().GetNextPageToken()
 
 		if token == "" || (opts.Num > 0 && len(results) >= opts.Num) {
 			break

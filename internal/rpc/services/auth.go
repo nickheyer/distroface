@@ -5,11 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -40,8 +39,8 @@ func NewAuthService(store *stores.Store, manager *auth.Manager, enforcer *rbac.E
 	return &AuthService{store: store, authManager: manager, enforcer: enforcer, oidcHandler: oidcHandler, log: log}
 }
 
-func (s *AuthService) Register(ctx context.Context, req *connect.Request[v1.RegisterRequest]) (*connect.Response[v1.RegisterResponse], error) {
-	msg := req.Msg
+func (s *AuthService) Register(ctx context.Context, req *v1.RegisterRequest) (*v1.RegisterResponse, error) {
+	msg := req
 
 	// Validate an invite code if provided
 	var invite *storage.RegistrationInvite
@@ -49,20 +48,20 @@ func (s *AuthService) Register(ctx context.Context, req *connect.Request[v1.Regi
 		var err error
 		invite, err = s.store.GetRegistrationInviteByCode(ctx, *msg.InviteCode)
 		if err != nil || invite == nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid invite code"))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid invite code")
 		}
 		if invite.ExpiresAt != nil && invite.ExpiresAt.Before(time.Now()) {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invite has expired"))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "invite has expired")
 		}
 		if invite.MaxUses > 0 && invite.UseCount >= invite.MaxUses {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invite has reached maximum uses"))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "invite has reached maximum uses")
 		}
 		if invite.PinHash != "" {
 			if msg.InvitePin == nil || *msg.InvitePin == "" {
-				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invite PIN is required"))
+				return nil, connect.Errorf(connect.CodeInvalidArgument, "invite PIN is required")
 			}
 			if bcrypt.CompareHashAndPassword([]byte(invite.PinHash), []byte(*msg.InvitePin)) != nil {
-				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid invite PIN"))
+				return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid invite PIN")
 			}
 		}
 	}
@@ -71,48 +70,48 @@ func (s *AuthService) Register(ctx context.Context, req *connect.Request[v1.Regi
 		// Allow first user even if registration is disabled
 		count, _ := s.store.CountUsers(ctx)
 		if count > 0 {
-			return nil, connect.NewError(connect.CodePermissionDenied, fmt.Errorf("registration is disabled"))
+			return nil, connect.Errorf(connect.CodePermissionDenied, "registration is disabled")
 		}
 	}
 
 	if msg.Username == "" || msg.Password == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
 	if !usernameRegex.MatchString(msg.Username) {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
 	if len(msg.Password) < 8 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
 	existing, err := s.store.GetUserByUsername(ctx, msg.Username)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if existing != nil {
-		return nil, connect.NewError(connect.CodeAlreadyExists, nil)
+		return nil, connect.NewError(connect.CodeAlreadyExists, "")
 	}
 
 	if msg.Email != "" {
 		existing, err = s.store.GetUserByEmail(ctx, msg.Email)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if existing != nil {
-			return nil, connect.NewError(connect.CodeAlreadyExists, nil)
+			return nil, connect.NewError(connect.CodeAlreadyExists, "")
 		}
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(msg.Password), bcrypt.DefaultCost)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	count, err := s.store.CountUsers(ctx)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	var emailPtr *string
@@ -130,7 +129,7 @@ func (s *AuthService) Register(ctx context.Context, req *connect.Request[v1.Regi
 	}
 
 	if err := s.store.CreateUser(ctx, user); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	// First user gets admin role
@@ -167,135 +166,137 @@ func (s *AuthService) Register(ctx context.Context, req *connect.Request[v1.Regi
 	// Login the newly registered user
 	_, _, token, _, err := s.authManager.Login(ctx, msg.Username, msg.Password)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	permissions := s.getPermissionsForRoles(roleNamesOf(roles))
 
-	return connect.NewResponse(&v1.RegisterResponse{
+	return &v1.RegisterResponse{
 		User:         userToProto(user, roles),
 		SessionToken: token,
 		Permissions:  permissions,
-	}), nil
+	}, nil
 }
 
-func (s *AuthService) Login(ctx context.Context, req *connect.Request[v1.LoginRequest]) (*connect.Response[v1.LoginResponse], error) {
-	msg := req.Msg
+func (s *AuthService) Login(ctx context.Context, req *v1.LoginRequest) (*v1.LoginResponse, error) {
+	msg := req
 
 	if msg.Identifier == "" || msg.Password == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
 	user, roleNames, token, _, err := s.authManager.Login(ctx, msg.Identifier, msg.Password)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, err)
+		return nil, connect.NewError(connect.CodeUnauthenticated, err.Error()).WithCause(err)
 	}
 
 	roles, _ := s.store.GetUserRoles(ctx, user.ID)
 	permissions := s.getPermissionsForRoles(roleNames)
 
-	return connect.NewResponse(&v1.LoginResponse{
+	return &v1.LoginResponse{
 		User:         userToProto(user, roles),
 		SessionToken: token,
 		Permissions:  permissions,
-	}), nil
+	}, nil
 }
 
-func (s *AuthService) Logout(ctx context.Context, req *connect.Request[v1.LogoutRequest]) (*connect.Response[v1.LogoutResponse], error) {
-	token := auth.ExtractToken(req.Header())
+func (s *AuthService) Logout(ctx context.Context, req *v1.LogoutRequest) (*v1.LogoutResponse, error) {
+	info, _ := connect.CallInfoForServerContext(ctx)
+	token := auth.ExtractToken(info.RequestHeader())
 	if token != "" {
 		_ = s.authManager.Logout(ctx, token)
 	}
 
-	return connect.NewResponse(&v1.LogoutResponse{}), nil
+	return &v1.LogoutResponse{}, nil
 }
 
-func (s *AuthService) GetCurrentUser(ctx context.Context, req *connect.Request[v1.GetCurrentUserRequest]) (*connect.Response[v1.GetCurrentUserResponse], error) {
+func (s *AuthService) GetCurrentUser(ctx context.Context, req *v1.GetCurrentUserRequest) (*v1.GetCurrentUserResponse, error) {
 	authUser := auth.UserFromContext(ctx)
 	if authUser == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
 	user, err := s.store.GetUserByID(ctx, authUser.ID)
 	if err != nil || user == nil {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 
 	roles, _ := s.store.GetUserRoles(ctx, user.ID)
 	permissions := s.getPermissionsForRoles(roleNamesOf(roles))
 
-	return connect.NewResponse(&v1.GetCurrentUserResponse{
+	return &v1.GetCurrentUserResponse{
 		User:        userToProto(user, roles),
 		Permissions: permissions,
-	}), nil
+	}, nil
 }
 
-func (s *AuthService) RefreshSession(ctx context.Context, req *connect.Request[v1.RefreshSessionRequest]) (*connect.Response[v1.RefreshSessionResponse], error) {
-	token := auth.ExtractToken(req.Header())
+func (s *AuthService) RefreshSession(ctx context.Context, req *v1.RefreshSessionRequest) (*v1.RefreshSessionResponse, error) {
+	info, _ := connect.CallInfoForServerContext(ctx)
+	token := auth.ExtractToken(info.RequestHeader())
 	if token == "" || strings.HasPrefix(token, "df_") {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("a session token is required"))
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "a session token is required")
 	}
 
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
 	newToken, expiresAt, err := s.authManager.IssueSession(ctx, user.ID)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	// Old session dies once the new one exists
 	_ = s.authManager.Logout(ctx, token)
 
-	return connect.NewResponse(&v1.RefreshSessionResponse{
+	return &v1.RefreshSessionResponse{
 		SessionToken: newToken,
 		ExpiresAt:    expiresAt.Unix(),
-	}), nil
+	}, nil
 }
 
-func (s *AuthService) GetAuthStatus(ctx context.Context, req *connect.Request[v1.GetAuthStatusRequest]) (*connect.Response[v1.GetAuthStatusResponse], error) {
+func (s *AuthService) GetAuthStatus(ctx context.Context, req *v1.GetAuthStatusRequest) (*v1.GetAuthStatusResponse, error) {
 	count, _ := s.store.CountUsers(ctx)
 	authCfg := s.authManager.Settings().System(ctx).GetAuth()
 
-	return connect.NewResponse(&v1.GetAuthStatusResponse{
+	return &v1.GetAuthStatusResponse{
 		LocalEnabled:        authCfg.GetLocalEnabled(),
 		OidcEnabled:         authCfg.GetOidc().GetEnabled(),
 		RegistrationEnabled: authCfg.GetLocalEnabled() && authCfg.GetLocalAllowRegistration(),
 		AnonymousAccess:     portal.AnonymousAllowed(ctx, authCfg.GetAnonymousAccess()),
 		FirstUserSetup:      count == 0,
-	}), nil
+	}, nil
 }
 
-func (s *AuthService) GetOIDCLoginURL(ctx context.Context, req *connect.Request[v1.GetOIDCLoginURLRequest]) (*connect.Response[v1.GetOIDCLoginURLResponse], error) {
+func (s *AuthService) GetOIDCLoginURL(ctx context.Context, req *v1.GetOIDCLoginURLRequest) (*v1.GetOIDCLoginURLResponse, error) {
 	if s.oidcHandler == nil || !s.oidcHandler.IsEnabled() {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("OIDC is not enabled"))
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "OIDC is not enabled")
 	}
-	return connect.NewResponse(&v1.GetOIDCLoginURLResponse{
+	return &v1.GetOIDCLoginURLResponse{
 		RedirectUrl: "/api/v1/auth/oidc/login",
-	}), nil
+	}, nil
 }
 
-func (s *AuthService) CreateInvite(ctx context.Context, req *connect.Request[v1.CreateInviteRequest]) (*connect.Response[v1.CreateInviteResponse], error) {
-	msg := req.Msg
+func (s *AuthService) CreateInvite(ctx context.Context, req *v1.CreateInviteRequest) (*v1.CreateInviteResponse, error) {
+	msg := req
 	authUser := auth.UserFromContext(ctx)
 	if authUser == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
 	// Validate that all specified roles exist
 	for _, roleID := range msg.RoleIds {
 		role, _ := s.store.GetRole(ctx, roleID)
 		if role == nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("role %q does not exist", roleID))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "role %q does not exist", roleID)
 		}
 	}
 
 	// Generate a crypto-random code
 	rawCode := make([]byte, 16)
 	if _, err := rand.Read(rawCode); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	code := base64.RawURLEncoding.EncodeToString(rawCode)
 
@@ -304,7 +305,7 @@ func (s *AuthService) CreateInvite(ctx context.Context, req *connect.Request[v1.
 	if msg.Pin != nil && *msg.Pin != "" {
 		hash, err := bcrypt.GenerateFromPassword([]byte(*msg.Pin), bcrypt.DefaultCost)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		pinHash = string(hash)
 	}
@@ -333,25 +334,25 @@ func (s *AuthService) CreateInvite(ctx context.Context, req *connect.Request[v1.
 	}
 
 	if err := s.store.CreateRegistrationInvite(ctx, invite); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.CreateInviteResponse{
+	return &v1.CreateInviteResponse{
 		Invite: s.inviteToProto(ctx, invite),
-	}), nil
+	}, nil
 }
 
-func (s *AuthService) ListInvites(ctx context.Context, req *connect.Request[v1.ListInvitesRequest]) (*connect.Response[v1.ListInvitesResponse], error) {
-	limit, offset := pages.Parse(req.Msg.Page)
+func (s *AuthService) ListInvites(ctx context.Context, req *v1.ListInvitesRequest) (*v1.ListInvitesResponse, error) {
+	limit, offset := pages.Parse(req.Page)
 
-	q := pages.ParseQuery(req.Msg.Page)
+	q := pages.ParseQuery(req.Page)
 	if err := stores.InvitesQuery.Validate(q); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
 	invites, total, err := s.store.ListRegistrationInvites(ctx, q, limit, offset)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	protoInvites := make([]*v1.RegistrationInvite, len(invites))
@@ -359,55 +360,55 @@ func (s *AuthService) ListInvites(ctx context.Context, req *connect.Request[v1.L
 		protoInvites[i] = s.inviteToProto(ctx, inv)
 	}
 
-	return connect.NewResponse(&v1.ListInvitesResponse{
+	return &v1.ListInvitesResponse{
 		Invites: protoInvites,
 		Page:    pages.Info(offset, limit, total),
-	}), nil
+	}, nil
 }
 
-func (s *AuthService) GetInvite(ctx context.Context, req *connect.Request[v1.GetInviteRequest]) (*connect.Response[v1.GetInviteResponse], error) {
-	if req.Msg.Id == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+func (s *AuthService) GetInvite(ctx context.Context, req *v1.GetInviteRequest) (*v1.GetInviteResponse, error) {
+	if req.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	invite, err := s.store.GetRegistrationInvite(ctx, req.Msg.Id)
+	invite, err := s.store.GetRegistrationInvite(ctx, req.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if invite == nil {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 
-	return connect.NewResponse(&v1.GetInviteResponse{
+	return &v1.GetInviteResponse{
 		Invite: s.inviteToProto(ctx, invite),
-	}), nil
+	}, nil
 }
 
-func (s *AuthService) DeleteInvite(ctx context.Context, req *connect.Request[v1.DeleteInviteRequest]) (*connect.Response[v1.DeleteInviteResponse], error) {
-	if req.Msg.Id == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+func (s *AuthService) DeleteInvite(ctx context.Context, req *v1.DeleteInviteRequest) (*v1.DeleteInviteResponse, error) {
+	if req.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	if err := s.store.DeleteRegistrationInvite(ctx, req.Msg.Id); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+	if err := s.store.DeleteRegistrationInvite(ctx, req.Id); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.DeleteInviteResponse{}), nil
+	return &v1.DeleteInviteResponse{}, nil
 }
 
-func (s *AuthService) BulkDeleteInvites(ctx context.Context, req *connect.Request[v1.BulkDeleteInvitesRequest]) (*connect.Response[v1.BulkDeleteInvitesResponse], error) {
-	if len(req.Msg.Ids) == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no invite ids provided"))
+func (s *AuthService) BulkDeleteInvites(ctx context.Context, req *v1.BulkDeleteInvitesRequest) (*v1.BulkDeleteInvitesResponse, error) {
+	if len(req.Ids) == 0 {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "no invite ids provided")
 	}
 
-	existing, err := s.store.FilterExistingInviteIDs(ctx, req.Msg.Ids)
+	existing, err := s.store.FilterExistingInviteIDs(ctx, req.Ids)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	resp := &v1.BulkDeleteInvitesResponse{}
 	var targets []string
-	for _, id := range req.Msg.Ids {
+	for _, id := range req.Ids {
 		if !existing[id] {
 			resp.Errors = append(resp.Errors, &v1.BulkOperationError{Id: id, Error: "invite not found"})
 			continue
@@ -417,35 +418,35 @@ func (s *AuthService) BulkDeleteInvites(ctx context.Context, req *connect.Reques
 
 	deleted, err := s.store.BulkDeleteRegistrationInvites(ctx, targets)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	resp.DeletedCount = int32(deleted)
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }
 
-func (s *AuthService) ValidateInvite(ctx context.Context, req *connect.Request[v1.ValidateInviteRequest]) (*connect.Response[v1.ValidateInviteResponse], error) {
-	if req.Msg.Code == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+func (s *AuthService) ValidateInvite(ctx context.Context, req *v1.ValidateInviteRequest) (*v1.ValidateInviteResponse, error) {
+	if req.Code == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	invite, err := s.store.GetRegistrationInviteByCode(ctx, req.Msg.Code)
+	invite, err := s.store.GetRegistrationInviteByCode(ctx, req.Code)
 	if err != nil || invite == nil {
-		return connect.NewResponse(&v1.ValidateInviteResponse{Valid: false}), nil
+		return &v1.ValidateInviteResponse{Valid: false}, nil
 	}
 
 	if invite.ExpiresAt != nil && invite.ExpiresAt.Before(time.Now()) {
-		return connect.NewResponse(&v1.ValidateInviteResponse{Valid: false}), nil
+		return &v1.ValidateInviteResponse{Valid: false}, nil
 	}
 
 	if invite.MaxUses > 0 && invite.UseCount >= invite.MaxUses {
-		return connect.NewResponse(&v1.ValidateInviteResponse{Valid: false}), nil
+		return &v1.ValidateInviteResponse{Valid: false}, nil
 	}
 
-	return connect.NewResponse(&v1.ValidateInviteResponse{
+	return &v1.ValidateInviteResponse{
 		Valid:       true,
 		RequiresPin: invite.PinHash != "",
-	}), nil
+	}, nil
 }
 
 func (s *AuthService) inviteToProto(ctx context.Context, inv *storage.RegistrationInvite) *v1.RegistrationInvite {

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
@@ -63,10 +63,10 @@ func (s *Service) isSystemAdmin(ctx context.Context) bool {
 // System scope needs settings manage, only wildcard admins pass
 func (s *Service) requireSystemAdmin(ctx context.Context) error {
 	if auth.UserFromContext(ctx) == nil {
-		return connect.NewError(connect.CodeUnauthenticated, nil)
+		return connect.NewError(connect.CodeUnauthenticated, "")
 	}
 	if !s.isSystemAdmin(ctx) {
-		return connect.NewError(connect.CodePermissionDenied, nil)
+		return connect.NewError(connect.CodePermissionDenied, "")
 	}
 	return nil
 }
@@ -75,20 +75,20 @@ func (s *Service) requireSystemAdmin(ctx context.Context) error {
 func (s *Service) requireOrgAdmin(ctx context.Context, orgID string) (*storage.Organization, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 	org, err := s.store.GetOrganizationByID(ctx, orgID)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if org == nil {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
 		member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if member == nil || (member.Role != storage.OrgRoleOwner && member.Role != storage.OrgRoleAdmin) {
-			return nil, connect.NewError(connect.CodePermissionDenied, nil)
+			return nil, connect.NewError(connect.CodePermissionDenied, "")
 		}
 	}
 	return org, nil
@@ -147,10 +147,10 @@ func (s *Service) resolveCertTarget(ctx context.Context, scope v1.TLSScope, orgI
 	case v1.TLSScope_TLS_SCOPE_PORTAL:
 		portal, err := s.store.GetRegistryPortal(ctx, portalID)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if portal == nil {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("portal not found"))
+			return nil, connect.Errorf(connect.CodeNotFound, "portal not found")
 		}
 		org, err := s.requireOrgAdmin(ctx, portal.OrgID)
 		if err != nil {
@@ -159,24 +159,24 @@ func (s *Service) resolveCertTarget(ctx context.Context, scope v1.TLSScope, orgI
 		target.OrgID = org.ID
 		target.PortalID = portal.ID
 	default:
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid scope %v", scope))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid scope %v", scope)
 	}
 	return target, nil
 }
 
-func (s *Service) UploadTLSCertificate(ctx context.Context, req *connect.Request[v1.UploadTLSCertificateRequest]) (*connect.Response[v1.UploadTLSCertificateResponse], error) {
-	msg := req.Msg
+func (s *Service) UploadTLSCertificate(ctx context.Context, req *v1.UploadTLSCertificateRequest) (*v1.UploadTLSCertificateResponse, error) {
+	msg := req
 	target, err := s.resolveCertTarget(ctx, msg.Scope, msg.OrgId, msg.PortalId)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := tls.X509KeyPair([]byte(msg.CertPem), []byte(msg.KeyPem)); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid certificate or key: %v", err))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid certificate or key: %v", err)
 	}
 	isCAScope := target.Scope == v1.TLSScope_TLS_SCOPE_ORG_CA || target.Scope == v1.TLSScope_TLS_SCOPE_APP_CA
 	if isCAScope {
 		if err := ValidateCABundle([]byte(msg.CertPem)); err != nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, err)
+			return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 		}
 	}
 	target.CertPEM = msg.CertPem
@@ -185,7 +185,7 @@ func (s *Service) UploadTLSCertificate(ctx context.Context, req *connect.Request
 		target.CreatedBy = user.Username
 	}
 	if err := s.store.SaveTLSCertificate(ctx, target); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	s.log.Info("tls material uploaded: scope %v org %s portal %s", target.Scope, target.OrgID, target.PortalID)
 	// A reimported root re-derives the acme issuer and flags orphans
@@ -195,13 +195,13 @@ func (s *Service) UploadTLSCertificate(ctx context.Context, req *connect.Request
 		s.engine.Invalidate(ctx)
 	}
 
-	return connect.NewResponse(&v1.UploadTLSCertificateResponse{
+	return &v1.UploadTLSCertificateResponse{
 		Info: materialInfo(target, isCAScope),
-	}), nil
+	}, nil
 }
 
-func (s *Service) DeleteTLSCertificate(ctx context.Context, req *connect.Request[v1.DeleteTLSCertificateRequest]) (*connect.Response[v1.DeleteTLSCertificateResponse], error) {
-	msg := req.Msg
+func (s *Service) DeleteTLSCertificate(ctx context.Context, req *v1.DeleteTLSCertificateRequest) (*v1.DeleteTLSCertificateResponse, error) {
+	msg := req
 	target, err := s.resolveCertTarget(ctx, msg.Scope, msg.OrgId, msg.PortalId)
 	if err != nil {
 		return nil, err
@@ -209,12 +209,12 @@ func (s *Service) DeleteTLSCertificate(ctx context.Context, req *connect.Request
 	// Removing the root strands every intermediate that chains to it
 	if target.Scope == v1.TLSScope_TLS_SCOPE_APP_CA {
 		if deps := s.engine.OrgICADependents(ctx); len(deps) > 0 {
-			return nil, connect.NewError(connect.CodeFailedPrecondition,
-				fmt.Errorf("%d organization intermediate cas chain to this root, re-issue or remove them first", len(deps)))
+			return nil, connect.Errorf(connect.CodeFailedPrecondition,
+				"%d organization intermediate cas chain to this root, re-issue or remove them first", len(deps))
 		}
 	}
 	if err := s.store.DeleteTLSCertificate(ctx, target.Scope, target.OrgID, target.PortalID); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	// The acme issuer is derived from the root, drop it to re-mint later
 	if target.Scope == v1.TLSScope_TLS_SCOPE_APP_CA {
@@ -223,11 +223,11 @@ func (s *Service) DeleteTLSCertificate(ctx context.Context, req *connect.Request
 	s.engine.Invalidate(ctx)
 	s.log.Info("tls material removed: scope %v org %s portal %s", target.Scope, target.OrgID, target.PortalID)
 
-	return connect.NewResponse(&v1.DeleteTLSCertificateResponse{}), nil
+	return &v1.DeleteTLSCertificateResponse{}, nil
 }
 
-func (s *Service) GetTLSMaterial(ctx context.Context, req *connect.Request[v1.GetTLSMaterialRequest]) (*connect.Response[v1.GetTLSMaterialResponse], error) {
-	msg := req.Msg
+func (s *Service) GetTLSMaterial(ctx context.Context, req *v1.GetTLSMaterialRequest) (*v1.GetTLSMaterialResponse, error) {
+	msg := req
 	resp := &v1.GetTLSMaterialResponse{}
 
 	if msg.OrgId == "" {
@@ -236,15 +236,15 @@ func (s *Service) GetTLSMaterial(ctx context.Context, req *connect.Request[v1.Ge
 		}
 		app, err := s.store.GetTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_APP, "", "")
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		resp.AppCert = materialInfo(app, false)
 		appCA, err := s.store.GetTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_APP_CA, "", "")
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		resp.AppCa = materialInfo(appCA, true)
-		return connect.NewResponse(resp), nil
+		return resp, nil
 	}
 
 	org, err := s.requireOrgAdmin(ctx, msg.OrgId)
@@ -253,12 +253,12 @@ func (s *Service) GetTLSMaterial(ctx context.Context, req *connect.Request[v1.Ge
 	}
 	orgCert, err := s.store.GetTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_ORG, org.ID, "")
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	resp.OrgCert = materialInfo(orgCert, false)
 	orgCA, err := s.store.GetTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_ORG_CA, org.ID, "")
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	resp.OrgCa = materialInfo(orgCA, true)
 	// Flag an intermediate that no longer chains to the current root
@@ -273,32 +273,32 @@ func (s *Service) GetTLSMaterial(ctx context.Context, req *connect.Request[v1.Ge
 	if msg.PortalId != "" {
 		portal, err := s.store.GetRegistryPortal(ctx, msg.PortalId)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if portal == nil || portal.OrgID != org.ID {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("portal not found"))
+			return nil, connect.Errorf(connect.CodeNotFound, "portal not found")
 		}
 		portalCert, err := s.store.GetTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_PORTAL, org.ID, portal.ID)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		resp.PortalCert = materialInfo(portalCert, false)
 	}
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }
 
-func (s *Service) GenerateOrgCA(ctx context.Context, req *connect.Request[v1.GenerateOrgCARequest]) (*connect.Response[v1.GenerateOrgCAResponse], error) {
-	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+func (s *Service) GenerateOrgCA(ctx context.Context, req *v1.GenerateOrgCARequest) (*v1.GenerateOrgCAResponse, error) {
+	org, err := s.requireOrgAdmin(ctx, req.OrgId)
 	if err != nil {
 		return nil, err
 	}
-	cn := strings.TrimSpace(req.Msg.CommonName)
+	cn := strings.TrimSpace(req.CommonName)
 	if cn == "" {
 		cn = org.Name
 	}
 	certPEM, keyPEM, err := GenerateCA(cn)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	record := &storage.TLSCertificate{
 		Scope:   v1.TLSScope_TLS_SCOPE_ORG_CA,
@@ -310,26 +310,26 @@ func (s *Service) GenerateOrgCA(ctx context.Context, req *connect.Request[v1.Gen
 		record.CreatedBy = user.Username
 	}
 	if err := s.store.SaveTLSCertificate(ctx, record); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	s.engine.Invalidate(ctx)
 	s.log.Info("org ca generated: %s (org %s)", cn, org.Name)
 
-	return connect.NewResponse(&v1.GenerateOrgCAResponse{OrgCa: materialInfo(record, true)}), nil
+	return &v1.GenerateOrgCAResponse{OrgCa: materialInfo(record, true)}, nil
 }
 
-func (s *Service) GenerateAppCA(ctx context.Context, req *connect.Request[v1.GenerateAppCARequest]) (*connect.Response[v1.GenerateAppCAResponse], error) {
+func (s *Service) GenerateAppCA(ctx context.Context, req *v1.GenerateAppCARequest) (*v1.GenerateAppCAResponse, error) {
 	if err := s.requireSystemAdmin(ctx); err != nil {
 		return nil, err
 	}
-	cn := strings.TrimSpace(req.Msg.CommonName)
+	cn := strings.TrimSpace(req.CommonName)
 	if cn == "" {
 		// A distinct name avoids colliding with minted leaf hostnames
 		cn = "DistroFace Instance Root CA"
 	}
 	certPEM, keyPEM, err := GenerateRootCA(cn)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	record := &storage.TLSCertificate{
 		Scope:   v1.TLSScope_TLS_SCOPE_APP_CA,
@@ -340,12 +340,12 @@ func (s *Service) GenerateAppCA(ctx context.Context, req *connect.Request[v1.Gen
 		record.CreatedBy = user.Username
 	}
 	if err := s.store.SaveTLSCertificate(ctx, record); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	s.log.Info("instance root ca generated: %s", cn)
 	s.reconcileRoot(ctx)
 
-	return connect.NewResponse(&v1.GenerateAppCAResponse{AppCa: materialInfo(record, true)}), nil
+	return &v1.GenerateAppCAResponse{AppCa: materialInfo(record, true)}, nil
 }
 
 // Re-mints the acme issuer and warns about org intermediates orphaned
@@ -356,25 +356,25 @@ func (s *Service) reconcileRoot(ctx context.Context) {
 	}
 }
 
-func (s *Service) IssueOrgICA(ctx context.Context, req *connect.Request[v1.IssueOrgICARequest]) (*connect.Response[v1.IssueOrgICAResponse], error) {
-	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+func (s *Service) IssueOrgICA(ctx context.Context, req *v1.IssueOrgICARequest) (*v1.IssueOrgICAResponse, error) {
+	org, err := s.requireOrgAdmin(ctx, req.OrgId)
 	if err != nil {
 		return nil, err
 	}
 	root, err := s.store.GetTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_APP_CA, "", "")
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if root == nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("the instance has no root ca, ask a system administrator to create one"))
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "the instance has no root ca, ask a system administrator to create one")
 	}
-	cn := strings.TrimSpace(req.Msg.CommonName)
+	cn := strings.TrimSpace(req.CommonName)
 	if cn == "" {
 		cn = org.Name
 	}
 	certPEM, keyPEM, err := IssueICA(root.CertPEM, root.KeyPEM, cn)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	record := &storage.TLSCertificate{
 		Scope:   v1.TLSScope_TLS_SCOPE_ORG_CA,
@@ -386,34 +386,34 @@ func (s *Service) IssueOrgICA(ctx context.Context, req *connect.Request[v1.Issue
 		record.CreatedBy = user.Username
 	}
 	if err := s.store.SaveTLSCertificate(ctx, record); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	s.engine.Invalidate(ctx)
 	s.log.Info("org ica issued from instance root: %s (org %s)", cn, org.Name)
 
-	return connect.NewResponse(&v1.IssueOrgICAResponse{OrgCa: materialInfo(record, true)}), nil
+	return &v1.IssueOrgICAResponse{OrgCa: materialInfo(record, true)}, nil
 }
 
-func (s *Service) SignCSR(ctx context.Context, req *connect.Request[v1.SignCSRRequest]) (*connect.Response[v1.SignCSRResponse], error) {
-	block, _ := pem.Decode([]byte(req.Msg.CsrPem))
+func (s *Service) SignCSR(ctx context.Context, req *v1.SignCSRRequest) (*v1.SignCSRResponse, error) {
+	block, _ := pem.Decode([]byte(req.CsrPem))
 	if block == nil || block.Type != "CERTIFICATE REQUEST" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("expected a pem certificate request"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "expected a pem certificate request")
 	}
 	csr, err := x509.ParseCertificateRequest(block.Bytes)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid csr: %w", err))
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid csr: %w", err).Error())
 	}
 	if err := csr.CheckSignature(); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("csr signature invalid: %w", err))
+		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("csr signature invalid: %w", err).Error())
 	}
 
 	orgID := ""
-	if req.Msg.OrgId == "" {
+	if req.OrgId == "" {
 		if err := s.requireSystemAdmin(ctx); err != nil {
 			return nil, err
 		}
 	} else {
-		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+		org, err := s.requireOrgAdmin(ctx, req.OrgId)
 		if err != nil {
 			return nil, err
 		}
@@ -422,19 +422,19 @@ func (s *Service) SignCSR(ctx context.Context, req *connect.Request[v1.SignCSRRe
 
 	sans := csrSANs(csr)
 	if len(sans) == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("csr has no subject names"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "csr has no subject names")
 	}
-	signed, err := s.engine.SignServerCert(ctx, orgID, csr.PublicKey, sans, int(req.Msg.ValidityDays))
+	signed, err := s.engine.SignServerCert(ctx, orgID, csr.PublicKey, sans, int(req.ValidityDays))
 	if err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 	}
 	if user := auth.UserFromContext(ctx); user != nil {
-		s.log.Info("csr signed for %v by %s (org %q)", sans, user.Username, req.Msg.OrgId)
+		s.log.Info("csr signed for %v by %s (org %q)", sans, user.Username, req.OrgId)
 	}
-	return connect.NewResponse(&v1.SignCSRResponse{
+	return &v1.SignCSRResponse{
 		CertPem: signed.CertPEM,
 		Cert:    certInfoFromLeaf(signed.Leaf),
-	}), nil
+	}, nil
 }
 
 // Union of the csr common name and dns sans
@@ -460,61 +460,61 @@ func csrSANs(csr *x509.CertificateRequest) []string {
 	return out
 }
 
-func (s *Service) GetCertStatus(ctx context.Context, req *connect.Request[v1.GetCertStatusRequest]) (*connect.Response[v1.GetCertStatusResponse], error) {
-	msg := req.Msg
+func (s *Service) GetCertStatus(ctx context.Context, req *v1.GetCertStatusRequest) (*v1.GetCertStatusResponse, error) {
+	msg := req
 	if msg.OrgId == "" {
 		if err := s.requireSystemAdmin(ctx); err != nil {
 			return nil, err
 		}
-		return connect.NewResponse(s.engine.AppStatus(ctx)), nil
+		return s.engine.AppStatus(ctx), nil
 	}
 	org, err := s.requireOrgAdmin(ctx, msg.OrgId)
 	if err != nil {
 		return nil, err
 	}
 	if msg.PortalId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("portal_id required with org_id"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "portal_id required with org_id")
 	}
 	portal, err := s.store.GetRegistryPortal(ctx, msg.PortalId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if portal == nil || portal.OrgID != org.ID {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("portal not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "portal not found")
 	}
-	return connect.NewResponse(s.engine.PortalStatus(ctx, portal)), nil
+	return s.engine.PortalStatus(ctx, portal), nil
 }
 
-func (s *Service) ListCertificateDomains(ctx context.Context, req *connect.Request[v1.ListCertificateDomainsRequest]) (*connect.Response[v1.ListCertificateDomainsResponse], error) {
+func (s *Service) ListCertificateDomains(ctx context.Context, req *v1.ListCertificateDomainsRequest) (*v1.ListCertificateDomainsResponse, error) {
 	resp := &v1.ListCertificateDomainsResponse{}
-	limit, offset := pages.Parse(req.Msg.Page)
-	q := pages.ParseQuery(req.Msg.Page)
+	limit, offset := pages.Parse(req.Page)
+	q := pages.ParseQuery(req.Page)
 	if err := stores.CertDomainsQuery.Validate(q); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
-	if req.Msg.OrgId != "" {
-		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+	if req.OrgId != "" {
+		org, err := s.requireOrgAdmin(ctx, req.OrgId)
 		if err != nil {
 			return nil, err
 		}
-		domains, total, err := s.store.ListCertificateDomainsByOrg(ctx, org.ID, q, req.Msg.PendingOnly, limit, offset)
+		domains, total, err := s.store.ListCertificateDomainsByOrg(ctx, org.ID, q, req.PendingOnly, limit, offset)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		for _, d := range domains {
 			resp.Domains = append(resp.Domains, s.domainToProto(ctx, d, org.Name))
 		}
 		resp.Page = pages.Info(offset, limit, total)
-		return connect.NewResponse(resp), nil
+		return resp, nil
 	}
 
 	if err := s.requireSystemAdmin(ctx); err != nil {
 		return nil, err
 	}
-	domains, total, err := s.store.ListCertificateDomains(ctx, q, req.Msg.Scope, req.Msg.PendingOnly, limit, offset)
+	domains, total, err := s.store.ListCertificateDomains(ctx, q, req.Scope, req.PendingOnly, limit, offset)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	for _, d := range domains {
 		orgName := ""
@@ -524,28 +524,28 @@ func (s *Service) ListCertificateDomains(ctx context.Context, req *connect.Reque
 		resp.Domains = append(resp.Domains, s.domainToProto(ctx, d, orgName))
 	}
 	resp.Page = pages.Info(offset, limit, total)
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }
 
-func (s *Service) AddCertificateDomain(ctx context.Context, req *connect.Request[v1.AddCertificateDomainRequest]) (*connect.Response[v1.AddCertificateDomainResponse], error) {
-	domain := bareHost(req.Msg.Domain)
+func (s *Service) AddCertificateDomain(ctx context.Context, req *v1.AddCertificateDomainRequest) (*v1.AddCertificateDomainResponse, error) {
+	domain := bareHost(req.Domain)
 	if domain == "" || !domainRegex.MatchString(domain) {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid domain"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid domain")
 	}
 	if err := s.engine.Policy().Blocked(ctx, domain); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
 	record := &storage.CertificateDomain{Domain: domain}
 	orgName := ""
-	if req.Msg.OrgId == "" {
+	if req.OrgId == "" {
 		// Instance level registration, always approved
 		if err := s.requireSystemAdmin(ctx); err != nil {
 			return nil, err
 		}
 		record.Scope = v1.CertificateDomainScope_CERTIFICATE_DOMAIN_SCOPE_SYSTEM
 	} else {
-		org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+		org, err := s.requireOrgAdmin(ctx, req.OrgId)
 		if err != nil {
 			return nil, err
 		}
@@ -556,10 +556,10 @@ func (s *Service) AddCertificateDomain(ctx context.Context, req *connect.Request
 
 	existing, err := s.store.GetCertificateDomainByName(ctx, domain)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if existing != nil {
-		return nil, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("domain already registered"))
+		return nil, connect.Errorf(connect.CodeAlreadyExists, "domain already registered")
 	}
 
 	user := auth.UserFromContext(ctx)
@@ -574,40 +574,40 @@ func (s *Service) AddCertificateDomain(ctx context.Context, req *connect.Request
 		}
 	}
 	if err := s.store.CreateCertificateDomain(ctx, record); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	s.log.Info("certificate domain registered: %s (scope %v approved %v)", domain, record.Scope, record.Approved)
 
-	return connect.NewResponse(&v1.AddCertificateDomainResponse{Domain: s.domainToProto(ctx, record, orgName)}), nil
+	return &v1.AddCertificateDomainResponse{Domain: s.domainToProto(ctx, record, orgName)}, nil
 }
 
-func (s *Service) RemoveCertificateDomain(ctx context.Context, req *connect.Request[v1.RemoveCertificateDomainRequest]) (*connect.Response[v1.RemoveCertificateDomainResponse], error) {
-	record, err := s.store.GetCertificateDomain(ctx, req.Msg.Id)
+func (s *Service) RemoveCertificateDomain(ctx context.Context, req *v1.RemoveCertificateDomainRequest) (*v1.RemoveCertificateDomainResponse, error) {
+	record, err := s.store.GetCertificateDomain(ctx, req.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if record == nil {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 	if err := s.requireDomainAdmin(ctx, record); err != nil {
 		return nil, err
 	}
 
 	if err := s.store.DeleteCertificateDomain(ctx, record.ID); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	s.log.Info("certificate domain removed: %s", record.Domain)
 
-	return connect.NewResponse(&v1.RemoveCertificateDomainResponse{}), nil
+	return &v1.RemoveCertificateDomainResponse{}, nil
 }
 
-func (s *Service) BulkRemoveCertificateDomains(ctx context.Context, req *connect.Request[v1.BulkRemoveCertificateDomainsRequest]) (*connect.Response[v1.BulkRemoveCertificateDomainsResponse], error) {
-	if len(req.Msg.Ids) == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("no domain ids provided"))
+func (s *Service) BulkRemoveCertificateDomains(ctx context.Context, req *v1.BulkRemoveCertificateDomainsRequest) (*v1.BulkRemoveCertificateDomainsResponse, error) {
+	if len(req.Ids) == 0 {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "no domain ids provided")
 	}
-	records, err := s.store.GetCertificateDomainsByIDs(ctx, req.Msg.Ids)
+	records, err := s.store.GetCertificateDomainsByIDs(ctx, req.Ids)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	byID := make(map[string]*storage.CertificateDomain, len(records))
 	for _, r := range records {
@@ -617,7 +617,7 @@ func (s *Service) BulkRemoveCertificateDomains(ctx context.Context, req *connect
 	resp := &v1.BulkRemoveCertificateDomainsResponse{}
 	adminByOrg := map[string]bool{}
 	var deleteIDs []string
-	for _, id := range req.Msg.Ids {
+	for _, id := range req.Ids {
 		record := byID[id]
 		if record == nil {
 			resp.Errors = append(resp.Errors, &v1.BulkOperationError{Id: id, Error: "domain not found"})
@@ -639,25 +639,25 @@ func (s *Service) BulkRemoveCertificateDomains(ctx context.Context, req *connect
 		deleteIDs = append(deleteIDs, id)
 	}
 	if err := s.store.DeleteCertificateDomains(ctx, deleteIDs); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	resp.RemovedCount = int32(len(deleteIDs))
 	if len(deleteIDs) > 0 {
 		s.log.Info("certificate domains removed: %d", len(deleteIDs))
 	}
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }
 
-func (s *Service) ApproveCertificateDomain(ctx context.Context, req *connect.Request[v1.ApproveCertificateDomainRequest]) (*connect.Response[v1.ApproveCertificateDomainResponse], error) {
+func (s *Service) ApproveCertificateDomain(ctx context.Context, req *v1.ApproveCertificateDomainRequest) (*v1.ApproveCertificateDomainResponse, error) {
 	if err := s.requireSystemAdmin(ctx); err != nil {
 		return nil, err
 	}
-	record, err := s.store.GetCertificateDomain(ctx, req.Msg.Id)
+	record, err := s.store.GetCertificateDomain(ctx, req.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if record == nil {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 	if !record.Approved {
 		record.Approved = true
@@ -665,7 +665,7 @@ func (s *Service) ApproveCertificateDomain(ctx context.Context, req *connect.Req
 			record.ApprovedBy = user.Username
 		}
 		if err := s.store.UpdateCertificateDomain(ctx, record); err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		s.log.Info("certificate domain approved: %s (by %s)", record.Domain, record.ApprovedBy)
 	}
@@ -673,20 +673,20 @@ func (s *Service) ApproveCertificateDomain(ctx context.Context, req *connect.Req
 	if record.Org != nil {
 		orgName = record.Org.Name
 	}
-	return connect.NewResponse(&v1.ApproveCertificateDomainResponse{Domain: s.domainToProto(ctx, record, orgName)}), nil
+	return &v1.ApproveCertificateDomainResponse{Domain: s.domainToProto(ctx, record, orgName)}, nil
 }
 
-func (s *Service) IssueCertificate(ctx context.Context, req *connect.Request[v1.IssueCertificateRequest]) (*connect.Response[v1.IssueCertificateResponse], error) {
+func (s *Service) IssueCertificate(ctx context.Context, req *v1.IssueCertificateRequest) (*v1.IssueCertificateResponse, error) {
 	var domain, orgID string
 
-	switch target := req.Msg.Target.(type) {
+	switch target := req.Target.(type) {
 	case *v1.IssueCertificateRequest_DomainId:
 		record, err := s.store.GetCertificateDomain(ctx, target.DomainId)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if record == nil {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("domain not found"))
+			return nil, connect.Errorf(connect.CodeNotFound, "domain not found")
 		}
 		if err := s.requireDomainAdmin(ctx, record); err != nil {
 			return nil, err
@@ -698,16 +698,16 @@ func (s *Service) IssueCertificate(ctx context.Context, req *connect.Request[v1.
 	case *v1.IssueCertificateRequest_PortalId:
 		portal, err := s.store.GetRegistryPortal(ctx, target.PortalId)
 		if err != nil {
-			return nil, connect.NewError(connect.CodeInternal, err)
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		if portal == nil {
-			return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("portal not found"))
+			return nil, connect.Errorf(connect.CodeNotFound, "portal not found")
 		}
 		if _, err := s.requireOrgAdmin(ctx, portal.OrgID); err != nil {
 			return nil, err
 		}
 		if portal.Hostname == "" {
-			return nil, connect.NewError(connect.CodeFailedPrecondition, fmt.Errorf("portal has no hostname"))
+			return nil, connect.Errorf(connect.CodeFailedPrecondition, "portal has no hostname")
 		}
 		domain = bareHost(portal.Hostname)
 		orgID = portal.OrgID
@@ -720,19 +720,19 @@ func (s *Service) IssueCertificate(ctx context.Context, req *connect.Request[v1.
 
 	if orgID != "" {
 		if err := s.engine.Policy().Allowed(ctx, domain, orgID); err != nil {
-			return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+			return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 		}
 		if allowed, _, resetAt := s.orgIssue.Take("org:" + orgID); !allowed {
-			return nil, connect.NewError(connect.CodeResourceExhausted,
-				fmt.Errorf("issuance rate limit reached for this organization, retry in %s", time.Until(resetAt).Round(time.Second)))
+			return nil, connect.Errorf(connect.CodeResourceExhausted,
+				"issuance rate limit reached for this organization, retry in %s", time.Until(resetAt).Round(time.Second))
 		}
 	}
 
 	info, err := s.engine.EnsureCertificate(ctx, domain)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("issuance failed: %w", err))
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("issuance failed: %w", err).Error())
 	}
 	s.log.Info("certificate issued for %s (expires %s)", domain, info.NotAfter.AsTime())
 
-	return connect.NewResponse(&v1.IssueCertificateResponse{Cert: info}), nil
+	return &v1.IssueCertificateResponse{Cert: info}, nil
 }

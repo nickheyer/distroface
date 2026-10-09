@@ -14,7 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"github.com/spf13/viper"
@@ -139,49 +140,115 @@ func newTransport() *http.Transport {
 
 // ── RPC plumbing ─────────────────────────────────────────────────────────
 
+// Shared client with bearer injection and session refresh
+func (c *Client) rpc() *connect.Client {
+	return connect.NewClient(connecthttp.NewTransport(c.HTTPClient, c.BaseURL), c.authInterceptor())
+}
+
+// Stored credentials never ride along, login and refresh use this
+func (c *Client) bareRPC() *connect.Client {
+	return connect.NewClient(connecthttp.NewTransport(c.HTTPClient, c.BaseURL))
+}
+
 func (c *Client) Artifacts() distrofacev1connect.ArtifactServiceClient {
-	return distrofacev1connect.NewArtifactServiceClient(c.HTTPClient, c.BaseURL, c.rpcOpts()...)
+	return distrofacev1connect.NewArtifactServiceClient(c.rpc())
 }
 
 func (c *Client) Auth() distrofacev1connect.AuthServiceClient {
-	return distrofacev1connect.NewAuthServiceClient(c.HTTPClient, c.BaseURL, c.rpcOpts()...)
+	return distrofacev1connect.NewAuthServiceClient(c.rpc())
 }
 
 func (c *Client) Repositories() distrofacev1connect.RepositoryServiceClient {
-	return distrofacev1connect.NewRepositoryServiceClient(c.HTTPClient, c.BaseURL, c.rpcOpts()...)
-}
-
-func (c *Client) rpcOpts() []connect.ClientOption {
-	return []connect.ClientOption{connect.WithInterceptors(c.authInterceptor())}
+	return distrofacev1connect.NewRepositoryServiceClient(c.rpc())
 }
 
 // Bearer header plus proactive and reactive session refresh
-func (c *Client) authInterceptor() connect.UnaryInterceptorFunc {
-	return func(next connect.UnaryFunc) connect.UnaryFunc {
-		return func(ctx context.Context, req connect.AnyRequest) (connect.AnyResponse, error) {
+func (c *Client) authInterceptor() connect.ClientInterceptor {
+	return func(next connect.ClientFunc) connect.ClientFunc {
+		return func(ctx context.Context, spec connect.Spec) (connect.ClientStream, error) {
 			if c.Tokens.IsExpired() {
 				if err := c.refreshToken(ctx); err != nil {
 					return nil, err
 				}
 			}
-			if token := c.Tokens.GetToken(); token != "" {
-				req.Header().Set("Authorization", "Bearer "+token)
+			info, _ := connect.CallInfoForClientContext(ctx)
+			if token := c.Tokens.GetToken(); token != "" && info != nil {
+				info.RequestHeader().Set("Authorization", "Bearer "+token)
 			}
-
-			resp, err := next(ctx, req)
-			if err == nil || connect.CodeOf(err) != connect.CodeUnauthenticated || c.Tokens.GetToken() == "" {
-				return resp, err
+			stream, err := next(ctx, spec)
+			if err != nil {
+				return nil, err
 			}
-
-			// Single retry after a refresh, PATs never refresh
-			debugf("Received unauthenticated, refreshing token and retrying...")
-			if rerr := c.refreshToken(ctx); rerr != nil {
-				return nil, rerr
-			}
-			req.Header().Set("Authorization", "Bearer "+c.Tokens.GetToken())
-			return next(ctx, req)
+			return &refreshingStream{ClientStream: stream, ctx: ctx, spec: spec, next: next, info: info, client: c}, nil
 		}
 	}
+}
+
+// Reopens the call once after a refresh when the server rejects the session
+type refreshingStream struct {
+	connect.ClientStream
+	ctx      context.Context
+	spec     connect.Spec
+	next     connect.ClientFunc
+	info     *connect.CallInfo
+	client   *Client
+	sent     []any
+	closed   bool
+	received int
+	retried  bool
+}
+
+func (r *refreshingStream) Send(msg any) error {
+	r.sent = append(r.sent, msg)
+	return r.ClientStream.Send(msg)
+}
+
+func (r *refreshingStream) CloseSend() error {
+	r.closed = true
+	return r.ClientStream.CloseSend()
+}
+
+func (r *refreshingStream) Receive(msg any) error {
+	err := r.ClientStream.Receive(msg)
+	if err == nil {
+		r.received++
+		return nil
+	}
+	if r.retried || r.received > 0 || connect.CodeOf(err) != connect.CodeUnauthenticated || r.client.Tokens.GetToken() == "" {
+		return err
+	}
+	r.retried = true
+
+	// Single retry after a refresh, PATs never refresh
+	debugf("Received unauthenticated, refreshing token and retrying...")
+	if rerr := r.client.refreshToken(r.ctx); rerr != nil {
+		return rerr
+	}
+	if r.info != nil {
+		r.info.RequestHeader().Set("Authorization", "Bearer "+r.client.Tokens.GetToken())
+	}
+	_ = r.ClientStream.Close()
+
+	stream, err := r.next(r.ctx, r.spec)
+	if err != nil {
+		return err
+	}
+	r.ClientStream = stream
+	for _, m := range r.sent {
+		if err := stream.Send(m); err != nil {
+			return err
+		}
+	}
+	if r.closed {
+		if err := stream.CloseSend(); err != nil {
+			return err
+		}
+	}
+	if err := stream.Receive(msg); err != nil {
+		return err
+	}
+	r.received++
+	return nil
 }
 
 // Trades the current session for a fresh one
@@ -196,17 +263,16 @@ func (c *Client) refreshToken(ctx context.Context) error {
 
 	debugf("Refreshing session token...")
 
-	auth := distrofacev1connect.NewAuthServiceClient(c.HTTPClient, c.BaseURL)
-	req := connect.NewRequest(&v1.RefreshSessionRequest{})
-	req.Header().Set("Authorization", "Bearer "+token)
-	resp, err := auth.RefreshSession(ctx, req)
+	ctx, info := connect.NewClientContext(ctx)
+	info.RequestHeader().Set("Authorization", "Bearer "+token)
+	resp, err := distrofacev1connect.NewAuthServiceClient(c.bareRPC()).RefreshSession(ctx, &v1.RefreshSessionRequest{})
 	if err != nil {
 		return fmt.Errorf("session refresh failed: %v - run 'dfcli login'", rpcErr(err))
 	}
 
-	expiresAt := time.Unix(resp.Msg.ExpiresAt, 0)
-	c.Tokens.SetToken(resp.Msg.SessionToken, expiresAt)
-	return saveConfig(AuthConfig{Token: resp.Msg.SessionToken, ExpiresAt: expiresAt, Server: c.BaseURL})
+	expiresAt := time.Unix(resp.ExpiresAt, 0)
+	c.Tokens.SetToken(resp.SessionToken, expiresAt)
+	return saveConfig(AuthConfig{Token: resp.SessionToken, ExpiresAt: expiresAt, Server: c.BaseURL})
 }
 
 // Friendly text for surfaced connect errors

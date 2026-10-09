@@ -3,10 +3,9 @@ package services
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/url"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -32,21 +31,21 @@ func NewWebhookService(store *stores.Store, enforcer *rbac.Enforcer, dispatcher 
 	return &WebhookService{store: store, enforcer: enforcer, dispatcher: dispatcher, log: log}
 }
 
-func (s *WebhookService) CreateWebhook(ctx context.Context, req *connect.Request[v1.CreateWebhookRequest]) (*connect.Response[v1.CreateWebhookResponse], error) {
+func (s *WebhookService) CreateWebhook(ctx context.Context, req *v1.CreateWebhookRequest) (*v1.CreateWebhookResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	msg := req.Msg
+	msg := req
 	if msg.Url == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("url is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "url is required")
 	}
 	if !isValidWebhookURL(msg.Url) {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("url must be a valid HTTP or HTTPS URL"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "url must be a valid HTTP or HTTPS URL")
 	}
 	if len(msg.Events) == 0 {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("at least one event is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "at least one event is required")
 	}
 
 	scope := storage.WebhookScopeRepository
@@ -57,14 +56,14 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *connect.Request
 	// Verify permission on the target repo/org
 	if scope == storage.WebhookScopeRepository {
 		if msg.RepoId == "" {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_id is required for repository webhooks"))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "repo_id is required for repository webhooks")
 		}
 		if err := s.checkRepoPermission(ctx, user, msg.RepoId, rbac.ActionUpdate); err != nil {
 			return nil, err
 		}
 	} else {
 		if msg.OrgId == "" {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("org_id is required for organization webhooks"))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "org_id is required for organization webhooks")
 		}
 		if err := s.checkOrgPermission(ctx, user, msg.OrgId, rbac.ActionUpdate); err != nil {
 			return nil, err
@@ -89,7 +88,7 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *connect.Request
 
 	if msg.PayloadTemplate != "" {
 		if err := webhook.ValidateTemplate(msg.PayloadTemplate); err != nil {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("payload_template: %v", err))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "payload_template: %v", err)
 		}
 	}
 
@@ -110,25 +109,25 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *connect.Request
 	}
 
 	if err := s.store.CreateWebhook(ctx, wh); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.CreateWebhookResponse{
+	return &v1.CreateWebhookResponse{
 		Webhook: s.webhookToProto(ctx, wh),
-	}), nil
+	}, nil
 }
 
-func (s *WebhookService) ListWebhooks(ctx context.Context, req *connect.Request[v1.ListWebhooksRequest]) (*connect.Response[v1.ListWebhooksResponse], error) {
+func (s *WebhookService) ListWebhooks(ctx context.Context, req *v1.ListWebhooksRequest) (*v1.ListWebhooksResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	msg := req.Msg
+	msg := req
 	limit, offset := pages.Parse(msg.Page)
 	q := pages.ParseQuery(msg.Page)
 	if err := stores.WebhooksQuery.Validate(q); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
 	var webhooks []*storage.Webhook
@@ -146,11 +145,11 @@ func (s *WebhookService) ListWebhooks(ctx context.Context, req *connect.Request[
 		}
 		webhooks, total, err = s.store.ListWebhooksByOrg(ctx, msg.OrgId, q, limit, offset)
 	} else {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("repo_id or org_id is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "repo_id or org_id is required")
 	}
 
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	protoWebhooks := make([]*v1.Webhook, len(webhooks))
@@ -158,48 +157,48 @@ func (s *WebhookService) ListWebhooks(ctx context.Context, req *connect.Request[
 		protoWebhooks[i] = s.webhookToProto(ctx, wh)
 	}
 
-	return connect.NewResponse(&v1.ListWebhooksResponse{
+	return &v1.ListWebhooksResponse{
 		Webhooks: protoWebhooks,
 		Page:     pages.Info(offset, limit, total),
-	}), nil
+	}, nil
 }
 
-func (s *WebhookService) GetWebhook(ctx context.Context, req *connect.Request[v1.GetWebhookRequest]) (*connect.Response[v1.GetWebhookResponse], error) {
+func (s *WebhookService) GetWebhook(ctx context.Context, req *v1.GetWebhookRequest) (*v1.GetWebhookResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	wh, err := s.store.GetWebhook(ctx, req.Msg.Id)
+	wh, err := s.store.GetWebhook(ctx, req.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if wh == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("webhook not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "webhook not found")
 	}
 
 	if err := s.checkWebhookPermission(ctx, user, wh, rbac.ActionRead); err != nil {
 		return nil, err
 	}
 
-	return connect.NewResponse(&v1.GetWebhookResponse{
+	return &v1.GetWebhookResponse{
 		Webhook: s.webhookToProto(ctx, wh),
-	}), nil
+	}, nil
 }
 
-func (s *WebhookService) UpdateWebhook(ctx context.Context, req *connect.Request[v1.UpdateWebhookRequest]) (*connect.Response[v1.UpdateWebhookResponse], error) {
+func (s *WebhookService) UpdateWebhook(ctx context.Context, req *v1.UpdateWebhookRequest) (*v1.UpdateWebhookResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	msg := req.Msg
+	msg := req
 	wh, err := s.store.GetWebhook(ctx, msg.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if wh == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("webhook not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "webhook not found")
 	}
 
 	if err := s.checkWebhookPermission(ctx, user, wh, rbac.ActionUpdate); err != nil {
@@ -208,7 +207,7 @@ func (s *WebhookService) UpdateWebhook(ctx context.Context, req *connect.Request
 
 	if msg.Url != "" {
 		if !isValidWebhookURL(msg.Url) {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("url must be a valid HTTP or HTTPS URL"))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "url must be a valid HTTP or HTTPS URL")
 		}
 		wh.URL = msg.Url
 	}
@@ -226,7 +225,7 @@ func (s *WebhookService) UpdateWebhook(ctx context.Context, req *connect.Request
 	if msg.PayloadTemplate != nil {
 		if *msg.PayloadTemplate != "" {
 			if err := webhook.ValidateTemplate(*msg.PayloadTemplate); err != nil {
-				return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("payload_template: %v", err))
+				return nil, connect.Errorf(connect.CodeInvalidArgument, "payload_template: %v", err)
 			}
 		}
 		wh.PayloadTemplate = *msg.PayloadTemplate
@@ -236,26 +235,26 @@ func (s *WebhookService) UpdateWebhook(ctx context.Context, req *connect.Request
 	}
 
 	if err := s.store.UpdateWebhook(ctx, wh); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.UpdateWebhookResponse{
+	return &v1.UpdateWebhookResponse{
 		Webhook: s.webhookToProto(ctx, wh),
-	}), nil
+	}, nil
 }
 
-func (s *WebhookService) DeleteWebhook(ctx context.Context, req *connect.Request[v1.DeleteWebhookRequest]) (*connect.Response[v1.DeleteWebhookResponse], error) {
+func (s *WebhookService) DeleteWebhook(ctx context.Context, req *v1.DeleteWebhookRequest) (*v1.DeleteWebhookResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	wh, err := s.store.GetWebhook(ctx, req.Msg.Id)
+	wh, err := s.store.GetWebhook(ctx, req.Id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if wh == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("webhook not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "webhook not found")
 	}
 
 	if err := s.checkWebhookPermission(ctx, user, wh, rbac.ActionDelete); err != nil {
@@ -263,29 +262,29 @@ func (s *WebhookService) DeleteWebhook(ctx context.Context, req *connect.Request
 	}
 
 	if err := s.store.DeleteWebhook(ctx, wh.ID); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.DeleteWebhookResponse{}), nil
+	return &v1.DeleteWebhookResponse{}, nil
 }
 
-func (s *WebhookService) ListWebhookDeliveries(ctx context.Context, req *connect.Request[v1.ListWebhookDeliveriesRequest]) (*connect.Response[v1.ListWebhookDeliveriesResponse], error) {
+func (s *WebhookService) ListWebhookDeliveries(ctx context.Context, req *v1.ListWebhookDeliveriesRequest) (*v1.ListWebhookDeliveriesResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	msg := req.Msg
+	msg := req
 	if msg.WebhookId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("webhook_id is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "webhook_id is required")
 	}
 
 	wh, err := s.store.GetWebhook(ctx, msg.WebhookId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if wh == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("webhook not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "webhook not found")
 	}
 
 	if err := s.checkWebhookPermission(ctx, user, wh, rbac.ActionRead); err != nil {
@@ -295,11 +294,11 @@ func (s *WebhookService) ListWebhookDeliveries(ctx context.Context, req *connect
 	limit, offset := pages.Parse(msg.Page)
 	q := pages.ParseQuery(msg.Page)
 	if err := stores.WebhookDeliveriesQuery.Validate(q); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 	deliveries, total, err := s.store.ListWebhookDeliveries(ctx, msg.WebhookId, q, limit, offset)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	protoDeliveries := make([]*v1.WebhookDelivery, len(deliveries))
@@ -307,38 +306,38 @@ func (s *WebhookService) ListWebhookDeliveries(ctx context.Context, req *connect
 		protoDeliveries[i] = deliveryToProto(d)
 	}
 
-	return connect.NewResponse(&v1.ListWebhookDeliveriesResponse{
+	return &v1.ListWebhookDeliveriesResponse{
 		Deliveries: protoDeliveries,
 		Page:       pages.Info(offset, limit, total),
-	}), nil
+	}, nil
 }
 
-func (s *WebhookService) RedeliverWebhook(ctx context.Context, req *connect.Request[v1.RedeliverWebhookRequest]) (*connect.Response[v1.RedeliverWebhookResponse], error) {
+func (s *WebhookService) RedeliverWebhook(ctx context.Context, req *v1.RedeliverWebhookRequest) (*v1.RedeliverWebhookResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	msg := req.Msg
+	msg := req
 	if msg.DeliveryId == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("delivery_id is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "delivery_id is required")
 	}
 
 	// Look up delivery to find webhook for permission check
 	delivery, err := s.store.GetWebhookDelivery(ctx, msg.DeliveryId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if delivery == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("delivery not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "delivery not found")
 	}
 
 	wh, err := s.store.GetWebhook(ctx, delivery.WebhookID)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if wh == nil {
-		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("webhook not found"))
+		return nil, connect.Errorf(connect.CodeNotFound, "webhook not found")
 	}
 
 	if err := s.checkWebhookPermission(ctx, user, wh, rbac.ActionUpdate); err != nil {
@@ -347,12 +346,12 @@ func (s *WebhookService) RedeliverWebhook(ctx context.Context, req *connect.Requ
 
 	newDelivery, err := s.dispatcher.Redeliver(ctx, msg.DeliveryId)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.RedeliverWebhookResponse{
+	return &v1.RedeliverWebhookResponse{
 		Delivery: deliveryToProto(newDelivery),
-	}), nil
+	}, nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────
@@ -369,14 +368,14 @@ func isValidWebhookURL(raw string) bool {
 func (s *WebhookService) checkRepoPermission(ctx context.Context, user *auth.AuthenticatedUser, repoID, action string) error {
 	repo := s.getRepoByID(ctx, repoID)
 	if repo == nil {
-		return connect.NewError(connect.CodeNotFound, fmt.Errorf("repository not found"))
+		return connect.Errorf(connect.CodeNotFound, "repository not found")
 	}
 	allowed, err := s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, action, repo.Namespace+"/"+repo.Name)
 	if err != nil {
-		return connect.NewError(connect.CodeInternal, err)
+		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if !allowed {
-		return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied"))
+		return connect.Errorf(connect.CodePermissionDenied, "permission denied")
 	}
 	return nil
 }
@@ -384,23 +383,23 @@ func (s *WebhookService) checkRepoPermission(ctx context.Context, user *auth.Aut
 func (s *WebhookService) checkOrgPermission(ctx context.Context, user *auth.AuthenticatedUser, orgID, action string) error {
 	org, err := s.store.GetOrganizationByID(ctx, orgID)
 	if err != nil {
-		return connect.NewError(connect.CodeInternal, err)
+		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if org == nil {
-		return connect.NewError(connect.CodeNotFound, fmt.Errorf("organization not found"))
+		return connect.Errorf(connect.CodeNotFound, "organization not found")
 	}
 	allowed, err := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, action, org.Name)
 	if err != nil {
-		return connect.NewError(connect.CodeInternal, err)
+		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if !allowed {
 		// Fall back to org membership check
 		member, err := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if err != nil || member == nil {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied"))
+			return connect.Errorf(connect.CodePermissionDenied, "permission denied")
 		}
 		if action != rbac.ActionRead && member.Role == storage.OrgRoleMember {
-			return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("permission denied"))
+			return connect.Errorf(connect.CodePermissionDenied, "permission denied")
 		}
 	}
 	return nil

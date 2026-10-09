@@ -5,7 +5,6 @@ import (
 	"os"
 	"time"
 
-	"connectrpc.com/connect"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
@@ -22,7 +21,7 @@ func NewHealthService(log *logger.Logger) *HealthService {
 	return &HealthService{log: log}
 }
 
-func (s *HealthService) HealthCheck(ctx context.Context, req *connect.Request[v1.HealthCheckRequest]) (*connect.Response[v1.HealthCheckResponse], error) {
+func (s *HealthService) HealthCheck(ctx context.Context, req *v1.HealthCheckRequest) (*v1.HealthCheckResponse, error) {
 	version := os.Getenv("APP_VERSION")
 	if version == "" {
 		version = "dev"
@@ -33,5 +32,5 @@ func (s *HealthService) HealthCheck(ctx context.Context, req *connect.Request[v1
 		Timestamp: timestamppb.New(time.Now()),
 		Version:   version,
 	}
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }

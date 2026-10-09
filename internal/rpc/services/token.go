@@ -3,7 +3,7 @@ package services
 import (
 	"context"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
@@ -26,19 +26,19 @@ func NewTokenService(manager *auth.Manager, enforcer *rbac.Enforcer, log *logger
 	return &TokenService{authManager: manager, enforcer: enforcer, log: log}
 }
 
-func (s *TokenService) CreateAPIToken(ctx context.Context, req *connect.Request[v1.CreateAPITokenRequest]) (*connect.Response[v1.CreateAPITokenResponse], error) {
+func (s *TokenService) CreateAPIToken(ctx context.Context, req *v1.CreateAPITokenRequest) (*v1.CreateAPITokenResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	if req.Msg.Name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	if req.Name == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	plaintext, token, err := s.authManager.GenerateAPIToken(ctx, user.ID, req.Msg.Name, req.Msg.ExpiresInDays)
+	plaintext, token, err := s.authManager.GenerateAPIToken(ctx, user.ID, req.Name, req.ExpiresInDays)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	protoToken := &v1.APIToken{
@@ -51,19 +51,19 @@ func (s *TokenService) CreateAPIToken(ctx context.Context, req *connect.Request[
 		protoToken.ExpiresAt = timestamppb.New(*token.ExpiresAt)
 	}
 
-	return connect.NewResponse(&v1.CreateAPITokenResponse{
+	return &v1.CreateAPITokenResponse{
 		PlaintextToken: plaintext,
 		Token:          protoToken,
-	}), nil
+	}, nil
 }
 
-func (s *TokenService) ListAPITokens(ctx context.Context, req *connect.Request[v1.ListAPITokensRequest]) (*connect.Response[v1.ListAPITokensResponse], error) {
+func (s *TokenService) ListAPITokens(ctx context.Context, req *v1.ListAPITokensRequest) (*v1.ListAPITokensResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	limit, offset := pages.Parse(req.Msg.Page)
+	limit, offset := pages.Parse(req.Page)
 
 	// Users with manage permission see all tokens
 	userID := user.ID
@@ -72,14 +72,14 @@ func (s *TokenService) ListAPITokens(ctx context.Context, req *connect.Request[v
 		userID = ""
 	}
 
-	q := pages.ParseQuery(req.Msg.Page)
+	q := pages.ParseQuery(req.Page)
 	if err := stores.TokensQuery.Validate(q); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
 	tokens, total, err := s.authManager.GetStore().ListAPITokens(ctx, userID, q, limit, offset)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
 	protoTokens := make([]*v1.APIToken, len(tokens))
@@ -98,20 +98,20 @@ func (s *TokenService) ListAPITokens(ctx context.Context, req *connect.Request[v
 		}
 	}
 
-	return connect.NewResponse(&v1.ListAPITokensResponse{
+	return &v1.ListAPITokensResponse{
 		Tokens: protoTokens,
 		Page:   pages.Info(offset, limit, total),
-	}), nil
+	}, nil
 }
 
-func (s *TokenService) DeleteAPIToken(ctx context.Context, req *connect.Request[v1.DeleteAPITokenRequest]) (*connect.Response[v1.DeleteAPITokenResponse], error) {
+func (s *TokenService) DeleteAPIToken(ctx context.Context, req *v1.DeleteAPITokenRequest) (*v1.DeleteAPITokenResponse, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 
-	if req.Msg.Id == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, nil)
+	if req.Id == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
 	// Users with manage permission can delete any token
@@ -121,9 +121,9 @@ func (s *TokenService) DeleteAPIToken(ctx context.Context, req *connect.Request[
 		userID = ""
 	}
 
-	if err := s.authManager.GetStore().DeleteAPIToken(ctx, req.Msg.Id, userID); err != nil {
-		return nil, connect.NewError(connect.CodeNotFound, err)
+	if err := s.authManager.GetStore().DeleteAPIToken(ctx, req.Id, userID); err != nil {
+		return nil, connect.NewError(connect.CodeNotFound, err.Error()).WithCause(err)
 	}
 
-	return connect.NewResponse(&v1.DeleteAPITokenResponse{}), nil
+	return &v1.DeleteAPITokenResponse{}, nil
 }

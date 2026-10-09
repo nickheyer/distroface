@@ -5,8 +5,9 @@ import (
 	"net/http"
 	"strings"
 
-	"connectrpc.com/connect"
-	"connectrpc.com/grpcreflect"
+	"connectrpc.com/connect/v2"
+	"connectrpc.com/connect/v2/connecthttp"
+	"connectrpc.com/grpcreflect/v2"
 	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/audit"
@@ -69,19 +70,15 @@ func NewServer(deps ServerDeps) *Server {
 func (s *Server) setupHandler() {
 	mux := http.NewServeMux()
 
-	interceptors := []connect.Interceptor{
-		connect.UnaryInterceptorFunc(s.rateLimitInterceptor()),
-		connect.UnaryInterceptorFunc(s.authInterceptor()),
-		&streamAuthInterceptor{s: s},
-		&loggingInterceptor{log: s.Log},
+	interceptors := []connect.ServerInterceptor{
+		s.rateLimitInterceptor(),
+		s.authInterceptor(),
+		s.loggingInterceptor(),
 	}
 	if s.AuditRecorder != nil {
-		interceptors = append(interceptors, connect.UnaryInterceptorFunc(s.auditInterceptor(s.AuditRecorder)))
+		interceptors = append(interceptors, s.auditInterceptor(s.AuditRecorder))
 	}
-
-	opts := []connect.HandlerOption{
-		connect.WithInterceptors(interceptors...),
-	}
+	rpcServer := connect.NewServer(interceptors...)
 
 	// Registry handler (OCI Distribution API)
 	if s.RegistryHandler != nil {
@@ -126,97 +123,47 @@ func (s *Server) setupHandler() {
 	}
 
 	// Register RPC services
-	healthService := services.NewHealthService(s.Log)
-	healthPath, healthHandler := distrofacev1connect.NewHealthServiceHandler(healthService, opts...)
-	mux.Handle(healthPath, healthHandler)
-
-	authService := services.NewAuthService(s.Store, s.AuthManager, s.Enforcer, s.OIDCHandler, s.Log)
-	authPath, authHandler := distrofacev1connect.NewAuthServiceHandler(authService, opts...)
-	mux.Handle(authPath, authHandler)
-
-	userService := services.NewUserService(s.Store, s.AuthManager, s.Enforcer, s.Log)
-	userPath, userHandler := distrofacev1connect.NewUserServiceHandler(userService, opts...)
-	mux.Handle(userPath, userHandler)
-
-	repoService := services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.MirrorMonitor, s.Log)
-	repoPath, repoHandler := distrofacev1connect.NewRepositoryServiceHandler(repoService, opts...)
-	mux.Handle(repoPath, repoHandler)
-
-	settingsService := services.NewSettingsService(s.Store, s.Resolver, s.Enforcer, s.Log)
-	settingsPath, settingsHandler := distrofacev1connect.NewSettingsServiceHandler(settingsService, opts...)
-	mux.Handle(settingsPath, settingsHandler)
-
-	roleService := services.NewRoleService(s.Store, s.Enforcer, s.Log)
-	rolePath, roleHandler := distrofacev1connect.NewRoleServiceHandler(roleService, opts...)
-	mux.Handle(rolePath, roleHandler)
-
-	tokenService := services.NewTokenService(s.AuthManager, s.Enforcer, s.Log)
-	tokenSvcPath, tokenSvcHandler := distrofacev1connect.NewTokenServiceHandler(tokenService, opts...)
-	mux.Handle(tokenSvcPath, tokenSvcHandler)
-
-	orgService := services.NewOrganizationService(s.Store, s.RegistryAccess, s.Enforcer, s.Resolver, s.Log)
-	orgPath, orgHandler := distrofacev1connect.NewOrganizationServiceHandler(orgService, opts...)
-	mux.Handle(orgPath, orgHandler)
-
-	webhookService := services.NewWebhookService(s.Store, s.Enforcer, s.WebhookDispatcher, s.Log)
-	webhookPath, webhookHandler := distrofacev1connect.NewWebhookServiceHandler(webhookService, opts...)
-	mux.Handle(webhookPath, webhookHandler)
+	distrofacev1connect.RegisterHealthServiceHandler(rpcServer, services.NewHealthService(s.Log))
+	distrofacev1connect.RegisterAuthServiceHandler(rpcServer, services.NewAuthService(s.Store, s.AuthManager, s.Enforcer, s.OIDCHandler, s.Log))
+	distrofacev1connect.RegisterUserServiceHandler(rpcServer, services.NewUserService(s.Store, s.AuthManager, s.Enforcer, s.Log))
+	distrofacev1connect.RegisterRepositoryServiceHandler(rpcServer, services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.MirrorMonitor, s.Log))
+	distrofacev1connect.RegisterSettingsServiceHandler(rpcServer, services.NewSettingsService(s.Store, s.Resolver, s.Enforcer, s.Log))
+	distrofacev1connect.RegisterRoleServiceHandler(rpcServer, services.NewRoleService(s.Store, s.Enforcer, s.Log))
+	distrofacev1connect.RegisterTokenServiceHandler(rpcServer, services.NewTokenService(s.AuthManager, s.Enforcer, s.Log))
+	distrofacev1connect.RegisterOrganizationServiceHandler(rpcServer, services.NewOrganizationService(s.Store, s.RegistryAccess, s.Enforcer, s.Resolver, s.Log))
+	distrofacev1connect.RegisterWebhookServiceHandler(rpcServer, services.NewWebhookService(s.Store, s.Enforcer, s.WebhookDispatcher, s.Log))
 
 	if s.PortalService != nil {
-		portalPath, portalHandler := distrofacev1connect.NewPortalServiceHandler(s.PortalService, opts...)
-		mux.Handle(portalPath, portalHandler)
+		distrofacev1connect.RegisterPortalServiceHandler(rpcServer, s.PortalService)
 	}
 
 	if s.ArtifactManager != nil {
-		artifactService := services.NewArtifactService(s.Store, s.ArtifactManager, s.Enforcer, s.MirrorMonitor, s.Log)
-		artifactPath, artifactHandler := distrofacev1connect.NewArtifactServiceHandler(artifactService, opts...)
-		mux.Handle(artifactPath, artifactHandler)
+		distrofacev1connect.RegisterArtifactServiceHandler(rpcServer, services.NewArtifactService(s.Store, s.ArtifactManager, s.Enforcer, s.MirrorMonitor, s.Log))
 	}
 
 	if s.MirrorMonitor != nil {
-		mirrorService := services.NewMirrorService(s.MirrorMonitor, s.Enforcer,
-			artifacts.NewAccess(s.Store, s.Enforcer), auth.NewRepoAccess(s.Store, s.Enforcer), s.Log)
-		mirrorPath, mirrorHandler := distrofacev1connect.NewMirrorServiceHandler(mirrorService, opts...)
-		mux.Handle(mirrorPath, mirrorHandler)
+		distrofacev1connect.RegisterMirrorServiceHandler(rpcServer, services.NewMirrorService(s.MirrorMonitor, s.Enforcer,
+			artifacts.NewAccess(s.Store, s.Enforcer), auth.NewRepoAccess(s.Store, s.Enforcer), s.Log))
 	}
 
 	// Registered even without a collector, it also serves storage usage
-	gcService := services.NewGCService(s.GCCollector, s.Store, s.RegistryStoragePath, s.Resolver, s.Log)
-	gcPath, gcHandler := distrofacev1connect.NewGCServiceHandler(gcService, opts...)
-	mux.Handle(gcPath, gcHandler)
+	distrofacev1connect.RegisterGCServiceHandler(rpcServer, services.NewGCService(s.GCCollector, s.Store, s.RegistryStoragePath, s.Resolver, s.Log))
 
 	if s.CertService != nil {
-		certPath, certHandler := distrofacev1connect.NewCertificateServiceHandler(s.CertService, opts...)
-		mux.Handle(certPath, certHandler)
+		distrofacev1connect.RegisterCertificateServiceHandler(rpcServer, s.CertService)
 	}
 
 	if s.AuditService != nil {
-		auditPath, auditHandler := distrofacev1connect.NewAuditServiceHandler(s.AuditService, opts...)
-		mux.Handle(auditPath, auditHandler)
+		distrofacev1connect.RegisterAuditServiceHandler(rpcServer, s.AuditService)
 	}
+	connecthttp.Mount(mux, rpcServer)
 
-	// GRPC reflection
-	reflector := grpcreflect.NewStaticReflector(
-		distrofacev1connect.HealthServiceName,
-		distrofacev1connect.AuthServiceName,
-		distrofacev1connect.UserServiceName,
-		distrofacev1connect.RepositoryServiceName,
-		distrofacev1connect.SettingsServiceName,
-		distrofacev1connect.RoleServiceName,
-		distrofacev1connect.TokenServiceName,
-		distrofacev1connect.OrganizationServiceName,
-		distrofacev1connect.WebhookServiceName,
-		distrofacev1connect.PortalServiceName,
-		distrofacev1connect.ArtifactServiceName,
-		distrofacev1connect.MirrorServiceName,
-		distrofacev1connect.GCServiceName,
-		distrofacev1connect.CertificateServiceName,
-		distrofacev1connect.AuditServiceName,
-	)
-	reflectV1Path, reflectV1Handler := grpcreflect.NewHandlerV1(reflector)
-	mux.Handle(reflectV1Path, s.requireAuth(reflectV1Handler))
-	reflectV1AlphaPath, reflectV1AlphaHandler := grpcreflect.NewHandlerV1Alpha(reflector)
-	mux.Handle(reflectV1AlphaPath, s.requireAuth(reflectV1AlphaHandler))
+	// Reflection on token only
+	reflectServer := connect.NewServer(s.reflectionAuthInterceptor())
+	grpcreflect.Register(reflectServer, grpcreflect.WithNamer(grpcreflect.NamerFunc(func() []string {
+		return serviceNames(rpcServer)
+	})))
+	connecthttp.Mount(mux, reflectServer)
 
 	// Serve frontend for non-RPC routes
 	s.setupFrontend(mux)
@@ -224,7 +171,7 @@ func (s *Server) setupHandler() {
 	// Headers stay app only, proxied backends own their responses
 	inner := utils.Headers(s.Resolver, s.httpsOnlyRedirect(mux))
 	// Portal hosts get the whole app, org scoped by the resolved portal
-	var root http.Handler = inner
+	root := inner
 	if s.PortalResolver != nil {
 		root = s.PortalResolver.Middleware(s.primaryHostname, inner)
 	}
@@ -273,26 +220,21 @@ func (s *Server) Handler() http.Handler {
 	return s.handler
 }
 
-// Gate plain http handlers behind session or token auth
-func (s *Server) requireAuth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.AuthManager.IsAnyAuthEnabled() {
-			next.ServeHTTP(w, r)
-			return
+// Distinct service names behind the registered procedures
+func serviceNames(server *connect.Server) []string {
+	seen := map[string]bool{}
+	var names []string
+	for spec := range server.Specs() {
+		name := strings.TrimPrefix(spec.Procedure, "/")
+		if i := strings.Index(name, "/"); i >= 0 {
+			name = name[:i]
 		}
-
-		token := auth.ExtractToken(r.Header)
-		if token == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
 		}
-		if _, err := s.AuthManager.ValidateToken(r.Context(), token); err != nil {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
+	}
+	return names
 }
 
 func (s *Server) setupFrontend(mux *http.ServeMux) {
@@ -326,7 +268,7 @@ func (s *Server) createFrontendHandler(fs http.FileSystem) http.HandlerFunc {
 
 		file, err := fs.Open(path)
 		if err == nil {
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 			stat, _ := file.Stat()
 			http.ServeContent(w, r, path, stat.ModTime(), file)
 			return
@@ -337,7 +279,7 @@ func (s *Server) createFrontendHandler(fs http.FileSystem) http.HandlerFunc {
 			http.NotFound(w, r)
 			return
 		}
-		defer indexFile.Close()
+		defer func() { _ = indexFile.Close() }()
 
 		stat, _ := indexFile.Stat()
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

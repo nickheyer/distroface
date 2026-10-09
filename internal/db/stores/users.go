@@ -115,6 +115,28 @@ func (s *Store) ListUsers(ctx context.Context, q pages.Query, limit, offset int)
 	return users, total, err
 }
 
+// Picker search over public columns, active accounts only
+var UserSearchQuery = pages.Spec{
+	Fields: map[string]string{
+		"username":     "username",
+		"display_name": "display_name",
+	},
+	Text: []string{"username", "display_name"},
+}
+
+func (s *Store) SearchUsers(ctx context.Context, q pages.Query, limit, offset int) ([]*db.User, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.User{}).Where("is_active = ?", true).Scopes(UserSearchQuery.Scope(q))
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var users []*db.User
+	err := tx.Order("username ASC").Limit(limit).Offset(offset).Find(&users).Error
+	return users, total, err
+}
+
 func (s *Store) UpdateUser(ctx context.Context, user *db.User) error {
 	return s.db.WithContext(ctx).Save(user).Error
 }

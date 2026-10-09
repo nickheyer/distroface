@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"connectrpc.com/connect"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/spf13/cobra"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -47,14 +46,14 @@ func newImageListCmd() *cobra.Command {
 		Use:   "list",
 		Short: "List image repositories",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			resp, err := client.Repositories().ListRepositories(cmd.Context(), connect.NewRequest(&v1.ListRepositoriesRequest{
+			resp, err := client.Repositories().ListRepositories(cmd.Context(), &v1.ListRepositoriesRequest{
 				Page: &v1.PageRequest{PageSize: 100},
-			}))
+			})
 			if err != nil {
 				return rpcErr(err)
 			}
-			msgs := make([]proto.Message, len(resp.Msg.Repositories))
-			for i, r := range resp.Msg.Repositories {
+			msgs := make([]proto.Message, len(resp.Repositories))
+			for i, r := range resp.Repositories {
 				msgs[i] = r
 			}
 			return printProtoJSON(msgs)
@@ -72,16 +71,16 @@ func newImageTagsCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("image must be qualified as namespace/name (e.g. myorg/app)")
 			}
-			resp, err := client.Repositories().ListTags(cmd.Context(), connect.NewRequest(&v1.ListTagsRequest{
+			resp, err := client.Repositories().ListTags(cmd.Context(), &v1.ListTagsRequest{
 				Namespace: namespace,
 				Name:      name,
 				Page:      &v1.PageRequest{PageSize: 100},
-			}))
+			})
 			if err != nil {
 				return rpcErr(err)
 			}
-			msgs := make([]proto.Message, len(resp.Msg.Tags))
-			for i, t := range resp.Msg.Tags {
+			msgs := make([]proto.Message, len(resp.Tags))
+			for i, t := range resp.Tags {
 				msgs[i] = t
 			}
 			return printProtoJSON(msgs)

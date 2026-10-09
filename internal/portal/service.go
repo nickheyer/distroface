@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"connectrpc.com/connect"
+	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/certs"
 	storage "github.com/nickheyer/distroface/internal/db"
@@ -46,25 +46,25 @@ func NewService(store *stores.Store, enforcer *rbac.Enforcer, proxies *Manager, 
 func (s *Service) requireOrgAdmin(ctx context.Context, orgID string) (*storage.Organization, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, nil)
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
 	if orgID == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("org_id is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "org_id is required")
 	}
 
 	org, err := s.store.GetOrganizationByID(ctx, orgID)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if org == nil {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 
 	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
 		member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if member == nil || (member.Role != storage.OrgRoleOwner && member.Role != storage.OrgRoleAdmin) {
-			return nil, connect.NewError(connect.CodePermissionDenied, nil)
+			return nil, connect.NewError(connect.CodePermissionDenied, "")
 		}
 	}
 	return org, nil
@@ -73,14 +73,14 @@ func (s *Service) requireOrgAdmin(ctx context.Context, orgID string) (*storage.O
 // Fetches a portal, must belong to the org
 func (s *Service) getOrgPortal(ctx context.Context, org *storage.Organization, id string) (*storage.RegistryPortal, error) {
 	if id == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("id is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "id is required")
 	}
 	portal, err := s.store.GetRegistryPortal(ctx, id)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if portal == nil || portal.OrgID != org.ID {
-		return nil, connect.NewError(connect.CodeNotFound, nil)
+		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 	return portal, nil
 }
@@ -90,32 +90,32 @@ func (s *Service) getOrgPortal(ctx context.Context, org *storage.Organization, i
 func (s *Service) validatePlacement(ctx context.Context, hostname string, port int, excludePortalID string) (string, int, error) {
 	hostname = strings.ToLower(strings.TrimSpace(hostname))
 	if hostname == "" && port == 0 {
-		return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname or port is required"))
+		return "", 0, connect.Errorf(connect.CodeInvalidArgument, "hostname or port is required")
 	}
 	if port < 0 || port > 65535 {
-		return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid port"))
+		return "", 0, connect.Errorf(connect.CodeInvalidArgument, "invalid port")
 	}
 	if port != 0 && port == s.mainPort {
 		if hostname == "" {
-			return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("a catch-all portal on the app's own port would shadow the primary UI"))
+			return "", 0, connect.Errorf(connect.CodeInvalidArgument, "a catch-all portal on the app's own port would shadow the primary UI")
 		}
 		port = 0
 	}
 
 	if hostname != "" {
 		if !hostnameRegex.MatchString(hostname) {
-			return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("invalid hostname"))
+			return "", 0, connect.Errorf(connect.CodeInvalidArgument, "invalid hostname")
 		}
 		primary := strings.ToLower(s.res.System(ctx).GetServer().GetPublicHostname())
 		if hostname == primary || hostname == strings.SplitN(primary, ":", 2)[0] {
-			return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("hostname conflicts with the server's primary hostname"))
+			return "", 0, connect.Errorf(connect.CodeInvalidArgument, "hostname conflicts with the server's primary hostname")
 		}
 	}
 
 	// Hostnames are unique per port, catch-alls one per port
 	portals, err := s.store.ListRegistryPortals(ctx)
 	if err != nil {
-		return "", 0, connect.NewError(connect.CodeInternal, err)
+		return "", 0, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	for _, p := range portals {
 		if p.ID == excludePortalID || p.Port != port {
@@ -123,15 +123,15 @@ func (s *Service) validatePlacement(ctx context.Context, hostname string, port i
 		}
 		if p.Hostname == hostname {
 			if hostname == "" {
-				return "", 0, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("port %d already has a catch-all portal", port))
+				return "", 0, connect.Errorf(connect.CodeAlreadyExists, "port %d already has a catch-all portal", port)
 			}
-			return "", 0, connect.NewError(connect.CodeAlreadyExists, fmt.Errorf("hostname already in use on this port"))
+			return "", 0, connect.Errorf(connect.CodeAlreadyExists, "hostname already in use on this port")
 		}
 	}
 
 	if port > 0 {
 		if err := s.proxies.ProbePort(port); err != nil {
-			return "", 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cannot bind port %d: %v", port, err))
+			return "", 0, connect.Errorf(connect.CodeInvalidArgument, "cannot bind port %d: %v", port, err)
 		}
 	}
 	return hostname, port, nil
@@ -158,7 +158,7 @@ func (s *Service) authorizeBackend(ctx context.Context) error {
 			return nil
 		}
 	}
-	return connect.NewError(connect.CodePermissionDenied, fmt.Errorf("changing a portal backend requires instance admin rights"))
+	return connect.Errorf(connect.CodePermissionDenied, "changing a portal backend requires instance admin rights")
 }
 
 // Proxy portals expose no registry surface, inert flags stay zeroed
@@ -184,7 +184,7 @@ func portalCertSource(src v1.CertSource) (v1.CertSource, error) {
 		v1.CertSource_CERT_SOURCE_ORG_CERT, v1.CertSource_CERT_SOURCE_MANUAL:
 		return src, nil
 	}
-	return 0, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("cert source %v is app only", src))
+	return 0, connect.Errorf(connect.CodeInvalidArgument, "cert source %v is app only", src)
 }
 
 // Registers an acme portal's hostname so issuance and approval can track it
@@ -250,23 +250,23 @@ func (s *Service) encodeRules(rules []*v1.PortalRule) (string, error) {
 		return "[]", nil
 	}
 	if err := ValidateRules(rules, s.log); err != nil {
-		return "", connect.NewError(connect.CodeInvalidArgument, err)
+		return "", connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 	encoded, err := json.Marshal(rules)
 	if err != nil {
-		return "", connect.NewError(connect.CodeInternal, err)
+		return "", connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	return string(encoded), nil
 }
 
-func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.CreatePortalRequest]) (*connect.Response[v1.CreatePortalResponse], error) {
-	msg := req.Msg
+func (s *Service) CreatePortal(ctx context.Context, req *v1.CreatePortalRequest) (*v1.CreatePortalResponse, error) {
+	msg := req
 	org, err := s.requireOrgAdmin(ctx, msg.OrgId)
 	if err != nil {
 		return nil, err
 	}
 	if msg.Name == "" {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("name is required"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "name is required")
 	}
 
 	hostname, port, err := s.validatePlacement(ctx, msg.Hostname, int(msg.Port), "")
@@ -278,10 +278,10 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 		return nil, err
 	}
 	if msg.Tls && certSource == v1.CertSource_CERT_SOURCE_NONE {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("requiring https needs a certificate source"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "requiring https needs a certificate source")
 	}
 	if err := s.engine.Policy().AllowedClaim(ctx, hostname, org.ID); err != nil {
-		return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 	}
 	rulesJSON, err := s.encodeRules(msg.Rules)
 	if err != nil {
@@ -289,7 +289,7 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 	}
 	backendURL, err := parseBackendURL(msg.BackendUrl)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 	if backendURL != "" {
 		if err := s.authorizeBackend(ctx); err != nil {
@@ -316,7 +316,7 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 	}
 	scrubProxyPortal(portal)
 	if err := s.store.CreateRegistryPortal(ctx, portal); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if portal.CertSource == v1.CertSource_CERT_SOURCE_ACME {
 		s.ensureCertDomain(ctx, org, portal.Hostname)
@@ -324,7 +324,7 @@ func (s *Service) CreatePortal(ctx context.Context, req *connect.Request[v1.Crea
 	s.reconcile(ctx)
 	s.log.Info("portal created: %s port %d tls=%v -> org %s (%s)", portal.Hostname, portal.Port, portal.TLS, org.Name, portal.ID)
 
-	return connect.NewResponse(&v1.CreatePortalResponse{Portal: s.portalWithStatus(ctx, portal)}), nil
+	return &v1.CreatePortalResponse{Portal: s.portalWithStatus(ctx, portal)}, nil
 }
 
 // Proto portal annotated with its computed certificate state
@@ -339,33 +339,33 @@ func (s *Service) portalWithStatus(ctx context.Context, p *storage.RegistryPorta
 	return proto
 }
 
-func (s *Service) GetPortal(ctx context.Context, req *connect.Request[v1.GetPortalRequest]) (*connect.Response[v1.GetPortalResponse], error) {
-	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+func (s *Service) GetPortal(ctx context.Context, req *v1.GetPortalRequest) (*v1.GetPortalResponse, error) {
+	org, err := s.requireOrgAdmin(ctx, req.OrgId)
 	if err != nil {
 		return nil, err
 	}
-	portal, err := s.getOrgPortal(ctx, org, req.Msg.Id)
+	portal, err := s.getOrgPortal(ctx, org, req.Id)
 	if err != nil {
 		return nil, err
 	}
-	return connect.NewResponse(&v1.GetPortalResponse{
+	return &v1.GetPortalResponse{
 		Portal: s.portalWithStatus(ctx, portal),
-	}), nil
+	}, nil
 }
 
-func (s *Service) ListPortals(ctx context.Context, req *connect.Request[v1.ListPortalsRequest]) (*connect.Response[v1.ListPortalsResponse], error) {
-	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+func (s *Service) ListPortals(ctx context.Context, req *v1.ListPortalsRequest) (*v1.ListPortalsResponse, error) {
+	org, err := s.requireOrgAdmin(ctx, req.OrgId)
 	if err != nil {
 		return nil, err
 	}
-	limit, offset := pages.Parse(req.Msg.Page)
-	q := pages.ParseQuery(req.Msg.Page)
+	limit, offset := pages.Parse(req.Page)
+	q := pages.ParseQuery(req.Page)
 	if err := stores.PortalsQuery.Validate(q); err != nil {
-		return nil, connect.NewError(connect.CodeInvalidArgument, err)
+		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 	portals, total, err := s.store.ListRegistryPortalsByOrgPaged(ctx, org.ID, q, limit, offset)
 	if err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	resp := &v1.ListPortalsResponse{
 		Page: pages.Info(offset, limit, total),
@@ -373,11 +373,11 @@ func (s *Service) ListPortals(ctx context.Context, req *connect.Request[v1.ListP
 	for _, p := range portals {
 		resp.Portals = append(resp.Portals, s.portalWithStatus(ctx, p))
 	}
-	return connect.NewResponse(resp), nil
+	return resp, nil
 }
 
-func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.UpdatePortalRequest]) (*connect.Response[v1.UpdatePortalResponse], error) {
-	msg := req.Msg
+func (s *Service) UpdatePortal(ctx context.Context, req *v1.UpdatePortalRequest) (*v1.UpdatePortalResponse, error) {
+	msg := req
 	org, err := s.requireOrgAdmin(ctx, msg.OrgId)
 	if err != nil {
 		return nil, err
@@ -390,7 +390,7 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 
 	if msg.Name != nil {
 		if *msg.Name == "" {
-			return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("name cannot be empty"))
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "name cannot be empty")
 		}
 		portal.Name = *msg.Name
 	}
@@ -408,7 +408,7 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 		}
 		if hostname != portal.Hostname {
 			if err := s.engine.Policy().AllowedClaim(ctx, hostname, org.ID); err != nil {
-				return nil, connect.NewError(connect.CodeFailedPrecondition, err)
+				return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 			}
 		}
 		portal.Hostname = hostname
@@ -451,7 +451,7 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 		if msg.BackendUrl != nil {
 			var err error
 			if backendURL, err = parseBackendURL(*msg.BackendUrl); err != nil {
-				return nil, connect.NewError(connect.CodeInvalidArgument, err)
+				return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 			}
 		}
 		if msg.BackendRewriteHost != nil {
@@ -474,11 +474,11 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 		portal.CertSource = v1.CertSource_CERT_SOURCE_NONE
 	}
 	if portal.TLS && portal.CertSource == v1.CertSource_CERT_SOURCE_NONE {
-		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("requiring https needs a certificate source"))
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "requiring https needs a certificate source")
 	}
 
 	if err := s.store.UpdateRegistryPortal(ctx, portal); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if portal.CertSource == v1.CertSource_CERT_SOURCE_ACME {
 		s.ensureCertDomain(ctx, org, portal.Hostname)
@@ -488,20 +488,20 @@ func (s *Service) UpdatePortal(ctx context.Context, req *connect.Request[v1.Upda
 	}
 	s.reconcile(ctx)
 
-	return connect.NewResponse(&v1.UpdatePortalResponse{Portal: s.portalWithStatus(ctx, portal)}), nil
+	return &v1.UpdatePortalResponse{Portal: s.portalWithStatus(ctx, portal)}, nil
 }
 
-func (s *Service) DeletePortal(ctx context.Context, req *connect.Request[v1.DeletePortalRequest]) (*connect.Response[v1.DeletePortalResponse], error) {
-	org, err := s.requireOrgAdmin(ctx, req.Msg.OrgId)
+func (s *Service) DeletePortal(ctx context.Context, req *v1.DeletePortalRequest) (*v1.DeletePortalResponse, error) {
+	org, err := s.requireOrgAdmin(ctx, req.OrgId)
 	if err != nil {
 		return nil, err
 	}
-	portal, err := s.getOrgPortal(ctx, org, req.Msg.Id)
+	portal, err := s.getOrgPortal(ctx, org, req.Id)
 	if err != nil {
 		return nil, err
 	}
 	if err := s.store.DeleteRegistryPortal(ctx, portal.ID); err != nil {
-		return nil, connect.NewError(connect.CodeInternal, err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if err := s.store.DeleteTLSCertificatesByPortal(ctx, portal.ID); err != nil {
 		s.log.Error("cleaning portal tls material: %v", err)
@@ -513,18 +513,18 @@ func (s *Service) DeletePortal(ctx context.Context, req *connect.Request[v1.Dele
 	s.reconcile(ctx)
 	s.log.Info("portal deleted: %s (%s)", portal.Hostname, portal.ID)
 
-	return connect.NewResponse(&v1.DeletePortalResponse{}), nil
+	return &v1.DeletePortalResponse{}, nil
 }
 
 // Reports the portal serving the current request host, empty off portals
-func (s *Service) ResolvePortal(ctx context.Context, _ *connect.Request[v1.ResolvePortalRequest]) (*connect.Response[v1.ResolvePortalResponse], error) {
+func (s *Service) ResolvePortal(ctx context.Context, _ *v1.ResolvePortalRequest) (*v1.ResolvePortalResponse, error) {
 	p := FromContext(ctx)
 	if p == nil {
-		return connect.NewResponse(&v1.ResolvePortalResponse{
+		return &v1.ResolvePortalResponse{
 			PrimaryScheme: s.primaryScheme(ctx),
-		}), nil
+		}, nil
 	}
-	return connect.NewResponse(&v1.ResolvePortalResponse{
+	return &v1.ResolvePortalResponse{
 		IsPortal:        true,
 		OrgName:         p.OrgName,
 		OrgDisplayName:  p.OrgDisplayName,
@@ -535,7 +535,7 @@ func (s *Service) ResolvePortal(ctx context.Context, _ *connect.Request[v1.Resol
 		PrimaryHost:     s.res.System(ctx).GetServer().GetPublicHostname(),
 		PrimaryScheme:   s.primaryScheme(ctx),
 		HidePrimaryLink: p.HidePrimaryLink,
-	}), nil
+	}, nil
 }
 
 // Https once the primary either refuses cleartext or has a working cert
