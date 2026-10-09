@@ -2,6 +2,9 @@ package services
 
 import (
 	"context"
+	"fmt"
+	"slices"
+	"strings"
 
 	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -420,9 +423,19 @@ func (s *OrganizationService) UpdateOrgMemberRole(ctx context.Context, req *v1.U
 
 	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
 	if !canManage {
+		orgAuthority := []string{storage.OrgRoleOwner, storage.OrgRoleAdmin}
 		requesterMember, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
-		if requesterMember == nil || requesterMember.Role != storage.OrgRoleOwner {
-			return nil, connect.NewError(connect.CodePermissionDenied, "")
+		if requesterMember == nil {
+			return nil, connect.NewError(connect.CodePermissionDenied, "user not found")
+		}
+		if !slices.Contains(orgAuthority, requesterMember.Role) {
+			return nil, connect.NewError(
+				connect.CodePermissionDenied,
+				fmt.Sprintf(
+					"user's org role (%s) is not an org authority role: %s",
+					requesterMember.Role,
+					strings.Join(orgAuthority, ", ")),
+			)
 		}
 	}
 
