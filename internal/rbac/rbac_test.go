@@ -73,8 +73,8 @@ func TestEnsureAdminPolicyIdempotent(t *testing.T) {
 func TestSeedDefaultPoliciesAnonymousDefaults(t *testing.T) {
 	e := newTestEnforcer(t)
 	perms := e.GetPermissionsForRole("anonymous")
-	if len(perms) != 4 {
-		t.Fatalf("anonymous seed = %+v, want read and pull on repositories and artifacts", perms)
+	if len(perms) != 6 {
+		t.Fatalf("anonymous seed = %+v, want read and pull on repositories, artifacts, and git", perms)
 	}
 	for _, p := range perms {
 		if p.ObjectID != "*" || (p.Action != ActionRead && p.Action != ActionPull) {

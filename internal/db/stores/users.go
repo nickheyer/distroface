@@ -203,3 +203,19 @@ func (s *Store) CountUsers(ctx context.Context) (int64, error) {
 	err := s.db.WithContext(ctx).Model(&db.User{}).Count(&count).Error
 	return count, err
 }
+
+// Users by id, missing ids are absent from the map
+func (s *Store) GetUsersByIDs(ctx context.Context, ids []string) (map[string]*db.User, error) {
+	out := make(map[string]*db.User, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var users []*db.User
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		out[u.ID] = u
+	}
+	return out, nil
+}

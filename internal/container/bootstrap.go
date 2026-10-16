@@ -9,6 +9,7 @@ import (
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/utils"
 )
 
 // Sentinel creator for orgs seeded without an owner
@@ -26,6 +27,9 @@ func seedUsers(ctx context.Context, users []config.BootstrapUser, store *stores.
 	for _, u := range users {
 		if u.Username == "" || u.Password == "" {
 			return fmt.Errorf("bootstrap user requires username and password")
+		}
+		if !utils.NamespaceAllowed(u.Username) {
+			return fmt.Errorf("bootstrap user %q: name is invalid or reserved", u.Username)
 		}
 
 		existing, err := store.GetUserByUsername(ctx, u.Username)
@@ -66,6 +70,9 @@ func seedOrgs(ctx context.Context, orgs []config.BootstrapOrg, store *stores.Sto
 	for _, o := range orgs {
 		if o.Name == "" {
 			return fmt.Errorf("bootstrap org requires name")
+		}
+		if !utils.NamespaceAllowed(o.Name) {
+			return fmt.Errorf("bootstrap org %q: name is invalid or reserved", o.Name)
 		}
 		for _, m := range o.Members {
 			if m.Username == "" {

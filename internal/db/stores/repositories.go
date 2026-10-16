@@ -205,3 +205,38 @@ func (s *Store) ListStarredRepositories(ctx context.Context, userID string, limi
 	err := tx.Order("stars.created_at DESC").Limit(limit).Offset(offset).Find(&repos).Error
 	return repos, total, err
 }
+
+// ── Source repository links and moves ────────────────────────────────────
+
+func (s *Store) GetRepositoryByID(ctx context.Context, id string) (*db.Repository, error) {
+	var repo db.Repository
+	err := s.db.WithContext(ctx).First(&repo, "id = ?", id).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &repo, err
+}
+
+func (s *Store) SetRepositoryGitRepo(ctx context.Context, id string, gitRepoID *string) error {
+	return s.db.WithContext(ctx).Model(&db.Repository{}).Where("id = ?", id).Update("git_repo_id", gitRepoID).Error
+}
+
+func (s *Store) ListRepositoriesByGitRepo(ctx context.Context, gitRepoID string) ([]*db.Repository, error) {
+	var repos []*db.Repository
+	err := s.db.WithContext(ctx).Where("git_repo_id = ?", gitRepoID).Order("name ASC").Find(&repos).Error
+	return repos, err
+}
+
+// Image repos named ns/name or ns/name/anything that carry no link yet
+func (s *Store) ListUnlinkedRepositoriesForGit(ctx context.Context, namespace, name string) ([]*db.Repository, error) {
+	var repos []*db.Repository
+	err := s.db.WithContext(ctx).Where("namespace = ? AND git_repo_id IS NULL AND (name = ? OR name LIKE ? ESCAPE '\\')", namespace, name, pages.LikePrefix(name+"/")).Find(&repos).Error
+	return repos, err
+}
+
+// Moves a repository row to a new address
+func (s *Store) MoveRepository(ctx context.Context, id, newNamespace, newName, ownerID string, isOrg bool) error {
+	return s.db.WithContext(ctx).Model(&db.Repository{}).Where("id = ?", id).Updates(map[string]any{
+		"namespace": newNamespace, "name": newName, "owner_id": ownerID, "is_org_namespace": isOrg,
+	}).Error
+}

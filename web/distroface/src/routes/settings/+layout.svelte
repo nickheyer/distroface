@@ -2,7 +2,8 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { authStore } from '$lib/stores/auth.svelte';
-	import { Settings, User, Lock, Key } from '@lucide/svelte';
+	import { configStore } from '$lib/stores/config.svelte';
+	import { Settings, User, Lock, Key, KeyRound, Bell } from '@lucide/svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
 
 	let { children } = $props();
@@ -12,6 +13,12 @@
 		{ href: resolve('/settings/security'), label: 'Security', icon: Lock },
 		...(authStore.canReadTokens
 			? [{ href: resolve('/settings/tokens'), label: 'API Tokens', icon: Key }]
+			: []),
+		...(configStore.gitEnabled
+			? [
+					{ href: resolve('/settings/keys'), label: 'Keys', icon: KeyRound },
+					{ href: resolve('/settings/notifications'), label: 'Notifications', icon: Bell }
+				]
 			: [])
 	]);
 

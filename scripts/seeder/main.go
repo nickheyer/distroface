@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -26,9 +27,16 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connecthttp"
+	git "github.com/go-git/go-git/v6"
+	gitconfig "github.com/go-git/go-git/v6/config"
+	"github.com/go-git/go-git/v6/plumbing"
+	gitclient "github.com/go-git/go-git/v6/plumbing/client"
+	"github.com/go-git/go-git/v6/plumbing/object"
+	githttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	"github.com/nickheyer/distroface/internal/rbac"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -44,6 +52,16 @@ const (
 	phaseArtifactRepos = "artifact-repos"
 	phaseArtifacts     = "artifacts"
 	phasePortals       = "portals"
+	phaseGitRepos      = "git-repos"
+	phaseTeams         = "teams"
+	phaseLabels        = "labels"
+	phaseMilestones    = "milestones"
+	phaseIssues        = "issues"
+	phasePullRequests  = "pull-requests"
+	phaseReleases      = "releases"
+	phaseGitStars      = "git-stars"
+
+	gitDefaultBranch = "main"
 
 	mtOCIManifest    = "application/vnd.oci.image.manifest.v1+json"
 	mtOCIConfig      = "application/vnd.oci.image.config.v1+json"
@@ -88,6 +106,16 @@ type Config struct {
 	ArtifactRepos int
 	Artifacts     int
 	Portals       int
+
+	GitRepos          int
+	CommitsPerRepo    int
+	Teams             int
+	LabelsPerRepo     int
+	MilestonesPerRepo int
+	Issues            int
+	PullRequests      int
+	Releases          int
+	GitStars          int
 
 	LayerSize       int
 	ArtifactSize    int
@@ -170,6 +198,16 @@ func loadConfig() *Config {
 	flag.IntVar(&cfg.Artifacts, "artifacts", envInt("artifacts", 1500), "uploaded artifact count")
 	flag.IntVar(&cfg.Portals, "portals", envInt("portals", 20), "registry portal count")
 
+	flag.IntVar(&cfg.GitRepos, "git-repos", envInt("git-repos", 60), "git repository count")
+	flag.IntVar(&cfg.CommitsPerRepo, "commits-per-repo", envInt("commits-per-repo", 5), "commits pushed per git repository")
+	flag.IntVar(&cfg.Teams, "teams", envInt("teams", 30), "organization team count")
+	flag.IntVar(&cfg.LabelsPerRepo, "labels-per-repo", envInt("labels-per-repo", 4), "labels created per git repository")
+	flag.IntVar(&cfg.MilestonesPerRepo, "milestones-per-repo", envInt("milestones-per-repo", 2), "milestones created per git repository")
+	flag.IntVar(&cfg.Issues, "issues", envInt("issues", 300), "issue count")
+	flag.IntVar(&cfg.PullRequests, "pull-requests", envInt("pull-requests", 100), "pull request count")
+	flag.IntVar(&cfg.Releases, "releases", envInt("releases", 60), "release count")
+	flag.IntVar(&cfg.GitStars, "git-stars", envInt("git-stars", 200), "git repository star count")
+
 	flag.IntVar(&cfg.LayerSize, "layer-size", envInt("layer-size", 2048), "image layer size in bytes")
 	flag.IntVar(&cfg.ArtifactSize, "artifact-size", envInt("artifact-size", 2048), "artifact payload size in bytes")
 	flag.StringVar(&cfg.WebhookURL, "webhook-url", envStr("webhook-url", "http://127.0.0.1:9/seed-hook"), "webhook target URL")
@@ -225,6 +263,16 @@ func (cfg *Config) printPlan() {
     artifact repos        %d
     artifacts             %d  (size=%dB)
     portals               %d
+
+  git:
+    git repos             %d  x %d commits
+    teams                 %d
+    labels per repo       %d
+    milestones per repo   %d
+    issues                %d
+    pull requests         %d
+    releases              %d
+    git stars             %d
 `,
 		cfg.BaseURL, cfg.Username,
 		cfg.Concurrency, cfg.Retries, cfg.Timeout,
@@ -233,6 +281,8 @@ func (cfg *Config) printPlan() {
 		cfg.ImageRepos, cfg.TagsPerRepo, cfg.LayerSize,
 		cfg.Pulls, cfg.Stars, cfg.Tokens, cfg.Webhooks, cfg.WebhooksActive,
 		cfg.ArtifactRepos, cfg.Artifacts, cfg.ArtifactSize, cfg.Portals,
+		cfg.GitRepos, cfg.CommitsPerRepo, cfg.Teams, cfg.LabelsPerRepo, cfg.MilestonesPerRepo,
+		cfg.Issues, cfg.PullRequests, cfg.Releases, cfg.GitStars,
 	)
 }
 
@@ -290,9 +340,27 @@ func main() {
 
 type roleRef struct{ id, name string }
 type userRef struct{ id, username, password string }
-type orgRef struct{ id, name string }
+type orgRef struct {
+	id, name string
+	members  []userRef
+}
 type repoRef struct{ id, namespace, name string }
 type artifactRepoRef struct{ namespace, name string }
+
+// Owner holds the credentials used for git pushes
+type gitRepoRef struct {
+	namespace string
+	name      string
+	owner     userRef
+	org       bool
+	private   bool
+	tag       string
+}
+
+func (r gitRepoRef) key() string { return r.namespace + "/" + r.name }
+
+type labelRef struct{ repo, id, scope string }
+type milestoneRef struct{ repo, id string }
 
 // One seeding target, index 0 is the base app
 type regEntry struct {
@@ -332,6 +400,12 @@ type seeder struct {
 
 	regEntries       []regEntry
 	orgArtifactRepos map[string][]artifactRepoRef
+
+	gitRepos       []gitRepoRef
+	publicGitRepos []gitRepoRef
+	orgGitRepos    map[string][]gitRepoRef
+	labels         map[string][]labelRef
+	milestones     map[string][]milestoneRef
 
 	sessMu   sync.Mutex
 	sessions map[string]*userSession
@@ -438,6 +512,88 @@ func (s *seeder) run(ctx context.Context) error {
 			return err
 		}
 	}
+
+	fmt.Println("\ngit...")
+	if cfg.phaseEnabled(phaseGitRepos) && cfg.GitRepos > 0 {
+		if s.gitRepos, err = collect(ctx, s, phaseGitRepos, cfg.GitRepos, s.createGitRepo); err != nil {
+			return err
+		}
+		s.orgGitRepos = map[string][]gitRepoRef{}
+		for _, r := range s.gitRepos {
+			if !r.private {
+				s.publicGitRepos = append(s.publicGitRepos, r)
+			}
+			if r.org {
+				s.orgGitRepos[r.namespace] = append(s.orgGitRepos[r.namespace], r)
+			}
+		}
+	}
+	if cfg.phaseEnabled(phaseTeams) && cfg.Teams > 0 {
+		if err = requirePools(phaseTeams, map[string]int{"orgs": len(s.orgs)}); err != nil {
+			return err
+		}
+		if err = runPhase(ctx, cfg, phaseTeams, cfg.Teams, s.createTeam); err != nil {
+			return err
+		}
+	}
+	if cfg.phaseEnabled(phaseLabels) && cfg.LabelsPerRepo > 0 {
+		if err = requirePools(phaseLabels, map[string]int{"git repos": len(s.gitRepos)}); err != nil {
+			return err
+		}
+		var labels []labelRef
+		if labels, err = collect(ctx, s, phaseLabels, len(s.gitRepos)*cfg.LabelsPerRepo, s.createLabel); err != nil {
+			return err
+		}
+		s.labels = map[string][]labelRef{}
+		for _, l := range labels {
+			s.labels[l.repo] = append(s.labels[l.repo], l)
+		}
+	}
+	if cfg.phaseEnabled(phaseMilestones) && cfg.MilestonesPerRepo > 0 {
+		if err = requirePools(phaseMilestones, map[string]int{"git repos": len(s.gitRepos)}); err != nil {
+			return err
+		}
+		var milestones []milestoneRef
+		if milestones, err = collect(ctx, s, phaseMilestones, len(s.gitRepos)*cfg.MilestonesPerRepo, s.createMilestone); err != nil {
+			return err
+		}
+		s.milestones = map[string][]milestoneRef{}
+		for _, m := range milestones {
+			s.milestones[m.repo] = append(s.milestones[m.repo], m)
+		}
+	}
+	if cfg.phaseEnabled(phaseIssues) && cfg.Issues > 0 {
+		if err = requirePools(phaseIssues, map[string]int{"git repos": len(s.gitRepos)}); err != nil {
+			return err
+		}
+		if err = runPhase(ctx, cfg, phaseIssues, cfg.Issues, s.createIssue); err != nil {
+			return err
+		}
+	}
+	if cfg.phaseEnabled(phasePullRequests) && cfg.PullRequests > 0 {
+		if err = requirePools(phasePullRequests, map[string]int{"git repos": len(s.gitRepos)}); err != nil {
+			return err
+		}
+		if err = runPhase(ctx, cfg, phasePullRequests, cfg.PullRequests, s.createPullRequest); err != nil {
+			return err
+		}
+	}
+	if cfg.phaseEnabled(phaseReleases) && cfg.Releases > 0 {
+		if err = requirePools(phaseReleases, map[string]int{"git repos": len(s.gitRepos)}); err != nil {
+			return err
+		}
+		if err = runPhase(ctx, cfg, phaseReleases, cfg.Releases, s.createRelease); err != nil {
+			return err
+		}
+	}
+	if cfg.phaseEnabled(phaseGitStars) && cfg.GitStars > 0 {
+		if err = requirePools(phaseGitStars, map[string]int{"users": len(s.users), "public git repos": len(s.publicGitRepos)}); err != nil {
+			return err
+		}
+		if err = runPhase(ctx, cfg, phaseGitStars, cfg.GitStars, s.starGitRepo); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -502,6 +658,8 @@ func (s *seeder) ensureMemberRole(ctx context.Context) error {
 				{Resource: rbac.ResourceTokens, Action: rbac.ActionDelete},
 				{Resource: rbac.ResourceOrganizations, Action: rbac.ActionRead},
 				{Resource: rbac.ResourceWebhooks, Action: rbac.ActionRead},
+				{Resource: rbac.ResourceGit, Action: rbac.ActionRead},
+				{Resource: rbac.ResourceGit, Action: rbac.ActionPull},
 			},
 		})
 	})
@@ -564,6 +722,7 @@ func (s *seeder) createOrg(ctx context.Context, i int) (orgRef, error) {
 		if err != nil && connect.CodeOf(err) != connect.CodeAlreadyExists {
 			return orgRef{}, fmt.Errorf("add member %s: %w", u.username, err)
 		}
+		org.members = append(org.members, u)
 	}
 	return org, nil
 }
@@ -857,6 +1016,338 @@ func (s *seeder) loadDockerRepos(ctx context.Context) error {
 	}
 }
 
+// -- git tier -------------------------------------------------------------
+
+var (
+	labelNames   = []string{"bug", "enhancement", "docs", "question", "help-wanted", "good-first-issue", "priority/high", "priority/low"}
+	labelColors  = []string{"#d73a4a", "#a2eeef", "#0075ca", "#d876e3", "#008672", "#7057ff", "#b60205", "#c2e0c6"}
+	teamUnits    = []string{"code", "issues", "pulls", "releases", "wiki", "projects", "packages", "actions"}
+	mergeMethods = []v1.GitMergeMethod{
+		v1.GitMergeMethod_GIT_MERGE_METHOD_MERGE,
+		v1.GitMergeMethod_GIT_MERGE_METHOD_SQUASH,
+		v1.GitMergeMethod_GIT_MERGE_METHOD_REBASE,
+		v1.GitMergeMethod_GIT_MERGE_METHOD_REBASE_MERGE,
+	}
+)
+
+// Cycles admin, org, and seeded user namespaces
+func (s *seeder) createGitRepo(ctx context.Context, i int) (gitRepoRef, error) {
+	repo := gitRepoRef{
+		name:    s.name("git", i),
+		owner:   userRef{username: s.cfg.Username, password: s.cfg.Password},
+		private: i%5 == 0,
+		tag:     "v0.1.0",
+	}
+	switch {
+	case len(s.orgs) > 0 && i%2 == 1:
+		repo.namespace = s.orgs[(i/2)%len(s.orgs)].name
+		repo.org = true
+	case len(s.users) > 0 && i%4 == 2:
+		repo.owner = s.users[(i/4)%len(s.users)]
+		repo.namespace = repo.owner.username
+	default:
+		repo.namespace = s.cfg.Username
+	}
+	visibility := v1.Visibility_VISIBILITY_PUBLIC
+	if repo.private {
+		visibility = v1.Visibility_VISIBILITY_PRIVATE
+	}
+	autoInit := i%3 == 0
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateGitRepositoryResponse, error) {
+		return s.client.git.CreateGitRepository(ctx, &v1.CreateGitRepositoryRequest{
+			Namespace:     repo.namespace,
+			Name:          repo.name,
+			Description:   "seeder generated git repository",
+			Visibility:    visibility,
+			DefaultBranch: gitDefaultBranch,
+			AutoInit:      autoInit,
+			Topics:        []string{"seed", sample([]string{"go", "rust", "docs", "infra"})},
+		})
+	})
+	if err != nil {
+		return gitRepoRef{}, err
+	}
+	repo.namespace, repo.name = resp.Repository.GetNamespace(), resp.Repository.GetName()
+	if s.cfg.CommitsPerRepo <= 0 {
+		return repo, nil
+	}
+	if err := s.client.seedGitHistory(ctx, repo, autoInit, s.cfg.CommitsPerRepo); err != nil {
+		return gitRepoRef{}, fmt.Errorf("push %s: %w", repo.key(), err)
+	}
+	return repo, nil
+}
+
+func (s *seeder) createTeam(ctx context.Context, i int) error {
+	org := s.orgs[i%len(s.orgs)]
+	includeAll := i%3 == 0
+	levels := []v1.TeamUnitLevel{v1.TeamUnitLevel_TEAM_UNIT_LEVEL_READ, v1.TeamUnitLevel_TEAM_UNIT_LEVEL_WRITE, v1.TeamUnitLevel_TEAM_UNIT_LEVEL_NONE}
+	units := make([]*v1.TeamUnitPermission, 0, len(teamUnits))
+	for k, unit := range teamUnits {
+		units = append(units, &v1.TeamUnitPermission{Unit: unit, Level: levels[(i+k)%len(levels)]})
+	}
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateTeamResponse, error) {
+		return s.client.orgs.CreateTeam(ctx, &v1.CreateTeamRequest{
+			OrgId:            org.id,
+			Name:             s.name("team", i),
+			Description:      "seeder generated team",
+			CanCreateRepos:   i%2 == 0,
+			IncludesAllRepos: includeAll,
+			AdminAccess:      i%5 == 0,
+			Units:            units,
+		})
+	})
+	if err != nil {
+		return err
+	}
+	teamID := resp.Team.GetId()
+	for _, u := range org.members[:min(3, len(org.members))] {
+		_, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.AddTeamMemberResponse, error) {
+			return s.client.orgs.AddTeamMember(ctx, &v1.AddTeamMemberRequest{OrgId: org.id, TeamId: teamID, UserId: u.id})
+		})
+		if err != nil && connect.CodeOf(err) != connect.CodeAlreadyExists {
+			return fmt.Errorf("add member %s: %w", u.username, err)
+		}
+	}
+	if repos := s.orgGitRepos[org.name]; len(repos) > 0 && !includeAll {
+		repo := repos[i%len(repos)]
+		_, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.AddTeamRepoResponse, error) {
+			return s.client.orgs.AddTeamRepo(ctx, &v1.AddTeamRepoRequest{OrgId: org.id, TeamId: teamID, RepoName: repo.name})
+		})
+		if err != nil && connect.CodeOf(err) != connect.CodeAlreadyExists {
+			return fmt.Errorf("add repo %s: %w", repo.name, err)
+		}
+	}
+	return nil
+}
+
+func (s *seeder) createLabel(ctx context.Context, i int) (labelRef, error) {
+	repo := s.gitRepos[i/s.cfg.LabelsPerRepo]
+	k := i % s.cfg.LabelsPerRepo
+	name := labelNames[k%len(labelNames)]
+	if k >= len(labelNames) {
+		name = fmt.Sprintf("%s-%d", name, k/len(labelNames))
+	}
+	scope, _, exclusive := strings.Cut(name, "/")
+	if !exclusive {
+		scope = ""
+	}
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateLabelResponse, error) {
+		return s.client.issues.CreateLabel(ctx, &v1.CreateLabelRequest{
+			Namespace:   repo.namespace,
+			Name:        repo.name,
+			LabelName:   name,
+			Color:       labelColors[k%len(labelColors)],
+			Description: "seeder generated label",
+			Exclusive:   exclusive,
+		})
+	})
+	if err != nil {
+		return labelRef{}, err
+	}
+	return labelRef{repo: repo.key(), id: resp.Label.GetId(), scope: scope}, nil
+}
+
+func (s *seeder) createMilestone(ctx context.Context, i int) (milestoneRef, error) {
+	repo := s.gitRepos[i/s.cfg.MilestonesPerRepo]
+	k := i % s.cfg.MilestonesPerRepo
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateMilestoneResponse, error) {
+		return s.client.issues.CreateMilestone(ctx, &v1.CreateMilestoneRequest{
+			Namespace:   repo.namespace,
+			Name:        repo.name,
+			Title:       fmt.Sprintf("v%d.0", k+1),
+			Description: "seeder generated milestone",
+			DueDate:     timestamppb.New(time.Now().AddDate(0, k+1, 0)),
+		})
+	})
+	if err != nil {
+		return milestoneRef{}, err
+	}
+	return milestoneRef{repo: repo.key(), id: resp.Milestone.GetId()}, nil
+}
+
+// Up to three label ids, one per exclusive scope
+func (s *seeder) randomLabelIDs(repo gitRepoRef) []string {
+	labels := s.labels[repo.key()]
+	if len(labels) == 0 {
+		return nil
+	}
+	var out []string
+	used := map[string]bool{}
+	for _, idx := range mrand.Perm(len(labels))[:mrand.IntN(min(3, len(labels))+1)] {
+		l := labels[idx]
+		if l.scope != "" && used[l.scope] {
+			continue
+		}
+		used[l.scope] = true
+		out = append(out, l.id)
+	}
+	return out
+}
+
+func (s *seeder) randomMilestoneID(repo gitRepoRef) string {
+	if ms := s.milestones[repo.key()]; len(ms) > 0 && mrand.IntN(2) == 0 {
+		return sample(ms).id
+	}
+	return ""
+}
+
+func (s *seeder) createIssue(ctx context.Context, i int) error {
+	repo := s.gitRepos[i%len(s.gitRepos)]
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateIssueResponse, error) {
+		return s.client.issues.CreateIssue(ctx, &v1.CreateIssueRequest{
+			Namespace:   repo.namespace,
+			Name:        repo.name,
+			Title:       fmt.Sprintf("Seed issue %d", i),
+			Body:        fmt.Sprintf("Generated by seeder run %s.", s.runID),
+			LabelIds:    s.randomLabelIDs(repo),
+			MilestoneId: s.randomMilestoneID(repo),
+		})
+	})
+	if err != nil {
+		return err
+	}
+	number := resp.Issue.GetNumber()
+	if i%3 == 0 {
+		_, err = retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateCommentResponse, error) {
+			return s.client.issues.CreateComment(ctx, &v1.CreateCommentRequest{
+				Namespace: repo.namespace,
+				Name:      repo.name,
+				Number:    number,
+				Body:      fmt.Sprintf("Seeder comment on issue %d.", number),
+			})
+		})
+		if err != nil {
+			return fmt.Errorf("comment: %w", err)
+		}
+	}
+	if i%4 == 1 {
+		_, err = retry(ctx, s.cfg, func(ctx context.Context) (*v1.UpdateIssueResponse, error) {
+			return s.client.issues.UpdateIssue(ctx, &v1.UpdateIssueRequest{
+				Namespace: repo.namespace,
+				Name:      repo.name,
+				Number:    number,
+				State:     ptr(v1.IssueState_ISSUE_STATE_CLOSED),
+			})
+		})
+		if err != nil {
+			return fmt.Errorf("close: %w", err)
+		}
+	}
+	return nil
+}
+
+// Topic branch push then a pull, every fourth merges
+func (s *seeder) createPullRequest(ctx context.Context, i int) error {
+	repo := s.gitRepos[i%len(s.gitRepos)]
+	branch := s.name("pr", i)
+	title := fmt.Sprintf("Seed change %d", i)
+	if err := s.client.pushTopicBranch(ctx, repo, branch, fmt.Sprintf("changes/pr-%d.txt", i), title); err != nil {
+		return fmt.Errorf("push %s: %w", branch, err)
+	}
+	merge := i%4 == 0
+	resp, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreatePullRequestResponse, error) {
+		return s.client.pulls.CreatePullRequest(ctx, &v1.CreatePullRequestRequest{
+			Namespace:   repo.namespace,
+			Name:        repo.name,
+			Base:        gitDefaultBranch,
+			Head:        branch,
+			Title:       title,
+			Body:        fmt.Sprintf("Generated by seeder run %s.", s.runID),
+			Draft:       !merge && i%5 == 1,
+			LabelIds:    s.randomLabelIDs(repo),
+			MilestoneId: s.randomMilestoneID(repo),
+		})
+	})
+	if err != nil {
+		return err
+	}
+	if !merge {
+		return nil
+	}
+	number := resp.PullRequest.GetIssue().GetNumber()
+	_, err = retry(ctx, s.cfg, func(ctx context.Context) (*v1.MergePullRequestResponse, error) {
+		return s.client.pulls.MergePullRequest(ctx, &v1.MergePullRequestRequest{
+			Namespace:    repo.namespace,
+			Name:         repo.name,
+			Number:       number,
+			Method:       mergeMethods[(i/4)%len(mergeMethods)],
+			DeleteBranch: i%8 == 0,
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("merge #%d: %w", number, err)
+	}
+	return nil
+}
+
+// Reuses the pushed tag first, later rounds cut new tags
+func (s *seeder) createRelease(ctx context.Context, i int) error {
+	repo := s.gitRepos[i%len(s.gitRepos)]
+	tag := repo.tag
+	if round := i / len(s.gitRepos); round > 0 {
+		tag = fmt.Sprintf("v0.%d.0", round+1)
+		_, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateTagResponse, error) {
+			return s.client.gitRefs.CreateTag(ctx, &v1.CreateTagRequest{
+				Namespace: repo.namespace,
+				Name:      repo.name,
+				Tag:       tag,
+				Target:    gitDefaultBranch,
+				Message:   "seeder release " + tag,
+			})
+		})
+		if err != nil && connect.CodeOf(err) != connect.CodeAlreadyExists {
+			return fmt.Errorf("tag %s: %w", tag, err)
+		}
+	}
+	_, err := retry(ctx, s.cfg, func(ctx context.Context) (*v1.CreateReleaseResponse, error) {
+		return s.client.releases.CreateRelease(ctx, &v1.CreateReleaseRequest{
+			Namespace:  repo.namespace,
+			Name:       repo.name,
+			Tag:        tag,
+			Title:      fmt.Sprintf("%s %s", repo.name, tag),
+			Body:       fmt.Sprintf("Generated by seeder run %s.", s.runID),
+			Draft:      true,
+			Prerelease: i%3 == 0,
+		})
+	})
+	if err != nil {
+		return err
+	}
+	if i%2 == 1 {
+		return nil
+	}
+	_, err = retry(ctx, s.cfg, func(ctx context.Context) (*v1.PublishReleaseResponse, error) {
+		return s.client.releases.PublishRelease(ctx, &v1.PublishReleaseRequest{
+			Namespace: repo.namespace,
+			Name:      repo.name,
+			Tag:       tag,
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("publish %s: %w", tag, err)
+	}
+	return nil
+}
+
+func (s *seeder) starGitRepo(ctx context.Context, i int) error {
+	u := s.users[i%len(s.users)]
+	tok, err := s.sessionFor(ctx, u)
+	if err != nil {
+		return fmt.Errorf("login %s: %w", u.username, err)
+	}
+	repo := sample(s.publicGitRepos)
+	_, err = retry(withToken(ctx, tok), s.cfg, func(ctx context.Context) (*v1.StarGitRepositoryResponse, error) {
+		return s.client.git.StarGitRepository(ctx, &v1.StarGitRepositoryRequest{
+			Namespace: repo.namespace,
+			Name:      repo.name,
+		})
+	})
+	if connect.CodeOf(err) == connect.CodeAlreadyExists {
+		return nil
+	}
+	return err
+}
+
 func (s *seeder) sessionFor(ctx context.Context, u userRef) (string, error) {
 	s.sessMu.Lock()
 	us, ok := s.sessions[u.username]
@@ -896,6 +1387,14 @@ type client struct {
 	portals   distrofacev1connect.PortalServiceClient
 	repos     distrofacev1connect.RepositoryServiceClient
 	health    distrofacev1connect.HealthServiceClient
+	git       distrofacev1connect.GitServiceClient
+	gitRefs   distrofacev1connect.GitRefServiceClient
+	issues    distrofacev1connect.IssueServiceClient
+	pulls     distrofacev1connect.PullRequestServiceClient
+	releases  distrofacev1connect.ReleaseServiceClient
+
+	// Plain client for go-git, keeps the admin bearer off pushes
+	gitHTTP *http.Client
 
 	regTokMu sync.Mutex
 	regToks  map[string]regToken
@@ -952,6 +1451,20 @@ func newClient(cfg *Config) (*client, error) {
 	c.portals = distrofacev1connect.NewPortalServiceClient(rpc)
 	c.repos = distrofacev1connect.NewRepositoryServiceClient(rpc)
 	c.health = distrofacev1connect.NewHealthServiceClient(rpc)
+	c.git = distrofacev1connect.NewGitServiceClient(rpc)
+	c.gitRefs = distrofacev1connect.NewGitRefServiceClient(rpc)
+	c.issues = distrofacev1connect.NewIssueServiceClient(rpc)
+	c.pulls = distrofacev1connect.NewPullRequestServiceClient(rpc)
+	c.releases = distrofacev1connect.NewReleaseServiceClient(rpc)
+	c.gitHTTP = &http.Client{
+		Timeout: cfg.Timeout,
+		Transport: &http.Transport{
+			MaxIdleConns:        conns,
+			MaxIdleConnsPerHost: conns,
+			MaxConnsPerHost:     conns,
+			IdleConnTimeout:     90 * time.Second,
+		},
+	}
 	return c, nil
 }
 
@@ -1262,6 +1775,151 @@ func (c *client) doRaw(req *http.Request) ([]byte, int, http.Header, error) {
 		return nil, resp.StatusCode, resp.Header, err
 	}
 	return body, resp.StatusCode, resp.Header, nil
+}
+
+// -- git (smart http via go-git) ------------------------------------------
+
+func (c *client) gitRemoteURL(repo gitRepoRef) string {
+	return c.baseURL + "/" + repo.namespace + "/" + repo.name + ".git"
+}
+
+func (c *client) gitOptions(u userRef) []gitclient.Option {
+	return []gitclient.Option{
+		gitclient.WithHTTPClient(c.gitHTTP),
+		gitclient.WithHTTPAuth(&githttp.BasicAuth{Username: u.username, Password: u.password}),
+	}
+}
+
+func gitSignature(u userRef) *object.Signature {
+	return &object.Signature{Name: u.username, Email: u.username + "@seed-distroface.localdomain", When: time.Now()}
+}
+
+// Writes one file and commits it on the current branch
+func gitCommitFile(w *git.Worktree, dir, path, content, msg string, u userRef) (plumbing.Hash, error) {
+	full := filepath.Join(dir, filepath.FromSlash(path))
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	if _, err := w.Add(path); err != nil {
+		return plumbing.ZeroHash, err
+	}
+	sig := gitSignature(u)
+	return w.Commit(msg, &git.CommitOptions{Author: sig, Committer: sig})
+}
+
+// Commits one file on a new branch from head
+func gitBranchCommit(w *git.Worktree, dir, branch, path, content, msg string, u userRef) error {
+	if err := w.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(branch), Create: true}); err != nil {
+		return fmt.Errorf("checkout %s: %w", branch, err)
+	}
+	_, err := gitCommitFile(w, dir, path, content, msg, u)
+	return err
+}
+
+// Single branch clone of the default branch, wiped between attempts
+func (c *client) gitClone(ctx context.Context, dir string, repo gitRepoRef, opts []gitclient.Option) (*git.Repository, error) {
+	return retry(ctx, c.cfg, func(ctx context.Context) (*git.Repository, error) {
+		_ = os.RemoveAll(dir)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+		return git.PlainCloneContext(ctx, dir, &git.CloneOptions{
+			URL:           c.gitRemoteURL(repo),
+			ClientOptions: opts,
+			ReferenceName: plumbing.NewBranchReferenceName(gitDefaultBranch),
+			SingleBranch:  true,
+		})
+	})
+}
+
+func (c *client) gitPush(ctx context.Context, r *git.Repository, opts []gitclient.Option, specs ...string) error {
+	refspecs := make([]gitconfig.RefSpec, 0, len(specs))
+	for _, spec := range specs {
+		refspecs = append(refspecs, gitconfig.RefSpec(spec))
+	}
+	_, err := retry(ctx, c.cfg, func(ctx context.Context) (struct{}, error) {
+		err := r.PushContext(ctx, &git.PushOptions{RefSpecs: refspecs, ClientOptions: opts})
+		if errors.Is(err, git.NoErrAlreadyUpToDate) {
+			err = nil
+		}
+		return struct{}{}, err
+	})
+	return err
+}
+
+// Commits, two branches, one annotated tag, then pushes all
+func (c *client) seedGitHistory(ctx context.Context, repo gitRepoRef, clone bool, commits int) error {
+	dir, err := os.MkdirTemp("", "seed-git-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	opts := c.gitOptions(repo.owner)
+	var r *git.Repository
+	if clone {
+		r, err = c.gitClone(ctx, dir, repo, opts)
+	} else {
+		r, err = git.PlainInit(dir, false, git.WithDefaultBranch(plumbing.NewBranchReferenceName(gitDefaultBranch)))
+		if err == nil {
+			_, err = r.CreateRemote(&gitconfig.RemoteConfig{Name: git.DefaultRemoteName, URLs: []string{c.gitRemoteURL(repo)}})
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("prepare worktree: %w", err)
+	}
+	w, err := r.Worktree()
+	if err != nil {
+		return err
+	}
+
+	var head plumbing.Hash
+	for k := range commits {
+		content := fmt.Sprintf("seed %s entry %d\n", repo.name, k)
+		if head, err = gitCommitFile(w, dir, fmt.Sprintf("notes/entry-%d.txt", k), content, fmt.Sprintf("Add entry %d", k), repo.owner); err != nil {
+			return fmt.Errorf("commit %d: %w", k, err)
+		}
+	}
+	if _, err = r.CreateTag(repo.tag, head, &git.CreateTagOptions{Tagger: gitSignature(repo.owner), Message: "seeder release " + repo.tag}); err != nil {
+		return fmt.Errorf("tag %s: %w", repo.tag, err)
+	}
+	for _, branch := range []string{"develop", "feature/seed"} {
+		content := fmt.Sprintf("seed %s branch %s\n", repo.name, branch)
+		if err = gitBranchCommit(w, dir, branch, "branches/"+filepath.Base(branch)+".txt", content, "Start "+branch, repo.owner); err != nil {
+			return err
+		}
+		if err = w.Checkout(&git.CheckoutOptions{Branch: plumbing.NewBranchReferenceName(gitDefaultBranch)}); err != nil {
+			return fmt.Errorf("checkout %s: %w", gitDefaultBranch, err)
+		}
+	}
+	return c.gitPush(ctx, r, opts, "refs/heads/*:refs/heads/*", "refs/tags/*:refs/tags/*")
+}
+
+// Clones default branch, commits on a topic branch, pushes
+func (c *client) pushTopicBranch(ctx context.Context, repo gitRepoRef, branch, path, msg string) error {
+	dir, err := os.MkdirTemp("", "seed-git-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	opts := c.gitOptions(repo.owner)
+	r, err := c.gitClone(ctx, dir, repo, opts)
+	if err != nil {
+		return fmt.Errorf("clone: %w", err)
+	}
+	w, err := r.Worktree()
+	if err != nil {
+		return err
+	}
+	content := fmt.Sprintf("seed %s change on %s\n", repo.name, branch)
+	if err := gitBranchCommit(w, dir, branch, path, content, msg, repo.owner); err != nil {
+		return err
+	}
+	return c.gitPush(ctx, r, opts, "refs/heads/"+branch+":refs/heads/"+branch)
 }
 
 // ── phase machinery ──────────────────────────────────────────────────────

@@ -37,3 +37,8 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 func (s *Store) CleanAllSessions(ctx context.Context) error {
 	return s.db.WithContext(ctx).Where("1 = 1").Delete(&db.Session{}).Error
 }
+
+// Signs a user out everywhere
+func (s *Store) DeleteSessionsByUser(ctx context.Context, userID string) error {
+	return s.db.WithContext(ctx).Where("user_id = ?", userID).Delete(&db.Session{}).Error
+}

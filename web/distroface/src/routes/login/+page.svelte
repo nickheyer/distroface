@@ -9,6 +9,7 @@
 	import { Separator } from '$lib/components/ui/separator';
 	import { Label } from '$lib/components/ui/label';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
@@ -322,7 +323,14 @@
 							</div>
 
 							<div class="space-y-1.5">
-								<Label for="login-pw" class="text-sm font-medium">Password</Label>
+								<div class="flex items-center justify-between">
+									<Label for="login-pw" class="text-sm font-medium">Password</Label>
+									{#if configStore.settings?.mail?.enabled}
+										<a href={resolve('/forgot-password')} class="text-xs text-muted-foreground hover:text-primary transition-colors">
+											Forgot password?
+										</a>
+									{/if}
+								</div>
 								<PasswordInput
 									id="login-pw"
 									placeholder="Password"

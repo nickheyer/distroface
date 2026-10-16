@@ -15,6 +15,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/mirror"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
@@ -34,11 +35,16 @@ type ArtifactService struct {
 	manager *artifacts.Manager
 	access  *artifacts.Access
 	mirrors *mirror.Monitor
+	git     *gitrepo.Manager
 	log     *logger.Logger
 }
 
-func NewArtifactService(store *stores.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, log *logger.Logger) *ArtifactService {
-	return &ArtifactService{store: store, manager: manager, access: artifacts.NewAccess(store, enforcer), mirrors: mirrors, log: log}
+func NewArtifactService(store *stores.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, git *gitrepo.Manager, log *logger.Logger) *ArtifactService {
+	access := artifacts.NewAccess(store, enforcer)
+	if git != nil {
+		access.SetLinkedAccess(git.Access())
+	}
+	return &ArtifactService{store: store, manager: manager, access: access, mirrors: mirrors, git: git, log: log}
 }
 
 // ── Repositories ─────────────────────────────────────────────────────────
@@ -86,6 +92,9 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *v1.
 	if !isPrivate && ns != user.Username {
 		isPrivate = s.manager.EffectivePrivateByDefault(ctx, ns)
 	}
+	if src, _ := s.store.GetGitRepository(ctx, ns, name); src != nil && src.IsPrivate {
+		isPrivate = true
+	}
 	repo := &storage.ArtifactRepository{
 		Namespace:    ns,
 		Name:         name,
@@ -97,6 +106,9 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *v1.
 	}
 	if err := s.store.CreateArtifactRepository(ctx, repo); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	if s.git != nil {
+		s.git.LinkArtifactByName(ctx, repo)
 	}
 
 	return &v1.CreateArtifactRepositoryResponse{
@@ -339,12 +351,17 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *v1.List
 	for _, a := range list { // Already newest first
 		grouped[a.Version] = append(grouped[a.Version], a)
 	}
+	var releases map[string]bool
+	if repo.GitRepoID != nil {
+		releases, _ = s.store.GitReleaseTags(ctx, *repo.GitRepoID)
+	}
 
 	versions := make([]*v1.ArtifactVersionGroup, len(order))
 	for i, ver := range order {
 		versions[i] = &v1.ArtifactVersionGroup{
-			Version:   ver,
-			Artifacts: artifactsToProto(grouped[ver]),
+			Version:    ver,
+			Artifacts:  artifactsToProto(grouped[ver]),
+			HasRelease: releases[ver],
 		}
 	}
 
@@ -736,6 +753,11 @@ func (s *ArtifactService) repoToProto(ctx context.Context, repo *storage.Artifac
 	if st, ok := stats[repo.ID]; ok {
 		out.ArtifactCount = st.Count
 		out.TotalSize = st.Size
+	}
+	if repo.GitRepoID != nil {
+		if g, err := s.store.GetGitRepositoryByID(ctx, *repo.GitRepoID); err == nil && g != nil {
+			out.SourceRepository = g.Namespace + "/" + g.Name
+		}
 	}
 	return out
 }

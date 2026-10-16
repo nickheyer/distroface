@@ -88,12 +88,20 @@ func (e *Enforcer) SeedDefaultPolicies() error {
 			{"user", ResourceArtifacts, ActionCreate, "*"},
 			{"user", ResourceArtifacts, ActionUpdate, "*"},
 			{"user", ResourceArtifacts, ActionDelete, "*"},
+			{"user", ResourceGit, ActionRead, "*"},
+			{"user", ResourceGit, ActionPull, "*"},
+			{"user", ResourceGit, ActionPush, "*"},
+			{"user", ResourceGit, ActionCreate, "*"},
+			{"user", ResourceGit, ActionUpdate, "*"},
+			{"user", ResourceGit, ActionDelete, "*"},
 		},
 		"anonymous": {
 			{"anonymous", ResourceRepositories, ActionRead, "*"},
 			{"anonymous", ResourceRepositories, ActionPull, "*"},
 			{"anonymous", ResourceArtifacts, ActionRead, "*"},
 			{"anonymous", ResourceArtifacts, ActionPull, "*"},
+			{"anonymous", ResourceGit, ActionRead, "*"},
+			{"anonymous", ResourceGit, ActionPull, "*"},
 		},
 	}
 
@@ -321,4 +329,24 @@ func (e *Enforcer) GetPermissionMatrix() map[string][]Permission {
 		}
 	}
 	return matrix
+}
+
+// Moves scoped grants on one object to its new name
+func (e *Enforcer) RenameObject(resource, oldObject, newObject string) error {
+	policies, err := e.enforcer.GetFilteredPolicy(0, "", resource, "", oldObject)
+	if err != nil {
+		return err
+	}
+	for _, p := range policies {
+		if len(p) < 4 {
+			continue
+		}
+		if _, err := e.enforcer.AddPolicy(p[0], p[1], p[2], newObject); err != nil {
+			return err
+		}
+		if _, err := e.enforcer.RemovePolicy(p[0], p[1], p[2], p[3]); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/distribution/distribution/v3/registry/handlers"
+	"github.com/nickheyer/distroface/internal/actions"
 	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/audit"
@@ -19,6 +20,9 @@ import (
 	"github.com/nickheyer/distroface/internal/certs"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/forge"
+	"github.com/nickheyer/distroface/internal/gitrepo"
+	"github.com/nickheyer/distroface/internal/mailer"
 	"github.com/nickheyer/distroface/internal/mirror"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
@@ -44,20 +48,24 @@ type App struct {
 	RegistryAccess *registry.RegistryAccess
 	PortalProxies  *portal.Manager
 	CertEngine     *certs.Engine
+	GitSSH         *gitrepo.SSHManager
 	Server         *http.Server
+	cancel         context.CancelFunc
 }
 
 // New builds the entire application: config, logger, store, settings
 // resolver, RBAC enforcer, auth manager, registry handler, and HTTP server.
 func New() (*App, error) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	cfg, err := config.Load(".")
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("loading configuration: %w", err)
 	}
 
 	if err := os.MkdirAll(cfg.Logging.Dir, 0755); err != nil {
+		cancel()
 		return nil, fmt.Errorf("creating log directory: %w", err)
 	}
 
@@ -72,6 +80,7 @@ func New() (*App, error) {
 	})
 
 	if err := os.MkdirAll(cfg.Storage.DataDir, 0755); err != nil {
+		cancel()
 		log.Close()
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
@@ -82,11 +91,13 @@ func New() (*App, error) {
 		ConnMaxLifetime: time.Duration(cfg.Database.ConnMaxLifetime) * time.Second,
 	})
 	if err != nil {
+		cancel()
 		log.Close()
 		return nil, fmt.Errorf("initializing storage: %w", err)
 	}
 
 	fail := func(step string, err error) (*App, error) {
+		cancel()
 		store.Close()
 		log.Close()
 		return nil, fmt.Errorf("%s: %w", step, err)
@@ -243,7 +254,38 @@ func New() (*App, error) {
 	// Pushes go straight into the embedded registry handler
 	ociSyncer := mirror.NewOCISyncer(registryApp, tokenService)
 	mirrorMonitor := mirror.NewMonitor(store, resolver, artifactManager, ociSyncer, log)
+	mirrorMonitor.SetSealer(authManager.Sealer("mirror"))
+
+	// Git hosting, the forge, mail, and actions share one manager chain
+	gitEngine, err := gitrepo.NewEngine(cfg.Git.StoragePath, cfg.Storage.DataDir)
+	if err != nil {
+		return fail("initializing git storage", err)
+	}
+	gitAccess := gitrepo.NewAccess(store, enforcer)
+	gitManager := gitrepo.NewManager(store, gitEngine, blobStore, resolver, gitAccess, dispatcher, auditRecorder, log)
+	gitManager.SetPackageManager(&packageManager{store: store, registry: registryAccess, artifacts: artifactManager})
+	registry.SetSourceLinker(gitManager)
+	tokenHandler.SetLinkedAccess(gitAccess)
+	artifactV1Facade.SetLinkedAccess(gitAccess)
+	mailService := mailer.NewService(store, resolver, log)
+	forgeManager := forge.NewManager(store, gitManager, mailService, resolver, log)
+	actionsManager := actions.NewManager(store, gitManager, forgeManager, artifactManager, authManager, resolver, log)
+	forgeManager.SetTrigger(actionsManager.Trigger)
+	mailService.SetInboundHandler(forgeManager.HandleInboundMail)
+	gitManager.Subscribe(forgeManager.OnRefUpdate, actionsManager.OnRefUpdate)
+	gitHTTP := gitrepo.NewHTTP(gitManager, authManager, tokenService, authLimiter, pullLimiter, anonPullLimiter, log)
+	gitSSH, err := gitrepo.NewSSHManager(gitManager, tokenService, portalResolver, cfg.Server.Host, authLimiter, log)
+	if err != nil {
+		return fail("initializing git ssh", err)
+	}
+	resolver.Subscribe(gitSSH.Reconcile)
+	portalService.OnChange(gitSSH.Reconcile)
+	mirrorMonitor.SetGit(gitManager)
 	mirrorMonitor.Schedule(ctx)
+	gitManager.ScheduleMaintenance(ctx)
+	mailService.Start(ctx)
+	actionsManager.Start(ctx)
+	log.Info("Git engine ready (repos=%s)", gitEngine.ReposDir())
 
 	if err := seedLegacyACMEDomains(ctx, cfg.LegacyACMEDomains, store, log); err != nil {
 		return fail("seeding legacy acme domains", err)
@@ -273,6 +315,12 @@ func New() (*App, error) {
 		CertService:         certService,
 		AuditRecorder:       auditRecorder,
 		AuditService:        auditService,
+		GitHTTP:             gitHTTP,
+		GitManager:          gitManager,
+		GitSSH:              gitSSH,
+		ForgeManager:        forgeManager,
+		ActionsManager:      actionsManager,
+		MailService:         mailService,
 	})
 
 	// Portal listeners reuse the fully built app handler
@@ -299,7 +347,9 @@ func New() (*App, error) {
 		RegistryAccess: registryAccess,
 		PortalProxies:  portalProxies,
 		CertEngine:     certEngine,
+		GitSSH:         gitSSH,
 		Server:         srv,
+		cancel:         cancel,
 	}, nil
 }
 
@@ -360,6 +410,9 @@ func (a *App) Start() error {
 	}()
 
 	a.CertEngine.ReconcileChallengeServer()
+	if a.GitSSH != nil {
+		a.GitSSH.Reconcile()
+	}
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
@@ -370,6 +423,12 @@ func (a *App) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	if a.cancel != nil {
+		a.cancel()
+	}
+	if a.GitSSH != nil {
+		a.GitSSH.Close()
+	}
 	if a.PortalProxies != nil {
 		a.PortalProxies.Close()
 	}
@@ -386,6 +445,12 @@ func (a *App) Start() error {
 
 // Close releases all held resources
 func (a *App) Close() {
+	if a.cancel != nil {
+		a.cancel()
+	}
+	if a.GitSSH != nil {
+		a.GitSSH.Close()
+	}
 	if a.PortalProxies != nil {
 		a.PortalProxies.Close()
 	}

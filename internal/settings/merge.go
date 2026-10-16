@@ -13,6 +13,8 @@ import (
 // Output only fields no tier may write
 var readOnlyPaths = []string{
 	"auth.oidc.client_secret_set",
+	"mail.password_set",
+	"mail.incoming.password_set",
 }
 
 // Paths each non system scope may store, prefixes cover subtrees
@@ -26,12 +28,21 @@ var scopeAllowed = map[v1.SettingsScopeType][]string{
 		"artifacts.retention",
 		"portals.isolated",
 		"auth.anonymous_access",
+		"git.lfs_enabled",
+		"git.private_by_default",
+		"git.default_branch",
+		"git.max_repo_size_mb",
+		"git.actions.enabled",
+		"mail",
 	},
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: {
 		"acme.email",
 		"acme.directory_url",
 		"tls.mtls_mode",
 		"auth.anonymous_access",
+	},
+	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO: {
+		"mail",
 	},
 }
 
@@ -180,6 +191,14 @@ func Redact(s *v1.Settings) {
 	if oidc := s.GetAuth().GetOidc(); oidc != nil {
 		oidc.ClientSecretSet = oidc.ClientSecret != nil && *oidc.ClientSecret != ""
 		oidc.ClientSecret = nil
+	}
+	if mail := s.GetMail(); mail != nil {
+		mail.PasswordSet = mail.Password != nil && *mail.Password != ""
+		mail.Password = nil
+		if in := mail.GetIncoming(); in != nil {
+			in.PasswordSet = in.Password != nil && *in.Password != ""
+			in.Password = nil
+		}
 	}
 }
 

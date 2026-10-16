@@ -59,6 +59,11 @@ func NewTokenHandler(ts *TokenService, store *stores.Store, manager *Manager, en
 	}
 }
 
+// Installs the source repository access hook, set once at startup
+func (h *TokenHandler) SetLinkedAccess(l LinkedAccess) {
+	h.repoAccess.SetLinkedAccess(l)
+}
+
 func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	service, scopeStr, account := r.FormValue("service"), r.FormValue("scope"), r.FormValue("account")
 

@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 
 	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -36,6 +37,9 @@ type Service struct {
 	res      *settings.Resolver
 	mainPort int
 	log      *logger.Logger
+
+	changeMu sync.RWMutex
+	onChange []func()
 }
 
 func NewService(store *stores.Store, enforcer *rbac.Enforcer, proxies *Manager, engine *certs.Engine, res *settings.Resolver, mainPort int, log *logger.Logger) *Service {
@@ -554,6 +558,19 @@ func (s *Service) reconcile(ctx context.Context) {
 	if err := s.proxies.Reconcile(ctx); err != nil {
 		s.log.Error("portal proxy reconcile: %v", err)
 	}
+	s.changeMu.RLock()
+	hooks := append([]func(){}, s.onChange...)
+	s.changeMu.RUnlock()
+	for _, fn := range hooks {
+		fn()
+	}
+}
+
+// Registers a callback run after every portal write
+func (s *Service) OnChange(fn func()) {
+	s.changeMu.Lock()
+	s.onChange = append(s.onChange, fn)
+	s.changeMu.Unlock()
 }
 
 func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {

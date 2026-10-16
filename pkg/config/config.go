@@ -22,6 +22,7 @@ type Config struct {
 	Logging   LoggingConfig   `mapstructure:"logging"`
 	Registry  RegistryConfig  `mapstructure:"registry"`
 	Artifacts ArtifactsConfig `mapstructure:"artifacts"`
+	Git       GitConfig       `mapstructure:"git"`
 	TLS       TLSConfig       `mapstructure:"tls"`
 	Auth      AuthConfig      `mapstructure:"auth"`
 	Bootstrap BootstrapConfig `mapstructure:"bootstrap"`
@@ -70,6 +71,10 @@ type RegistryConfig struct {
 }
 
 type ArtifactsConfig struct {
+	StoragePath string `mapstructure:"storage_path"`
+}
+
+type GitConfig struct {
 	StoragePath string `mapstructure:"storage_path"`
 }
 
@@ -151,6 +156,7 @@ func Load(configPath string) (*Config, error) {
 	_ = v.BindEnv("database.path")
 	_ = v.BindEnv("registry.storage_path")
 	_ = v.BindEnv("artifacts.storage_path")
+	_ = v.BindEnv("git.storage_path")
 	_ = v.BindEnv("logging.dir")
 	_ = v.BindEnv("auth.jwt_secret")
 	_ = v.BindEnv("tls.cert_file")
@@ -333,6 +339,9 @@ func applyDerivedPaths(cfg *Config) {
 	if cfg.Artifacts.StoragePath == "" {
 		cfg.Artifacts.StoragePath = filepath.Join(cfg.Storage.DataDir, "artifacts")
 	}
+	if cfg.Git.StoragePath == "" {
+		cfg.Git.StoragePath = filepath.Join(cfg.Storage.DataDir, "git")
+	}
 	if cfg.Logging.Dir == "" {
 		cfg.Logging.Dir = filepath.Join(cfg.Storage.DataDir, "logs")
 	}
@@ -358,6 +367,11 @@ func validateConfig(cfg *Config) error {
 	cfg.Artifacts.StoragePath, err = filepath.Abs(cfg.Artifacts.StoragePath)
 	if err != nil {
 		return fmt.Errorf("invalid artifact storage path: %w", err)
+	}
+
+	cfg.Git.StoragePath, err = filepath.Abs(cfg.Git.StoragePath)
+	if err != nil {
+		return fmt.Errorf("invalid git storage path: %w", err)
 	}
 
 	cfg.Logging.Dir, err = filepath.Abs(cfg.Logging.Dir)

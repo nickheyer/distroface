@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { UserRound, Calendar, Building2, Settings } from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { relativeTime } from '$lib/utils';
 	import { Pager } from '$lib/pager.svelte';
@@ -14,15 +15,38 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import RepoList from '$lib/components/repo-list.svelte';
+	import GitRepoList from '$lib/components/git/git-repo-list.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
 	import type { User, Repository } from '$lib/proto/distroface/v1/types_pb';
+	import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 
-	const username = $derived(page.params.username);
+	const username = $derived(page.params.namespace);
 
 	let user = $state<User | undefined>(undefined);
 	let loading = $state(true);
 	let repos = $state<Repository[]>([]);
 	let repoLoading = $state(true);
 	const repoPager = new Pager(20);
+
+	let gitRepos = $state<GitRepository[]>([]);
+	let gitLoading = $state(true);
+	const gitPager = new Pager(20);
+
+	async function loadGitRepos() {
+		gitLoading = true;
+		try {
+			const resp = await rpcClient.git.listGitRepositories(
+				{ page: gitPager.request(undefined, 'updated_at desc'), namespace: username },
+				silentCallOptions
+			);
+			gitRepos = resp.repositories;
+			gitPager.apply(resp.page);
+		} catch {
+			gitRepos = [];
+		} finally {
+			gitLoading = false;
+		}
+	}
 
 	let starred = $state<Repository[]>([]);
 	let starredLoading = $state(true);
@@ -42,6 +66,15 @@
 			user = resp.user;
 		} catch {
 			user = undefined;
+			try {
+				const org = await rpcClient.organization.getOrganization({ name: username }, silentCallOptions);
+				if (org.organization) {
+					await goto(resolve('/orgs/[name]', { name: username ?? "" }));
+					return;
+				}
+			} catch {
+				// Neither a user nor an org, the not found state renders
+			}
 		} finally {
 			loading = false;
 		}
@@ -81,6 +114,10 @@
 	onMount(() => { loadUser(); loadRepos(); });
 
 	$effect(() => {
+		if (configStore.gitEnabled) loadGitRepos();
+	});
+
+	$effect(() => {
 		if (isOwnProfile) loadStarred();
 	});
 </script>
@@ -95,7 +132,7 @@
 			</div>
 		</div>
 	{:else if user}
-		<div class="flex items-center gap-4">
+		<div class="flex flex-wrap items-center gap-4">
 			<Avatar class="h-16 w-16">
 				<AvatarFallback class="text-xl bg-primary/10 text-primary font-bold">
 					{getInitials(user)}
@@ -121,7 +158,7 @@
 				</div>
 			</div>
 			{#if isOwnProfile}
-				<div class="flex gap-2 shrink-0">
+				<div class="flex flex-wrap gap-2 shrink-0">
 					<a href={resolve('/orgs')}>
 						<Button variant="outline" size="sm">
 							<Building2 class="h-4 w-4 mr-1.5" />Organizations
@@ -165,6 +202,26 @@
 			emptyMessage="No image repositories yet"
 		/>
 	</div>
+
+	{#if configStore.gitEnabled}
+		<div class="space-y-4">
+			<div class="section-header">
+				<h2 class="section-title">Git</h2>
+				{#if gitPager.totalCount > 0}
+					<span class="text-[12px] text-muted-foreground/60 tabular-nums">{gitPager.totalCount} total</span>
+				{/if}
+			</div>
+
+			<GitRepoList
+				repos={gitRepos}
+				pager={gitPager}
+				onChange={loadGitRepos}
+				loading={gitLoading}
+				showNamespace={false}
+				emptyMessage="No git repositories yet"
+			/>
+		</div>
+	{/if}
 
 	{#if isOwnProfile}
 		<div class="space-y-4">

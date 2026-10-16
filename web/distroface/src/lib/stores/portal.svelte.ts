@@ -1,4 +1,5 @@
 import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+import { configStore } from '$lib/stores/config.svelte';
 
 // Portal identity of the host serving the app, empty on the primary host
 class PortalStore {
@@ -11,6 +12,7 @@ class PortalStore {
 	primaryHost = $state('');
 	primaryScheme = $state('http');
 	hidePrimaryLink = $state(false);
+	sshPort = $state(0);
 
 	async init() {
 		try {
@@ -23,6 +25,7 @@ class PortalStore {
 			this.mapUnqualified = resp.mapUnqualified;
 			this.primaryHost = resp.primaryHost;
 			this.hidePrimaryLink = resp.hidePrimaryLink;
+			this.sshPort = resp.sshPort;
 			if (resp.primaryScheme) this.primaryScheme = resp.primaryScheme;
 		} catch {
 			// Treated as the primary host on failure
@@ -52,6 +55,15 @@ class PortalStore {
 			return window.location.protocol.replace(':', '');
 		}
 		return this.primaryScheme || 'http';
+	}
+
+	// Git clone url over http through this host, mapped when unqualified
+	httpCloneURL(namespace: string, name: string, wiki = false): string {
+		const suffix = wiki ? '.wiki.git' : '.git';
+		const origin = this.isPortal && typeof window !== 'undefined'
+			? window.location.origin
+			: `${this.scheme()}://${configStore.publicHostname}`;
+		return `${origin}/${this.imageRef(namespace, name)}${suffix}`;
 	}
 
 	// Repo path as pulled through this host, org prefix dropped when mapped

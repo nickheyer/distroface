@@ -159,6 +159,7 @@ func (res *Resolver) reloadLocked() {
 			CertSource:      p.CertSource,
 			CatchAll:        p.Hostname == "",
 			HidePrimaryLink: p.HidePrimaryLink,
+			SSHPort:         p.SSHPort,
 		}
 		if res.settings != nil {
 			entry.Isolated = res.settings.Org(context.Background(), p.OrgID).GetPortals().GetIsolated()
@@ -193,6 +194,38 @@ func (res *Resolver) reloadLocked() {
 	res.entries = entries
 	res.hosts = hosts
 	res.loaded = true
+}
+
+// Portal owning a dedicated ssh port, nil for the primary listener
+func (res *Resolver) ResolveSSH(port int) *Portal {
+	if res == nil || port <= 0 {
+		return nil
+	}
+	res.ensureLoaded()
+	res.mu.RLock()
+	defer res.mu.RUnlock()
+	for _, p := range res.entries {
+		if p.SSHPort == port {
+			return p
+		}
+	}
+	return nil
+}
+
+// Ssh ports needed by enabled portals
+func (res *Resolver) SSHPorts() []int {
+	res.ensureLoaded()
+	res.mu.RLock()
+	defer res.mu.RUnlock()
+	seen := map[int]bool{}
+	var ports []int
+	for _, p := range res.entries {
+		if p.SSHPort > 0 && !seen[p.SSHPort] {
+			seen[p.SSHPort] = true
+			ports = append(ports, p.SSHPort)
+		}
+	}
+	return ports
 }
 
 // Ports needed by enabled portals, used by the proxy manager

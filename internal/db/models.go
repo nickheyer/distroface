@@ -25,6 +25,7 @@ type User struct {
 	IsActive           bool       `json:"is_active" gorm:"not null;default:true"`
 	MustChangePassword bool       `json:"must_change_password" gorm:"not null;default:false;column:must_change_password"`
 	LastLogin          *time.Time `json:"last_login" gorm:"column:last_login"`
+	EmailVerifiedAt    *time.Time `json:"email_verified_at" gorm:"column:email_verified_at"`
 	CreatedAt          time.Time  `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt          time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
 }
@@ -75,6 +76,9 @@ type APIToken struct {
 	TokenHash  string     `json:"-" gorm:"not null;uniqueIndex;column:token_hash"`
 	ExpiresAt  *time.Time `json:"expires_at" gorm:"column:expires_at"`
 	LastUsedAt *time.Time `json:"last_used_at" gorm:"column:last_used_at"`
+	ScopeType  int32      `json:"scope_type" gorm:"not null;default:0;column:scope_type"` // Zero means the full identity
+	ScopeID    string     `json:"scope_id" gorm:"not null;default:'';index;column:scope_id"`
+	ReadOnly   bool       `json:"read_only" gorm:"not null;default:false;column:read_only"`
 	CreatedAt  time.Time  `json:"created_at" gorm:"autoCreateTime"`
 	User       *User      `json:"-" gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
 }
@@ -116,6 +120,7 @@ type Repository struct {
 	MirrorState     string            `json:"-" gorm:"type:text;not null;default:'';column:mirror_state"`  // Sync cursor and cooldown bookkeeping
 	MirrorLastSync  *time.Time        `json:"mirror_last_sync" gorm:"column:mirror_last_sync"`
 	MirrorLastError string            `json:"mirror_last_error" gorm:"column:mirror_last_error"`
+	GitRepoID       *string           `json:"git_repo_id" gorm:"index;column:git_repo_id"` // Source repository link
 	CreatedAt       time.Time         `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt       time.Time         `json:"updated_at" gorm:"autoUpdateTime"`
 }
@@ -131,26 +136,29 @@ type Star struct {
 
 // Webhook scope constants
 const (
-	WebhookScopeRepository   = "repository"
-	WebhookScopeOrganization = "organization"
+	WebhookScopeRepository    = "repository"
+	WebhookScopeOrganization  = "organization"
+	WebhookScopeGitRepository = "git_repository"
 )
 
 type Webhook struct {
-	ID              string        `json:"id" gorm:"primaryKey"`
-	Scope           string        `json:"scope" gorm:"not null"`
-	RepoID          *string       `json:"repo_id" gorm:"index;column:repo_id"`
-	OrgID           *string       `json:"org_id" gorm:"index;column:org_id"`
-	URL             string        `json:"url" gorm:"not null"`
-	Secret          string        `json:"-" gorm:"column:secret"` // Plaintext secret needed for hmac signing
-	Events          string        `json:"events" gorm:"not null"` // JSON array: ["push","pull","delete"]
-	Active          bool          `json:"active" gorm:"not null;default:true"`
-	ContentType     string        `json:"content_type" gorm:"not null;default:'application/json'"`
-	PayloadTemplate string        `json:"payload_template" gorm:"type:text"`
-	CreatedBy       string        `json:"created_by" gorm:"not null;column:created_by"`
-	CreatedAt       time.Time     `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt       time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
-	Repo            *Repository   `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
-	Org             *Organization `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+	ID              string         `json:"id" gorm:"primaryKey"`
+	Scope           string         `json:"scope" gorm:"not null"`
+	RepoID          *string        `json:"repo_id" gorm:"index;column:repo_id"`
+	OrgID           *string        `json:"org_id" gorm:"index;column:org_id"`
+	GitRepoID       *string        `json:"git_repo_id" gorm:"index;column:git_repo_id"`
+	URL             string         `json:"url" gorm:"not null"`
+	Secret          string         `json:"-" gorm:"column:secret"` // Plaintext secret needed for hmac signing
+	Events          string         `json:"events" gorm:"not null"` // JSON array: ["push","pull","delete"]
+	Active          bool           `json:"active" gorm:"not null;default:true"`
+	ContentType     string         `json:"content_type" gorm:"not null;default:'application/json'"`
+	PayloadTemplate string         `json:"payload_template" gorm:"type:text"`
+	CreatedBy       string         `json:"created_by" gorm:"not null;column:created_by"`
+	CreatedAt       time.Time      `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt       time.Time      `json:"updated_at" gorm:"autoUpdateTime"`
+	Repo            *Repository    `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+	Org             *Organization  `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+	GitRepo         *GitRepository `json:"-" gorm:"foreignKey:GitRepoID;constraint:OnDelete:CASCADE"`
 }
 
 type WebhookDelivery struct {
@@ -183,6 +191,7 @@ type RegistryPortal struct { // Alternate org-owned registry host and/or proxy p
 	BackendURL         string        `json:"backend_url" gorm:"not null;default:'';column:backend_url"`                      // Set proxies all portal traffic to this local service
 	BackendRewriteHost bool          `json:"backend_rewrite_host" gorm:"not null;default:false;column:backend_rewrite_host"` // Send the backend's host instead of the client's
 	BackendInsecure    bool          `json:"backend_insecure" gorm:"not null;default:false;column:backend_insecure"`         // Skip tls verification for an https backend
+	SSHPort            int           `json:"ssh_port" gorm:"not null;default:0;column:ssh_port"`                             // Dedicated git ssh listener, 0 none
 	Enabled            bool          `json:"enabled" gorm:"not null"`
 	CreatedAt          time.Time     `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt          time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
@@ -213,6 +222,7 @@ type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v
 	MirrorState     string              `json:"-" gorm:"type:text;not null;default:'';column:mirror_state"`  // Sync cursor and cooldown bookkeeping
 	MirrorLastSync  *time.Time          `json:"mirror_last_sync" gorm:"column:mirror_last_sync"`
 	MirrorLastError string              `json:"mirror_last_error" gorm:"column:mirror_last_error"`
+	GitRepoID       *string             `json:"git_repo_id" gorm:"index;column:git_repo_id"` // Source repository link
 	CreatedAt       time.Time           `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt       time.Time           `json:"updated_at" gorm:"autoUpdateTime"`
 }
@@ -293,4 +303,735 @@ type RegistrationInvite struct {
 	ExpiresAt   *time.Time `json:"expires_at" gorm:"column:expires_at"`
 	CreatedBy   string     `json:"created_by" gorm:"not null;column:created_by"`
 	CreatedAt   time.Time  `json:"created_at" gorm:"autoCreateTime"`
+}
+
+// ── Git repositories ─────────────────────────────────────────────────────
+
+// Repository unit names shared by teams, collaborators, and access checks
+const (
+	GitUnitCode     = "code"
+	GitUnitIssues   = "issues"
+	GitUnitPulls    = "pulls"
+	GitUnitReleases = "releases"
+	GitUnitWiki     = "wiki"
+	GitUnitProjects = "projects"
+	GitUnitPackages = "packages"
+	GitUnitActions  = "actions"
+)
+
+// Collaborator and team level names
+const (
+	GitLevelNone  = "none"
+	GitLevelRead  = "read"
+	GitLevelWrite = "write"
+	GitLevelAdmin = "admin"
+)
+
+type GitRepository struct {
+	ID              string         `json:"id" gorm:"primaryKey"`
+	Namespace       string         `json:"namespace" gorm:"uniqueIndex:idx_git_namespace_name;not null"`
+	Name            string         `json:"name" gorm:"uniqueIndex:idx_git_namespace_name;not null"`
+	Description     string         `json:"description"`
+	Website         string         `json:"website"`
+	OwnerID         string         `json:"owner_id" gorm:"index;column:owner_id"`
+	IsPrivate       bool           `json:"is_private" gorm:"not null;default:false"`
+	IsOrgNamespace  bool           `json:"is_org_namespace" gorm:"not null;default:false"`
+	DefaultBranch   string         `json:"default_branch" gorm:"not null;default:'main'"`
+	ObjectFormat    string         `json:"object_format" gorm:"not null;default:'sha1'"`
+	Type            v1.GitRepoType `json:"type" gorm:"not null;default:1"`
+	ForkOfID        *string        `json:"fork_of_id" gorm:"index;column:fork_of_id"`
+	TemplateOfID    *string        `json:"template_of_id" gorm:"column:template_of_id"`
+	IsArchived      bool           `json:"is_archived" gorm:"not null;default:false"`
+	Units           string         `json:"units" gorm:"type:text;not null;default:'{}'"` // Protojson GitRepoUnits
+	LFSEnabled      bool           `json:"lfs_enabled" gorm:"not null;default:true;column:lfs_enabled"`
+	MergeSettings   string         `json:"merge_settings" gorm:"type:text;not null;default:'{}'"` // Protojson GitMergeSettings
+	IssueCounter    int64          `json:"issue_counter" gorm:"not null;default:0"`
+	RunCounter      int64          `json:"run_counter" gorm:"not null;default:0"`
+	SizeBytes       int64          `json:"size_bytes" gorm:"not null;default:0"`
+	LFSSizeBytes    int64          `json:"lfs_size_bytes" gorm:"not null;default:0;column:lfs_size_bytes"`
+	BranchCount     int32          `json:"branch_count" gorm:"not null;default:0"`
+	TagCount        int32          `json:"tag_count" gorm:"not null;default:0"`
+	PullCount       int64          `json:"pull_count" gorm:"not null;default:0"`
+	PushCount       int64          `json:"push_count" gorm:"not null;default:0"`
+	LastPush        *time.Time     `json:"last_push"`
+	MirrorConfig    string         `json:"-" gorm:"type:text;not null;default:'';column:mirror_config"`
+	MirrorState     string         `json:"-" gorm:"type:text;not null;default:'';column:mirror_state"`
+	MirrorLastSync  *time.Time     `json:"mirror_last_sync" gorm:"column:mirror_last_sync"`
+	MirrorLastError string         `json:"mirror_last_error" gorm:"column:mirror_last_error"`
+	CreatedAt       time.Time      `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt       time.Time      `json:"updated_at" gorm:"autoUpdateTime"`
+}
+
+type GitRedirect struct {
+	ID        string         `gorm:"primaryKey"`
+	Namespace string         `gorm:"not null;uniqueIndex:idx_git_redirect"`
+	Name      string         `gorm:"not null;uniqueIndex:idx_git_redirect"`
+	RepoID    string         `gorm:"not null;index"`
+	CreatedAt time.Time      `gorm:"autoCreateTime"`
+	Repo      *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitTransfer struct {
+	ID          string         `gorm:"primaryKey"`
+	RepoID      string         `gorm:"not null;uniqueIndex"`
+	ToNamespace string         `gorm:"not null;index"`
+	NewName     string         `gorm:"not null"`
+	RequestedBy string         `gorm:"not null"`
+	ExpiresAt   time.Time      `gorm:"not null"`
+	CreatedAt   time.Time      `gorm:"autoCreateTime"`
+	Repo        *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitTopic struct {
+	RepoID string         `gorm:"primaryKey"`
+	Topic  string         `gorm:"primaryKey;index"`
+	Repo   *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitStar struct {
+	ID        string         `gorm:"primaryKey"`
+	UserID    string         `gorm:"not null;uniqueIndex:idx_git_star_user_repo"`
+	RepoID    string         `gorm:"not null;uniqueIndex:idx_git_star_user_repo;index"`
+	CreatedAt time.Time      `gorm:"autoCreateTime"`
+	User      *User          `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Repo      *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitWatch struct {
+	ID        string         `gorm:"primaryKey"`
+	UserID    string         `gorm:"not null;uniqueIndex:idx_git_watch_user_repo"`
+	RepoID    string         `gorm:"not null;uniqueIndex:idx_git_watch_user_repo;index"`
+	Mode      string         `gorm:"not null;default:'participating'"` // all, participating, ignore
+	CreatedAt time.Time      `gorm:"autoCreateTime"`
+	User      *User          `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Repo      *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitCollaborator struct {
+	ID         string         `gorm:"primaryKey"`
+	RepoID     string         `gorm:"not null;uniqueIndex:idx_git_collab_repo_user"`
+	UserID     string         `gorm:"not null;uniqueIndex:idx_git_collab_repo_user;index"`
+	Permission string         `gorm:"not null;default:'read'"`
+	Accepted   bool           `gorm:"not null;default:false"`
+	CreatedAt  time.Time      `gorm:"autoCreateTime"`
+	Repo       *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+	User       *User          `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type OrgTeam struct {
+	ID               string `gorm:"primaryKey"`
+	OrgID            string `gorm:"not null;uniqueIndex:idx_team_org_name"`
+	Name             string `gorm:"not null;uniqueIndex:idx_team_org_name"`
+	Description      string
+	IsDefault        bool          `gorm:"not null;default:false"`
+	CanCreateRepos   bool          `gorm:"not null;default:false"`
+	IncludesAllRepos bool          `gorm:"not null;default:false"`
+	AdminAccess      bool          `gorm:"not null;default:false"`
+	Units            string        `gorm:"type:text;not null;default:'{}'"` // JSON unit name to level
+	CreatedAt        time.Time     `gorm:"autoCreateTime"`
+	UpdatedAt        time.Time     `gorm:"autoUpdateTime"`
+	Org              *Organization `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
+type OrgTeamMember struct {
+	TeamID string   `gorm:"primaryKey"`
+	UserID string   `gorm:"primaryKey;index"`
+	Team   *OrgTeam `gorm:"foreignKey:TeamID;constraint:OnDelete:CASCADE"`
+	User   *User    `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type OrgTeamRepo struct {
+	TeamID string         `gorm:"primaryKey"`
+	RepoID string         `gorm:"primaryKey;index"`
+	Team   *OrgTeam       `gorm:"foreignKey:TeamID;constraint:OnDelete:CASCADE"`
+	Repo   *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+// SSH key owner kinds
+const (
+	SSHKeyOwnerUser    = "user"
+	SSHKeyOwnerGitRepo = "git_repo"
+)
+
+type SSHKey struct {
+	ID          string `gorm:"primaryKey"`
+	OwnerType   string `gorm:"not null;index:idx_sshkey_owner"`
+	OwnerID     string `gorm:"not null;index:idx_sshkey_owner"`
+	Title       string `gorm:"not null"`
+	PublicKey   string `gorm:"type:text;not null"`
+	Fingerprint string `gorm:"not null;uniqueIndex"`
+	KeyType     string `gorm:"not null"`
+	Usage       string `gorm:"not null;default:'auth'"` // auth, signing, both
+	ReadOnly    bool   `gorm:"not null;default:true"`
+	CreatedBy   string `gorm:"not null"`
+	LastUsedAt  *time.Time
+	ExpiresAt   *time.Time
+	CreatedAt   time.Time `gorm:"autoCreateTime"`
+}
+
+type GPGKey struct {
+	ID          string `gorm:"primaryKey"`
+	UserID      string `gorm:"not null;index"`
+	KeyID       string `gorm:"not null;index"`
+	Fingerprint string `gorm:"not null;uniqueIndex"`
+	Armored     string `gorm:"type:text;not null"`
+	Emails      string `gorm:"type:text;not null;default:'[]'"` // JSON array
+	Verified    bool   `gorm:"not null;default:false"`
+	Challenge   string `gorm:"not null;default:''"`
+	ExpiresAt   *time.Time
+	CreatedAt   time.Time `gorm:"autoCreateTime"`
+	User        *User     `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type GitBranchProtection struct {
+	ID                     string         `gorm:"primaryKey"`
+	RepoID                 string         `gorm:"not null;index"`
+	Pattern                string         `gorm:"not null"`
+	Priority               int            `gorm:"not null;default:0"`
+	BlockForcePush         bool           `gorm:"not null;default:false"`
+	BlockDeletion          bool           `gorm:"not null;default:false"`
+	RequirePullRequest     bool           `gorm:"not null;default:false"`
+	RequiredApprovals      int            `gorm:"not null;default:0"`
+	DismissStaleApprovals  bool           `gorm:"not null;default:false"`
+	RequireCodeOwnerReview bool           `gorm:"not null;default:false"`
+	RequireStatusChecks    bool           `gorm:"not null;default:false"`
+	StatusCheckContexts    string         `gorm:"type:text;not null;default:'[]'"`
+	RequireSignedCommits   bool           `gorm:"not null;default:false"`
+	RequireLinearHistory   bool           `gorm:"not null;default:false"`
+	RequireUpToDate        bool           `gorm:"not null;default:false"`
+	AllowedPushers         string         `gorm:"type:text;not null;default:'[]'"`
+	AllowedMergers         string         `gorm:"type:text;not null;default:'[]'"`
+	BypassIDs              string         `gorm:"type:text;not null;default:'[]'"`
+	CreatedAt              time.Time      `gorm:"autoCreateTime"`
+	UpdatedAt              time.Time      `gorm:"autoUpdateTime"`
+	Repo                   *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitTagProtection struct {
+	ID             string         `gorm:"primaryKey"`
+	RepoID         string         `gorm:"not null;index"`
+	Pattern        string         `gorm:"not null"`
+	BlockDeletion  bool           `gorm:"not null;default:false"`
+	AllowedPushers string         `gorm:"type:text;not null;default:'[]'"`
+	CreatedAt      time.Time      `gorm:"autoCreateTime"`
+	Repo           *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitCommitStatus struct {
+	ID          string `gorm:"primaryKey"`
+	RepoID      string `gorm:"not null;index:idx_status_repo_sha"`
+	SHA         string `gorm:"not null;index:idx_status_repo_sha;column:sha"`
+	Context     string `gorm:"not null"`
+	State       string `gorm:"not null"` // pending, success, failure, error
+	TargetURL   string `gorm:"column:target_url"`
+	Description string
+	CreatorID   string         `gorm:"not null"`
+	CreatedAt   time.Time      `gorm:"autoCreateTime"`
+	Repo        *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type LFSObject struct {
+	OID       string    `gorm:"primaryKey;column:oid"`
+	Size      int64     `gorm:"not null"`
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+}
+
+type GitLFSLink struct {
+	RepoID string         `gorm:"primaryKey"`
+	OID    string         `gorm:"primaryKey;index;column:oid"`
+	Repo   *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type LFSLock struct {
+	ID        string         `gorm:"primaryKey"`
+	RepoID    string         `gorm:"not null;uniqueIndex:idx_lfs_lock_repo_path"`
+	Path      string         `gorm:"not null;uniqueIndex:idx_lfs_lock_repo_path"`
+	OwnerID   string         `gorm:"not null"`
+	CreatedAt time.Time      `gorm:"autoCreateTime"`
+	Repo      *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitRelease struct {
+	ID          string `gorm:"primaryKey"`
+	RepoID      string `gorm:"not null;uniqueIndex:idx_release_repo_tag"`
+	Tag         string `gorm:"not null;uniqueIndex:idx_release_repo_tag"`
+	Name        string
+	Body        string `gorm:"type:text"`
+	Draft       bool   `gorm:"not null;default:false"`
+	Prerelease  bool   `gorm:"not null;default:false"`
+	AuthorID    string `gorm:"not null"`
+	TargetSHA   string `gorm:"column:target_sha"`
+	PublishedAt *time.Time
+	CreatedAt   time.Time      `gorm:"autoCreateTime"`
+	UpdatedAt   time.Time      `gorm:"autoUpdateTime"`
+	Repo        *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitReleaseImage struct {
+	ID          string      `gorm:"primaryKey"`
+	ReleaseID   string      `gorm:"not null;uniqueIndex:idx_release_image"`
+	ImageRepoID string      `gorm:"not null;uniqueIndex:idx_release_image"`
+	Tag         string      `gorm:"not null;uniqueIndex:idx_release_image"`
+	Digest      string      `gorm:"not null"`
+	CreatedAt   time.Time   `gorm:"autoCreateTime"`
+	Release     *GitRelease `gorm:"foreignKey:ReleaseID;constraint:OnDelete:CASCADE"`
+	ImageRepo   *Repository `gorm:"foreignKey:ImageRepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitPushMirror struct {
+	ID              string `gorm:"primaryKey"`
+	RepoID          string `gorm:"not null;index"`
+	RemoteURL       string `gorm:"not null;column:remote_url"`
+	AuthToken       string `gorm:"not null;default:''"`
+	Username        string `gorm:"not null;default:''"`
+	UseSSHKey       bool   `gorm:"not null;default:false;column:use_ssh_key"`
+	IntervalMinutes int32  `gorm:"not null;default:0"`
+	SyncOnPush      bool   `gorm:"not null;default:true"`
+	LastSync        *time.Time
+	LastError       string
+	State           string         `gorm:"type:text;not null;default:''"`
+	CreatedAt       time.Time      `gorm:"autoCreateTime"`
+	Repo            *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitImport struct {
+	RepoID    string `gorm:"primaryKey"`
+	Source    string `gorm:"not null"` // github, gitlab, gitea
+	Upstream  string `gorm:"not null"`
+	Phase     string `gorm:"not null;default:''"`
+	State     string `gorm:"type:text;not null;default:'{}'"`
+	LastError string
+	UpdatedAt time.Time      `gorm:"autoUpdateTime"`
+	Repo      *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+// ── Issues and pull requests ─────────────────────────────────────────────
+
+// Issue state constants
+const (
+	IssueStateOpen   = "open"
+	IssueStateClosed = "closed"
+)
+
+type GitIssue struct {
+	ID           string  `gorm:"primaryKey"`
+	RepoID       string  `gorm:"not null;uniqueIndex:idx_issue_repo_number;index:idx_issue_repo_state"`
+	Number       int64   `gorm:"not null;uniqueIndex:idx_issue_repo_number"`
+	IsPull       bool    `gorm:"not null;index"`
+	Title        string  `gorm:"not null"`
+	Body         string  `gorm:"type:text"`
+	State        string  `gorm:"not null;default:'open';index:idx_issue_repo_state"`
+	AuthorID     string  `gorm:"not null;index"`
+	MilestoneID  *string `gorm:"index"`
+	Locked       bool    `gorm:"not null;default:false"`
+	LockReason   string
+	Pinned       int `gorm:"not null;default:0"`
+	DueDate      *time.Time
+	ClosedAt     *time.Time
+	ClosedBy     string
+	CommentCount int            `gorm:"not null;default:0"`
+	CreatedAt    time.Time      `gorm:"autoCreateTime;index"`
+	UpdatedAt    time.Time      `gorm:"autoUpdateTime;index"`
+	Repo         *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitPullRequest struct {
+	IssueID              string `gorm:"primaryKey"`
+	HeadRepoID           string `gorm:"not null;index"`
+	HeadBranch           string `gorm:"not null;index"`
+	HeadSHA              string `gorm:"not null;column:head_sha"`
+	BaseBranch           string `gorm:"not null;index"`
+	MergeBaseSHA         string `gorm:"column:merge_base_sha"`
+	Draft                bool   `gorm:"not null;default:false"`
+	MergeableState       string `gorm:"not null;default:'unknown'"`
+	ConflictPaths        string `gorm:"type:text;not null;default:'[]'"`
+	ChangedFiles         int    `gorm:"not null;default:0"`
+	Additions            int    `gorm:"not null;default:0"`
+	Deletions            int    `gorm:"not null;default:0"`
+	CommitCount          int    `gorm:"not null;default:0"`
+	AllowMaintainerEdits bool   `gorm:"not null;default:true"`
+	AutoMergeMethod      string `gorm:"not null;default:''"`
+	AutoMergeBy          string `gorm:"not null;default:''"`
+	AutoMergeTitle       string `gorm:"not null;default:''"`
+	AutoMergeMessage     string `gorm:"type:text;not null;default:''"`
+	AutoMergeDelete      bool   `gorm:"not null;default:false"`
+	MergedAt             *time.Time
+	MergedBy             string    `gorm:"not null;default:''"`
+	MergeCommitSHA       string    `gorm:"not null;default:'';column:merge_commit_sha"`
+	MergeMethod          string    `gorm:"not null;default:''"`
+	HeadDeleted          bool      `gorm:"not null;default:false"`
+	Issue                *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+}
+
+type GitLabel struct {
+	ID             string  `gorm:"primaryKey"`
+	RepoID         *string `gorm:"index"`
+	OrgID          *string `gorm:"index"`
+	Name           string  `gorm:"not null"`
+	Color          string  `gorm:"not null"`
+	Description    string
+	ExclusiveScope string         `gorm:"not null;default:''"`
+	CreatedAt      time.Time      `gorm:"autoCreateTime"`
+	Repo           *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+	Org            *Organization  `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
+type GitIssueLabel struct {
+	IssueID string    `gorm:"primaryKey"`
+	LabelID string    `gorm:"primaryKey;index"`
+	Issue   *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+	Label   *GitLabel `gorm:"foreignKey:LabelID;constraint:OnDelete:CASCADE"`
+}
+
+type GitMilestone struct {
+	ID          string `gorm:"primaryKey"`
+	RepoID      string `gorm:"not null;index"`
+	Title       string `gorm:"not null"`
+	Description string `gorm:"type:text"`
+	DueDate     *time.Time
+	State       string `gorm:"not null;default:'open'"`
+	ClosedAt    *time.Time
+	CreatedAt   time.Time      `gorm:"autoCreateTime"`
+	UpdatedAt   time.Time      `gorm:"autoUpdateTime"`
+	Repo        *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitIssueAssignee struct {
+	IssueID string    `gorm:"primaryKey"`
+	UserID  string    `gorm:"primaryKey;index"`
+	Issue   *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+	User    *User     `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type GitComment struct {
+	ID        string  `gorm:"primaryKey"`
+	IssueID   string  `gorm:"not null;index"`
+	AuthorID  string  `gorm:"not null"`
+	Type      string  `gorm:"not null;default:'comment'"`
+	Body      string  `gorm:"type:text"`
+	Payload   string  `gorm:"type:text;not null;default:'{}'"`
+	ReviewID  *string `gorm:"index"`
+	ViaEmail  bool    `gorm:"not null;default:false"`
+	EditedAt  *time.Time
+	CreatedAt time.Time `gorm:"autoCreateTime;index"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
+	Issue     *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+}
+
+type GitReaction struct {
+	ID         string    `gorm:"primaryKey"`
+	TargetType string    `gorm:"not null;uniqueIndex:idx_reaction"` // issue, comment, review_comment
+	TargetID   string    `gorm:"not null;uniqueIndex:idx_reaction;index"`
+	UserID     string    `gorm:"not null;uniqueIndex:idx_reaction"`
+	Emoji      string    `gorm:"not null;uniqueIndex:idx_reaction"`
+	CreatedAt  time.Time `gorm:"autoCreateTime"`
+}
+
+type GitIssueDependency struct {
+	IssueID     string    `gorm:"primaryKey"`
+	DependsOnID string    `gorm:"primaryKey;index"`
+	Issue       *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+	DependsOn   *GitIssue `gorm:"foreignKey:DependsOnID;constraint:OnDelete:CASCADE"`
+}
+
+type GitTrackedTime struct {
+	ID        string `gorm:"primaryKey"`
+	IssueID   string `gorm:"not null;index"`
+	UserID    string `gorm:"not null;index"`
+	Seconds   int64  `gorm:"not null"`
+	Note      string
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+	Issue     *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+}
+
+type GitIssueSubscription struct {
+	IssueID    string    `gorm:"primaryKey"`
+	UserID     string    `gorm:"primaryKey;index"`
+	Subscribed bool      `gorm:"not null;default:true"` // False silences a participant
+	Issue      *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+}
+
+type GitReviewRequest struct {
+	ID          string    `gorm:"primaryKey"`
+	IssueID     string    `gorm:"not null;index"`
+	UserID      string    `gorm:"not null;default:''"`
+	TeamID      string    `gorm:"not null;default:''"`
+	RequestedBy string    `gorm:"not null"`
+	Fulfilled   bool      `gorm:"not null;default:false"`
+	CreatedAt   time.Time `gorm:"autoCreateTime"`
+	Issue       *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+}
+
+type GitReview struct {
+	ID          string `gorm:"primaryKey"`
+	IssueID     string `gorm:"not null;index"`
+	ReviewerID  string `gorm:"not null;index"`
+	State       string `gorm:"not null;default:'pending'"`
+	Body        string `gorm:"type:text"`
+	CommitSHA   string `gorm:"not null;default:'';column:commit_sha"`
+	Dismissed   bool   `gorm:"not null;default:false"`
+	DismissedBy string `gorm:"not null;default:''"`
+	SubmittedAt *time.Time
+	CreatedAt   time.Time `gorm:"autoCreateTime"`
+	Issue       *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+}
+
+type GitReviewComment struct {
+	ID          string    `gorm:"primaryKey"`
+	ReviewID    *string   `gorm:"index"`
+	IssueID     string    `gorm:"not null;index"`
+	AuthorID    string    `gorm:"not null"`
+	Path        string    `gorm:"not null"`
+	Line        int       `gorm:"not null"`
+	Side        string    `gorm:"not null;default:'new'"`
+	StartLine   int       `gorm:"not null;default:0"`
+	DiffHunk    string    `gorm:"type:text"`
+	Body        string    `gorm:"type:text"`
+	ThreadID    string    `gorm:"not null;index"`
+	Resolved    bool      `gorm:"not null;default:false"`
+	ResolvedBy  string    `gorm:"not null;default:''"`
+	CommitSHA   string    `gorm:"not null;default:'';column:commit_sha"`
+	OutdatedSHA string    `gorm:"not null;default:'';column:outdated_sha"`
+	Pending     bool      `gorm:"not null;default:false"`
+	CreatedAt   time.Time `gorm:"autoCreateTime"`
+	UpdatedAt   time.Time `gorm:"autoUpdateTime"`
+	Issue       *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+}
+
+// ── Projects ─────────────────────────────────────────────────────────────
+
+type GitProject struct {
+	ID          string         `gorm:"primaryKey"`
+	RepoID      *string        `gorm:"index"`
+	OrgID       *string        `gorm:"index"`
+	Title       string         `gorm:"not null"`
+	Description string         `gorm:"type:text"`
+	State       string         `gorm:"not null;default:'open'"`
+	Public      bool           `gorm:"not null;default:false"`
+	CreatorID   string         `gorm:"not null"`
+	CreatedAt   time.Time      `gorm:"autoCreateTime"`
+	UpdatedAt   time.Time      `gorm:"autoUpdateTime"`
+	Repo        *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+	Org         *Organization  `gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
+}
+
+type GitProjectColumn struct {
+	ID        string      `gorm:"primaryKey"`
+	ProjectID string      `gorm:"not null;index"`
+	Title     string      `gorm:"not null"`
+	Color     string      `gorm:"not null;default:''"`
+	Position  int         `gorm:"not null;default:0"`
+	IsDefault bool        `gorm:"not null;default:false"`
+	Project   *GitProject `gorm:"foreignKey:ProjectID;constraint:OnDelete:CASCADE"`
+}
+
+type GitProjectIssue struct {
+	ProjectID string            `gorm:"primaryKey"`
+	IssueID   string            `gorm:"primaryKey;index"`
+	ColumnID  string            `gorm:"not null;index"`
+	Position  int               `gorm:"not null;default:0"`
+	Project   *GitProject       `gorm:"foreignKey:ProjectID;constraint:OnDelete:CASCADE"`
+	Issue     *GitIssue         `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+	Column    *GitProjectColumn `gorm:"foreignKey:ColumnID;constraint:OnDelete:CASCADE"`
+}
+
+// ── Notifications and mail ───────────────────────────────────────────────
+
+type GitNotification struct {
+	ID        string         `gorm:"primaryKey"`
+	UserID    string         `gorm:"not null;index:idx_notif_user_status"`
+	RepoID    string         `gorm:"not null;index"`
+	IssueID   *string        `gorm:"index"`
+	SHA       string         `gorm:"not null;default:'';column:sha"`
+	Kind      string         `gorm:"not null"`
+	Title     string         `gorm:"not null;default:''"`
+	Reason    string         `gorm:"not null;default:''"`
+	Status    string         `gorm:"not null;default:'unread';index:idx_notif_user_status"`
+	UpdatedBy string         `gorm:"not null;default:''"`
+	CreatedAt time.Time      `gorm:"autoCreateTime"`
+	UpdatedAt time.Time      `gorm:"autoUpdateTime;index"`
+	User      *User          `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+	Repo      *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type UserNotificationPrefs struct {
+	UserID              string    `gorm:"primaryKey"`
+	WebMode             string    `gorm:"not null;default:'participating'"`
+	EmailMode           string    `gorm:"not null;default:'participating'"`
+	EmailMentions       bool      `gorm:"not null;default:true"`
+	EmailReviewRequests bool      `gorm:"not null;default:true"`
+	EmailAssignments    bool      `gorm:"not null;default:true"`
+	EmailOwnActivity    bool      `gorm:"not null;default:false"`
+	UpdatedAt           time.Time `gorm:"autoUpdateTime"`
+	User                *User     `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type MailMessage struct {
+	ID        string `gorm:"primaryKey"`
+	ScopeType int32  `gorm:"not null;default:1"`
+	ScopeID   string `gorm:"not null;default:''"`
+	To        string `gorm:"not null"`
+	Subject   string `gorm:"not null"`
+	Text      string `gorm:"type:text"`
+	HTML      string `gorm:"type:text;column:html"`
+	Headers   string `gorm:"type:text;not null;default:'{}'"`
+	Status    string `gorm:"not null;default:'queued';index"`
+	Attempts  int    `gorm:"not null;default:0"`
+	LastError string
+	NextTry   time.Time `gorm:"index"`
+	SentAt    *time.Time
+	CreatedAt time.Time `gorm:"autoCreateTime;index"`
+}
+
+type MailInboundToken struct {
+	TokenHash string    `gorm:"primaryKey"`
+	UserID    string    `gorm:"not null;index"`
+	IssueID   string    `gorm:"not null;index"`
+	ExpiresAt time.Time `gorm:"not null"`
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+}
+
+type PasswordReset struct {
+	ID        string    `gorm:"primaryKey"`
+	UserID    string    `gorm:"not null;index"`
+	TokenHash string    `gorm:"not null;uniqueIndex"`
+	ExpiresAt time.Time `gorm:"not null"`
+	UsedAt    *time.Time
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+	User      *User     `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type EmailVerification struct {
+	ID        string    `gorm:"primaryKey"`
+	UserID    string    `gorm:"not null;index"`
+	Email     string    `gorm:"not null"`
+	TokenHash string    `gorm:"not null;uniqueIndex"`
+	ExpiresAt time.Time `gorm:"not null"`
+	UsedAt    *time.Time
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+	User      *User     `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+// ── Actions ──────────────────────────────────────────────────────────────
+
+// Actions scope kinds
+const (
+	ActionsScopeSystem = "system"
+	ActionsScopeOrg    = "org"
+	ActionsScopeRepo   = "repo"
+)
+
+type ActionsRunner struct {
+	ID        string `gorm:"primaryKey"`
+	ScopeKind string `gorm:"not null;index:idx_runner_scope"`
+	ScopeID   string `gorm:"not null;default:'';index:idx_runner_scope"`
+	Name      string `gorm:"not null"`
+	Labels    string `gorm:"type:text;not null;default:'[]'"`
+	TokenHash string `gorm:"not null;uniqueIndex"`
+	Version   string `gorm:"not null;default:''"`
+	Busy      int    `gorm:"not null;default:0"`
+	LastSeen  *time.Time
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+}
+
+type ActionsRunnerToken struct {
+	ID        string    `gorm:"primaryKey"`
+	ScopeKind string    `gorm:"not null"`
+	ScopeID   string    `gorm:"not null;default:''"`
+	TokenHash string    `gorm:"not null;uniqueIndex"`
+	ExpiresAt time.Time `gorm:"not null"`
+	UsedAt    *time.Time
+	CreatedBy string    `gorm:"not null"`
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+}
+
+type ActionsWorkflowState struct {
+	RepoID   string         `gorm:"primaryKey"`
+	Path     string         `gorm:"primaryKey"`
+	Disabled bool           `gorm:"not null;default:false"`
+	Repo     *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type ActionsRun struct {
+	ID            string `gorm:"primaryKey"`
+	RepoID        string `gorm:"not null;uniqueIndex:idx_run_repo_number;index:idx_run_repo_created"`
+	Number        int64  `gorm:"not null;uniqueIndex:idx_run_repo_number"`
+	WorkflowPath  string `gorm:"not null;index"`
+	WorkflowName  string `gorm:"not null;default:''"`
+	Event         string `gorm:"not null"`
+	Ref           string `gorm:"not null"`
+	SHA           string `gorm:"not null;column:sha;index"`
+	TriggerUserID string `gorm:"not null;default:''"`
+	Status        string `gorm:"not null;default:'queued';index"`
+	Conclusion    string `gorm:"not null;default:''"`
+	NeedsApproval bool   `gorm:"not null;default:false"`
+	SkipCI        bool   `gorm:"not null;default:false;column:skip_ci"`
+	PullNumber    int64  `gorm:"not null;default:0"`
+	Payload       string `gorm:"type:text;not null;default:'{}'"` // Event payload as json
+	Workflow      string `gorm:"type:text;not null;default:''"`   // Workflow source at trigger time
+	Concurrency   string `gorm:"not null;default:''"`
+	StartedAt     *time.Time
+	FinishedAt    *time.Time
+	CreatedAt     time.Time      `gorm:"autoCreateTime;index:idx_run_repo_created"`
+	Repo          *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type ActionsJob struct {
+	ID          string `gorm:"primaryKey"`
+	RunID       string `gorm:"not null;index"`
+	Name        string `gorm:"not null"`
+	JobKey      string `gorm:"not null"` // Key in the jobs map plus matrix suffix
+	RunsOn      string `gorm:"type:text;not null;default:'[]'"`
+	Needs       string `gorm:"type:text;not null;default:'[]'"`
+	Matrix      string `gorm:"type:text;not null;default:'{}'"`
+	Status      string `gorm:"not null;default:'waiting';index"`
+	Conclusion  string `gorm:"not null;default:''"`
+	RunnerID    string `gorm:"not null;default:''"`
+	Attempt     int    `gorm:"not null;default:1"`
+	Steps       string `gorm:"type:text;not null;default:'[]'"`
+	Outputs     string `gorm:"type:text;not null;default:'{}'"`
+	Annotations string `gorm:"type:text;not null;default:'[]'"`
+	Definition  string `gorm:"type:text;not null;default:'{}'"` // Resolved job definition as json
+	TokenID     string `gorm:"not null;default:''"`
+	LogChunks   int    `gorm:"not null;default:0"`
+	LogDigest   string `gorm:"not null;default:''"` // Compacted log blob after completion
+	StartedAt   *time.Time
+	FinishedAt  *time.Time
+	CreatedAt   time.Time   `gorm:"autoCreateTime"`
+	Run         *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
+}
+
+type ActionsJobLog struct {
+	JobID string      `gorm:"primaryKey"`
+	Index int         `gorm:"primaryKey"`
+	Data  []byte      `gorm:"not null"`
+	Job   *ActionsJob `gorm:"foreignKey:JobID;constraint:OnDelete:CASCADE"`
+}
+
+type ActionsSecret struct {
+	ID        string    `gorm:"primaryKey"`
+	ScopeKind string    `gorm:"not null;uniqueIndex:idx_secret_scope_name"`
+	ScopeID   string    `gorm:"not null;default:'';uniqueIndex:idx_secret_scope_name"`
+	Name      string    `gorm:"not null;uniqueIndex:idx_secret_scope_name"`
+	Sealed    []byte    `gorm:"not null"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
+}
+
+type ActionsVariable struct {
+	ID        string    `gorm:"primaryKey"`
+	ScopeKind string    `gorm:"not null;uniqueIndex:idx_variable_scope_name"`
+	ScopeID   string    `gorm:"not null;default:'';uniqueIndex:idx_variable_scope_name"`
+	Name      string    `gorm:"not null;uniqueIndex:idx_variable_scope_name"`
+	Value     string    `gorm:"type:text;not null"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
+}
+
+type ActionsArtifact struct {
+	ID         string `gorm:"primaryKey"`
+	RunID      string `gorm:"not null;index"`
+	ArtifactID string `gorm:"not null;index"`
+	Name       string `gorm:"not null"`
+	ExpiresAt  *time.Time
+	CreatedAt  time.Time   `gorm:"autoCreateTime"`
+	Run        *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
 }

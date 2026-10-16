@@ -571,3 +571,64 @@ func (s *Store) loadArtifactProperties(ctx context.Context, artifacts []*db.Arti
 	}
 	return nil
 }
+
+// ── Source repository links and moves ────────────────────────────────────
+
+func (s *Store) GetArtifactRepositoryByID(ctx context.Context, id int64) (*db.ArtifactRepository, error) {
+	var repo db.ArtifactRepository
+	err := s.db.WithContext(ctx).First(&repo, "id = ?", id).Error
+	if err == gorm.ErrRecordNotFound {
+		return nil, nil
+	}
+	return &repo, err
+}
+
+func (s *Store) SetArtifactRepositoryGitRepo(ctx context.Context, id int64, gitRepoID *string) error {
+	return s.db.WithContext(ctx).Model(&db.ArtifactRepository{}).Where("id = ?", id).Update("git_repo_id", gitRepoID).Error
+}
+
+func (s *Store) ListArtifactRepositoriesByGitRepo(ctx context.Context, gitRepoID string) ([]*db.ArtifactRepository, error) {
+	var repos []*db.ArtifactRepository
+	err := s.db.WithContext(ctx).Where("git_repo_id = ?", gitRepoID).Order("name ASC").Find(&repos).Error
+	return repos, err
+}
+
+// Moves an artifact repository row to a new address
+func (s *Store) MoveArtifactRepository(ctx context.Context, id int64, newNamespace, newName, ownerID string) error {
+	return s.db.WithContext(ctx).Model(&db.ArtifactRepository{}).Where("id = ?", id).Updates(map[string]any{
+		"namespace": newNamespace, "name": newName, "owner_id": ownerID,
+	}).Error
+}
+
+// Newest version string per artifact repo
+func (s *Store) LatestArtifactVersions(ctx context.Context, repoIDs []int64) (map[int64]string, error) {
+	out := map[int64]string{}
+	if len(repoIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		RepoID  int64
+		Version string
+	}
+	err := s.db.WithContext(ctx).Raw(`SELECT repo_id, version FROM artifacts a WHERE repo_id IN ? AND created_at = (SELECT MAX(created_at) FROM artifacts b WHERE b.repo_id = a.repo_id)`, repoIDs).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.RepoID] = r.Version
+	}
+	return out, nil
+}
+
+// Distinct versions of a repo, for release badges
+func (s *Store) ArtifactVersionsSet(ctx context.Context, repoID int64) (map[string]bool, error) {
+	var versions []string
+	if err := s.db.WithContext(ctx).Model(&db.Artifact{}).Where("repo_id = ?", repoID).Distinct().Pluck("version", &versions).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(versions))
+	for _, v := range versions {
+		out[v] = true
+	}
+	return out, nil
+}

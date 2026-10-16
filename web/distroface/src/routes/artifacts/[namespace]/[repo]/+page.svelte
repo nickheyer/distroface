@@ -30,7 +30,8 @@
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import {
 		Archive, ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, ChevronDown, Download,
-		Lock, Globe, Pencil, Plus, RefreshCw, Search, Settings, Square, Tag, Tags, Trash2, Upload, X
+		Lock, Globe, Pencil, Plus, RefreshCw, Search, Settings, Square, Tag, Tags, Trash2, Upload, X,
+		GitBranch, Rocket
 	} from '@lucide/svelte';
 	import {
 		Select, SelectContent, SelectItem, SelectTrigger
@@ -52,6 +53,11 @@
 	const namespace = $derived(page.params.namespace ?? '');
 
 	let repo = $state<ArtifactRepository | null>(null);
+	// Namespace and name of the git repository this package belongs to
+	const sourceRepo = $derived.by(() => {
+		const [namespace = '', name = ''] = (repo?.sourceRepository ?? '').split('/');
+		return { namespace, name };
+	});
 	let versions = $state<ArtifactVersionGroup[]>([]);
 	let loading = $state(true);
 	let notFound = $state(false);
@@ -615,6 +621,14 @@
 						/>
 					{/if}
 				</div>
+				{#if repo.sourceRepository}
+					<p class="flex items-center gap-1.5 text-[13px] text-muted-foreground mt-0.5">
+						<GitBranch class="h-3.5 w-3.5" />
+						Source repository
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+						<a href="/{repo.sourceRepository}" class="font-medium text-foreground hover:text-primary transition-colors">{repo.sourceRepository}</a>
+					</p>
+				{/if}
 				<p class="text-[13px] text-muted-foreground mt-0.5">
 					{repo.description || 'No description'}
 					<span class="text-muted-foreground/50 mx-1.5">·</span>
@@ -717,16 +731,26 @@
 						onOpenChange={(v) => (expandedVersions = { ...expandedVersions, [group.version]: v })}
 					>
 						<div class="rounded-xl border border-border/50 overflow-hidden">
-							<CollapsibleTrigger
-								class="flex w-full items-center gap-2.5 px-4 py-3 bg-muted/20 hover:bg-muted/40 transition-colors text-left"
-							>
-								<ChevronDown class="h-4 w-4 text-muted-foreground transition-transform {expandedVersions[group.version] ? '' : '-rotate-90'}" />
-								<Tag class="h-3.5 w-3.5 text-primary" />
-								<span class="font-medium font-mono text-sm">{group.version}</span>
-								<span class="text-xs text-muted-foreground ml-auto tabular-nums">
-									{group.artifacts.length} file{group.artifacts.length === 1 ? '' : 's'}
-								</span>
-							</CollapsibleTrigger>
+							<div class="flex items-center bg-muted/20">
+								<CollapsibleTrigger
+									class="flex flex-1 min-w-0 items-center gap-2.5 px-4 py-3 hover:bg-muted/40 transition-colors text-left"
+								>
+									<ChevronDown class="h-4 w-4 text-muted-foreground transition-transform {expandedVersions[group.version] ? '' : '-rotate-90'}" />
+									<Tag class="h-3.5 w-3.5 text-primary" />
+									<span class="font-medium font-mono text-sm">{group.version}</span>
+									<span class="text-xs text-muted-foreground ml-auto tabular-nums">
+										{group.artifacts.length} file{group.artifacts.length === 1 ? '' : 's'}
+									</span>
+								</CollapsibleTrigger>
+								{#if group.hasRelease && repo.sourceRepository}
+									<a
+										href={resolve('/[namespace]/[name]/releases/[tag]', { ...sourceRepo, tag: group.version })}
+										class="mr-4 inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-1.5 py-px text-[10px] font-medium text-primary hover:bg-primary/10 shrink-0"
+									>
+										<Rocket class="h-2.5 w-2.5" />Release
+									</a>
+								{/if}
+							</div>
 							<CollapsibleContent>
 								{@render artifactTable(sortedFiles(group.artifacts))}
 							</CollapsibleContent>

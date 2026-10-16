@@ -173,7 +173,7 @@
 					{#each members as member (member.userId)}
 						<TableRow>
 							<TableCell class="font-medium py-3 px-3">
-								<a href={resolve('/[username]', { username: member.username })} class="hover:text-primary transition-colors">{member.username}</a>
+								<a href={resolve('/[namespace]', { namespace: member.username })} class="hover:text-primary transition-colors">{member.username}</a>
 							</TableCell>
 							<TableCell class="py-3 px-3">
 								{#if ctx.canAdmin && member.role !== OrgRole.OWNER}

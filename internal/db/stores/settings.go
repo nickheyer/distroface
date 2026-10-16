@@ -56,6 +56,22 @@ func (s *Store) DeleteSettingsValue(ctx context.Context, scope v1.SettingsScopeT
 	return s.db.WithContext(ctx).Delete(&db.SettingsRow{}, "scope_type = ? AND scope_id = ?", int32(scope), scopeID).Error
 }
 
+// Org id of the namespace owning a git repository, empty for users
+func (s *Store) GetGitRepoOrgID(ctx context.Context, repoID string) (string, error) {
+	var repo db.GitRepository
+	if err := s.db.WithContext(ctx).Select("namespace", "is_org_namespace").First(&repo, "id = ?", repoID).Error; err != nil {
+		return "", err
+	}
+	if !repo.IsOrgNamespace {
+		return "", nil
+	}
+	var org db.Organization
+	if err := s.db.WithContext(ctx).Select("id").First(&org, "name = ?", repo.Namespace).Error; err != nil {
+		return "", err
+	}
+	return org.ID, nil
+}
+
 func (s *Store) GetPortalOrgID(ctx context.Context, portalID string) (string, error) {
 	var portal db.RegistryPortal
 	err := s.db.WithContext(ctx).Select("org_id").First(&portal, "id = ?", portalID).Error

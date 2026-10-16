@@ -176,3 +176,11 @@
 .section-subtitle {
 	@apply text-sm text-muted-foreground;
 }
+
+/* Horizontal tab strips scroll without a visible bar */
+.scrollbar-none {
+	scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+	display: none;
+}

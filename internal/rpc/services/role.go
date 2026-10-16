@@ -291,9 +291,30 @@ func (s *RoleService) ListScopeableObjects(ctx context.Context, req *v1.ListScop
 				ScopeSource: rbac.ResourceOrganizations,
 			})
 		}
+	case rbac.ResourceGit:
+		repos, t, err := s.store.ListGitRepositories(ctx, stores.GitRepoListOptions{
+			IncludePrivate:  true,
+			IncludeArchived: true,
+			Query:           query,
+			Limit:           limit,
+			Offset:          offset,
+		})
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		}
+		total = t
+		for _, r := range repos {
+			fullName := r.Namespace + "/" + r.Name
+			objects = append(objects, &v1.ScopeableObject{
+				Id:          fullName,
+				Name:        fullName,
+				Resource:    rbac.ResourceGit,
+				ScopeSource: rbac.ResourceGit,
+			})
+		}
 	default:
-		return nil, connect.Errorf(connect.CodeInvalidArgument, "resource must be one of %s, %s, %s",
-			rbac.ResourceRepositories, rbac.ResourceArtifacts, rbac.ResourceOrganizations)
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "resource must be one of %s, %s, %s, %s",
+			rbac.ResourceRepositories, rbac.ResourceArtifacts, rbac.ResourceOrganizations, rbac.ResourceGit)
 	}
 
 	return &v1.ListScopeableObjectsResponse{

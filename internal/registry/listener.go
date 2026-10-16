@@ -2,9 +2,13 @@ package registry
 
 import (
 	"context"
+	"encoding/json"
 	"net"
+	"strings"
 
 	"github.com/distribution/distribution/v3"
+	"github.com/distribution/distribution/v3/manifest/ocischema"
+	"github.com/distribution/distribution/v3/manifest/schema2"
 	repositorymiddleware "github.com/distribution/distribution/v3/registry/middleware/repository"
 	"github.com/distribution/reference"
 	"github.com/google/uuid"
@@ -24,6 +28,17 @@ var listenerDeps struct {
 	log        *logger.Logger
 	dispatcher *webhook.Dispatcher
 	recorder   *audit.Recorder
+	linker     SourceLinker
+}
+
+// Links an image repo to the git repo its source label names
+type SourceLinker interface {
+	LinkImageBySource(ctx context.Context, img *storage.Repository, source string)
+}
+
+// SetSourceLinker enables linking by the opencontainers source label
+func SetSourceLinker(l SourceLinker) {
+	listenerDeps.linker = l
 }
 
 // RegisterListenerMiddleware stores the dependencies needed by the
@@ -47,6 +62,7 @@ func init() {
 			log:        listenerDeps.log,
 			dispatcher: listenerDeps.dispatcher,
 			recorder:   listenerDeps.recorder,
+			linker:     listenerDeps.linker,
 		}}, nil
 	})
 }
@@ -57,6 +73,7 @@ type observer struct {
 	log        *logger.Logger
 	dispatcher *webhook.Dispatcher
 	recorder   *audit.Recorder
+	linker     SourceLinker
 }
 
 type observedRepo struct {
@@ -69,7 +86,7 @@ func (r *observedRepo) Manifests(ctx context.Context, options ...distribution.Ma
 	if err != nil {
 		return nil, err
 	}
-	return &observedManifests{ManifestService: ms, repo: r.Repository.Named(), obs: r.obs}, nil
+	return &observedManifests{ManifestService: ms, dist: r.Repository, repo: r.Repository.Named(), obs: r.obs}, nil
 }
 
 func (r *observedRepo) Tags(ctx context.Context) distribution.TagService {
@@ -78,6 +95,7 @@ func (r *observedRepo) Tags(ctx context.Context) distribution.TagService {
 
 type observedManifests struct {
 	distribution.ManifestService
+	dist distribution.Repository
 	repo reference.Named
 	obs  *observer
 }
@@ -93,7 +111,7 @@ func (m *observedManifests) Get(ctx context.Context, dgst digest.Digest, options
 func (m *observedManifests) Put(ctx context.Context, manifest distribution.Manifest, options ...distribution.ManifestServiceOption) (digest.Digest, error) {
 	dgst, err := m.ManifestService.Put(ctx, manifest, options...)
 	if err == nil {
-		m.obs.manifestPushed(ctx, m.repo, manifest, options...)
+		m.obs.manifestPushed(ctx, m.dist, m.repo, manifest, options...)
 	}
 	return dgst, err
 }
@@ -120,7 +138,7 @@ func (t *observedTags) Untag(ctx context.Context, tag string) error {
 	return err
 }
 
-func (o *observer) manifestPushed(ctx context.Context, repo reference.Named, m distribution.Manifest, options ...distribution.ManifestServiceOption) {
+func (o *observer) manifestPushed(ctx context.Context, dist distribution.Repository, repo reference.Named, m distribution.Manifest, options ...distribution.ManifestServiceOption) {
 	namespace, name := utils.SplitRepoName(repo.Name())
 	if namespace == "" || name == "" {
 		return
@@ -159,11 +177,26 @@ func (o *observer) manifestPushed(ctx context.Context, repo reference.Named, m d
 			OwnerID:        ownerID,
 			IsOrgNamespace: isOrgNamespace,
 		}
+		// Packages named after a git repository link to it and follow its visibility
+		first := name
+		if i := strings.IndexByte(first, '/'); i > 0 {
+			first = first[:i]
+		}
+		if src, _ := o.store.GetGitRepository(ctx, namespace, first); src != nil {
+			r.GitRepoID = &src.ID
+			r.IsPrivate = src.IsPrivate
+		}
 		if err := o.store.CreateRepository(ctx, r); err != nil {
 			o.log.Error("listener: failed to create repo %s/%s: %v", namespace, name, err)
 			return
 		}
 		o.log.Info("listener: auto-created repository %s/%s", namespace, name)
+	}
+
+	if r.GitRepoID == nil && o.linker != nil && dist != nil {
+		if source := imageSourceLabel(ctx, dist, m); source != "" {
+			o.linker.LinkImageBySource(ctx, r, source)
+		}
 	}
 
 	if err := o.store.IncrementPushCount(ctx, namespace, name); err != nil {
@@ -176,6 +209,35 @@ func (o *observer) manifestPushed(ctx context.Context, repo reference.Named, m d
 		o.dispatcher.Dispatch(ctx, "push", namespace, name, tag, dgst)
 	}
 	o.audit(ctx, "push", namespace, name, tag, dgst)
+}
+
+// Source label from the image config, empty when absent or oversized
+func imageSourceLabel(ctx context.Context, dist distribution.Repository, m distribution.Manifest) string {
+	var cfg distribution.Descriptor
+	switch mm := m.(type) {
+	case *ocischema.DeserializedManifest:
+		cfg = mm.Config
+	case *schema2.DeserializedManifest:
+		cfg = mm.Config
+	default:
+		return ""
+	}
+	if cfg.Digest == "" || cfg.Size > 1<<20 {
+		return ""
+	}
+	raw, err := dist.Blobs(ctx).Get(ctx, cfg.Digest)
+	if err != nil {
+		return ""
+	}
+	var parsed struct {
+		Config struct {
+			Labels map[string]string `json:"Labels"`
+		} `json:"config"`
+	}
+	if json.Unmarshal(raw, &parsed) != nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.Config.Labels["org.opencontainers.image.source"])
 }
 
 func (o *observer) manifestPulled(ctx context.Context, repo reference.Named, m distribution.Manifest, options ...distribution.ManifestServiceOption) {

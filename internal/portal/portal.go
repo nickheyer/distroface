@@ -23,6 +23,7 @@ type Portal struct {
 	CatchAll        bool
 	Isolated        bool
 	HidePrimaryLink bool
+	SSHPort         int
 	rules           *pathMapper
 	backendProxy    http.Handler
 }
@@ -63,9 +64,29 @@ func ForeignRef(ctx context.Context, namespace string) bool {
 }
 
 type ctxKey struct{}
+type hostKey struct{}
+type schemeKey struct{}
 
 func WithPortal(ctx context.Context, p *Portal) context.Context {
 	return context.WithValue(ctx, ctxKey{}, p)
+}
+
+// Records the host and scheme the request arrived on for link building
+func WithRequestOrigin(ctx context.Context, host, scheme string) context.Context {
+	ctx = context.WithValue(ctx, hostKey{}, host)
+	return context.WithValue(ctx, schemeKey{}, scheme)
+}
+
+// Host the request arrived on, empty outside http
+func HostFromContext(ctx context.Context) string {
+	h, _ := ctx.Value(hostKey{}).(string)
+	return h
+}
+
+// Scheme the request arrived on, empty outside http
+func SchemeFromContext(ctx context.Context) string {
+	s, _ := ctx.Value(schemeKey{}).(string)
+	return s
 }
 
 // Portal serving the request, nil outside portal traffic

@@ -53,6 +53,11 @@ func NewV1API(store *stores.Store, manager *Manager, authMgr *auth.Manager, enfo
 	return a
 }
 
+// Installs the source repository access hook, set once at startup
+func (a *V1API) SetLinkedAccess(l auth.LinkedAccess) {
+	a.access.SetLinkedAccess(l)
+}
+
 // Mounts login and refresh, never namespace rewritten
 func (a *V1API) RegisterAuth(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/auth/login", a.handleLogin)

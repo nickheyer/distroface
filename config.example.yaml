@@ -28,6 +28,9 @@ registry:
 artifacts:
   # storage_path: "./data/artifacts"  # Derived from storage.data_dir when unset
 
+git:
+  # storage_path: "./data/git"        # Derived from storage.data_dir when unset
+
 logging:
   enabled: true
   # dir: "./data/logs"          # Derived from storage.data_dir when unset
@@ -77,6 +80,37 @@ logging:
 #   auth:
 #     local_enabled: true
 #     local_allow_registration: false
+#   git:
+#     enabled: true
+#     ssh_enabled: false                   # Off until an admin turns it on, the ui probes the port first
+#     ssh_port: 22                         # Listener port, needs root or cap_net_bind_service below 1024
+#     ssh_public_host: ""                  # host or host:port in clone urls, defaults to public_hostname
+#     lfs_enabled: true
+#     max_lfs_object_mb: 2048
+#     max_repo_size_mb: 0                  # Zero unlimited
+#     private_by_default: false
+#     default_branch: "main"
+#     release_on_tag: false                # Annotated tags create draft releases
+#     allow_forks: true
+#     max_concurrent_transfers: 32
+#     gc: { enabled: true, interval_hours: 168 }
+#     signing: { enabled: false }          # Instance key signs web commits and merges
+#     actions:
+#       enabled: false
+#       artifact_retention_days: 90
+#       log_retention_days: 90
+#       run_on_mirror: false
+#       default_runs_on: "ubuntu-latest"
+#   mail:
+#     enabled: false
+#     smtp_host: "smtp.example.com"
+#     smtp_port: 587
+#     security: "MAIL_SECURITY_STARTTLS"   # NONE, STARTTLS, or TLS
+#     username: ""
+#     password: ""
+#     from_address: "distroface@example.com"
+#     from_name: "DistroFace"
+#     allow_private_networks: true         # Relays are usually internal
 
 # Operator pinned settings. Always win over the database and the ui,
 # rendered as locked fields in the app. DISTROFACE_OVERRIDES_JSON env

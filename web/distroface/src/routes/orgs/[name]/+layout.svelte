@@ -6,9 +6,11 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import {
-		Building2, Package, Archive, Users, Webhook, Globe, ShieldCheck, Settings
+		Building2, Package, Archive, Users, Webhook, Globe, ShieldCheck, Settings,
+		GitBranch, UsersRound, Tag, SquareKanban, Cpu, KeyRound, Mail
 	} from '@lucide/svelte';
 	import { OrgContext, ORG_CONTEXT_KEY } from '$lib/org-context.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
 
 	let { children } = $props();
 
@@ -24,13 +26,29 @@
 
 	const navItems: NavItem[] = $derived.by(() => {
 		const name = page.params.name ?? '';
+		const git = configStore.gitEnabled;
 		const items: NavItem[] = [
 			{ href: resolve('/orgs/[name]', { name }), label: 'Images', icon: Package },
-			{ href: resolve('/orgs/[name]/artifacts', { name }), label: 'Artifacts', icon: Archive },
-			{ href: resolve('/orgs/[name]/members', { name }), label: 'Members', icon: Users }
+			{ href: resolve('/orgs/[name]/artifacts', { name }), label: 'Artifacts', icon: Archive }
 		];
+		if (git) {
+			items.push({ href: `/orgs/${name}/repos`, label: 'Git', icon: GitBranch });
+		}
+		items.push({ href: resolve('/orgs/[name]/members', { name }), label: 'Members', icon: Users });
+		if (git) {
+			items.push({ href: resolve('/orgs/[name]/teams', { name }), label: 'Teams', icon: UsersRound });
+		}
 		if (ctx.canAdmin) {
+			if (git) {
+				items.push(
+					{ href: resolve('/orgs/[name]/labels', { name }), label: 'Labels', icon: Tag },
+					{ href: resolve('/orgs/[name]/projects', { name }), label: 'Projects', icon: SquareKanban },
+					{ href: resolve('/orgs/[name]/runners', { name }), label: 'Runners', icon: Cpu },
+					{ href: resolve('/orgs/[name]/secrets', { name }), label: 'Secrets', icon: KeyRound }
+				);
+			}
 			items.push(
+				{ href: resolve('/orgs/[name]/email', { name }), label: 'Email', icon: Mail },
 				{ href: resolve('/orgs/[name]/webhooks', { name }), label: 'Webhooks', icon: Webhook },
 				{ href: resolve('/orgs/[name]/portals', { name }), label: 'Portals', icon: Globe },
 				{ href: resolve('/orgs/[name]/certificates', { name }), label: 'Certificates', icon: ShieldCheck },
@@ -66,8 +84,8 @@
 				<Building2 class="h-7 w-7 text-primary" />
 			</div>
 			<div class="flex-1 min-w-0 space-y-1">
-				<h1 class="text-2xl font-bold tracking-tight">{ctx.org.displayName || ctx.org.name}</h1>
-				<div class="flex items-center gap-3 text-sm text-muted-foreground">
+				<h1 class="text-2xl font-bold tracking-tight truncate">{ctx.org.displayName || ctx.org.name}</h1>
+				<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
 					{#if ctx.org.description}
 						<span class="truncate">{ctx.org.description}</span>
 					{/if}

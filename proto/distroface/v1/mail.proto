@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "distroface/v1/settings.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// MailService tests and inspects outbound mail for a settings scope.
+service MailService {
+  // SendTestEmail sends a message with the effective settings of a scope.
+  rpc SendTestEmail(SendTestEmailRequest) returns (SendTestEmailResponse) {}
+  // ListMailDeliveries pages queued and sent messages for a scope.
+  rpc ListMailDeliveries(ListMailDeliveriesRequest) returns (ListMailDeliveriesResponse) {}
+  // RetryMailDelivery requeues a failed message.
+  rpc RetryMailDelivery(RetryMailDeliveryRequest) returns (RetryMailDeliveryResponse) {}
+}
+
+// Delivery state of a queued message
+enum MailStatus {
+  MAIL_STATUS_UNSPECIFIED = 0;
+  MAIL_STATUS_QUEUED = 1;
+  MAIL_STATUS_SENT = 2;
+  MAIL_STATUS_FAILED = 3;
+}
+
+// MailDelivery is one queued or sent message.
+message MailDelivery {
+  string id = 1;
+  SettingsScope scope = 2;
+  string to = 3;
+  string subject = 4;
+  MailStatus status = 5;
+  int32 attempts = 6;
+  string last_error = 7;
+  google.protobuf.Timestamp sent_at = 8;
+  google.protobuf.Timestamp created_at = 9;
+}
+
+// SendTestEmailRequest names the scope and recipient.
+message SendTestEmailRequest {
+  SettingsScope scope = 1;
+  // Empty sends to the caller
+  string to = 2;
+}
+
+// SendTestEmailResponse contains the queued delivery.
+message SendTestEmailResponse {
+  MailDelivery delivery = 1;
+}
+
+// ListMailDeliveriesRequest pages deliveries of a scope.
+message ListMailDeliveriesRequest {
+  PageRequest page = 1;
+  SettingsScope scope = 2;
+  MailStatus status = 3;
+}
+
+// ListMailDeliveriesResponse contains deliveries newest first.
+message ListMailDeliveriesResponse {
+  repeated MailDelivery deliveries = 1;
+  PageInfo page = 2;
+}
+
+// RetryMailDeliveryRequest identifies a failed message.
+message RetryMailDeliveryRequest {
+  string id = 1;
+}
+
+// RetryMailDeliveryResponse contains the requeued delivery.
+message RetryMailDeliveryResponse {
+  MailDelivery delivery = 1;
+}

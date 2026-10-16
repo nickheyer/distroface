@@ -20,11 +20,27 @@ var artifactRoutePattern = regexp.MustCompile(`^/api/v1/artifacts/([^/]+)/(.+)$`
 // First segment control-plane keywords never namespace rewritten
 var artifactReservedRepo = map[string]bool{"repos": true, "search": true, "_ns": true}
 
+// Opaque repo name ahead of a smart http, lfs, or browse suffix
+var gitRoutePattern = regexp.MustCompile(`^/(.+?)(\.wiki)?(\.git)?/(info/refs|git-upload-pack|git-receive-pack|git-upload-archive|HEAD|objects/.+|info/lfs(?:/.*)?|-/.*)$`)
+
+// Root paths that never belong to a git repository
+var nonGitPrefixes = []string{"/v2/", "/api/", "/auth/", "/acme/", "/.well-known/", "/distroface.v1.", "/grpc.reflection.", "/connect."}
+
+func isGitDataPath(path string) bool {
+	for _, p := range nonGitPrefixes {
+		if strings.HasPrefix(path, p) {
+			return false
+		}
+	}
+	return gitRoutePattern.MatchString(path)
+}
+
 const oidcLoginPath = "/api/v1/auth/oidc/login"
 
 // Serves the whole app per portal, resolves the portal into the request ctx
 func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r = r.WithContext(WithRequestOrigin(r.Context(), r.Host, requestScheme(r)))
 		p := res.Resolve(r)
 		if p != nil {
 			r = r.WithContext(WithPortal(r.Context(), p))
@@ -59,6 +75,22 @@ func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) ht
 		}
 
 		switch {
+		case isGitDataPath(r.URL.Path):
+			// Push intents are gated by the git handler, upload-pack posts are reads
+			if match := gitRoutePattern.FindStringSubmatch(r.URL.Path); match != nil {
+				name, wiki, suffix := match[1], match[2], match[4]
+				mapped := p.MapName(name)
+				if !p.InScope(mapped) {
+					http.NotFound(w, r)
+					return
+				}
+				if mapped != name {
+					res.log.Debug("git path mapping: %s -> %s (host %s, %s %s)", name, mapped, r.Host, r.Method, r.URL.Path)
+					r.URL.Path = "/" + mapped + wiki + ".git/" + suffix
+					r.URL.RawPath = ""
+				}
+			}
+
 		case strings.HasPrefix(r.URL.Path, "/v2/"):
 			if !res.allowMethod(w, r, p) {
 				return

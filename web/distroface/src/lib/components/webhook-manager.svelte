@@ -87,8 +87,8 @@
 			const listReq: Record<string, unknown> = {
 				page: pager.request(filter.request())
 			};
-			if (scope === WebhookScope.REPOSITORY) listReq.repoId = scopeId;
-			else listReq.orgId = scopeId;
+			if (scope === WebhookScope.ORGANIZATION) listReq.orgId = scopeId;
+			else listReq.repoId = scopeId;
 
 			const resp = await rpcClient.webhook.listWebhooks(listReq);
 			webhooks = resp.webhooks;
@@ -118,8 +118,8 @@
 				contentType: 'application/json',
 				payloadTemplate: newPayloadTemplate
 			};
-			if (scope === WebhookScope.REPOSITORY) createReq.repoId = scopeId;
-			else createReq.orgId = scopeId;
+			if (scope === WebhookScope.ORGANIZATION) createReq.orgId = scopeId;
+			else createReq.repoId = scopeId;
 
 			await rpcClient.webhook.createWebhook(createReq);
 			createOpen = false;

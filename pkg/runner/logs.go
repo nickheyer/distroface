@@ -1,0 +1,210 @@
+package runner
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"connectrpc.com/connect/v2"
+)
+
+const (
+	logFlushEvery = time.Second
+	logFlushBytes = 32 * 1024
+	logSendLimit  = 1024 * 1024
+)
+
+// Buffers job output and ships it in ordered chunks
+type logStream struct {
+	client *Client
+	jobID  string
+
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	partial []byte
+	masks   []string
+	index   int
+	failed  error
+	dead    bool
+	wake    chan struct{}
+	done    chan struct{}
+	stopped chan struct{}
+}
+
+func newLogStream(client *Client, jobID string) *logStream {
+	return &logStream{client: client, jobID: jobID, wake: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{})}
+}
+
+// Runs the periodic flusher until closed
+func (l *logStream) Start(ctx context.Context) {
+	go func() {
+		defer close(l.stopped)
+		t := time.NewTicker(logFlushEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-l.done:
+				return
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				l.flush(ctx, true)
+			case <-l.wake:
+				l.flush(ctx, false)
+			}
+		}
+	}()
+}
+
+// Hides a value in every line written from now on
+func (l *logStream) AddMask(v string) {
+	v = strings.TrimSpace(v)
+	if len(v) < 3 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, m := range l.masks {
+		if m == v {
+			return
+		}
+	}
+	l.masks = append(l.masks, v)
+}
+
+func (l *logStream) mask(s string) string {
+	for _, m := range l.masks {
+		s = strings.ReplaceAll(s, m, "***")
+	}
+	return s
+}
+
+// Masks complete lines, partial lines wait for their newline
+func (l *logStream) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	data := append(l.partial, p...)
+	l.partial = nil
+	for {
+		i := bytes.IndexByte(data, '\n')
+		if i < 0 {
+			break
+		}
+		l.buf.WriteString(l.mask(string(data[:i+1])))
+		data = data[i+1:]
+	}
+	if len(data) > 0 {
+		l.partial = append([]byte(nil), data...)
+	}
+	big := l.buf.Len() >= logFlushBytes
+	l.mu.Unlock()
+	if big {
+		select {
+		case l.wake <- struct{}{}:
+		default:
+		}
+	}
+	return len(p), nil
+}
+
+func (l *logStream) Line(format string, args ...any) {
+	s := fmt.Sprintf(format, args...)
+	if !strings.HasSuffix(s, "\n") {
+		s += "\n"
+	}
+	l.Write([]byte(s))
+}
+
+// Pending bytes, partial line included when forced
+func (l *logStream) take(force bool) []byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if force && len(l.partial) > 0 {
+		l.buf.WriteString(l.mask(string(l.partial)))
+		l.partial = nil
+	}
+	if l.buf.Len() == 0 {
+		return nil
+	}
+	n := l.buf.Len()
+	if n > logSendLimit {
+		n = logSendLimit
+	}
+	out := make([]byte, n)
+	copy(out, l.buf.Bytes()[:n])
+	l.buf.Next(n)
+	return out
+}
+
+func (l *logStream) flush(ctx context.Context, force bool) {
+	for {
+		chunk := l.take(force)
+		if chunk == nil {
+			return
+		}
+		l.mu.Lock()
+		dead := l.dead
+		l.mu.Unlock()
+		if dead {
+			continue
+		}
+		if err := l.send(ctx, chunk); err != nil {
+			l.mu.Lock()
+			l.failed = err
+			l.dead = permanent(err)
+			l.mu.Unlock()
+			return
+		}
+		force = false
+	}
+}
+
+// Explicit indexes dedupe retries, conflicts defer to the server
+func (l *logStream) send(ctx context.Context, chunk []byte) error {
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		next, err := l.client.AppendLog(sctx, l.jobID, l.index, chunk)
+		cancel()
+		if err == nil {
+			l.index = next
+			return nil
+		}
+		lastErr = err
+		if isCode(err, connect.CodeFailedPrecondition) {
+			sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			next, err = l.client.AppendLog(sctx, l.jobID, -1, chunk)
+			cancel()
+			if err == nil {
+				l.index = next
+				return nil
+			}
+			return err
+		}
+		if permanent(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * time.Second):
+		}
+	}
+	return lastErr
+}
+
+// Flushes everything left and stops the flusher
+func (l *logStream) Close(ctx context.Context) error {
+	select {
+	case <-l.done:
+	default:
+		close(l.done)
+	}
+	<-l.stopped
+	l.flush(ctx, true)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.failed
+}

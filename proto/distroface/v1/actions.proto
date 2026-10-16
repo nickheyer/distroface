@@ -1,0 +1,658 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// ActionsService manages workflows, runs, logs, secrets, variables, and runners.
+service ActionsService {
+  // ListWorkflows returns the workflow files of the default branch.
+  rpc ListWorkflows(ListWorkflowsRequest) returns (ListWorkflowsResponse) {}
+  // GetWorkflow returns one workflow file with its parse result.
+  rpc GetWorkflow(GetWorkflowRequest) returns (GetWorkflowResponse) {}
+  // EnableWorkflow allows a workflow to run.
+  rpc EnableWorkflow(EnableWorkflowRequest) returns (EnableWorkflowResponse) {}
+  // DisableWorkflow stops a workflow from running.
+  rpc DisableWorkflow(DisableWorkflowRequest) returns (DisableWorkflowResponse) {}
+  // DispatchWorkflow triggers a workflow_dispatch run.
+  rpc DispatchWorkflow(DispatchWorkflowRequest) returns (DispatchWorkflowResponse) {}
+  // ListWorkflowRuns pages runs.
+  rpc ListWorkflowRuns(ListWorkflowRunsRequest) returns (ListWorkflowRunsResponse) {}
+  // GetWorkflowRun returns one run with its jobs.
+  rpc GetWorkflowRun(GetWorkflowRunRequest) returns (GetWorkflowRunResponse) {}
+  // CancelRun cancels a run and its jobs.
+  rpc CancelRun(CancelRunRequest) returns (CancelRunResponse) {}
+  // RerunRun reruns failed jobs or every job.
+  rpc RerunRun(RerunRunRequest) returns (RerunRunResponse) {}
+  // ApproveRun approves a run from a fork pull request.
+  rpc ApproveRun(ApproveRunRequest) returns (ApproveRunResponse) {}
+  // GetJob returns one job with its steps.
+  rpc GetJob(GetJobRequest) returns (GetJobResponse) {}
+  // StreamJobLog streams log lines until the job finishes.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  rpc StreamJobLog(StreamJobLogRequest) returns (stream JobLogChunk) {}
+  // ListRunArtifacts returns the artifacts a run uploaded.
+  rpc ListRunArtifacts(ListRunArtifactsRequest) returns (ListRunArtifactsResponse) {}
+  // ListSecrets returns secret names of a scope.
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse) {}
+  // SetSecret creates or replaces a secret.
+  rpc SetSecret(SetSecretRequest) returns (SetSecretResponse) {}
+  // DeleteSecret removes a secret.
+  rpc DeleteSecret(DeleteSecretRequest) returns (DeleteSecretResponse) {}
+  // ListVariables returns variables of a scope.
+  rpc ListVariables(ListVariablesRequest) returns (ListVariablesResponse) {}
+  // SetVariable creates or replaces a variable.
+  rpc SetVariable(SetVariableRequest) returns (SetVariableResponse) {}
+  // DeleteVariable removes a variable.
+  rpc DeleteVariable(DeleteVariableRequest) returns (DeleteVariableResponse) {}
+  // ListRunners returns runners of a scope.
+  rpc ListRunners(ListRunnersRequest) returns (ListRunnersResponse) {}
+  // CreateRunnerToken mints a one time registration token for a scope.
+  rpc CreateRunnerToken(CreateRunnerTokenRequest) returns (CreateRunnerTokenResponse) {}
+  // DeleteRunner removes a runner.
+  rpc DeleteRunner(DeleteRunnerRequest) returns (DeleteRunnerResponse) {}
+  // UpdateRunner changes labels or name.
+  rpc UpdateRunner(UpdateRunnerRequest) returns (UpdateRunnerResponse) {}
+}
+
+// RunnerService is spoken by dfcli runner, authenticated by the runner token header.
+service RunnerService {
+  // RegisterRunner exchanges a registration token for a runner identity.
+  rpc RegisterRunner(RegisterRunnerRequest) returns (RegisterRunnerResponse) {}
+  // Heartbeat marks the runner online.
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse) {}
+  // FetchTask long polls for a job matching the runner's labels.
+  rpc FetchTask(FetchTaskRequest) returns (FetchTaskResponse) {}
+  // UpdateTask reports step states and outputs.
+  rpc UpdateTask(UpdateTaskRequest) returns (UpdateTaskResponse) {}
+  // AppendTaskLog appends log bytes.
+  rpc AppendTaskLog(AppendTaskLogRequest) returns (AppendTaskLogResponse) {}
+  // CompleteTask reports the final conclusion.
+  rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse) {}
+  // UploadTaskArtifact starts an artifact upload for the run.
+  rpc UploadTaskArtifact(UploadTaskArtifactRequest) returns (UploadTaskArtifactResponse) {}
+  // FinishTaskArtifact completes an artifact upload.
+  rpc FinishTaskArtifact(FinishTaskArtifactRequest) returns (FinishTaskArtifactResponse) {}
+}
+
+// Lifecycle state of a run, job, or step
+enum ActionsStatus {
+  ACTIONS_STATUS_UNSPECIFIED = 0;
+  ACTIONS_STATUS_WAITING = 1;
+  ACTIONS_STATUS_QUEUED = 2;
+  ACTIONS_STATUS_RUNNING = 3;
+  ACTIONS_STATUS_COMPLETED = 4;
+}
+
+// Outcome of a completed run, job, or step
+enum ActionsConclusion {
+  ACTIONS_CONCLUSION_UNSPECIFIED = 0;
+  ACTIONS_CONCLUSION_SUCCESS = 1;
+  ACTIONS_CONCLUSION_FAILURE = 2;
+  ACTIONS_CONCLUSION_CANCELLED = 3;
+  ACTIONS_CONCLUSION_SKIPPED = 4;
+  ACTIONS_CONCLUSION_TIMED_OUT = 5;
+  ACTIONS_CONCLUSION_NEUTRAL = 6;
+}
+
+// Owner of secrets, variables, and runners
+message ActionsScope {
+  // system, org, or repo
+  string kind = 1;
+  // Org id or repo full name, empty for system
+  string id = 2;
+}
+
+// Workflow is one workflow file.
+message Workflow {
+  string path = 1;
+  string name = 2;
+  bool enabled = 3;
+  repeated string triggers = 4;
+  // Parse error when the file is invalid
+  string error = 5;
+  // workflow_dispatch inputs as json schema like description
+  string dispatch_inputs = 6;
+  int32 run_count = 7;
+  google.protobuf.Timestamp last_run_at = 8;
+}
+
+// One step of a job
+message JobStep {
+  int32 number = 1;
+  string name = 2;
+  ActionsStatus status = 3;
+  ActionsConclusion conclusion = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp finished_at = 6;
+}
+
+// Job is one job of a run.
+message Job {
+  string id = 1;
+  string run_id = 2;
+  string name = 3;
+  repeated string runs_on = 4;
+  repeated string needs = 5;
+  ActionsStatus status = 6;
+  ActionsConclusion conclusion = 7;
+  string runner_name = 8;
+  int32 attempt = 9;
+  repeated JobStep steps = 10;
+  // Job outputs as json
+  string outputs = 11;
+  // Annotations as json array
+  string annotations = 12;
+  google.protobuf.Timestamp started_at = 13;
+  google.protobuf.Timestamp finished_at = 14;
+}
+
+// WorkflowRun is one execution of a workflow.
+message WorkflowRun {
+  string id = 1;
+  string repo_full_name = 2;
+  int64 number = 3;
+  string workflow_path = 4;
+  string workflow_name = 5;
+  string event = 6;
+  string ref = 7;
+  string sha = 8;
+  string trigger_user = 9;
+  ActionsStatus status = 10;
+  ActionsConclusion conclusion = 11;
+  // Waiting for approval from a fork pull request
+  bool needs_approval = 12;
+  repeated Job jobs = 13;
+  // Pull request number when the event came from one
+  int64 pull_request_number = 14;
+  string html_url = 15;
+  google.protobuf.Timestamp started_at = 16;
+  google.protobuf.Timestamp finished_at = 17;
+  google.protobuf.Timestamp created_at = 18;
+}
+
+// Bytes of log appended to a job
+message JobLogChunk {
+  string job_id = 1;
+  int32 index = 2;
+  bytes data = 3;
+  // No more chunks will follow
+  bool done = 4;
+}
+
+// RunArtifact is a file a run uploaded.
+message RunArtifact {
+  string id = 1;
+  string name = 2;
+  int64 size = 3;
+  string download_url = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// Secret is a sealed value shown by name only.
+message Secret {
+  string name = 1;
+  ActionsScope scope = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+
+// Variable is a plain value.
+message Variable {
+  string name = 1;
+  string value = 2;
+  ActionsScope scope = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}
+
+// Runner is a registered job executor.
+message Runner {
+  string id = 1;
+  string name = 2;
+  ActionsScope scope = 3;
+  repeated string labels = 4;
+  string version = 5;
+  // online, offline, busy
+  string status = 6;
+  google.protobuf.Timestamp last_seen = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+// ListWorkflowsRequest identifies a repository.
+message ListWorkflowsRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// ListWorkflowsResponse contains workflows.
+message ListWorkflowsResponse {
+  repeated Workflow workflows = 1;
+}
+
+// GetWorkflowRequest identifies a workflow by path.
+message GetWorkflowRequest {
+  string namespace = 1;
+  string name = 2;
+  string path = 3;
+}
+
+// GetWorkflowResponse contains the workflow and its source.
+message GetWorkflowResponse {
+  Workflow workflow = 1;
+  string source = 2;
+}
+
+// EnableWorkflowRequest identifies a workflow.
+message EnableWorkflowRequest {
+  string namespace = 1;
+  string name = 2;
+  string path = 3;
+}
+
+// EnableWorkflowResponse contains the workflow.
+message EnableWorkflowResponse {
+  Workflow workflow = 1;
+}
+
+// DisableWorkflowRequest identifies a workflow.
+message DisableWorkflowRequest {
+  string namespace = 1;
+  string name = 2;
+  string path = 3;
+}
+
+// DisableWorkflowResponse contains the workflow.
+message DisableWorkflowResponse {
+  Workflow workflow = 1;
+}
+
+// DispatchWorkflowRequest triggers a run.
+message DispatchWorkflowRequest {
+  string namespace = 1;
+  string name = 2;
+  string path = 3;
+  // Branch or tag to run on
+  string ref = 4;
+  map<string, string> inputs = 5;
+}
+
+// DispatchWorkflowResponse contains the run.
+message DispatchWorkflowResponse {
+  WorkflowRun run = 1;
+}
+
+// ListWorkflowRunsRequest pages runs.
+message ListWorkflowRunsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string workflow_path = 4;
+  ActionsStatus status = 5;
+  ActionsConclusion conclusion = 6;
+  string event = 7;
+  string ref = 8;
+  string actor = 9;
+}
+
+// ListWorkflowRunsResponse contains runs newest first.
+message ListWorkflowRunsResponse {
+  repeated WorkflowRun runs = 1;
+  PageInfo page = 2;
+}
+
+// GetWorkflowRunRequest identifies a run.
+message GetWorkflowRunRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// GetWorkflowRunResponse contains the run with jobs.
+message GetWorkflowRunResponse {
+  WorkflowRun run = 1;
+}
+
+// CancelRunRequest identifies a run.
+message CancelRunRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// CancelRunResponse contains the run.
+message CancelRunResponse {
+  WorkflowRun run = 1;
+}
+
+// RerunRunRequest reruns a run.
+message RerunRunRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+  // Only jobs that failed
+  bool failed_only = 4;
+}
+
+// RerunRunResponse contains the run.
+message RerunRunResponse {
+  WorkflowRun run = 1;
+}
+
+// ApproveRunRequest approves a fork run.
+message ApproveRunRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// ApproveRunResponse contains the run.
+message ApproveRunResponse {
+  WorkflowRun run = 1;
+}
+
+// GetJobRequest identifies a job.
+message GetJobRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// GetJobResponse contains the job.
+message GetJobResponse {
+  Job job = 1;
+}
+
+// StreamJobLogRequest identifies a job and a starting chunk.
+message StreamJobLogRequest {
+  string namespace = 1;
+  string name = 2;
+  string job_id = 3;
+  int32 from_index = 4;
+}
+
+// ListRunArtifactsRequest identifies a run.
+message ListRunArtifactsRequest {
+  string namespace = 1;
+  string name = 2;
+  string run_id = 3;
+}
+
+// ListRunArtifactsResponse contains artifacts.
+message ListRunArtifactsResponse {
+  repeated RunArtifact artifacts = 1;
+}
+
+// ListSecretsRequest identifies a scope.
+message ListSecretsRequest {
+  PageRequest page = 1;
+  ActionsScope scope = 2;
+}
+
+// ListSecretsResponse contains secret names.
+message ListSecretsResponse {
+  repeated Secret secrets = 1;
+  PageInfo page = 2;
+}
+
+// SetSecretRequest creates or replaces a secret.
+message SetSecretRequest {
+  ActionsScope scope = 1;
+  string secret_name = 2;
+  string value = 3;
+}
+
+// SetSecretResponse contains the secret.
+message SetSecretResponse {
+  Secret secret = 1;
+}
+
+// DeleteSecretRequest identifies a secret.
+message DeleteSecretRequest {
+  ActionsScope scope = 1;
+  string secret_name = 2;
+}
+
+// DeleteSecretResponse is empty on success.
+message DeleteSecretResponse {}
+
+// ListVariablesRequest identifies a scope.
+message ListVariablesRequest {
+  PageRequest page = 1;
+  ActionsScope scope = 2;
+}
+
+// ListVariablesResponse contains variables.
+message ListVariablesResponse {
+  repeated Variable variables = 1;
+  PageInfo page = 2;
+}
+
+// SetVariableRequest creates or replaces a variable.
+message SetVariableRequest {
+  ActionsScope scope = 1;
+  string variable_name = 2;
+  string value = 3;
+}
+
+// SetVariableResponse contains the variable.
+message SetVariableResponse {
+  Variable variable = 1;
+}
+
+// DeleteVariableRequest identifies a variable.
+message DeleteVariableRequest {
+  ActionsScope scope = 1;
+  string variable_name = 2;
+}
+
+// DeleteVariableResponse is empty on success.
+message DeleteVariableResponse {}
+
+// ListRunnersRequest identifies a scope.
+message ListRunnersRequest {
+  PageRequest page = 1;
+  ActionsScope scope = 2;
+}
+
+// ListRunnersResponse contains runners.
+message ListRunnersResponse {
+  repeated Runner runners = 1;
+  PageInfo page = 2;
+}
+
+// CreateRunnerTokenRequest identifies a scope.
+message CreateRunnerTokenRequest {
+  ActionsScope scope = 1;
+}
+
+// CreateRunnerTokenResponse contains the one time token.
+message CreateRunnerTokenResponse {
+  string token = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+// DeleteRunnerRequest identifies a runner.
+message DeleteRunnerRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+}
+
+// DeleteRunnerResponse is empty on success.
+message DeleteRunnerResponse {}
+
+// UpdateRunnerRequest changes the set fields.
+message UpdateRunnerRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+  optional string runner_name = 3;
+  bool set_labels = 4;
+  repeated string labels = 5;
+}
+
+// UpdateRunnerResponse contains the runner.
+message UpdateRunnerResponse {
+  Runner runner = 1;
+}
+
+// RegisterRunnerRequest exchanges a registration token.
+message RegisterRunnerRequest {
+  string registration_token = 1;
+  string runner_name = 2;
+  repeated string labels = 3;
+  string version = 4;
+}
+
+// RegisterRunnerResponse contains the runner identity and its long lived token.
+message RegisterRunnerResponse {
+  Runner runner = 1;
+  string runner_token = 2;
+}
+
+// HeartbeatRequest reports the runner is alive.
+message HeartbeatRequest {
+  string version = 1;
+  // Jobs currently executing
+  repeated string running_job_ids = 2;
+}
+
+// HeartbeatResponse is empty on success.
+message HeartbeatResponse {}
+
+// FetchTaskRequest long polls for work.
+message FetchTaskRequest {
+  // Seconds to wait before returning empty
+  int32 wait_seconds = 1;
+}
+
+// One service container of a job
+message TaskService {
+  string name = 1;
+  string image = 2;
+  map<string, string> env = 3;
+  repeated string ports = 4;
+  repeated string volumes = 5;
+  string options = 6;
+}
+
+// One step to execute
+message TaskStep {
+  int32 number = 1;
+  string name = 2;
+  string id = 3;
+  // Action reference such as actions/checkout@v4, empty for run steps
+  string uses = 4;
+  string run = 5;
+  string shell = 6;
+  string working_directory = 7;
+  map<string, string> env = 8;
+  map<string, string> with = 9;
+  // Expression evaluated by the runner against step results
+  string condition = 10;
+  bool continue_on_error = 11;
+  int32 timeout_minutes = 12;
+}
+
+// Task is a job handed to a runner.
+message Task {
+  string job_id = 1;
+  string run_id = 2;
+  string repo_full_name = 3;
+  string job_name = 4;
+  // Image for the job container, empty for the host executor
+  string container_image = 5;
+  string container_options = 6;
+  repeated TaskService services = 7;
+  repeated TaskStep steps = 8;
+  map<string, string> env = 9;
+  map<string, string> secrets = 10;
+  map<string, string> variables = 11;
+  // Scoped api token for checkout and publishing
+  string token = 12;
+  // github context as json
+  string context = 13;
+  // Outputs of needed jobs as json
+  string needs = 14;
+  // Matrix values as json
+  string matrix = 15;
+  int32 timeout_minutes = 16;
+  string clone_url = 17;
+  string server_url = 18;
+  // Shell for run steps without an explicit shell
+  string default_shell = 19;
+  // Resolved runs-on labels of the job
+  repeated string runs_on = 20;
+}
+
+// FetchTaskResponse contains a task or nothing.
+message FetchTaskResponse {
+  Task task = 1;
+}
+
+// UpdateTaskRequest reports progress.
+message UpdateTaskRequest {
+  string job_id = 1;
+  repeated JobStep steps = 2;
+  // Job outputs as json
+  string outputs = 3;
+  // Annotations as json array
+  string annotations = 4;
+}
+
+// UpdateTaskResponse tells the runner whether to cancel.
+message UpdateTaskResponse {
+  bool cancelled = 1;
+}
+
+// AppendTaskLogRequest appends log bytes.
+message AppendTaskLogRequest {
+  string job_id = 1;
+  int32 index = 2;
+  bytes data = 3;
+}
+
+// AppendTaskLogResponse acknowledges the chunk.
+message AppendTaskLogResponse {
+  int32 next_index = 1;
+}
+
+// CompleteTaskRequest reports the conclusion.
+message CompleteTaskRequest {
+  string job_id = 1;
+  ActionsConclusion conclusion = 2;
+  repeated JobStep steps = 3;
+  string outputs = 4;
+  string annotations = 5;
+}
+
+// CompleteTaskResponse is empty on success.
+message CompleteTaskResponse {}
+
+// UploadTaskArtifactRequest starts an upload.
+message UploadTaskArtifactRequest {
+  string job_id = 1;
+  string artifact_name = 2;
+  // Relative path within the artifact
+  string path = 3;
+}
+
+// UploadTaskArtifactResponse contains the upload session and data plane url.
+message UploadTaskArtifactResponse {
+  string upload_id = 1;
+  string upload_url = 2;
+}
+
+// FinishTaskArtifactRequest completes an upload.
+message FinishTaskArtifactRequest {
+  string job_id = 1;
+  string artifact_name = 2;
+  string path = 3;
+  string upload_id = 4;
+}
+
+// FinishTaskArtifactResponse contains the stored artifact.
+message FinishTaskArtifactResponse {
+  RunArtifact artifact = 1;
+}

@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/nickheyer/distroface/internal/artifacts"
+	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -51,6 +53,8 @@ type Monitor struct {
 	res       *settings.Resolver
 	artifacts *artifacts.Manager
 	oci       *ociSyncer
+	git       *gitrepo.Manager
+	sealer    *auth.Sealer
 	log       *logger.Logger
 	client    *http.Client
 
@@ -61,6 +65,7 @@ type Monitor struct {
 	cancels     map[string]context.CancelFunc
 	stopped     map[string]bool
 	activeSyncs map[string]Event
+	pushTimers  map[string]*time.Timer
 	events      *hub
 }
 
@@ -99,6 +104,7 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		cancels:     make(map[string]context.CancelFunc),
 		stopped:     make(map[string]bool),
 		activeSyncs: make(map[string]Event),
+		pushTimers:  make(map[string]*time.Timer),
 		events:      newHub(),
 	}
 }
@@ -284,6 +290,10 @@ func (m *Monitor) sweep(ctx context.Context) {
 		}
 	}
 
+	if m.git != nil {
+		jobs = append(jobs, m.gitJobs(ctx)...)
+	}
+
 	sem := make(chan struct{}, lim.Workers)
 	for _, job := range jobs {
 		wg.Add(1)
@@ -361,6 +371,7 @@ func (m *Monitor) execArtifactSync(ctx context.Context, repo *db.ArtifactReposit
 		OwnerID:   repo.OwnerID,
 	}
 	state := ParseState(repo.MirrorState)
+	prevETag := state.ListETag
 	runCtx, cancel := context.WithTimeout(ctx, currentLimits().SyncTimeout)
 	m.armCancel(key, cancel)
 	m.beginSync(key, ev)
@@ -382,6 +393,10 @@ func (m *Monitor) execArtifactSync(ctx context.Context, repo *db.ArtifactReposit
 	}
 	if err := m.store.SetArtifactRepoMirrorStatus(statusCtx(ctx), repo.ID, time.Now().UTC(), msg, state.Encode()); err != nil {
 		m.log.Error("mirror status update for artifact repo %d: %v", repo.ID, err)
+	}
+	// Linked git repos take release notes whenever the listing changed
+	if m.git != nil && repo.GitRepoID != nil && (syncErr == nil || nothing != nil) && (state.ListETag == "" || state.ListETag != prevETag) {
+		m.syncLinkedReleases(statusCtx(ctx), repo, cfg)
 	}
 	m.endSync(key, ev, syncErr)
 }

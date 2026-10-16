@@ -1,0 +1,145 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// KeyService manages ssh keys, deploy keys, and gpg keys.
+service KeyService {
+  // AddSSHKey registers a user key or a repository deploy key.
+  rpc AddSSHKey(AddSSHKeyRequest) returns (AddSSHKeyResponse) {}
+  // ListSSHKeys lists the caller's keys or a repository's deploy keys.
+  rpc ListSSHKeys(ListSSHKeysRequest) returns (ListSSHKeysResponse) {}
+  // DeleteSSHKey removes a key.
+  rpc DeleteSSHKey(DeleteSSHKeyRequest) returns (DeleteSSHKeyResponse) {}
+  // AddGPGKey registers an armored public key.
+  rpc AddGPGKey(AddGPGKeyRequest) returns (AddGPGKeyResponse) {}
+  // ListGPGKeys lists the caller's gpg keys.
+  rpc ListGPGKeys(ListGPGKeysRequest) returns (ListGPGKeysResponse) {}
+  // DeleteGPGKey removes a gpg key.
+  rpc DeleteGPGKey(DeleteGPGKeyRequest) returns (DeleteGPGKeyResponse) {}
+  // VerifyGPGKey proves ownership by signing a challenge.
+  rpc VerifyGPGKey(VerifyGPGKeyRequest) returns (VerifyGPGKeyResponse) {}
+}
+
+// What an ssh key may be used for
+enum SSHKeyUsage {
+  SSH_KEY_USAGE_UNSPECIFIED = 0;
+  SSH_KEY_USAGE_AUTH = 1;
+  SSH_KEY_USAGE_SIGNING = 2;
+  SSH_KEY_USAGE_BOTH = 3;
+}
+
+// SSHKey is a registered public key.
+message SSHKey {
+  string id = 1;
+  string title = 2;
+  string fingerprint = 3;
+  string key_type = 4;
+  SSHKeyUsage usage = 5;
+  // Deploy key that cannot push
+  bool read_only = 6;
+  // Full name of the repository for deploy keys
+  string repo_full_name = 7;
+  string public_key = 8;
+  google.protobuf.Timestamp last_used_at = 9;
+  google.protobuf.Timestamp expires_at = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+// GPGKey is a registered OpenPGP public key.
+message GPGKey {
+  string id = 1;
+  string key_id = 2;
+  string fingerprint = 3;
+  repeated string emails = 4;
+  // Challenge signed, key trusted for verification
+  bool verified = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// AddSSHKeyRequest registers a key for the caller or a repository.
+message AddSSHKeyRequest {
+  string title = 1;
+  string public_key = 2;
+  SSHKeyUsage usage = 3;
+  // Deploy key target, empty registers a user key
+  string namespace = 4;
+  string name = 5;
+  bool read_only = 6;
+  optional int32 expires_in_days = 7;
+}
+
+// AddSSHKeyResponse contains the key.
+message AddSSHKeyResponse {
+  SSHKey key = 1;
+}
+
+// ListSSHKeysRequest lists user keys or deploy keys.
+message ListSSHKeysRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// ListSSHKeysResponse contains keys.
+message ListSSHKeysResponse {
+  repeated SSHKey keys = 1;
+  PageInfo page = 2;
+}
+
+// DeleteSSHKeyRequest identifies a key.
+message DeleteSSHKeyRequest {
+  string id = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// DeleteSSHKeyResponse is empty on success.
+message DeleteSSHKeyResponse {}
+
+// AddGPGKeyRequest registers an armored key.
+message AddGPGKeyRequest {
+  string armored_public_key = 1;
+}
+
+// AddGPGKeyResponse contains the key and a challenge to sign.
+message AddGPGKeyResponse {
+  GPGKey key = 1;
+  // Sign this with the key and submit through VerifyGPGKey
+  string challenge = 2;
+}
+
+// ListGPGKeysRequest pages the caller's keys.
+message ListGPGKeysRequest {
+  PageRequest page = 1;
+}
+
+// ListGPGKeysResponse contains keys.
+message ListGPGKeysResponse {
+  repeated GPGKey keys = 1;
+  PageInfo page = 2;
+}
+
+// DeleteGPGKeyRequest identifies a key.
+message DeleteGPGKeyRequest {
+  string id = 1;
+}
+
+// DeleteGPGKeyResponse is empty on success.
+message DeleteGPGKeyResponse {}
+
+// VerifyGPGKeyRequest carries the armored signature over the challenge.
+message VerifyGPGKeyRequest {
+  string id = 1;
+  string armored_signature = 2;
+}
+
+// VerifyGPGKeyResponse contains the key.
+message VerifyGPGKeyResponse {
+  GPGKey key = 1;
+}

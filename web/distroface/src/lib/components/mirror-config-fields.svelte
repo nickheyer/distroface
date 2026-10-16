@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import type { MirrorConfig } from '$lib/proto/distroface/v1/types_pb';
 
-	export type MirrorKind = 'github' | 'gitlab' | 'gitea' | 'oci';
+	export type MirrorKind = 'github' | 'gitlab' | 'gitea' | 'oci' | 'git';
 
 	export type MirrorForm = {
 		upstream: string;
@@ -142,6 +142,17 @@
 				depthUnit: 'tags',
 				depthHelp: 'Number of tags to keep, 0 for all',
 				syncTarget: 'the upstream'
+			},
+			git: {
+				upstreamLabel: 'Upstream repository',
+				upstreamPlaceholder: 'https://github.com/nickheyer/distroface.git',
+				upstreamHelp: 'https or ssh clone URL, owner/repo works for GitHub, GitLab, and Gitea',
+				tokenHelp: 'Sent as basic auth for private https upstreams',
+				patternLabel: 'Ref filter',
+				patternHelp: 'Glob over branch and tag names, empty mirrors all',
+				depthUnit: 'refs',
+				depthHelp: 'Ignored for git mirrors',
+				syncTarget: 'the upstream'
 			}
 		}[kind]
 	);
@@ -210,7 +221,7 @@
 		/>
 	</FormField>
 
-	{#if kind === 'oci'}
+	{#if kind === 'oci' || kind === 'git'}
 		<FormField label="Username" id="{idPrefix}-username">
 			<Input
 				id="{idPrefix}-username"
@@ -269,22 +280,24 @@
 		<Input id="{idPrefix}-pattern" bind:value={form.pattern} placeholder="*" class="font-mono text-sm" />
 	</FormField>
 
-	{#if kind !== 'oci'}
+	{#if kind !== 'oci' && kind !== 'git'}
 		<FormField label="Include prereleases" horizontal>
 			<Switch bind:checked={form.includePrereleases} />
 		</FormField>
 	{/if}
 
-	<div class="grid grid-cols-2 gap-3">
-		<FormField label="Sync depth" id="{idPrefix}-depth" help={depthHelp}>
-			<UnitInput
-				id="{idPrefix}-depth"
-				min={0}
-				max={depthCap > 0 ? depthCap : undefined}
-				unit={copy.depthUnit}
-				bind:value={form.syncDepth}
-			/>
-		</FormField>
+	<div class="grid gap-3 {kind === 'git' ? 'grid-cols-1' : 'grid-cols-2'}">
+		{#if kind !== 'git'}
+			<FormField label="Sync depth" id="{idPrefix}-depth" help={depthHelp}>
+				<UnitInput
+					id="{idPrefix}-depth"
+					min={0}
+					max={depthCap > 0 ? depthCap : undefined}
+					unit={copy.depthUnit}
+					bind:value={form.syncDepth}
+				/>
+			</FormField>
+		{/if}
 		<FormField
 			label="Sync interval"
 			id="{idPrefix}-interval"

@@ -162,6 +162,54 @@ func (c *Client) Repositories() distrofacev1connect.RepositoryServiceClient {
 	return distrofacev1connect.NewRepositoryServiceClient(c.rpc())
 }
 
+func (c *Client) Git() distrofacev1connect.GitServiceClient {
+	return distrofacev1connect.NewGitServiceClient(c.rpc())
+}
+
+func (c *Client) GitRefs() distrofacev1connect.GitRefServiceClient {
+	return distrofacev1connect.NewGitRefServiceClient(c.rpc())
+}
+
+func (c *Client) GitFiles() distrofacev1connect.GitFileServiceClient {
+	return distrofacev1connect.NewGitFileServiceClient(c.rpc())
+}
+
+func (c *Client) Releases() distrofacev1connect.ReleaseServiceClient {
+	return distrofacev1connect.NewReleaseServiceClient(c.rpc())
+}
+
+func (c *Client) Issues() distrofacev1connect.IssueServiceClient {
+	return distrofacev1connect.NewIssueServiceClient(c.rpc())
+}
+
+func (c *Client) Pulls() distrofacev1connect.PullRequestServiceClient {
+	return distrofacev1connect.NewPullRequestServiceClient(c.rpc())
+}
+
+func (c *Client) Keys() distrofacev1connect.KeyServiceClient {
+	return distrofacev1connect.NewKeyServiceClient(c.rpc())
+}
+
+func (c *Client) Organizations() distrofacev1connect.OrganizationServiceClient {
+	return distrofacev1connect.NewOrganizationServiceClient(c.rpc())
+}
+
+func (c *Client) APITokens() distrofacev1connect.TokenServiceClient {
+	return distrofacev1connect.NewTokenServiceClient(c.rpc())
+}
+
+func (c *Client) Actions() distrofacev1connect.ActionsServiceClient {
+	return distrofacev1connect.NewActionsServiceClient(c.rpc())
+}
+
+func (c *Client) Runner() distrofacev1connect.RunnerServiceClient {
+	return distrofacev1connect.NewRunnerServiceClient(c.rpc())
+}
+
+func (c *Client) Users() distrofacev1connect.UserServiceClient {
+	return distrofacev1connect.NewUserServiceClient(c.rpc())
+}
+
 // Bearer header plus proactive and reactive session refresh
 func (c *Client) authInterceptor() connect.ClientInterceptor {
 	return func(next connect.ClientFunc) connect.ClientFunc {

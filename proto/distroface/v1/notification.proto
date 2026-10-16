@@ -1,0 +1,159 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// NotificationService serves the caller's inbox and preferences.
+service NotificationService {
+  // ListNotifications pages the inbox.
+  rpc ListNotifications(ListNotificationsRequest) returns (ListNotificationsResponse) {}
+  // GetUnreadCount returns the unread total.
+  rpc GetUnreadCount(GetUnreadCountRequest) returns (GetUnreadCountResponse) {}
+  // MarkRead marks notifications read or unread.
+  rpc MarkRead(MarkReadRequest) returns (MarkReadResponse) {}
+  // MarkAllRead marks every unread notification read, optionally for one repository.
+  rpc MarkAllRead(MarkAllReadRequest) returns (MarkAllReadResponse) {}
+  // PinNotification pins or unpins a notification.
+  rpc PinNotification(PinNotificationRequest) returns (PinNotificationResponse) {}
+  // WatchNotifications streams unread count changes until the client disconnects.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  rpc WatchNotifications(WatchNotificationsRequest) returns (stream NotificationEvent) {}
+  // GetNotificationPrefs returns the caller's web and email preferences.
+  rpc GetNotificationPrefs(GetNotificationPrefsRequest) returns (GetNotificationPrefsResponse) {}
+  // UpdateNotificationPrefs changes the caller's preferences.
+  rpc UpdateNotificationPrefs(UpdateNotificationPrefsRequest) returns (UpdateNotificationPrefsResponse) {}
+}
+
+// Read state of a notification
+enum NotificationStatus {
+  NOTIFICATION_STATUS_UNSPECIFIED = 0;
+  NOTIFICATION_STATUS_UNREAD = 1;
+  NOTIFICATION_STATUS_READ = 2;
+  NOTIFICATION_STATUS_PINNED = 3;
+}
+
+// Which events are delivered
+enum NotificationMode {
+  NOTIFICATION_MODE_UNSPECIFIED = 0;
+  NOTIFICATION_MODE_ALL = 1;
+  NOTIFICATION_MODE_PARTICIPATING = 2;
+  NOTIFICATION_MODE_NONE = 3;
+}
+
+// Notification is one inbox entry.
+message Notification {
+  string id = 1;
+  string repo_full_name = 2;
+  // issue, pull, commit, release, repository, collaboration, transfer
+  string kind = 3;
+  // Issue or pull request number when applicable
+  int64 number = 4;
+  string title = 5;
+  // Last action such as commented, closed, merged, mentioned
+  string reason = 6;
+  string sha = 7;
+  NotificationStatus status = 8;
+  string updated_by = 9;
+  string html_url = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+// Streamed inbox update
+message NotificationEvent {
+  int64 unread_count = 1;
+  // Present when one notification changed
+  Notification notification = 2;
+}
+
+// Web and email delivery preferences
+message NotificationPrefs {
+  NotificationMode web_mode = 1;
+  NotificationMode email_mode = 2;
+  bool email_mentions = 3;
+  bool email_review_requests = 4;
+  bool email_assignments = 5;
+  bool email_own_activity = 6;
+}
+
+// ListNotificationsRequest pages the inbox.
+message ListNotificationsRequest {
+  PageRequest page = 1;
+  // Empty lists unread and pinned
+  NotificationStatus status = 2;
+  string repo_full_name = 3;
+  bool all = 4;
+}
+
+// ListNotificationsResponse contains a page of notifications.
+message ListNotificationsResponse {
+  repeated Notification notifications = 1;
+  PageInfo page = 2;
+  int64 unread_count = 3;
+}
+
+// GetUnreadCountRequest is empty.
+message GetUnreadCountRequest {}
+
+// GetUnreadCountResponse contains the unread total.
+message GetUnreadCountResponse {
+  int64 unread_count = 1;
+}
+
+// MarkReadRequest changes the read state of listed notifications.
+message MarkReadRequest {
+  repeated string ids = 1;
+  bool unread = 2;
+}
+
+// MarkReadResponse contains the unread total.
+message MarkReadResponse {
+  int64 unread_count = 1;
+}
+
+// MarkAllReadRequest marks everything read, or one repository.
+message MarkAllReadRequest {
+  string repo_full_name = 1;
+}
+
+// MarkAllReadResponse contains the unread total.
+message MarkAllReadResponse {
+  int64 unread_count = 1;
+}
+
+// PinNotificationRequest pins or unpins.
+message PinNotificationRequest {
+  string id = 1;
+  bool pinned = 2;
+}
+
+// PinNotificationResponse contains the notification.
+message PinNotificationResponse {
+  Notification notification = 1;
+}
+
+// WatchNotificationsRequest is empty.
+message WatchNotificationsRequest {}
+
+// GetNotificationPrefsRequest is empty.
+message GetNotificationPrefsRequest {}
+
+// GetNotificationPrefsResponse contains the preferences.
+message GetNotificationPrefsResponse {
+  NotificationPrefs prefs = 1;
+}
+
+// UpdateNotificationPrefsRequest replaces the preferences.
+message UpdateNotificationPrefsRequest {
+  NotificationPrefs prefs = 1;
+  // Signed token from an unsubscribe link, allows an unauthenticated call
+  string unsubscribe_token = 2;
+}
+
+// UpdateNotificationPrefsResponse contains the preferences.
+message UpdateNotificationPrefsResponse {
+  NotificationPrefs prefs = 1;
+}

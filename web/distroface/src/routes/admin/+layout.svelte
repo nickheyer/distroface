@@ -5,7 +5,7 @@
 	import type { Pathname } from '$app/types';
 	import { onMount } from 'svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
-	import { LayoutDashboard, Shield, ShieldCheck, Lock, Globe, ScrollText, HardDrive, HardDriveDownload, Users, Key, Ticket } from '@lucide/svelte';
+	import { LayoutDashboard, Shield, ShieldCheck, Lock, Globe, ScrollText, HardDrive, HardDriveDownload, Users, Key, Ticket, GitBranch, Mail, Cpu } from '@lucide/svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
 
 	let { children } = $props();
@@ -34,6 +34,13 @@
 			: []),
 		...(authStore.canReadSettings
 			? [{ href: '/admin/mirroring', label: 'Mirroring', icon: HardDriveDownload } satisfies NavItem]
+			: []),
+		...(authStore.canReadSettings
+			? [
+					{ href: '/admin/git', label: 'Git', icon: GitBranch } satisfies NavItem,
+					{ href: '/admin/mail', label: 'Mail', icon: Mail } satisfies NavItem,
+					{ href: '/admin/runners', label: 'Runners', icon: Cpu } satisfies NavItem
+				]
 			: []),
 		...(authStore.canReadUsers
 			? [{ href: '/admin/users', label: 'Users', icon: Users } satisfies NavItem]

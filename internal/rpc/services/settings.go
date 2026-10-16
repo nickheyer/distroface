@@ -12,6 +12,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/settings"
@@ -27,11 +28,13 @@ type SettingsService struct {
 	store    *stores.Store
 	resolver *settings.Resolver
 	enforcer *rbac.Enforcer
+	git      *gitrepo.Manager
+	ssh      *gitrepo.SSHManager // Nil when git over ssh is not wired
 	log      *logger.Logger
 }
 
-func NewSettingsService(store *stores.Store, resolver *settings.Resolver, enforcer *rbac.Enforcer, log *logger.Logger) *SettingsService {
-	return &SettingsService{store: store, resolver: resolver, enforcer: enforcer, log: log}
+func NewSettingsService(store *stores.Store, resolver *settings.Resolver, enforcer *rbac.Enforcer, git *gitrepo.Manager, ssh *gitrepo.SSHManager, log *logger.Logger) *SettingsService {
+	return &SettingsService{store: store, resolver: resolver, enforcer: enforcer, log: log, git: git, ssh: ssh}
 }
 
 func (s *SettingsService) isSystemAdmin(ctx context.Context) bool {
@@ -43,11 +46,39 @@ func (s *SettingsService) isSystemAdmin(ctx context.Context) bool {
 	return allowed
 }
 
+// Repository tier access, admin level for writes and visibility for reads
+func (s *SettingsService) requireRepoScope(ctx context.Context, user *auth.AuthenticatedUser, repoID string, write bool) error {
+	if repoID == "" {
+		return connect.Errorf(connect.CodeInvalidArgument, "scope_id required")
+	}
+	if s.git == nil {
+		return connect.Errorf(connect.CodeNotFound, "repository not found")
+	}
+	repo, err := s.store.GetGitRepositoryByID(ctx, repoID)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	if repo == nil || !s.git.Access().CanSee(ctx, user, repo) {
+		return connect.Errorf(connect.CodeNotFound, "repository not found")
+	}
+	if s.isSystemAdmin(ctx) {
+		return nil
+	}
+	levels := s.git.Access().Levels(ctx, user, repo)
+	if write && !levels.CanAdmin && !levels.IsOwner {
+		return connect.NewError(connect.CodePermissionDenied, "")
+	}
+	return nil
+}
+
 // Write access, org and portal scopes need an org admin
 func (s *SettingsService) requireScopeAdmin(ctx context.Context, scope *v1.SettingsScope) error {
 	user := auth.UserFromContext(ctx)
 	if user == nil || user.IsAnonymous() {
 		return connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	if scope.GetType() == v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO {
+		return s.requireRepoScope(ctx, user, scope.GetScopeId(), true)
 	}
 	orgID, err := s.scopeOrgID(ctx, scope)
 	if err != nil {
@@ -74,6 +105,9 @@ func (s *SettingsService) requireScopeRead(ctx context.Context, scope *v1.Settin
 	user := auth.UserFromContext(ctx)
 	if user == nil || user.IsAnonymous() {
 		return connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	if scope.GetType() == v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO {
+		return s.requireRepoScope(ctx, user, scope.GetScopeId(), false)
 	}
 	orgID, err := s.scopeOrgID(ctx, scope)
 	if err != nil {
@@ -108,6 +142,15 @@ func (s *SettingsService) scopeOrgID(ctx context.Context, scope *v1.SettingsScop
 			return "", connect.Errorf(connect.CodeNotFound, "portal not found")
 		}
 		return orgID, nil
+	case v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO:
+		if scope.GetScopeId() == "" {
+			return "", connect.Errorf(connect.CodeInvalidArgument, "scope_id required")
+		}
+		orgID, err := s.store.GetGitRepoOrgID(ctx, scope.GetScopeId())
+		if err != nil {
+			return "", connect.Errorf(connect.CodeNotFound, "repository not found")
+		}
+		return orgID, nil
 	default:
 		return "", connect.Errorf(connect.CodeInvalidArgument, "scope type required")
 	}
@@ -123,6 +166,12 @@ func publicSubset(ctx context.Context, eff *v1.Settings) *v1.Settings {
 			LocalAllowRegistration: proto.Bool(eff.GetAuth().GetLocalAllowRegistration()),
 			AnonymousAccess:        proto.Bool(portal.AnonymousAllowed(ctx, eff.GetAuth().GetAnonymousAccess())),
 			Oidc:                   &v1.OIDCSettings{Enabled: proto.Bool(eff.GetAuth().GetOidc().GetEnabled())},
+		},
+		Git: &v1.GitSettings{
+			Enabled:       proto.Bool(eff.GetGit().GetEnabled()),
+			SshEnabled:    proto.Bool(eff.GetGit().GetSshEnabled()),
+			SshPort:       proto.Int32(eff.GetGit().GetSshPort()),
+			SshPublicHost: proto.String(eff.GetGit().GetSshPublicHost()),
 		},
 	}
 }
@@ -188,6 +237,9 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, req *v1.UpdateSett
 	if err := s.checkDirectoryNotSelf(ctx, patch); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
+	if err := s.checkSSHPortBinds(ctx, scope, patch, req.GetUpdateMask().GetPaths()); err != nil {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
+	}
 
 	stored, err := s.resolver.Update(ctx, scope.GetType(), scope.GetScopeId(), patch, req.GetUpdateMask().GetPaths())
 	if err != nil {
@@ -211,6 +263,68 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, req *v1.UpdateSett
 		Stored:    &v1.GetSettingsResponse{Settings: storedOut, LockedPaths: s.resolver.LockedPaths()},
 		Effective: &v1.GetEffectiveSettingsResponse{Settings: effOut, Provenance: prov},
 	}, nil
+}
+
+// Ssh settings only save when the resulting port binds on this host
+func (s *SettingsService) checkSSHPortBinds(ctx context.Context, scope *v1.SettingsScope, patch *v1.Settings, paths []string) error {
+	if scope.GetType() != v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM || s.ssh == nil {
+		return nil
+	}
+	touched := false
+	for _, p := range paths {
+		if p == "git" || p == "git.ssh_enabled" || p == "git.ssh_port" || p == "git.enabled" {
+			touched = true
+			break
+		}
+	}
+	if !touched {
+		return nil
+	}
+	eff := s.resolver.System(ctx).GetGit()
+	enabled := eff.GetEnabled()
+	sshOn := eff.GetSshEnabled()
+	port := int(eff.GetSshPort())
+	if g := patch.GetGit(); g != nil {
+		if g.Enabled != nil {
+			enabled = *g.Enabled
+		}
+		if g.SshEnabled != nil {
+			sshOn = *g.SshEnabled
+		}
+		if g.SshPort != nil {
+			port = int(*g.SshPort)
+		}
+	}
+	if !enabled || !sshOn {
+		return nil
+	}
+	if _, err := s.ssh.Probe(port); err != nil {
+		return fmt.Errorf("git ssh not saved: %v", err)
+	}
+	return nil
+}
+
+func (s *SettingsService) ProbeGitSSHPort(ctx context.Context, req *v1.ProbeGitSSHPortRequest) (*v1.ProbeGitSSHPortResponse, error) {
+	if err := s.requireScopeAdmin(ctx, &v1.SettingsScope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM}); err != nil {
+		return nil, err
+	}
+	port := int(req.GetPort())
+	if port == 0 {
+		port = int(s.resolver.System(ctx).GetGit().GetSshPort())
+	}
+	out := &v1.ProbeGitSSHPortResponse{Port: int32(port)}
+	if s.ssh == nil {
+		out.Message = "git over ssh is not available on this instance"
+		return out, nil
+	}
+	listening, err := s.ssh.Probe(port)
+	out.Listening = listening
+	if err != nil {
+		out.Message = err.Error()
+		return out, nil
+	}
+	out.Ok = true
+	return out, nil
 }
 
 // An acme client pointed at this instance dials itself
@@ -241,6 +355,23 @@ func validateSettingsPatch(patch *v1.Settings) error {
 		}
 		if a.TokenExpirySeconds != nil && *a.TokenExpirySeconds < 60 {
 			return fmt.Errorf("token expiry must be at least 60 seconds")
+		}
+	}
+	if g := patch.GetGit(); g != nil {
+		if g.SshPort != nil && (*g.SshPort < 1 || *g.SshPort > 65535) {
+			return fmt.Errorf("ssh port must be between 1 and 65535")
+		}
+		if g.SshPublicHost != nil && *g.SshPublicHost != "" {
+			host := *g.SshPublicHost
+			if h, p, err := net.SplitHostPort(host); err == nil {
+				host = h
+				if n, err := strconv.Atoi(p); err != nil || n < 1 || n > 65535 {
+					return fmt.Errorf("ssh public host port must be between 1 and 65535")
+				}
+			}
+			if strings.ContainsAny(host, "/ \t") {
+				return fmt.Errorf("ssh public host must be a host or host:port")
+			}
 		}
 	}
 	if acme := patch.GetAcme(); acme != nil && acme.ChallengePort != nil && *acme.ChallengePort != "" {

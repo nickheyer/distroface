@@ -16,6 +16,8 @@ type Store interface {
 	SetSettingsValue(ctx context.Context, scope v1.SettingsScopeType, scopeID, value string) error
 	DeleteSettingsValue(ctx context.Context, scope v1.SettingsScopeType, scopeID string) error
 	GetPortalOrgID(ctx context.Context, portalID string) (string, error)
+	// Org id owning a git repository, empty for user namespaces
+	GetGitRepoOrgID(ctx context.Context, repoID string) (string, error)
 }
 
 type scopeKey struct {
@@ -32,6 +34,7 @@ type Resolver struct {
 	mu        sync.RWMutex
 	rows      map[scopeKey]*v1.Settings
 	portalOrg map[string]string
+	repoOrg   map[string]string
 	subs      []func()
 }
 
@@ -41,6 +44,7 @@ func NewResolver(store Store, fileOverrides *v1.Settings) *Resolver {
 		overrides: fileOverrides,
 		rows:      map[scopeKey]*v1.Settings{},
 		portalOrg: map[string]string{},
+		repoOrg:   map[string]string{},
 	}
 	if fileOverrides != nil {
 		r.locked = setLeafPaths(fileOverrides)
@@ -65,6 +69,7 @@ func (r *Resolver) Invalidate() {
 	r.mu.Lock()
 	r.rows = map[scopeKey]*v1.Settings{}
 	r.portalOrg = map[string]string{}
+	r.repoOrg = map[string]string{}
 	r.mu.Unlock()
 }
 
@@ -135,6 +140,32 @@ func (r *Resolver) orgForPortal(ctx context.Context, portalID string) (string, e
 	return orgID, nil
 }
 
+func (r *Resolver) orgForRepo(ctx context.Context, repoID string) (string, error) {
+	r.mu.RLock()
+	orgID, ok := r.repoOrg[repoID]
+	r.mu.RUnlock()
+	if ok {
+		return orgID, nil
+	}
+	orgID, err := r.store.GetGitRepoOrgID(ctx, repoID)
+	if err != nil {
+		return "", err
+	}
+	r.mu.Lock()
+	r.repoOrg[repoID] = orgID
+	r.mu.Unlock()
+	return orgID, nil
+}
+
+// Repo resolves the repository tier falling back to system on lookup failure
+func (r *Resolver) Repo(ctx context.Context, repoID string) *v1.Settings {
+	eff, _, err := r.Effective(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, repoID)
+	if err != nil {
+		return r.System(ctx)
+	}
+	return eff
+}
+
 // Effective resolves the full chain for a scope with provenance
 func (r *Resolver) Effective(ctx context.Context, scope v1.SettingsScopeType, scopeID string) (*v1.Settings, []*v1.FieldProvenance, error) {
 	type tierRow struct {
@@ -172,6 +203,23 @@ func (r *Resolver) Effective(ctx context.Context, scope v1.SettingsScopeType, sc
 		chain = append(chain,
 			tierRow{org, v1.SettingsTier_SETTINGS_TIER_ORG},
 			tierRow{portal, v1.SettingsTier_SETTINGS_TIER_PORTAL})
+	case v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO:
+		orgID, err := r.orgForRepo(ctx, scopeID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if orgID != "" {
+			org, err := r.Stored(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, orgID)
+			if err != nil {
+				return nil, nil, err
+			}
+			chain = append(chain, tierRow{org, v1.SettingsTier_SETTINGS_TIER_ORG})
+		}
+		repo, err := r.Stored(ctx, scope, scopeID)
+		if err != nil {
+			return nil, nil, err
+		}
+		chain = append(chain, tierRow{repo, v1.SettingsTier_SETTINGS_TIER_REPO})
 	}
 
 	eff := proto.Clone(Defaults()).(*v1.Settings)

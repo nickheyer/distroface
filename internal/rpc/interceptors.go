@@ -377,7 +377,7 @@ func portalAllowsProcedure(ctx context.Context, procedure string) error {
 		return nil
 	}
 	perm, ok := rbac.ProcedurePermissions[procedure]
-	if !ok || (perm.Resource != rbac.ResourceArtifacts && perm.Resource != rbac.ResourceRepositories) {
+	if !ok || (perm.Resource != rbac.ResourceArtifacts && perm.Resource != rbac.ResourceRepositories && perm.Resource != rbac.ResourceGit) {
 		return nil
 	}
 	if perm.Action == rbac.ActionRead || perm.Action == rbac.ActionPull {

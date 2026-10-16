@@ -31,6 +31,7 @@
 		LogIn,
 		LogOut,
 		Package,
+		GitBranch,
 		Settings,
 		Building2,
 		User,
@@ -45,12 +46,17 @@
 	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import CliSetupPrompt from '$lib/components/cli-setup-prompt.svelte';
+	import NotificationBell from '$lib/components/git/notification-bell.svelte';
 
 	let { children } = $props();
 	let initialized = $state(false);
 	let mobileMenuOpen = $state(false);
 
 	const isLoginPage = $derived(page.url.pathname === '/login');
+	// Mailed link pages render bare, no sign in redirect
+	const isAuthPage = $derived(
+		isLoginPage || /^\/(forgot-password|reset-password|verify-email)(\/|$)/.test(page.url.pathname)
+	);
 	const isChangePasswordPage = $derived(page.url.pathname === '/change-password');
 
 	function getUserInitials(user: typeof authStore.user): string {
@@ -65,8 +71,9 @@
 	}
 
 	function isActive(path: string): boolean {
-		if (path === '/') return page.url.pathname === '/';
-		return page.url.pathname.startsWith(path);
+		const current = page.url.pathname;
+		if (path === '/') return current === '/' || current.startsWith('/images');
+		return current.startsWith(path);
 	}
 
 	onMount(async () => {
@@ -75,13 +82,13 @@
 		await portalStore.init();
 		initialized = true;
 
-		if (!isLoginPage && authStore.firstUserSetup) {
+		if (!isAuthPage && authStore.firstUserSetup) {
 			goto(resolve('/login'));
 			return;
 		}
 
 		if (
-			!isLoginPage &&
+			!isAuthPage &&
 			!authStore.isAuthenticated &&
 			!authStore.anonymousAccessEnabled &&
 			authStore.authStatusLoaded
@@ -100,6 +107,7 @@
 	const navLinks: NavLink[] = $derived([
 		{ href: '/', label: 'Images', icon: Package },
 		{ href: '/artifacts', label: 'Artifacts', icon: Archive },
+		...(configStore.gitEnabled ? [{ href: '/git', label: 'Git', icon: GitBranch } satisfies NavLink] : []),
 		...(authStore.isAuthenticated && !portalStore.isPortal
 			? [{ href: '/orgs', label: 'Organizations', icon: Building2 } satisfies NavLink]
 			: []),
@@ -139,7 +147,7 @@
 <LoadingBar />
 <Toaster position="bottom-center" expand={true} richColors />
 
-{#if isLoginPage || isChangePasswordPage}
+{#if isAuthPage || isChangePasswordPage}
 	{@render children?.()}
 {:else if !initialized}
 	<div class="flex h-screen flex-col items-center justify-center gap-3">
@@ -197,6 +205,10 @@
 							<Sun class="h-4 w-4 text-muted-foreground" />
 						{/if}
 					</Button>
+
+					{#if authStore.isAuthenticated && configStore.gitEnabled}
+						<NotificationBell />
+					{/if}
 
 					{#if authStore.isAuthenticated && authStore.user}
 						<DropdownMenu>

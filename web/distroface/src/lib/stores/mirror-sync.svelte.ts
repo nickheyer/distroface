@@ -24,8 +24,15 @@ class MirrorSyncStore {
 		this.abort?.abort();
 	}
 
-	syncing(kind: 'image' | 'artifact', repoId: string | number | bigint): boolean {
+	syncing(kind: 'image' | 'artifact' | 'git' | 'git_push' | 'import', repoId: string | number | bigint): boolean {
 		return !!this.active[`${kind}:${repoId}`];
+	}
+
+	// Latest progress line per active sync, imports report phases
+	messages = $state<Record<string, string>>({});
+
+	message(kind: 'git' | 'git_push' | 'import', repoId: string): string {
+		return this.messages[`${kind}:${repoId}`] ?? '';
 	}
 
 	private async loop() {
@@ -55,8 +62,10 @@ class MirrorSyncStore {
 		const key = `${ev.kind}:${ev.repoId}`;
 		if (ev.phase === SyncPhase.STARTED) {
 			this.active[key] = true;
+			if (ev.message) this.messages[key] = ev.message;
 		} else if (ev.phase === SyncPhase.COMPLETED || ev.phase === SyncPhase.FAILED) {
 			delete this.active[key];
+			delete this.messages[key];
 			this.lastFinished = ev;
 			this.finishedSeq++;
 		}

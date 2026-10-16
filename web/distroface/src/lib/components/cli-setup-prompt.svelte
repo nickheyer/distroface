@@ -39,6 +39,7 @@
 	const dfcliLoginExample = $derived(
 		`dfcli --server ${portalStore.scheme()}://${registryHost} \\\n  login --token ${newPlaintextToken ?? 'YOUR_TOKEN'}`
 	);
+	const gitCredentialExample = 'git config --global credential.helper "dfcli git credential"';
 
 	function storageKey(userId: string): string {
 		return `df_cli_prompt_${userId}`;
@@ -156,6 +157,17 @@
 						</div>
 						<pre class="px-4 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all select-all">{dfcliLoginExample}</pre>
 					</div>
+
+					{#if configStore.gitEnabled}
+						<div class="rounded-lg border border-border/50 bg-muted/30 overflow-hidden">
+							<div class="flex items-center gap-2 px-3 py-1.5 border-b border-border/40">
+								<Terminal class="h-3.5 w-3.5 text-muted-foreground" />
+								<span class="flex-1 text-xs font-medium text-muted-foreground">Let git use the dfcli login</span>
+								<CopyButton text={gitCredentialExample} label="Command copied!" />
+							</div>
+							<pre class="px-4 py-3 font-mono text-xs leading-relaxed whitespace-pre-wrap break-all select-all">{gitCredentialExample}</pre>
+						</div>
+					{/if}
 				{:else}
 					<p class="text-sm text-muted-foreground">
 						Tools like docker can't authenticate in a browser via SSO.

@@ -1,0 +1,334 @@
+<script lang="ts">
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import { goto } from '$app/navigation';
+	import { CircleDot, CircleCheck, Lock, Pencil, Blocks, Pin, MoreHorizontal, Link2, ArrowLeft } from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Input } from '$lib/components/ui/input';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '$lib/components/ui/dropdown-menu';
+	import EmptyState from '$lib/components/empty-state.svelte';
+	import Markdown from '$lib/components/git/markdown.svelte';
+	import CommentBox from '$lib/components/git/comment-box.svelte';
+	import ReactionBar from '$lib/components/git/reaction-bar.svelte';
+	import Timeline from '$lib/components/git/timeline.svelte';
+	import IssueSidebar from '$lib/components/git/issue-sidebar.svelte';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
+	import { authStore } from '$lib/stores/auth.svelte';
+	import { GitUnit } from '$lib/proto/distroface/v1/git_pb';
+	import { IssueState, type Issue, type Comment } from '$lib/proto/distroface/v1/issue_pb';
+	import { relativeTime } from '$lib/utils';
+	import { timestampDate } from '@bufbuild/protobuf/wkt';
+	import { toast } from 'svelte-sonner';
+
+	const repo = $derived(gitRepoStore.repo!);
+	const namespace = $derived(repo.namespace);
+	const name = $derived(repo.name);
+	const base = $derived(`/${namespace}/${name}`);
+	const number = $derived(Number(page.params.number ?? 0));
+
+	let issue = $state<Issue | undefined>();
+	let notFound = $state(false);
+	let comments = $state<Comment[]>([]);
+	let nextToken = $state('');
+	let commentsLoading = $state(false);
+	let loadedFor = $state(0);
+
+	const viewerId = $derived(authStore.user?.id ?? '');
+	const isAuthor = $derived(!!issue && !!viewerId && issue.author?.id === viewerId);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.ISSUES) && !repo.isArchived);
+	const canEditIssue = $derived(canWrite || (isAuthor && !repo.isArchived));
+	const canComment = $derived(
+		authStore.isAuthenticated && gitRepoStore.canRead(GitUnit.ISSUES) && !repo.isArchived && (!issue?.locked || canWrite)
+	);
+
+	async function loadIssue() {
+		try {
+			const resp = await rpcClient.issue.getIssue({ namespace, name, number: BigInt(number) }, silentCallOptions);
+			issue = resp.issue;
+			notFound = !issue;
+			if (issue?.isPull) {
+				await goto(resolve('/[namespace]/[name]/pulls/[number]', { namespace, name, number: String(number) }), { replaceState: true });
+			}
+		} catch {
+			issue = undefined;
+			notFound = true;
+		}
+	}
+
+	async function loadComments(reset = true) {
+		commentsLoading = true;
+		try {
+			const resp = await rpcClient.issue.listComments(
+				{ namespace, name, number: BigInt(number), page: { pageSize: 50, pageToken: reset ? '' : nextToken, orderBy: '' } },
+				silentCallOptions
+			);
+			comments = reset ? resp.comments : [...comments, ...resp.comments];
+			nextToken = resp.page?.nextPageToken ?? '';
+		} catch {
+			if (reset) comments = [];
+		} finally {
+			commentsLoading = false;
+		}
+	}
+
+	function refresh() {
+		loadIssue();
+		loadComments();
+	}
+
+	$effect(() => {
+		if (!number || loadedFor === number) return;
+		loadedFor = number;
+		issue = undefined;
+		notFound = false;
+		gitRepoStore.load(namespace, name);
+		refresh();
+	});
+
+	// Title editing
+	let editingTitle = $state(false);
+	let titleDraft = $state('');
+	let savingTitle = $state(false);
+
+	async function saveTitle() {
+		if (!issue || !titleDraft.trim() || savingTitle) return;
+		if (titleDraft.trim() === issue.title) {
+			editingTitle = false;
+			return;
+		}
+		savingTitle = true;
+		try {
+			const resp = await rpcClient.issue.updateIssue({ namespace, name, number: issue.number, title: titleDraft.trim() });
+			if (resp.issue) issue = resp.issue;
+			editingTitle = false;
+			loadComments();
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			savingTitle = false;
+		}
+	}
+
+	// Body editing
+	let editingBody = $state(false);
+	let bodyDraft = $state('');
+	let savingBody = $state(false);
+
+	async function saveBody() {
+		if (!issue || savingBody) return;
+		savingBody = true;
+		try {
+			const resp = await rpcClient.issue.updateIssue({ namespace, name, number: issue.number, body: bodyDraft });
+			if (resp.issue) issue = resp.issue;
+			editingBody = false;
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			savingBody = false;
+		}
+	}
+
+	// New comment and state changes
+	let draft = $state('');
+	let posting = $state(false);
+
+	async function postComment() {
+		if (!issue || !draft.trim() || posting) return;
+		posting = true;
+		try {
+			await rpcClient.issue.createComment({ namespace, name, number: issue.number, body: draft });
+			draft = '';
+			refresh();
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			posting = false;
+		}
+	}
+
+	async function setState(state: IssueState) {
+		if (!issue || posting) return;
+		posting = true;
+		try {
+			if (draft.trim()) {
+				await rpcClient.issue.createComment({ namespace, name, number: issue.number, body: draft });
+				draft = '';
+			}
+			const resp = await rpcClient.issue.updateIssue({ namespace, name, number: issue.number, state });
+			if (resp.issue) issue = resp.issue;
+			toast.success(state === IssueState.CLOSED ? 'Issue closed' : 'Issue reopened');
+			loadComments();
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			posting = false;
+		}
+	}
+
+	function copyLink() {
+		navigator.clipboard?.writeText(`${location.origin}${resolve('/[namespace]/[name]/issues/[number]', { namespace, name, number: String(number) })}`).then(() => toast.success('Link copied'));
+	}
+
+	const isOpen = $derived(issue?.state !== IssueState.CLOSED);
+	const knownUsers = $derived(issue ? [...issue.assignees, ...(issue.author ? [issue.author] : []), ...(issue.closedBy ? [issue.closedBy] : [])] : []);
+</script>
+
+{#if notFound}
+	<EmptyState icon={CircleDot} message="Issue not found" description="#{number} does not exist in this repository or you cannot see it.">
+		{#snippet actions()}
+			<Button variant="outline" size="sm" href="{base}/issues"><ArrowLeft class="h-3.5 w-3.5 mr-1.5" />Back to issues</Button>
+		{/snippet}
+	</EmptyState>
+{:else if !issue}
+	<div class="space-y-4">
+		<Skeleton class="h-8 w-2/3" />
+		<Skeleton class="h-4 w-1/3" />
+		<Skeleton class="h-40 w-full rounded-xl" />
+	</div>
+{:else}
+	<div class="space-y-5">
+		<header class="space-y-2">
+			{#if editingTitle}
+				<div class="flex flex-col sm:flex-row sm:items-center gap-2">
+					<Input bind:value={titleDraft} class="flex-1" aria-label="Issue title" onkeydown={(e) => { if (e.key === 'Enter') saveTitle(); if (e.key === 'Escape') editingTitle = false; }} autofocus />
+					<div class="flex items-center gap-2 justify-end">
+						<Button size="sm" variant="outline" class="h-8" onclick={() => (editingTitle = false)}>Cancel</Button>
+						<Button size="sm" class="h-8" onclick={saveTitle} disabled={savingTitle || !titleDraft.trim()}>{savingTitle ? 'Saving...' : 'Save'}</Button>
+					</div>
+				</div>
+			{:else}
+				<div class="flex items-start gap-3">
+					<h1 class="text-xl sm:text-2xl font-semibold tracking-tight leading-snug flex-1 min-w-0 break-words">
+						{issue.title} <span class="text-muted-foreground font-normal">#{issue.number}</span>
+					</h1>
+					{#if issue.pinned}<Pin class="h-4 w-4 text-muted-foreground mt-1.5 shrink-0" aria-label="Pinned" />{/if}
+					{#if canEditIssue}
+						<Button variant="outline" size="sm" class="h-8 shrink-0" onclick={() => { titleDraft = issue!.title; editingTitle = true; }}><Pencil class="h-3.5 w-3.5 mr-1.5" />Edit</Button>
+					{/if}
+					<DropdownMenu>
+						<DropdownMenuTrigger>
+							{#snippet child({ props })}
+								<Button {...props} variant="outline" size="icon" class="h-8 w-8 shrink-0" aria-label="More"><MoreHorizontal class="h-3.5 w-3.5" /></Button>
+							{/snippet}
+						</DropdownMenuTrigger>
+						<DropdownMenuContent align="end" class="w-40">
+							<DropdownMenuItem onclick={copyLink}><Link2 class="h-3.5 w-3.5 mr-2" />Copy link</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+				</div>
+			{/if}
+			<div class="flex flex-wrap items-center gap-2 text-[13px] text-muted-foreground">
+				{#if isOpen}
+					<Badge class="bg-success text-white border-transparent gap-1 h-6"><CircleDot class="h-3.5 w-3.5" />Open</Badge>
+				{:else}
+					<Badge class="bg-purple-600 text-white border-transparent gap-1 h-6"><CircleCheck class="h-3.5 w-3.5" />Closed</Badge>
+				{/if}
+				{#if issue.author}
+					<a href={resolve('/[namespace]', { namespace: issue.author.username })} class="font-medium text-foreground hover:text-primary">{issue.author.username}</a>
+				{/if}
+				<span>opened this issue{#if issue.createdAt} <span title={timestampDate(issue.createdAt).toLocaleString()}>{relativeTime(timestampDate(issue.createdAt))}</span>{/if}</span>
+				<span class="text-muted-foreground/60">/</span>
+				<span>{issue.commentCount} comment{issue.commentCount === 1 ? '' : 's'}</span>
+				{#if !isOpen && issue.closedBy}
+					<span class="text-muted-foreground/60">/</span>
+					<span>closed by <a href={resolve('/[namespace]', { namespace: issue.closedBy.username })} class="hover:text-primary">{issue.closedBy.username}</a>{#if issue.closedAt} {relativeTime(timestampDate(issue.closedAt))}{/if}</span>
+				{/if}
+			</div>
+		</header>
+
+		{#if issue.locked}
+			<div class="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-[13px]">
+				<Lock class="h-4 w-4 text-muted-foreground" />
+				<span>This conversation has been locked{#if issue.lockReason}&#32;as <strong>{issue.lockReason}</strong>{/if} and limited to collaborators with write access.</span>
+			</div>
+		{/if}
+		{#if issue.blocked}
+			<div class="flex items-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[13px]">
+				<Blocks class="h-4 w-4 text-amber-600 dark:text-amber-400" />
+				<span>This issue is blocked by open dependencies and cannot be closed until they are resolved.</span>
+			</div>
+		{/if}
+
+		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_16rem]">
+			<div class="space-y-4 min-w-0">
+				<div class="rounded-xl border border-border/60 bg-card overflow-hidden">
+					<div class="flex items-center gap-2 px-4 py-2 border-b border-border/50 bg-muted/20 text-[12.5px] text-muted-foreground">
+						<span class="h-5 w-5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold inline-flex items-center justify-center shrink-0">{(issue.author?.username ?? '?').charAt(0).toUpperCase()}</span>
+						{#if issue.author}<a href={resolve('/[namespace]', { namespace: issue.author.username })} class="font-medium text-foreground hover:text-primary">{issue.author.username}</a>{/if}
+						<span>opened</span>
+						{#if issue.createdAt}<span title={timestampDate(issue.createdAt).toLocaleString()}>{relativeTime(timestampDate(issue.createdAt))}</span>{/if}
+						{#if issue.updatedAt && issue.createdAt && timestampDate(issue.updatedAt).getTime() - timestampDate(issue.createdAt).getTime() > 60000}
+							<span class="text-muted-foreground/70">(edited)</span>
+						{/if}
+						{#if canEditIssue && !editingBody}
+							<div class="ml-auto">
+								<Button variant="ghost" size="icon" class="h-6 w-6" title="Edit description" onclick={() => { bodyDraft = issue!.body; editingBody = true; }}><Pencil class="h-3.5 w-3.5" /></Button>
+							</div>
+						{/if}
+					</div>
+					<div class="px-4 py-3 text-sm">
+						{#if editingBody}
+							<CommentBox bind:value={bodyDraft} submitLabel="Update" submitting={savingBody} onSubmit={saveBody} autofocus>
+								{#snippet extra()}
+									<Button variant="outline" size="sm" class="h-8" onclick={() => (editingBody = false)}>Cancel</Button>
+								{/snippet}
+							</CommentBox>
+						{:else if issue.body.trim()}
+							<Markdown source={issue.body} />
+						{:else}
+							<p class="text-muted-foreground italic">No description provided.</p>
+						{/if}
+					</div>
+					{#if !editingBody && (issue.reactions.some((r) => r.count > 0) || canComment)}
+						<div class="px-4 pb-3">
+							<ReactionBar {namespace} {name} {number} reactions={issue.reactions} canReact={canComment} onChanged={loadIssue} />
+						</div>
+					{/if}
+				</div>
+
+				<Timeline {namespace} {name} {number} items={comments} {canComment} canModerate={canWrite} loading={commentsLoading && comments.length === 0} onChanged={refresh} {knownUsers} />
+
+				{#if nextToken}
+					<div class="flex justify-center">
+						<Button variant="outline" size="sm" onclick={() => loadComments(false)} disabled={commentsLoading}>{commentsLoading ? 'Loading...' : 'Load more'}</Button>
+					</div>
+				{/if}
+
+				{#if canComment}
+					<div class="pt-2 border-t border-border/50">
+						<CommentBox bind:value={draft} submitting={posting} onSubmit={postComment}>
+							{#snippet extra()}
+								{#if canEditIssue}
+									{#if isOpen}
+										<Button variant="outline" size="sm" class="h-8" onclick={() => setState(IssueState.CLOSED)} disabled={posting || issue?.blocked}>
+											<CircleCheck class="h-3.5 w-3.5 mr-1.5 text-purple-500" />{draft.trim() ? 'Close with comment' : 'Close issue'}
+										</Button>
+									{:else}
+										<Button variant="outline" size="sm" class="h-8" onclick={() => setState(IssueState.OPEN)} disabled={posting}>
+											<CircleDot class="h-3.5 w-3.5 mr-1.5 text-success" />{draft.trim() ? 'Reopen with comment' : 'Reopen issue'}
+										</Button>
+									{/if}
+								{/if}
+							{/snippet}
+						</CommentBox>
+					</div>
+				{:else if !authStore.isAuthenticated}
+					<p class="text-[13px] text-muted-foreground text-center py-3"><a href={resolve('/login')} class="text-primary hover:underline">Sign in</a> to join the conversation.</p>
+				{:else if issue.locked}
+					<p class="text-[13px] text-muted-foreground text-center py-3 inline-flex items-center gap-1.5 w-full justify-center"><Lock class="h-3.5 w-3.5" />Locked, only writers can comment.</p>
+				{/if}
+			</div>
+
+			<aside>
+				<IssueSidebar {namespace} {name} bind:issue canWrite={canWrite} canModerate={canWrite} onChanged={refresh} />
+			</aside>
+		</div>
+	</div>
+{/if}
+
+<svelte:head>
+	<title>{issue ? `${issue.title} #${issue.number}` : `#${number}`} - {namespace}/{name}</title>
+</svelte:head>
