@@ -29,12 +29,17 @@ type Config struct {
 	Images      map[string]string `json:"images"`
 	Concurrency int               `json:"concurrency"`
 	HostEnabled bool              `json:"host_enabled"`
-	WorkDir     string            `json:"work_dir,omitempty"`
-	DockerHost  string            `json:"docker_host,omitempty"`
+	// Jobs may mount the docker socket, run privileged, and bind host paths
+	PrivilegedJobs bool   `json:"privileged_jobs,omitempty"`
+	WorkDir        string `json:"work_dir,omitempty"`
+	DockerHost     string `json:"docker_host,omitempty"`
 }
 
-// Lives at ~/.dfcli/runner.json
+// Lives at ~/.dfcli/runner.json unless DFCLI_RUNNER_CONFIG names another file
 func DefaultPath() string {
+	if p := os.Getenv("DFCLI_RUNNER_CONFIG"); p != "" {
+		return p
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		home = "."
@@ -134,10 +139,13 @@ func (c *Config) FallbackImage() string {
 	return DefaultImage
 }
 
-// Parent of every job directory
+// Parent of every job directory, DFCLI_RUNNER_WORK_DIR when the config has none
 func (c *Config) JobRoot() string {
 	if c.WorkDir != "" {
 		return c.WorkDir
+	}
+	if p := os.Getenv("DFCLI_RUNNER_WORK_DIR"); p != "" {
+		return p
 	}
 	return filepath.Join(os.TempDir(), "dfcli-runner")
 }

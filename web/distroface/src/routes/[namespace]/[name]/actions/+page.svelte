@@ -364,7 +364,7 @@ jobs:
 					{#if selectedWorkflow.error}
 						<div class="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-[12.5px] flex items-start gap-2">
 							<AlertCircle class="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-							<div class="min-w-0 break-words"><span class="font-medium">This workflow file does not parse.</span> <span class="font-mono text-muted-foreground">{selectedWorkflow.error}</span></div>
+							<div class="min-w-0 wrap-break-word"><span class="font-medium">This workflow file does not parse.</span> <span class="font-mono text-muted-foreground">{selectedWorkflow.error}</span></div>
 						</div>
 					{/if}
 				{/if}

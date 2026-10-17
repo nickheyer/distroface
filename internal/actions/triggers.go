@@ -36,6 +36,7 @@ type triggerInput struct {
 	Inputs        map[string]any
 	PullNumber    int64
 	NeedsApproval bool
+	FromFork      bool
 	Changed       []string
 	ChangedKnown  bool
 	OnlyPath      string
@@ -70,7 +71,7 @@ func (m *Manager) LoadWorkflows(ctx context.Context, repo *db.GitRepository, rev
 // Reads the first workflows directory that holds yaml files
 func loadWorkflowFiles(ctx context.Context, r *gitrepo.Repo, commit plumbing.Hash) ([]*WorkflowFile, error) {
 	for _, dir := range WorkflowDirs {
-		entries, err := r.Tree(ctx, commit, dir, false)
+		entries, _, err := r.Tree(ctx, commit, dir, false)
 		if err != nil {
 			continue
 		}
@@ -274,8 +275,10 @@ func (m *Manager) trigger(ctx context.Context, repo *db.GitRepository, event, ac
 	switch event {
 	case "pull_request", "pull_request_target":
 		in.PullNumber = pullNumber(payload)
-		if pullFromFork(repo, payload) && !m.actorCanWrite(ctx, repo, actor) {
-			in.NeedsApproval = true
+		if pullFromFork(repo, payload) {
+			// The author owns the head code, whoever caused the event
+			in.NeedsApproval = !m.pullAuthorCanWrite(ctx, repo, in.PullNumber)
+			in.FromFork = event == "pull_request"
 		}
 		if in.Ref == "" {
 			in.Ref = fmt.Sprintf("refs/pull/%d/head", in.PullNumber)
@@ -314,6 +317,20 @@ func (m *Manager) actorCanWrite(ctx context.Context, repo *db.GitRepository, act
 		return false
 	}
 	return m.git.Access().Level(ctx, actor, repo, db.GitUnitActions) >= gitrepo.LevelWrite
+}
+
+// Write access of the pull request author, who controls the head code
+func (m *Manager) pullAuthorCanWrite(ctx context.Context, repo *db.GitRepository, number int64) bool {
+	issue, err := m.store.GetGitIssue(ctx, repo.ID, number)
+	if err != nil || issue == nil {
+		return false
+	}
+	u, err := m.store.GetUserByID(ctx, issue.AuthorID)
+	if err != nil || u == nil || !u.IsActive {
+		return false
+	}
+	roles, _ := m.store.GetUserRoleNames(ctx, u.ID)
+	return m.actorCanWrite(ctx, repo, &auth.AuthenticatedUser{ID: u.ID, Username: u.Username, Roles: roles, Provider: u.AuthProvider})
 }
 
 func pullNumber(payload map[string]any) int64 {

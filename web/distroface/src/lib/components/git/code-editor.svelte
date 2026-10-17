@@ -38,6 +38,6 @@
 	});
 </script>
 
-<div class="rounded-xl border border-border/60 overflow-hidden text-sm [&_.cm-editor]:min-h-[24rem] [&_.cm-editor]:max-h-[70vh] [&_.cm-scroller]:overflow-auto [&_.cm-editor.cm-focused]:outline-none">
+<div class="rounded-xl border border-border/60 overflow-hidden text-sm [&_.cm-editor]:min-h-96 [&_.cm-editor]:max-h-[70vh] [&_.cm-scroller]:overflow-auto [&_.cm-editor.cm-focused]:outline-none">
 	<CodeMirror bind:value {lang} {theme} {readonly} {placeholder} lineWrapping tabSize={4} useTab />
 </div>

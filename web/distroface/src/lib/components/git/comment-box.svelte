@@ -133,10 +133,10 @@
 			{disabled}
 			rows={6}
 			onkeydown={onKeydown}
-			class="w-full min-h-[9rem] resize-y bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground font-mono leading-relaxed"
+			class="w-full min-h-36 resize-y bg-transparent px-3 py-2.5 text-sm outline-none placeholder:text-muted-foreground font-mono leading-relaxed"
 		></textarea>
 	{:else}
-		<div class="px-4 py-3 min-h-[9rem] text-sm">
+		<div class="px-4 py-3 min-h-36 text-sm">
 			{#if value.trim()}
 				<Markdown source={value} />
 			{:else}

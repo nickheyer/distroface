@@ -58,6 +58,8 @@ var ReservedNamespaces = map[string]bool{
 	"verify-email": true, "docs": true, "notifications": true, "explore": true,
 	"v2": true, "auth": true, "acme": true, "assets": true, "static": true,
 	"favicon.ico": true, "robots.txt": true, "git": true, "new": true,
+	// Action ecosystems, so uses: actions/checkout can never land on a local squat
+	"actions": true, "docker": true, "github": true,
 }
 
 // Reports whether a username or org name may own a namespace

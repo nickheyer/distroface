@@ -106,7 +106,7 @@
 <Popover bind:open>
 	<PopoverTrigger>
 		{#snippet child({ props })}
-			<Button {...props} variant="outline" size="sm" class={cn('h-8 gap-1.5 max-w-[16rem] font-normal', className)}>
+			<Button {...props} variant="outline" size="sm" class={cn('h-8 gap-1.5 max-w-64 font-normal', className)}>
 				{#if currentKind === 'tag'}
 					<Tag class="h-3.5 w-3.5 text-muted-foreground shrink-0" />
 				{:else}

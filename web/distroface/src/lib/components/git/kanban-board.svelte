@@ -273,7 +273,7 @@
 	}
 </script>
 
-<div class="flex gap-4 overflow-x-auto pb-4 -mx-1 px-1 min-h-[24rem]">
+<div class="flex gap-4 overflow-x-auto pb-4 -mx-1 px-1 min-h-96">
 	{#each sorted as column, ci (column.id)}
 		<section
 			class={cn(

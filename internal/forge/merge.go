@@ -60,7 +60,7 @@ func (m *Manager) Mergeability(ctx context.Context, repo *db.GitRepository, acto
 	}
 	mergeBase, _ := r.MergeBase(baseTip, head)
 	if pr.MergeableState == MergeableUnknown || pr.MergeableState == MergeableChecking || pr.MergeableState == MergeableBlocked {
-		res, err := r.Merge3(ctx, mergeBase, baseTip, head, false)
+		res, err := r.MergeCommits(ctx, baseTip, head, false)
 		if err != nil {
 			return nil, err
 		}
@@ -111,9 +111,10 @@ func (m *Manager) Mergeability(ctx context.Context, repo *db.GitRepository, acto
 func (m *Manager) ruleBlockers(ctx context.Context, r *gitrepo.Repo, repo *db.GitRepository, issue *db.GitIssue, pr *db.GitPullRequest, rule *db.GitBranchProtection, mergeBase, baseTip, head plumbing.Hash) []Blocker {
 	var out []Blocker
 	reviews, _, _ := m.store.ListGitReviews(ctx, issue.ID, false, 0, 0)
+	// The newest review per reviewer decides, a dismissed newest leaves no standing
 	latest := map[string]*db.GitReview{}
 	for _, rv := range reviews {
-		if rv.Dismissed || rv.State == "commented" || rv.ReviewerID == issue.AuthorID {
+		if rv.Imported || rv.State == "commented" || rv.ReviewerID == issue.AuthorID {
 			continue
 		}
 		latest[rv.ReviewerID] = rv
@@ -121,7 +122,7 @@ func (m *Manager) ruleBlockers(ctx context.Context, r *gitrepo.Repo, repo *db.Gi
 	approvals := map[string]bool{}
 	changes := 0
 	for id, rv := range latest {
-		if !m.reviewerHasWeight(ctx, repo, id) {
+		if rv.Dismissed || !m.reviewerHasWeight(ctx, repo, id) {
 			continue
 		}
 		switch rv.State {
@@ -140,13 +141,18 @@ func (m *Manager) ruleBlockers(ctx context.Context, r *gitrepo.Repo, repo *db.Gi
 	if rule.RequireCodeOwnerReview {
 		owners := m.ownersForPull(ctx, repo, pr)
 		for _, group := range owners {
+			// An owner entry that names nobody cannot be satisfied, it never passes by accident
+			if len(group.UserIDs) == 0 {
+				out = append(out, Blocker{"code_owners", "code owners for " + group.Pattern + " resolve to no user who can approve"})
+				break
+			}
 			satisfied := false
 			for _, id := range group.UserIDs {
 				if approvals[id] {
 					satisfied = true
 				}
 			}
-			if !satisfied && len(group.UserIDs) > 0 {
+			if !satisfied {
 				out = append(out, Blocker{"code_owners", "code owner approval missing for " + group.Pattern})
 				break
 			}
@@ -160,6 +166,10 @@ func (m *Manager) ruleBlockers(ctx context.Context, r *gitrepo.Repo, repo *db.Gi
 		}
 		required := gitrepo.DecodeIDs(rule.StatusCheckContexts)
 		if len(required) == 0 {
+			// No named checks means every reported check, and something must have reported
+			if len(byContext) == 0 {
+				out = append(out, Blocker{"status_checks", "no status check has reported on the head commit yet"})
+			}
 			for c := range byContext {
 				required = append(required, c)
 			}
@@ -172,7 +182,10 @@ func (m *Manager) ruleBlockers(ctx context.Context, r *gitrepo.Repo, repo *db.Gi
 		}
 	}
 	if rule.RequireSignedCommits || rule.RequireLinearHistory {
-		commits, _, _ := r.CommitsBetween(ctx, mergeBase, head, 1000)
+		commits, truncated, _ := r.CommitsBetween(ctx, mergeBase, head, 1000)
+		if truncated {
+			out = append(out, Blocker{"history", "more than 1000 commits cannot be verified, split the pull request"})
+		}
 		for _, c := range commits {
 			if rule.RequireLinearHistory && c.NumParents() > 1 {
 				out = append(out, Blocker{"linear_history", "commit " + c.Hash.String()[:8] + " is a merge commit"})
@@ -294,7 +307,7 @@ func (m *Manager) Merge(ctx context.Context, repo *db.GitRepository, actor Actor
 			}
 			return head, nil
 		case MergeMethodMerge:
-			res, err := r.Merge3(ctx, mergeBase, baseTip, head, true)
+			res, err := r.MergeCommits(ctx, baseTip, head, true)
 			if err != nil {
 				return plumbing.ZeroHash, err
 			}
@@ -303,7 +316,7 @@ func (m *Manager) Merge(ctx context.Context, repo *db.GitRepository, actor Actor
 			}
 			return r.WriteCommit(ctx, gitrepo.CommitSpec{Tree: res.Tree, Parents: []plumbing.Hash{baseTip, head}, Message: message, Author: committer, Committer: committer, Signer: m.git.Signer(ctx)})
 		case MergeMethodSquash:
-			res, err := r.Merge3(ctx, mergeBase, baseTip, head, true)
+			res, err := r.MergeCommits(ctx, baseTip, head, true)
 			if err != nil {
 				return plumbing.ZeroHash, err
 			}
@@ -372,7 +385,7 @@ func (m *Manager) closeReferencedIssues(ctx context.Context, repo *db.GitReposit
 		if issue == nil || issue.IsPull || issue.State != "open" || target.ID != repo.ID {
 			continue
 		}
-		if err := m.setState(ctx, target, actor, issue, "closed", sha); err != nil {
+		if err := m.setState(ctx, target, actor, issue, nil, "closed", sha); err != nil {
 			m.log.Debug("closing #%d from merge: %v", issue.Number, err)
 		}
 	}
@@ -394,9 +407,12 @@ func (m *Manager) squashBody(ctx context.Context, repo *db.GitRepository, pr *db
 
 // Replays commits between base and head onto a new parent, oldest first
 func (m *Manager) replayCommits(ctx context.Context, r *gitrepo.Repo, committer object.Signature, mergeBase, head, onto plumbing.Hash) (plumbing.Hash, error) {
-	commits, _, err := r.CommitsBetween(ctx, mergeBase, head, 1000)
+	commits, truncated, err := r.CommitsBetween(ctx, mergeBase, head, 1000)
 	if err != nil {
 		return plumbing.ZeroHash, err
+	}
+	if truncated {
+		return plumbing.ZeroHash, fmt.Errorf("%w: the pull request has more than 1000 commits, rebase it locally or merge instead", ErrInvalid)
 	}
 	cur := onto
 	for i := len(commits) - 1; i >= 0; i-- {
@@ -432,8 +448,8 @@ func (m *Manager) replayCommits(ctx context.Context, r *gitrepo.Repo, committer 
 
 // Rebases a head onto a new base inside one repository
 func (m *Manager) rebaseOnto(ctx context.Context, repo *db.GitRepository, actor Actor, mergeBase, head, onto plumbing.Hash) (plumbing.Hash, error) {
-	unlock := m.git.Engine().LockRepo(repo.ID)
-	defer unlock()
+	lock := m.git.Engine().LockRepo(repo.ID)
+	defer lock.Unlock()
 	r, err := m.git.Engine().OpenRepo(repo.Namespace, repo.Name, false)
 	if err != nil {
 		return plumbing.ZeroHash, err

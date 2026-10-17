@@ -141,8 +141,8 @@
 						{#each deliveries as d (d.id)}
 							<TableRow>
 								<TableCell class="py-3 px-3">
-									<p class="font-medium truncate max-w-[14rem] sm:max-w-md">{d.subject || '(no subject)'}</p>
-									<p class="text-[12px] text-muted-foreground mt-0.5 truncate max-w-[14rem] sm:max-w-md">
+									<p class="font-medium truncate max-w-56 sm:max-w-md">{d.subject || '(no subject)'}</p>
+									<p class="text-[12px] text-muted-foreground mt-0.5 truncate max-w-56 sm:max-w-md">
 										to {d.to}
 										{#if d.scope && d.scope.scopeId}
 											<span class="mx-1">/</span> scope {d.scope.scopeId}

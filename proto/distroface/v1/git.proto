@@ -509,6 +509,8 @@ message GitDiff {
   int32 total_files = 2;
   int32 additions = 3;
   int32 deletions = 4;
+  // Stats and hunks were withheld past the file cap, totals cover only the counted files
+  bool truncated = 5;
 }
 
 // Run of consecutive lines attributed to one commit
@@ -1388,6 +1390,8 @@ message GetTreeResponse {
   repeated GitTreeEntry entries = 3;
   // Last commit touching the directory itself
   GitCommit last_commit = 4;
+  // Listing stopped at the entry cap
+  bool truncated = 5;
 }
 
 // GetBlobRequest reads a file.

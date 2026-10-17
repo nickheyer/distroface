@@ -17,6 +17,7 @@
 	import RepoList from '$lib/components/repo-list.svelte';
 	import GitRepoList from '$lib/components/git/git-repo-list.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
+	import { portalStore } from '$lib/stores/portal.svelte';
 	import type { User, Repository } from '$lib/proto/distroface/v1/types_pb';
 	import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 
@@ -61,6 +62,11 @@
 
 	async function loadUser() {
 		loading = true;
+		// On a portal that maps bare names, a single segment is a repository of its org
+		if (portalStore.isPortal && portalStore.mapUnqualified && username && username !== portalStore.orgName) {
+			await goto(resolve('/[namespace]/[name]', { namespace: portalStore.orgName, name: username }), { replaceState: true });
+			return;
+		}
 		try {
 			const resp = await rpcClient.user.getUser({ username });
 			user = resp.user;

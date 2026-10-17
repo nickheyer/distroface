@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,11 +26,18 @@ type Manager struct {
 	log   *logger.Logger
 
 	trigger TriggerFunc
+	// Key behind signed notification tokens, none means none are issued or accepted
+	tokenKey []byte
+	// In flight notification fan outs
+	pending sync.WaitGroup
 }
 
 func NewManager(store *stores.Store, git *gitrepo.Manager, mail *mailer.Service, res *settings.Resolver, log *logger.Logger) *Manager {
 	return &Manager{store: store, git: git, mail: mail, res: res, log: log}
 }
+
+// Installs the purpose bound key for signed notification tokens
+func (m *Manager) SetTokenKey(key []byte) { m.tokenKey = key }
 
 func (m *Manager) Store() *stores.Store         { return m.store }
 func (m *Manager) Git() *gitrepo.Manager        { return m.git }

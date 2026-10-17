@@ -22,6 +22,7 @@ import (
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	"github.com/nickheyer/distroface/pkg/utils"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -155,7 +156,10 @@ func (s *GitService) CreateGitRepository(ctx context.Context, req *v1.CreateGitR
 		if err := s.mirrors.ValidateGitMirror(ctx, req.Mirror); err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		if mirrorCfg, err = mirror.EncodeConfig(req.Mirror); err != nil {
+		if s.mirrors == nil {
+			return nil, connect.Errorf(connect.CodeUnavailable, "mirroring is not available")
+		}
+		if mirrorCfg, err = s.mirrors.EncodeConfig(req.Mirror); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 	} else if req.Mirror != nil {
@@ -169,6 +173,9 @@ func (s *GitService) CreateGitRepository(ctx context.Context, req *v1.CreateGitR
 	private := req.Visibility == v1.Visibility_VISIBILITY_PRIVATE
 	if req.Visibility == v1.Visibility_VISIBILITY_UNSPECIFIED {
 		private = s.manager.NamespaceGitSettings(ctx, ns).GetPrivateByDefault()
+	}
+	if req.Website != "" && !utils.IsWebURL(req.Website) {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "website must be an http or https url")
 	}
 	params := gitrepo.CreateParams{
 		Namespace:     ns,
@@ -284,6 +291,9 @@ func (s *GitService) UpdateGitRepository(ctx context.Context, req *v1.UpdateGitR
 		cols["description"] = *req.Description
 	}
 	if req.Website != nil {
+		if *req.Website != "" && !utils.IsWebURL(*req.Website) {
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "website must be an http or https url")
+		}
 		cols["website"] = *req.Website
 	}
 	if req.Visibility != nil && *req.Visibility != v1.Visibility_VISIBILITY_UNSPECIFIED {
@@ -328,15 +338,18 @@ func (s *GitService) UpdateGitRepository(ctx context.Context, req *v1.UpdateGitR
 		if repo.Type != v1.GitRepoType_GIT_REPO_TYPE_MIRROR {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "only mirror repositories take mirror settings")
 		}
-		merged, err := mirror.ApplyUpdate(repo.MirrorConfig, req.Mirror)
+		if s.mirrors == nil {
+			return nil, connect.Errorf(connect.CodeUnavailable, "mirroring is not available")
+		}
+		merged, err := s.mirrors.ApplyUpdate(repo.MirrorConfig, req.Mirror)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		full, err := mirror.ParseConfig(merged)
+		full, err := s.mirrors.Config(merged)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		if s.mirrors != nil {
+		{
 			if err := s.mirrors.ValidateGitMirror(ctx, full); err != nil {
 				return nil, mapMirrorErr(err)
 			}
@@ -614,7 +627,7 @@ func (s *GitService) SyncFork(ctx context.Context, req *v1.SyncForkRequest) (*v1
 		return nil, connect.Errorf(connect.CodeFailedPrecondition, "branch %q does not exist upstream", branch)
 	}
 	local := r.BranchHash(branch)
-	defer func() { _ = r.UpdateRef(staging, upstream, plumbing.ZeroHash) }()
+	defer s.manager.DropStagingRef(ctx, fork, staging)
 	if local == upstream {
 		r.Close()
 		return &v1.SyncForkResponse{}, nil
@@ -623,9 +636,14 @@ func (s *GitService) SyncFork(ctx context.Context, req *v1.SyncForkRequest) (*v1
 	if !ff {
 		ff, _ = r.IsAncestor(local, upstream)
 	}
+	// A protected default branch takes upstream through its own rules, by pull request
+	if ff {
+		protections, _ := s.store.ListGitBranchProtections(ctx, fork.ID)
+		ff = gitrepo.MatchProtection(protections, branch) == nil
+	}
 	if !ff {
 		r.Close()
-		// Diverged forks get a pull request from the parent instead
+		// Diverged and protected forks get a pull request from the parent instead
 		if s.forge == nil {
 			return nil, connect.Errorf(connect.CodeFailedPrecondition, "fork has diverged from upstream, open a pull request to merge upstream changes")
 		}
@@ -637,7 +655,7 @@ func (s *GitService) SyncFork(ctx context.Context, req *v1.SyncForkRequest) (*v1
 		issue, _, err := s.forge.CreatePull(ctx, fork, actor, forge.NewPull{
 			Base: branch, Head: parent.Namespace + "/" + parent.Name + ":" + branch,
 			Title: fmt.Sprintf("Sync %s from %s/%s", branch, parent.Namespace, parent.Name),
-			Body:  "Upstream changes that could not be fast forwarded into this fork.",
+			Body:  "Upstream changes that could not be applied to this fork directly.",
 		})
 		if err != nil {
 			return nil, mapForgeErr(err)
@@ -646,7 +664,7 @@ func (s *GitService) SyncFork(ctx context.Context, req *v1.SyncForkRequest) (*v1
 	}
 	commits, _, _ := r.CommitsBetween(ctx, local, upstream, 10000)
 	r.Close()
-	if err := s.manager.UpdateRef(ctx, fork, user, plumbing.NewBranchReferenceName(branch), local, upstream, gitrepo.HookOptions{BypassPullRequest: true, BypassSignedCommits: true}); err != nil {
+	if err := s.manager.UpdateRef(ctx, fork, user, plumbing.NewBranchReferenceName(branch), local, upstream, gitrepo.HookOptions{}); err != nil {
 		return nil, mapGitErr(err)
 	}
 	return &v1.SyncForkResponse{Commits: int32(len(commits))}, nil
@@ -925,7 +943,7 @@ func (s *GitService) CreatePushMirror(ctx context.Context, req *v1.CreatePushMir
 	pm := &storage.GitPushMirror{
 		RepoID:          repo.ID,
 		RemoteURL:       strings.TrimSpace(req.RemoteUrl),
-		AuthToken:       req.AuthToken,
+		AuthToken:       s.mirrors.SealToken(req.AuthToken),
 		Username:        req.Username,
 		UseSSHKey:       req.UseSshKey,
 		IntervalMinutes: max(req.IntervalMinutes, 0),
@@ -962,13 +980,18 @@ func (s *GitService) UpdatePushMirror(ctx context.Context, req *v1.UpdatePushMir
 		return nil, err
 	}
 	if req.RemoteUrl != nil {
-		if _, err := gitrepo.ValidateUpstreamURL(*req.RemoteUrl); err != nil {
+		next, err := gitrepo.ValidateUpstreamURL(*req.RemoteUrl)
+		if err != nil {
 			return nil, mapGitErr(err)
+		}
+		// A stored credential never follows the mirror to another host
+		if prev, err := gitrepo.ValidateUpstreamURL(pm.RemoteURL); err == nil && !strings.EqualFold(prev.Hostname(), next.Hostname()) && req.AuthToken == nil {
+			pm.AuthToken = ""
 		}
 		pm.RemoteURL = strings.TrimSpace(*req.RemoteUrl)
 	}
 	if req.AuthToken != nil {
-		pm.AuthToken = *req.AuthToken
+		pm.AuthToken = s.mirrors.SealToken(*req.AuthToken)
 	}
 	if req.Username != nil {
 		pm.Username = *req.Username
@@ -1100,6 +1123,9 @@ func (s *GitService) LinkRepository(ctx context.Context, req *v1.LinkRepositoryR
 		if img.GitRepoID != nil && *img.GitRepoID != repo.ID {
 			return nil, connect.Errorf(connect.CodeFailedPrecondition, "package is linked to another repository")
 		}
+		if !s.manager.CanManageImage(ctx, user, img) {
+			return nil, connect.Errorf(connect.CodePermissionDenied, "linking shares the package with this repository's collaborators, which needs manage rights on the package")
+		}
 		if err := s.store.SetRepositoryGitRepo(ctx, img.ID, &repo.ID); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
@@ -1115,6 +1141,9 @@ func (s *GitService) LinkRepository(ctx context.Context, req *v1.LinkRepositoryR
 		}
 		if art.GitRepoID != nil && *art.GitRepoID != repo.ID {
 			return nil, connect.Errorf(connect.CodeFailedPrecondition, "package is linked to another repository")
+		}
+		if !s.manager.CanManageArtifact(ctx, user, art) {
+			return nil, connect.Errorf(connect.CodePermissionDenied, "linking shares the package with this repository's collaborators, which needs manage rights on the package")
 		}
 		if err := s.store.SetArtifactRepositoryGitRepo(ctx, art.ID, &repo.ID); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)

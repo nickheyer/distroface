@@ -227,8 +227,14 @@
 </script>
 
 {#snippet actor(c: Comment)}
-	{@const u = c.author?.username || 'system'}
-	<a href={resolve('/[namespace]', { namespace: u })} class="font-medium text-foreground hover:text-primary">{u}</a>
+	{@const p = payload(c)}
+	{@const imported = !c.author && !!p.imported}
+	{@const u = c.author?.username || (imported ? str(p, 'author') : '') || 'system'}
+	{#if imported}
+		<span class="font-medium text-foreground">{u}</span><span class="text-muted-foreground"> via {str(p, 'source')}</span>
+	{:else}
+		<a href={resolve('/[namespace]', { namespace: u })} class="font-medium text-foreground hover:text-primary">{u}</a>
+	{/if}
 {/snippet}
 
 {#snippet userLink(id: string)}
@@ -371,11 +377,17 @@
 
 {#snippet card(c: Comment)}
 	{@const t = when(c)}
-	{@const u = c.author?.username || 'system'}
+	{@const p = payload(c)}
+	{@const imported = !c.author && !!p.imported}
+	{@const u = c.author?.username || (imported ? str(p, 'author') : '') || 'system'}
 	<div id="comment-{c.id}" class="rounded-xl border border-border/60 bg-card overflow-hidden scroll-mt-20">
 		<div class="flex items-center gap-2 px-4 py-2 border-b border-border/50 bg-muted/20 text-[12.5px] text-muted-foreground">
 			<span class="h-5 w-5 rounded-full bg-primary/10 text-primary text-[10px] font-semibold inline-flex items-center justify-center shrink-0">{u.charAt(0).toUpperCase()}</span>
-			<a href={resolve('/[namespace]', { namespace: u })} class="font-medium text-foreground hover:text-primary">{u}</a>
+			{#if imported}
+				<span class="font-medium text-foreground">{u}</span><span>via {str(p, 'source')}</span>
+			{:else}
+				<a href={resolve('/[namespace]', { namespace: u })} class="font-medium text-foreground hover:text-primary">{u}</a>
+			{/if}
 			<span>commented</span>
 			{#if t.rel}<span title={t.abs}>{t.rel}</span>{/if}
 			{#if c.edited}<span class="text-muted-foreground/70" title="This comment was edited">(edited)</span>{/if}

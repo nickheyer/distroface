@@ -66,6 +66,9 @@ type ServerDeps struct {
 	MailService         *mailer.Service
 }
 
+// Largest request message any procedure accepts, uploads stream over plain http
+const rpcReadMaxBytes = 64 << 20
+
 type Server struct {
 	ServerDeps
 	handler http.Handler
@@ -194,7 +197,7 @@ func (s *Server) setupHandler() {
 	if s.AuditService != nil {
 		distrofacev1connect.RegisterAuditServiceHandler(rpcServer, s.AuditService)
 	}
-	connecthttp.Mount(mux, rpcServer)
+	connecthttp.Mount(mux, rpcServer, connecthttp.WithReadMaxBytes(rpcReadMaxBytes))
 
 	// Reflection on token only
 	reflectServer := connect.NewServer(s.reflectionAuthInterceptor())

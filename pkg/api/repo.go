@@ -54,7 +54,7 @@ Repositories are addressed as [namespace/]name. Bare names resolve in
 }
 
 func newRepoCreateCmd() *cobra.Command {
-	var namespace, description, mirror, template, defaultBranch string
+	var namespace, description, mirror, mirrorUsername, mirrorToken, template, defaultBranch string
 	var private, autoInit bool
 
 	cmd := &cobra.Command{
@@ -98,7 +98,10 @@ func newRepoCreateCmd() *cobra.Command {
 			}
 			if mirror != "" {
 				req.Type = v1.GitRepoType_GIT_REPO_TYPE_MIRROR
-				req.Mirror = &v1.MirrorConfig{Upstream: mirror}
+				req.Mirror = &v1.MirrorConfig{Upstream: mirror, Username: mirrorUsername}
+				if mirrorToken != "" {
+					req.Mirror.AuthToken = &mirrorToken
+				}
 			}
 			resp, err := client.Git().CreateGitRepository(cmd.Context(), req)
 			if err != nil {
@@ -112,6 +115,8 @@ func newRepoCreateCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&description, "description", "d", "", "Repository description")
 	cmd.Flags().BoolVarP(&private, "private", "p", false, "Make repository private")
 	cmd.Flags().StringVar(&mirror, "mirror", "", "Create a pull mirror of this upstream git url")
+	cmd.Flags().StringVar(&mirrorUsername, "mirror-username", "", "Username for the upstream, some hosts accept the token alone")
+	cmd.Flags().StringVar(&mirrorToken, "mirror-token", "", "Token or password for a private upstream")
 	cmd.Flags().StringVar(&template, "template", "", "Create from a template repository (namespace/name)")
 	cmd.Flags().StringVar(&defaultBranch, "default-branch", "", "Default branch name")
 	cmd.Flags().BoolVar(&autoInit, "auto-init", false, "Create an initial commit with a readme")

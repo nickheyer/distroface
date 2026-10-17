@@ -86,6 +86,8 @@ type GitRepoListOptions struct {
 	ViewerID        string
 	IncludePrivate  bool
 	GrantedRepos    []string
+	OnlyRepo        string // Credential scope, exact namespace/name
+	OnlyNamespace   string // Credential scope, exact namespace
 	Type            v1.GitRepoType
 	Topic           string
 	IncludeArchived bool
@@ -115,6 +117,12 @@ var GitRepoSortColumns = map[string]bool{
 // Visibility clause shared by every repository listing
 func gitVisibilityScope(opts GitRepoListOptions) func(*gorm.DB) *gorm.DB {
 	return func(q *gorm.DB) *gorm.DB {
+		if opts.OnlyRepo != "" {
+			q = q.Where("(git_repositories.namespace || '/' || git_repositories.name) = ?", opts.OnlyRepo)
+		}
+		if opts.OnlyNamespace != "" {
+			q = q.Where("git_repositories.namespace = ?", opts.OnlyNamespace)
+		}
 		if opts.IncludePrivate {
 			return q
 		}
@@ -236,8 +244,26 @@ func (s *Store) CountGitForks(ctx context.Context, parentID string) (int64, erro
 	return n, err
 }
 
-func (s *Store) DeleteGitRepository(ctx context.Context, id string) error {
-	return s.db.WithContext(ctx).Delete(&db.GitRepository{}, "id = ?", id).Error
+// Removes the row and every repo scoped record no foreign key covers
+func (s *Store) DeleteGitRepository(ctx context.Context, repo *db.GitRepository) error {
+	full := repo.Namespace + "/" + repo.Name
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("scope_type = ? AND scope_id = ?", int32(v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_GIT_REPO), full).Delete(&db.APIToken{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("owner_type = ? AND owner_id = ?", db.SSHKeyOwnerGitRepo, repo.ID).Delete(&db.SSHKey{}).Error; err != nil {
+			return err
+		}
+		for _, model := range []any{&db.ActionsSecret{}, &db.ActionsVariable{}, &db.ActionsRunner{}, &db.ActionsRunnerToken{}} {
+			if err := tx.Where("scope_kind = ? AND scope_id = ?", db.ActionsScopeRepo, repo.ID).Delete(model).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("scope_type = ? AND scope_id = ?", int32(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO), repo.ID).Delete(&db.SettingsRow{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&db.GitRepository{}, "id = ?", repo.ID).Error
+	})
 }
 
 func (s *Store) IncrementGitPullCount(ctx context.Context, id string) error {
@@ -277,6 +303,14 @@ func (s *Store) MoveGitRepository(ctx context.Context, repo *db.GitRepository, n
 			return err
 		}
 		if err := tx.Create(redirect).Error; err != nil {
+			return err
+		}
+		// Teams of the old org lose the repo, the new org grants through its own teams
+		teamRepos := tx.Where("repo_id = ?", repo.ID)
+		if isOrg {
+			teamRepos = teamRepos.Where("team_id NOT IN (SELECT id FROM org_teams WHERE org_id = ?)", ownerID)
+		}
+		if err := teamRepos.Delete(&db.OrgTeamRepo{}).Error; err != nil {
 			return err
 		}
 		return tx.Model(&db.GitRepository{}).Where("id = ?", repo.ID).Updates(map[string]any{
@@ -613,6 +647,13 @@ func (s *Store) UpsertLFSObject(ctx context.Context, repoID, oid string, size in
 	})
 }
 
+// Repositories linking one object, capped
+func (s *Store) ListLFSLinkRepoIDs(ctx context.Context, oid string, limit int) ([]string, error) {
+	var ids []string
+	err := s.db.WithContext(ctx).Model(&db.GitLFSLink{}).Where("oid = ?", oid).Limit(limit).Pluck("repo_id", &ids).Error
+	return ids, err
+}
+
 func (s *Store) GetLFSObject(ctx context.Context, repoID, oid string) (*db.LFSObject, error) {
 	var obj db.LFSObject
 	err := s.db.WithContext(ctx).Joins("JOIN git_lfs_links ON git_lfs_links.oid = lfs_objects.oid AND git_lfs_links.repo_id = ?", repoID).
@@ -621,6 +662,19 @@ func (s *Store) GetLFSObject(ctx context.Context, repoID, oid string) (*db.LFSOb
 		return nil, nil
 	}
 	return &obj, err
+}
+
+// Repository count with object and lfs bytes summed over every repository
+func (s *Store) GitStorageTotals(ctx context.Context) (count, bytes, lfsBytes int64, err error) {
+	var row struct {
+		Count int64
+		Bytes int64
+		LFS   int64
+	}
+	err = s.db.WithContext(ctx).Model(&db.GitRepository{}).
+		Select("COUNT(*) AS count, COALESCE(SUM(size_bytes), 0) AS bytes, COALESCE(SUM(lfs_size_bytes), 0) AS lfs").
+		Scan(&row).Error
+	return row.Count, row.Bytes, row.LFS, err
 }
 
 func (s *Store) LFSRepoSize(ctx context.Context, repoID string) (int64, error) {

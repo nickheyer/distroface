@@ -142,19 +142,27 @@ func (s *ProjectService) toProto(ctx context.Context, p *storage.GitProject, wit
 		}
 		labels, _ := s.store.GetGitIssueLabels(ctx, ids)
 		assignees, _ := s.store.GetGitIssueAssignees(ctx, ids)
+		viewer := auth.UserFromContext(ctx)
+		access := s.forge.Git().Access()
 		repos := map[string]*storage.GitRepository{}
 		for _, c := range view.Cards {
 			is := view.Issues[c.IssueID]
 			if is == nil {
 				continue
 			}
-			card := &v1.ProjectCard{IssueId: is.ID, Number: is.Number, Title: is.Title, State: is.State, IsPull: is.IsPull, Position: int32(c.Position)}
 			if repos[is.RepoID] == nil {
 				repos[is.RepoID], _ = s.store.GetGitRepositoryByID(ctx, is.RepoID)
 			}
-			if r := repos[is.RepoID]; r != nil {
-				card.RepoFullName = r.Namespace + "/" + r.Name
+			// A board shows a card only when its issue is readable on its own repository
+			r := repos[is.RepoID]
+			unit := storage.GitUnitIssues
+			if is.IsPull {
+				unit = storage.GitUnitPulls
 			}
+			if r == nil || access.Level(ctx, viewer, r, unit) < gitrepo.LevelRead {
+				continue
+			}
+			card := &v1.ProjectCard{IssueId: is.ID, Number: is.Number, Title: is.Title, State: is.State, IsPull: is.IsPull, Position: int32(c.Position), RepoFullName: r.Namespace + "/" + r.Name}
 			for _, l := range labels[is.ID] {
 				card.Labels = append(card.Labels, l.Name)
 			}

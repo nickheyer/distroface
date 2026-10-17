@@ -235,25 +235,34 @@ func (m *Monitor) gitHTTPAuth(up gitUpstream, cfg *v1.MirrorConfig) gitrepo.Remo
 	return gitrepo.RemoteAuth{HTTPClient: m.client, Username: user, Password: pass}
 }
 
-// Transport credentials, ssh pins the host key on first contact
-func (m *Monitor) gitAuth(up gitUpstream, cfg *v1.MirrorConfig, state *GitMirrorState) gitrepo.RemoteAuth {
+// Transport credentials, ssh pins the host key and never falls back to an agent
+func (m *Monitor) gitAuth(up gitUpstream, cfg *v1.MirrorConfig, state *GitMirrorState) (gitrepo.RemoteAuth, error) {
 	if !up.SSH {
-		return m.gitHTTPAuth(up, cfg)
+		return m.gitHTTPAuth(up, cfg), nil
 	}
-	a := gitrepo.RemoteAuth{HostKey: state.HostKey}
-	if pem, err := m.openMirrorKey(state.SSHPrivateKey); err == nil {
-		a.SSHKeyPEM = pem
+	if state.SSHPrivateKey == "" {
+		return gitrepo.RemoteAuth{}, fmt.Errorf("%w: upstream uses ssh, generate the repository ssh key and install it upstream first", ErrInvalid)
 	}
+	pem, err := m.openMirrorKey(state.SSHPrivateKey)
+	if err != nil {
+		return gitrepo.RemoteAuth{}, fmt.Errorf("%w: the stored ssh key cannot be decrypted, generate it again", ErrInvalid)
+	}
+	a := gitrepo.RemoteAuth{HostKey: state.HostKey, Dialer: m.dial, SSHKeyPEM: pem}
 	a.OnHostKey = func(fp string) { state.HostKey = fp }
-	return a
+	return a, nil
 }
 
-// Decrypts the stored ssh key, empty input yields nil
+// Decrypts the stored ssh key with the sealing key, then the jwt derived one it may predate
 func (m *Monitor) openMirrorKey(sealed string) ([]byte, error) {
 	if sealed == "" {
 		return nil, nil
 	}
 	plain, err := m.sealer.Open(sealed)
+	if err != nil && m.legacySealer != nil {
+		if legacy, lerr := m.legacySealer.Open(sealed); lerr == nil {
+			return []byte(legacy), nil
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -326,7 +335,7 @@ func (m *Monitor) gitJobs(ctx context.Context) []func() {
 		if _, importing := pending[repo.ID]; importing || repo.IsArchived {
 			continue
 		}
-		cfg, err := ParseConfig(repo.MirrorConfig)
+		cfg, err := m.Config(repo.MirrorConfig)
 		if err != nil {
 			m.log.Error("mirror config for git repo %s/%s: %v", repo.Namespace, repo.Name, err)
 			continue
@@ -463,10 +472,10 @@ func (m *Monitor) syncGitRepo(ctx context.Context, repo *db.GitRepository, cfg *
 	if _, err := gitrepo.ValidateUpstreamURL(up.URL); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	if up.SSH && state.SSHPrivateKey == "" {
-		return fmt.Errorf("%w: upstream uses ssh, generate the repository ssh key and install it upstream first", ErrInvalid)
+	auth, err := m.gitAuth(up, cfg, state)
+	if err != nil {
+		return err
 	}
-	auth := m.gitAuth(up, cfg, state)
 	refspecs := mirrorRefspecs
 	var wanted map[plumbing.ReferenceName]bool
 	if pattern := cfg.GetPattern(); pattern != "" {

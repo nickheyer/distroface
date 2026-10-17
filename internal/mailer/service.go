@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/settings"
@@ -45,7 +46,12 @@ type Service struct {
 	log     *logger.Logger
 	inbound InboundHandler
 	rate    rateWindow
+	// Records messages the worker gave up on, nil records nothing
+	audit *audit.Recorder
 }
+
+// Installs the audit recorder, set once at startup
+func (s *Service) SetAuditRecorder(r *audit.Recorder) { s.audit = r }
 
 // Installs the reply by mail handler, set once at startup
 func (s *Service) SetInboundHandler(fn InboundHandler) { s.inbound = fn }
@@ -71,21 +77,27 @@ func (s *Service) Enabled(ctx context.Context, scope Scope) bool {
 	return ms.GetEnabled() && ms.GetSmtpHost() != ""
 }
 
-// Scope whose mail settings apply to a repository event, falling back to the org and system tiers
+// Scope owning the relay a repository event sends through, or the nearest tier that turned mail off
 func (s *Service) ScopeFor(ctx context.Context, repoID, orgID string) Scope {
 	if repoID != "" {
 		sc := Scope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, ID: repoID}
-		if s.Enabled(ctx, sc) {
+		if !s.Enabled(ctx, sc) || s.ownsRelay(ctx, sc) {
 			return sc
 		}
 	}
 	if orgID != "" {
 		sc := Scope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, ID: orgID}
-		if s.Enabled(ctx, sc) {
+		if !s.Enabled(ctx, sc) || s.ownsRelay(ctx, sc) {
 			return sc
 		}
 	}
 	return Scope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM}
+}
+
+// Whether the scope's own row names an smtp host
+func (s *Service) ownsRelay(ctx context.Context, sc Scope) bool {
+	row, err := s.res.Stored(ctx, sc.Type, sc.ID)
+	return err == nil && row.GetMail() != nil && row.GetMail().SmtpHost != nil
 }
 
 // Instance name shown in mail layouts

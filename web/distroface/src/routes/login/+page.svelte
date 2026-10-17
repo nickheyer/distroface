@@ -325,7 +325,7 @@
 							<div class="space-y-1.5">
 								<div class="flex items-center justify-between">
 									<Label for="login-pw" class="text-sm font-medium">Password</Label>
-									{#if configStore.settings?.mail?.enabled}
+									{#if authStore.passwordResetEnabled}
 										<a href={resolve('/forgot-password')} class="text-xs text-muted-foreground hover:text-primary transition-colors">
 											Forgot password?
 										</a>

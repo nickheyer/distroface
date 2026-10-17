@@ -44,6 +44,9 @@ type sideChange struct {
 	entry  object.TreeEntry
 	action merkletrie.Action
 	from   object.TreeEntry
+	// Rename links, the delete side names the new path and the insert side the old one
+	renamedTo   string
+	renamedFrom string
 }
 
 func changeMap(changes object.Changes) (map[string]sideChange, error) {
@@ -57,10 +60,10 @@ func changeMap(changes object.Changes) (map[string]sideChange, error) {
 		if action == merkletrie.Delete {
 			p = ch.From.Name
 		}
-		// Renames show as a delete plus an insert so both paths merge independently
+		// Renames become a linked delete plus insert so the other side's edits can follow
 		if action == merkletrie.Modify && ch.From.Name != ch.To.Name {
-			out[ch.From.Name] = sideChange{action: merkletrie.Delete, from: ch.From.TreeEntry}
-			out[ch.To.Name] = sideChange{action: merkletrie.Insert, entry: ch.To.TreeEntry}
+			out[ch.From.Name] = sideChange{action: merkletrie.Delete, from: ch.From.TreeEntry, renamedTo: ch.To.Name}
+			out[ch.To.Name] = sideChange{action: merkletrie.Insert, entry: ch.To.TreeEntry, from: ch.From.TreeEntry, renamedFrom: ch.From.Name}
 			continue
 		}
 		out[p] = sideChange{entry: ch.To.TreeEntry, action: action, from: ch.From.TreeEntry}
@@ -100,13 +103,82 @@ func (r *Repo) Merge3(ctx context.Context, base, ours, theirs plumbing.Hash, wri
 	return r.MergeTrees(ctx, baseTree, oursTree, theirsTree, write)
 }
 
-// Three way merge at the tree level with line level diff3 for text files
-func (r *Repo) MergeTrees(ctx context.Context, baseTree, oursTree, theirsTree *object.Tree, write bool) (*MergeResult, error) {
-	oursChanges, err := object.DiffTreeWithOptions(ctx, baseTree, oursTree, &object.DiffTreeOptions{})
+// Bases of bases are merged this deep before the first base stands in
+const virtualBaseDepth = 8
+
+// Three way merge of two commits over every merge base, criss-cross histories merge their bases first
+func (r *Repo) MergeCommits(ctx context.Context, ours, theirs plumbing.Hash, write bool) (*MergeResult, error) {
+	baseTree, err := r.virtualBase(ctx, ours, theirs, virtualBaseDepth)
 	if err != nil {
 		return nil, err
 	}
-	theirsChanges, err := object.DiffTreeWithOptions(ctx, baseTree, theirsTree, &object.DiffTreeOptions{})
+	oursTree, err := r.commitTree(ours)
+	if err != nil {
+		return nil, err
+	}
+	theirsTree, err := r.commitTree(theirs)
+	if err != nil {
+		return nil, err
+	}
+	return r.MergeTrees(ctx, baseTree, oursTree, theirsTree, write)
+}
+
+// Base tree for a merge, a merged tree of the bases when the histories hold several
+func (r *Repo) virtualBase(ctx context.Context, a, b plumbing.Hash, depth int) (*object.Tree, error) {
+	bases, err := r.MergeBases(a, b)
+	if err != nil {
+		return nil, err
+	}
+	if len(bases) == 0 {
+		return &object.Tree{}, nil
+	}
+	first, err := r.commitTree(bases[0])
+	if err != nil {
+		return nil, err
+	}
+	if len(bases) == 1 || depth == 0 {
+		return first, nil
+	}
+	acc := first
+	for i := 1; i < len(bases); i++ {
+		ancestor, err := r.virtualBase(ctx, bases[i-1], bases[i], depth-1)
+		if err != nil {
+			return nil, err
+		}
+		next, err := r.commitTree(bases[i])
+		if err != nil {
+			return nil, err
+		}
+		res, err := r.MergeTrees(ctx, ancestor, acc, next, true)
+		if err != nil {
+			return nil, err
+		}
+		if !res.Clean() {
+			return first, nil
+		}
+		if acc, err = r.Repo.TreeObject(res.Tree); err != nil {
+			return nil, err
+		}
+	}
+	return acc, nil
+}
+
+func (r *Repo) commitTree(h plumbing.Hash) (*object.Tree, error) {
+	c, err := r.Commit(h)
+	if err != nil {
+		return nil, err
+	}
+	return c.Tree()
+}
+
+// Three way merge at the tree level with line level diff3 for text files
+func (r *Repo) MergeTrees(ctx context.Context, baseTree, oursTree, theirsTree *object.Tree, write bool) (*MergeResult, error) {
+	renames := &object.DiffTreeOptions{DetectRenames: true, RenameScore: 50, RenameLimit: 1000}
+	oursChanges, err := object.DiffTreeWithOptions(ctx, baseTree, oursTree, renames)
+	if err != nil {
+		return nil, err
+	}
+	theirsChanges, err := object.DiffTreeWithOptions(ctx, baseTree, theirsTree, renames)
 	if err != nil {
 		return nil, err
 	}
@@ -121,6 +193,8 @@ func (r *Repo) MergeTrees(ctx context.Context, baseTree, oursTree, theirsTree *o
 
 	result := &MergeResult{}
 	var edits []TreeEdit
+	baseAt := map[string]*object.TreeEntry{}
+	result.Conflicts = append(result.Conflicts, resolveRenames(baseTree, ourMap, theirMap, baseAt)...)
 	paths := map[string]bool{}
 	for p := range ourMap {
 		paths[p] = true
@@ -147,7 +221,11 @@ func (r *Repo) MergeTrees(ctx context.Context, baseTree, oursTree, theirsTree *o
 		case inTheirs && !inOurs:
 			edits = append(edits, editFor(p, t))
 		default:
-			edit, conflict, err := r.mergePath(ctx, p, baseEntry(baseTree, p), o, t)
+			base, carried := baseAt[p]
+			if !carried {
+				base = baseEntry(baseTree, p)
+			}
+			edit, conflict, err := r.mergePath(ctx, p, base, o, t)
 			if err != nil {
 				return nil, err
 			}
@@ -173,6 +251,58 @@ func (r *Repo) MergeTrees(ctx context.Context, baseTree, oursTree, theirsTree *o
 	}
 	result.Tree = tree
 	return result, nil
+}
+
+// Follows each side's renames so the other side's edit to the old path lands on the new one
+func resolveRenames(baseTree *object.Tree, ourMap, theirMap map[string]sideChange, baseAt map[string]*object.TreeEntry) []Conflict {
+	var out []Conflict
+	seen := map[string]bool{}
+	handle := func(renamer, other map[string]sideChange, renamerIsOurs bool) {
+		for old, rc := range renamer {
+			if rc.action != merkletrie.Delete || rc.renamedTo == "" || seen[old] {
+				continue
+			}
+			seen[old] = true
+			newPath := rc.renamedTo
+			base := baseEntry(baseTree, old)
+			oc, ok := other[old]
+			if !ok {
+				continue
+			}
+			sides := func(mine, theirs plumbing.Hash) (plumbing.Hash, plumbing.Hash) {
+				if renamerIsOurs {
+					return mine, theirs
+				}
+				return theirs, mine
+			}
+			switch {
+			case oc.action == merkletrie.Delete && oc.renamedTo == newPath:
+				// Both moved it to the same place, the content merges there against the old base
+				baseAt[newPath] = base
+			case oc.action == merkletrie.Delete && oc.renamedTo != "":
+				o, t := sides(renamer[newPath].entry.Hash, other[oc.renamedTo].entry.Hash)
+				out = append(out, Conflict{Path: old, Kind: "rename", Base: baseHash(base), Ours: o, Theirs: t})
+			case oc.action == merkletrie.Delete:
+				o, t := sides(renamer[newPath].entry.Hash, plumbing.ZeroHash)
+				out = append(out, Conflict{Path: old, Kind: "rename_delete", Base: baseHash(base), Ours: o, Theirs: t})
+			case oc.action == merkletrie.Modify:
+				if existing, taken := other[newPath]; taken && existing.action != merkletrie.Delete {
+					o, t := sides(renamer[newPath].entry.Hash, existing.entry.Hash)
+					out = append(out, Conflict{Path: newPath, Kind: "rename_add", Base: baseHash(base), Ours: o, Theirs: t})
+					continue
+				}
+				other[newPath] = sideChange{entry: oc.entry, action: merkletrie.Modify, from: oc.from}
+				delete(other, old)
+				moved := renamer[newPath]
+				moved.action = merkletrie.Modify
+				renamer[newPath] = moved
+				baseAt[newPath] = base
+			}
+		}
+	}
+	handle(ourMap, theirMap, true)
+	handle(theirMap, ourMap, false)
+	return out
 }
 
 func baseEntry(tree *object.Tree, p string) *object.TreeEntry {
@@ -311,22 +441,25 @@ func baseHash(e *object.TreeEntry) plumbing.Hash {
 
 // Conflicts where one side made a path a file and the other a directory
 func dirFileCollisions(paths []string, ours, theirs map[string]sideChange) []Conflict {
+	oursDirs, theirsDirs := ancestorDirs(ours), ancestorDirs(theirs)
 	var out []Conflict
-	seen := map[string]bool{}
 	for _, p := range paths {
-		for _, q := range paths {
-			if p == q || !strings.HasPrefix(q, p+"/") {
-				continue
-			}
-			oFile := ours[p].action != merkletrie.Delete && ours[p].entry.Mode != filemode.Empty
-			tFile := theirs[p].action != merkletrie.Delete && theirs[p].entry.Mode != filemode.Empty
-			_, oDir := ours[q]
-			_, tDir := theirs[q]
-			if (oFile && tDir) || (tFile && oDir) {
-				if !seen[p] {
-					seen[p] = true
-					out = append(out, Conflict{Path: p, Kind: "directory"})
-				}
+		oFile := ours[p].action != merkletrie.Delete && ours[p].entry.Mode != filemode.Empty
+		tFile := theirs[p].action != merkletrie.Delete && theirs[p].entry.Mode != filemode.Empty
+		if (oFile && theirsDirs[p]) || (tFile && oursDirs[p]) {
+			out = append(out, Conflict{Path: p, Kind: "directory"})
+		}
+	}
+	return out
+}
+
+// Every directory that holds a changed path on one side
+func ancestorDirs(side map[string]sideChange) map[string]bool {
+	out := map[string]bool{}
+	for p := range side {
+		for i := len(p) - 1; i > 0; i-- {
+			if p[i] == '/' {
+				out[p[:i]] = true
 			}
 		}
 	}

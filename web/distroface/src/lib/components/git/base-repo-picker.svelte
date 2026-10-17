@@ -17,7 +17,7 @@
 
 {#if repo.forkOf}
 	<Select type="single" value={self} onValueChange={(v) => { if (v && v !== self) onSelect(v); }}>
-		<SelectTrigger class="h-8 max-w-full sm:max-w-[16rem] text-[12.5px] font-mono" size="sm" aria-label="Base repository">
+		<SelectTrigger class="h-8 max-w-full sm:max-w-64 text-[12.5px] font-mono" size="sm" aria-label="Base repository">
 			<GitFork class="h-3.5 w-3.5 text-muted-foreground" />
 			{self}
 		</SelectTrigger>

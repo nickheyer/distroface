@@ -191,11 +191,11 @@ func (o *observer) manifestPushed(ctx context.Context, dist distribution.Reposit
 			return
 		}
 		o.log.Info("listener: auto-created repository %s/%s", namespace, name)
-	}
-
-	if r.GitRepoID == nil && o.linker != nil && dist != nil {
-		if source := imageSourceLabel(ctx, dist, m); source != "" {
-			o.linker.LinkImageBySource(ctx, r, source)
+		// Only a package this push creates follows its label, existing ones link by hand
+		if r.GitRepoID == nil && o.linker != nil && dist != nil {
+			if source := imageSourceLabel(ctx, dist, m); source != "" {
+				o.linker.LinkImageBySource(ctx, r, source)
+			}
 		}
 	}
 

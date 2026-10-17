@@ -33,6 +33,9 @@ import (
 // Caller errors mapped to InvalidArgument
 var ErrInvalid = errors.New("invalid argument")
 
+// Returned when an input passes a configured or built in cap
+var ErrTooLarge = errors.New("too large")
+
 // Returned when a write targets an archived repository
 var ErrArchived = errors.New("repository is archived")
 
@@ -41,6 +44,8 @@ var ErrMirror = errors.New("repository is a mirror")
 
 // Deletes and moves packages linked to a source repository
 type PackageManager interface {
+	CanManageImageRepo(ctx context.Context, user *auth.AuthenticatedUser, repo *db.Repository) bool
+	CanManageArtifactRepo(ctx context.Context, user *auth.AuthenticatedUser, repo *db.ArtifactRepository) bool
 	DeleteImageRepo(ctx context.Context, repo *db.Repository) error
 	DeleteArtifactRepo(ctx context.Context, repo *db.ArtifactRepository) error
 	MoveImageRepo(ctx context.Context, repo *db.Repository, newNamespace, newName, ownerID string, isOrg bool) error
@@ -62,6 +67,8 @@ type Manager struct {
 
 	subsMu sync.RWMutex
 	subs   []RefSubscriber
+	// Per repository maintenance mutexes
+	maintenance sync.Map
 }
 
 func NewManager(store *stores.Store, engine *Engine, blobs *artifacts.BlobStore, res *settings.Resolver, access *Access, dispatcher *webhook.Dispatcher, recorder *audit.Recorder, log *logger.Logger) *Manager {
@@ -314,7 +321,7 @@ func (m *Manager) Create(ctx context.Context, user *auth.AuthenticatedUser, p Cr
 		m.includeInCreatorTeams(ctx, user, repo)
 	}
 	_ = m.store.SetGitWatch(ctx, user.ID, repo.ID, "all")
-	m.AdoptPackages(ctx, repo)
+	m.AdoptPackages(ctx, user, repo)
 	if p.AutoInit && p.ForkOf == nil && p.TemplateOf == nil {
 		if err := m.autoInit(ctx, user, repo, p); err != nil {
 			m.log.Error("git auto init %s/%s: %v", repo.Namespace, repo.Name, err)
@@ -339,13 +346,25 @@ func (m *Manager) includeInCreatorTeams(ctx context.Context, user *auth.Authenti
 	}
 }
 
-// Links packages that already carry the repository's name
-func (m *Manager) AdoptPackages(ctx context.Context, repo *db.GitRepository) {
+// Whether a user may manage an image package, false without a package manager
+func (m *Manager) CanManageImage(ctx context.Context, user *auth.AuthenticatedUser, img *db.Repository) bool {
+	return m.packages != nil && m.packages.CanManageImageRepo(ctx, user, img)
+}
+
+// Whether a user may manage an artifact package, false without a package manager
+func (m *Manager) CanManageArtifact(ctx context.Context, user *auth.AuthenticatedUser, art *db.ArtifactRepository) bool {
+	return m.packages != nil && m.packages.CanManageArtifactRepo(ctx, user, art)
+}
+
+// Links same named packages the creator already manages, a link shares them
+func (m *Manager) AdoptPackages(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository) {
 	images, _ := m.store.ListUnlinkedRepositoriesForGit(ctx, repo.Namespace, repo.Name)
 	for _, img := range images {
-		_ = m.store.SetRepositoryGitRepo(ctx, img.ID, &repo.ID)
+		if m.CanManageImage(ctx, user, img) {
+			_ = m.store.SetRepositoryGitRepo(ctx, img.ID, &repo.ID)
+		}
 	}
-	if art, _ := m.store.GetArtifactRepository(ctx, repo.Namespace, repo.Name); art != nil && art.GitRepoID == nil {
+	if art, _ := m.store.GetArtifactRepository(ctx, repo.Namespace, repo.Name); art != nil && art.GitRepoID == nil && m.CanManageArtifact(ctx, user, art) {
 		_ = m.store.SetArtifactRepositoryGitRepo(ctx, art.ID, &repo.ID)
 	}
 }
@@ -476,8 +495,8 @@ func (m *Manager) Delete(ctx context.Context, user *auth.AuthenticatedUser, repo
 	if !deleteLinked && (len(images) > 0 || len(arts) > 0) {
 		return fmt.Errorf("%w: repository still has %d linked packages, pass delete_linked or unlink them first", ErrInvalid, len(images)+len(arts))
 	}
-	unlock := m.engine.LockRepo(repo.ID)
-	defer unlock()
+	lock := m.engine.LockRepo(repo.ID)
+	defer lock.Unlock()
 	if deleteLinked && m.packages != nil {
 		for _, img := range images {
 			if err := m.packages.DeleteImageRepo(ctx, img); err != nil {
@@ -497,9 +516,11 @@ func (m *Manager) Delete(ctx context.Context, user *auth.AuthenticatedUser, repo
 	for _, oid := range oids {
 		m.reapLFSBlob(ctx, oid)
 	}
-	if err := m.store.DeleteGitRepository(ctx, repo.ID); err != nil {
+	if err := m.store.DeleteGitRepository(ctx, repo); err != nil {
 		return err
 	}
+	m.res.ForgetRepo(repo.ID)
+	_ = m.access.enforcer.RemoveObject("git", repo.Namespace+"/"+repo.Name)
 	if err := m.engine.Delete(repo.Namespace, repo.Name); err != nil {
 		return err
 	}
@@ -543,38 +564,27 @@ func (m *Manager) Move(ctx context.Context, user *auth.AuthenticatedUser, repo *
 	} else {
 		return nil, fmt.Errorf("%w: namespace %q does not exist", ErrInvalid, newNamespace)
 	}
-	unlock := m.engine.LockRepo(repo.ID)
-	defer unlock()
+	lock := m.engine.LockRepo(repo.ID)
+	defer lock.Unlock()
+	defer m.engine.MarkRenaming(repo.ID)()
 	oldFull := repo.Namespace + "/" + repo.Name
+	undo, err := m.movePackages(ctx, repo, newNamespace, newName, ownerID, isOrg)
+	if err != nil {
+		return nil, err
+	}
 	if err := m.engine.Rename(repo.Namespace, repo.Name, newNamespace, newName); err != nil {
+		undo()
 		return nil, err
 	}
 	if err := m.store.MoveGitRepository(ctx, repo, newNamespace, newName, ownerID, isOrg); err != nil {
 		_ = m.engine.Rename(newNamespace, newName, repo.Namespace, repo.Name)
+		undo()
 		return nil, err
 	}
+	m.res.ForgetRepo(repo.ID)
 	newFull := newNamespace + "/" + newName
 	_ = m.access.enforcer.RenameObject("git", oldFull, newFull)
 	_ = m.store.RenameAPITokenScope(ctx, int32(v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_GIT_REPO), oldFull, newFull)
-	if m.packages != nil {
-		images, _ := m.store.ListRepositoriesByGitRepo(ctx, repo.ID)
-		for _, img := range images {
-			if img.Namespace == repo.Namespace && (img.Name == repo.Name || strings.HasPrefix(img.Name, repo.Name+"/")) {
-				child := newName + strings.TrimPrefix(img.Name, repo.Name)
-				if err := m.packages.MoveImageRepo(ctx, img, newNamespace, child, ownerID, isOrg); err != nil {
-					m.log.Error("moving linked image %s/%s: %v", img.Namespace, img.Name, err)
-				}
-			}
-		}
-		arts, _ := m.store.ListArtifactRepositoriesByGitRepo(ctx, repo.ID)
-		for _, art := range arts {
-			if art.Namespace == repo.Namespace && art.Name == repo.Name {
-				if err := m.packages.MoveArtifactRepo(ctx, art, newNamespace, newName, ownerID); err != nil {
-					m.log.Error("moving linked artifact repo %s/%s: %v", art.Namespace, art.Name, err)
-				}
-			}
-		}
-	}
 	moved, err := m.store.GetGitRepositoryByID(ctx, repo.ID)
 	if err != nil {
 		return nil, err
@@ -582,6 +592,78 @@ func (m *Manager) Move(ctx context.Context, user *auth.AuthenticatedUser, repo *
 	m.audit(ctx, user, "Git/move", oldFull+" -> "+newFull, audit.OutcomeSuccess)
 	m.dispatchRepoEvent(ctx, moved, user, "renamed")
 	return moved, nil
+}
+
+// Bytes a push may still carry under the quota, zero means unlimited
+func (m *Manager) pushBudget(ctx context.Context, repo *db.GitRepository, wiki bool) (int64, error) {
+	if wiki {
+		return 0, nil
+	}
+	maxMB := m.gitSettings(ctx, repo).GetMaxRepoSizeMb()
+	if maxMB <= 0 {
+		return 0, nil
+	}
+	size, err := m.engine.Size(repo.Namespace, repo.Name, false)
+	if err != nil {
+		return 0, nil
+	}
+	return max(maxMB*1024*1024-size, 0) + pushSlackBytes, fmt.Errorf("%w: push exceeds the %d MB repository quota", ErrTooLarge, maxMB)
+}
+
+// Moves the name linked packages first, the undo puts back whatever succeeded
+func (m *Manager) movePackages(ctx context.Context, repo *db.GitRepository, newNamespace, newName, ownerID string, isOrg bool) (func(), error) {
+	var undos []func()
+	undo := func() {
+		for i := len(undos) - 1; i >= 0; i-- {
+			undos[i]()
+		}
+	}
+	if m.packages == nil {
+		return undo, nil
+	}
+	images, err := m.store.ListRepositoriesByGitRepo(ctx, repo.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, img := range images {
+		if img.Namespace != repo.Namespace || (img.Name != repo.Name && !strings.HasPrefix(img.Name, repo.Name+"/")) {
+			continue
+		}
+		child := newName + strings.TrimPrefix(img.Name, repo.Name)
+		if err := m.packages.MoveImageRepo(ctx, img, newNamespace, child, ownerID, isOrg); err != nil {
+			undo()
+			return nil, fmt.Errorf("%w: moving linked image %s/%s: %v", ErrInvalid, img.Namespace, img.Name, err)
+		}
+		moved := *img
+		moved.Namespace, moved.Name = newNamespace, child
+		undos = append(undos, func() {
+			if err := m.packages.MoveImageRepo(ctx, &moved, img.Namespace, img.Name, img.OwnerID, img.IsOrgNamespace); err != nil {
+				m.log.Error("restoring linked image %s/%s: %v", img.Namespace, img.Name, err)
+			}
+		})
+	}
+	arts, err := m.store.ListArtifactRepositoriesByGitRepo(ctx, repo.ID)
+	if err != nil {
+		undo()
+		return nil, err
+	}
+	for _, art := range arts {
+		if art.Namespace != repo.Namespace || art.Name != repo.Name {
+			continue
+		}
+		if err := m.packages.MoveArtifactRepo(ctx, art, newNamespace, newName, ownerID); err != nil {
+			undo()
+			return nil, fmt.Errorf("%w: moving linked artifact repo %s/%s: %v", ErrInvalid, art.Namespace, art.Name, err)
+		}
+		moved := *art
+		moved.Namespace, moved.Name = newNamespace, newName
+		undos = append(undos, func() {
+			if err := m.packages.MoveArtifactRepo(ctx, &moved, art.Namespace, art.Name, art.OwnerID); err != nil {
+				m.log.Error("restoring linked artifact repo %s/%s: %v", art.Namespace, art.Name, err)
+			}
+		})
+	}
+	return undo, nil
 }
 
 // Copies every ref of a parent into a fresh repository
@@ -637,7 +719,10 @@ func (m *Manager) UseTemplate(ctx context.Context, user *auth.AuthenticatedUser,
 	if err != nil {
 		return repo, nil
 	}
-	entries, err := src.Tree(ctx, head, "", true)
+	entries, truncated, err := src.Tree(ctx, head, "", true)
+	if err == nil && truncated {
+		err = fmt.Errorf("%w: template has more than %d files", ErrTooLarge, MaxTreeEntries)
+	}
 	if err != nil {
 		return repo, err
 	}
@@ -713,8 +798,8 @@ func (m *Manager) CommitToBranch(ctx context.Context, repo *db.GitRepository, us
 	if repo.Type == v1.GitRepoType_GIT_REPO_TYPE_MIRROR && !req.Options.Mirror && !req.Wiki {
 		return plumbing.ZeroHash, ErrMirror
 	}
-	unlock := m.engine.LockRepo(repo.ID)
-	defer unlock()
+	lock := m.engine.LockRepo(repo.ID)
+	defer lock.Unlock()
 	r, err := m.engine.OpenRepo(repo.Namespace, repo.Name, req.Wiki)
 	if err != nil {
 		return plumbing.ZeroHash, err
@@ -780,7 +865,7 @@ func (m *Manager) CommitToBranch(ctx context.Context, repo *db.GitRepository, us
 	if r.HeadBranch() == "" {
 		_ = r.SetHead(target)
 	}
-	m.AfterRefUpdate(ctx, RefEvent{Repo: repo, Actor: user, Updates: []RefUpdate{{Name: refName, Old: old, New: newCommit}}, Wiki: req.Wiki, Mirror: opts.Mirror})
+	m.AfterRefUpdate(ctx, RefEvent{Repo: repo, Actor: user, Updates: []RefUpdate{{Name: refName, Old: old, New: newCommit}}, Wiki: req.Wiki, Mirror: opts.Mirror}, lock)
 	return newCommit, nil
 }
 
@@ -792,8 +877,8 @@ func (m *Manager) UpdateRef(ctx context.Context, repo *db.GitRepository, user *a
 	if repo.Type == v1.GitRepoType_GIT_REPO_TYPE_MIRROR && !opts.Mirror {
 		return ErrMirror
 	}
-	unlock := m.engine.LockRepo(repo.ID)
-	defer unlock()
+	lock := m.engine.LockRepo(repo.ID)
+	defer lock.Unlock()
 	r, err := m.engine.OpenRepo(repo.Namespace, repo.Name, opts.Wiki)
 	if err != nil {
 		return err
@@ -812,14 +897,15 @@ func (m *Manager) UpdateRef(ctx context.Context, repo *db.GitRepository, user *a
 			forced = true
 		}
 	}
-	m.AfterRefUpdate(ctx, RefEvent{Repo: repo, Actor: user, Updates: []RefUpdate{{Name: name, Old: old, New: new, Forced: forced}}, Wiki: opts.Wiki, Mirror: opts.Mirror})
+	m.AfterRefUpdate(ctx, RefEvent{Repo: repo, Actor: user, Updates: []RefUpdate{{Name: name, Old: old, New: new, Forced: forced}}, Wiki: opts.Wiki, Mirror: opts.Mirror}, lock)
 	return nil
 }
 
 // ── Post receive fan out ─────────────────────────────────────────────────
 
-// Runs the bookkeeping, webhooks, audit, and subscribers after refs moved
-func (m *Manager) AfterRefUpdate(ctx context.Context, ev RefEvent) {
+// Bookkeeping under store lock, fan out under push lock only
+func (m *Manager) AfterRefUpdate(ctx context.Context, ev RefEvent, lock *RepoLock) {
+	defer lock.UnlockStore()
 	repo := ev.Repo
 	r, err := m.engine.OpenRepo(repo.Namespace, repo.Name, ev.Wiki)
 	if err != nil {
@@ -854,6 +940,7 @@ func (m *Manager) AfterRefUpdate(ctx context.Context, ev RefEvent) {
 		m.refreshCounts(ctx, repo, r)
 	}
 	r.Close()
+	lock.UnlockStore()
 
 	actor := "system"
 	actorID := ""
@@ -995,8 +1082,8 @@ func (m *Manager) Audit(ctx context.Context, ev audit.Event) {
 
 // Fetches refspecs from a url into a repository, every write goes through the hooks
 func (m *Manager) fetchInto(ctx context.Context, repo *db.GitRepository, wiki bool, remoteURL string, refspecs []string, clientOpts []fetchOption) error {
-	unlock := m.engine.LockRepo(repo.ID)
-	defer unlock()
+	lock := m.engine.LockRepo(repo.ID)
+	defer lock.Unlock()
 	r, err := m.engine.OpenRepo(repo.Namespace, repo.Name, wiki)
 	if err != nil {
 		return err
@@ -1007,11 +1094,39 @@ func (m *Manager) fetchInto(ctx context.Context, repo *db.GitRepository, wiki bo
 		return err
 	}
 	after := snapshotRefs(r)
-	updates := diffSnapshots(before, after)
+	// Server owned staging refs are plumbing, nobody is told about them
+	var updates []RefUpdate
+	for _, u := range diffSnapshots(before, after) {
+		if !IsStagingRef(u.Name) {
+			updates = append(updates, u)
+		}
+	}
 	if len(updates) > 0 {
-		m.AfterRefUpdate(ctx, RefEvent{Repo: repo, Actor: nil, Updates: updates, Wiki: wiki, Mirror: true})
+		m.AfterRefUpdate(ctx, RefEvent{Repo: repo, Actor: nil, Updates: updates, Wiki: wiki, Mirror: true}, lock)
 	}
 	return nil
+}
+
+// Refs under refs/distroface that only exist while an operation runs
+func IsStagingRef(name plumbing.ReferenceName) bool {
+	return strings.HasPrefix(name.String(), "refs/distroface/")
+}
+
+// Removes a staging ref, the objects it pinned fall to maintenance
+func (m *Manager) DropStagingRef(ctx context.Context, repo *db.GitRepository, ref plumbing.ReferenceName) {
+	if !IsStagingRef(ref) {
+		return
+	}
+	unlock := m.engine.LockStore(repo.ID)
+	defer unlock()
+	r, err := m.engine.OpenRepo(repo.Namespace, repo.Name, false)
+	if err != nil {
+		return
+	}
+	defer r.Close()
+	if current, err := r.Resolve(ref.String()); err == nil {
+		_ = r.UpdateRef(ref, current, plumbing.ZeroHash)
+	}
 }
 
 func snapshotRefs(r *Repo) map[plumbing.ReferenceName]plumbing.Hash {

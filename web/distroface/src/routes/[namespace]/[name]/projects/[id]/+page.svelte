@@ -133,7 +133,7 @@
 			<Button variant="ghost" size="sm" class="h-8" href="{base}/projects"><ArrowLeft class="h-3.5 w-3.5 mr-1" />Projects</Button>
 			<div class="min-w-0 flex-1 basis-48">
 				<div class="flex flex-wrap items-center gap-2">
-					<h2 class="section-title min-w-0 break-words">{project.title}</h2>
+					<h2 class="section-title min-w-0 wrap-break-word">{project.title}</h2>
 					{#if !project.public}<Badge variant="outline" class="text-[11px] gap-1 text-muted-foreground" title="Only collaborators with write access to projects see this board"><Lock class="h-3 w-3" />Private</Badge>{/if}
 					{#if project.state === 'closed'}<Badge variant="outline" class="text-[11px]">Closed</Badge>{/if}
 					<span class="text-[12.5px] text-muted-foreground tabular-nums">{project.openCount} open, {project.closedCount} closed</span>

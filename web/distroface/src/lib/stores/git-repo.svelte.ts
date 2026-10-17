@@ -9,6 +9,7 @@ class GitRepoStore {
 	loading = $state(false);
 	error = $state('');
 	notFound = $state(false);
+	loadedFor = $state(''); // Wont be the same as repo after rename
 
 	// Loads once per namespace and name, force refetches
 	async load(namespace: string, name: string, force = false): Promise<GitRepository | undefined> {
@@ -18,6 +19,7 @@ class GitRepoStore {
 		this.loading = true;
 		this.error = '';
 		this.notFound = false;
+		this.loadedFor = `${namespace}/${name}`;
 		try {
 			const resp = await rpcClient.git.getGitRepository({ namespace, name }, silentCallOptions);
 			this.repo = resp.repository;

@@ -48,6 +48,7 @@ type job struct {
 	exec       executor
 	docker     *client.Client
 	network    string
+	confined   bool
 	hasBash    atomic.Int32
 
 	github  map[string]any
@@ -358,9 +359,11 @@ func (j *job) prepare(ctx context.Context) error {
 	}
 	j.docker = cli
 	j.network = "dfcli-" + shortID(j.task.JobId)
+	j.confined = true
 	j.exec = &dockerExecutor{
 		cli: cli, jobID: j.task.JobId, jobDir: dir, image: image, options: j.task.ContainerOptions,
 		services: j.task.Services, log: j.log, auth: registryAuth{host: registryHost(j.task.ServerUrl), token: j.task.Token},
+		privileged: j.r.cfg.PrivilegedJobs,
 	}
 	return nil
 }

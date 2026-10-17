@@ -218,7 +218,7 @@
 						{#each variables as variable (variable.name)}
 							<TableRow>
 								<TableCell class="font-mono text-sm py-3 px-3 break-all">{variable.name}</TableCell>
-								<TableCell class="font-mono text-[13px] text-muted-foreground py-3 px-3 max-w-[12rem] sm:max-w-md truncate">{variable.value}</TableCell>
+								<TableCell class="font-mono text-[13px] text-muted-foreground py-3 px-3 max-w-48 sm:max-w-md truncate">{variable.value}</TableCell>
 								<TableCell class="text-sm text-muted-foreground py-3 px-3 hidden sm:table-cell">
 									{variable.updatedAt ? relativeTime(timestampDate(variable.updatedAt)) : '-'}
 								</TableCell>

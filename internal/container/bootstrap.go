@@ -28,9 +28,6 @@ func seedUsers(ctx context.Context, users []config.BootstrapUser, store *stores.
 		if u.Username == "" || u.Password == "" {
 			return fmt.Errorf("bootstrap user requires username and password")
 		}
-		if !utils.NamespaceAllowed(u.Username) {
-			return fmt.Errorf("bootstrap user %q: name is invalid or reserved", u.Username)
-		}
 
 		existing, err := store.GetUserByUsername(ctx, u.Username)
 		if err != nil {
@@ -38,6 +35,9 @@ func seedUsers(ctx context.Context, users []config.BootstrapUser, store *stores.
 		}
 		if existing != nil {
 			continue
+		}
+		if !utils.UsernameRegex.MatchString(u.Username) {
+			return fmt.Errorf("bootstrap user %q: name is invalid", u.Username)
 		}
 
 		user, err := authManager.CreateLocalUser(ctx, u.Username, u.Email, u.Password)
@@ -71,9 +71,6 @@ func seedOrgs(ctx context.Context, orgs []config.BootstrapOrg, store *stores.Sto
 		if o.Name == "" {
 			return fmt.Errorf("bootstrap org requires name")
 		}
-		if !utils.NamespaceAllowed(o.Name) {
-			return fmt.Errorf("bootstrap org %q: name is invalid or reserved", o.Name)
-		}
 		for _, m := range o.Members {
 			if m.Username == "" {
 				return fmt.Errorf("bootstrap org %q: member requires username", o.Name)
@@ -90,6 +87,9 @@ func seedOrgs(ctx context.Context, orgs []config.BootstrapOrg, store *stores.Sto
 			return fmt.Errorf("bootstrap org %q: %w", o.Name, err)
 		}
 		if org == nil {
+			if !utils.UsernameRegex.MatchString(o.Name) {
+				return fmt.Errorf("bootstrap org %q: name is invalid", o.Name)
+			}
 			// Org names must not shadow usernames
 			user, err := store.GetUserByUsername(ctx, o.Name)
 			if err != nil {
@@ -111,6 +111,9 @@ func seedOrgs(ctx context.Context, orgs []config.BootstrapOrg, store *stores.Sto
 			}
 			if err := store.CreateOrganization(ctx, org); err != nil {
 				return fmt.Errorf("bootstrap org %q: %w", o.Name, err)
+			}
+			if _, err := store.EnsureDefaultTeam(ctx, org.ID); err != nil {
+				return fmt.Errorf("bootstrap org %q default team: %w", o.Name, err)
 			}
 			log.Info("Bootstrap created org %q", o.Name)
 		}

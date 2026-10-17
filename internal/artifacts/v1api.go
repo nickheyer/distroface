@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"path"
@@ -21,6 +23,7 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
+	"github.com/nickheyer/distroface/pkg/utils"
 )
 
 // Drop in v1 rest facade for old dfcli and ci
@@ -547,6 +550,21 @@ func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *aut
 		return
 	}
 	defer f.Close()
+	ct := artifact.MimeType
+	if ct == "" {
+		ct = mime.TypeByExtension(path.Ext(artifact.Name))
+	}
+	if ct == "" {
+		head := make([]byte, 512)
+		n, _ := io.ReadFull(f, head)
+		ct = http.DetectContentType(head[:n])
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
+			return
+		}
+	}
+	utils.HardenUserContent(w.Header(), ct)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.Name))
 	http.ServeContent(w, r, artifact.Name, info.ModTime(), f)
 }
 

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/db"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/wneessen/go-mail"
@@ -106,6 +107,10 @@ func (s *Service) drain(ctx context.Context) {
 			if m.Attempts >= maxAttempts {
 				m.Status = StatusFailed
 				s.log.Error("mail: giving up on %s to %s: %v", m.ID, m.To, err)
+				if s.audit != nil {
+					s.audit.Record(ctx, audit.Event{Action: "Mail/send", Resource: "mail", Outcome: audit.OutcomeError,
+						Detail: fmt.Sprintf("%q to %s failed after %d attempts: %s", m.Subject, m.To, m.Attempts, m.LastError)})
+				}
 			} else {
 				m.NextTry = now.Add(time.Duration(1<<uint(m.Attempts)) * time.Minute)
 			}
@@ -158,6 +163,9 @@ func (s *Service) deliver(ctx context.Context, ms *v1.MailSettings, m *db.MailMe
 	}
 	msg.Subject(m.Subject)
 	msg.SetDate()
+	// Every message is machine generated, auto responders must stay quiet
+	msg.SetGenHeader(mail.Header("Auto-Submitted"), "auto-generated")
+	msg.SetGenHeader(mail.Header("X-Auto-Response-Suppress"), "All")
 	msg.SetBodyString(mail.TypeTextPlain, m.Text)
 	if m.HTML != "" {
 		msg.AddAlternativeString(mail.TypeTextHTML, m.HTML)

@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -21,6 +22,7 @@ import (
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	"github.com/nickheyer/distroface/pkg/utils"
 	"gopkg.in/yaml.v3"
 )
 
@@ -31,6 +33,8 @@ const (
 	gitCommitsMaxLimit     = 100
 	gitGrepLimit           = 500
 	gitLastCommitBudget    = 2000
+	// Largest file the web editor accepts, bigger files arrive by push
+	gitMaxEditBytes = 25 << 20
 )
 
 type GitFileService struct {
@@ -113,11 +117,11 @@ func (s *GitFileService) GetTree(ctx context.Context, req *v1.GetTreeRequest) (*
 		return nil, err
 	}
 	dir := gitCleanPath(req.Path)
-	entries, err := r.Tree(ctx, commit, dir, req.Recursive)
+	entries, truncated, err := r.Tree(ctx, commit, dir, req.Recursive)
 	if err != nil {
 		return nil, connect.Errorf(connect.CodeNotFound, "path %q not found", dir)
 	}
-	out := &v1.GetTreeResponse{Sha: commit.String(), Path: dir}
+	out := &v1.GetTreeResponse{Sha: commit.String(), Path: dir, Truncated: truncated}
 	enrich := newGitCommitEnricher(ctx, s.store, s.manager, repo, r)
 	var last map[string]*object.Commit
 	if req.WithLastCommit && !req.Recursive {
@@ -342,10 +346,17 @@ func (s *GitFileService) resolveHead(ctx context.Context, user *auth.Authenticat
 		}
 		// Objects must live in the base repository for a diff to be computed
 		if _, err := r.Commit(h); err != nil {
-			staging := "+" + plumbing.NewBranchReferenceName(head[i+1:]).String() + ":refs/distroface/compare/" + h.String()
-			if err := s.manager.FetchLocal(ctx, repo, other, false, staging); err != nil {
+			if maxMB := s.manager.GitSettings(ctx, repo).GetMaxRepoSizeMb(); maxMB > 0 {
+				if size, err := s.manager.Engine().Size(repo.Namespace, repo.Name, false); err == nil && size > maxMB*1024*1024 {
+					return plumbing.ZeroHash, nil, connect.Errorf(connect.CodeResourceExhausted, "repository is over its size quota, compare across repositories is unavailable")
+				}
+			}
+			staging := plumbing.ReferenceName("refs/distroface/compare/" + h.String())
+			if err := s.manager.FetchLocal(ctx, repo, other, false, "+"+plumbing.NewBranchReferenceName(head[i+1:]).String()+":"+staging.String()); err != nil {
 				return plumbing.ZeroHash, nil, mapGitErr(err)
 			}
+			// The ref only had to exist for the fetch, the objects stay until pruned
+			s.manager.DropStagingRef(ctx, repo, staging)
 		}
 		return h, other, nil
 	}
@@ -519,9 +530,12 @@ func (s *GitFileService) Blame(ctx context.Context, req *v1.BlameRequest) (*v1.B
 		return nil, err
 	}
 	p := gitCleanPath(req.Path)
-	runs, err := r.Blame(commit, p)
+	runs, err := r.Blame(ctx, commit, p)
 	if err != nil {
-		return nil, connect.Errorf(connect.CodeNotFound, "file %q not found", p)
+		if errors.Is(err, gitrepo.ErrNotFound) {
+			return nil, connect.Errorf(connect.CodeNotFound, "file %q not found", p)
+		}
+		return nil, mapGitErr(err)
 	}
 	enrich := newGitCommitEnricher(ctx, s.store, s.manager, repo, r)
 	out := &v1.BlameResponse{Sha: commit.String()}
@@ -598,6 +612,9 @@ func (s *GitFileService) UpdateFiles(ctx context.Context, req *v1.UpdateFilesReq
 		p := gitCleanPath(op.Path)
 		if p == "" {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "operation path is required")
+		}
+		if len(op.Content) > gitMaxEditBytes {
+			return nil, connect.Errorf(connect.CodeResourceExhausted, "%s exceeds the %d MB web edit limit, push it with git instead", p, gitMaxEditBytes>>20)
 		}
 		switch op.Kind {
 		case v1.FileOperationKind_FILE_OPERATION_KIND_CREATE, v1.FileOperationKind_FILE_OPERATION_KIND_UPDATE:
@@ -852,7 +869,7 @@ func gitLoadIssueTemplates(ctx context.Context, r *gitrepo.Repo, commit plumbing
 				out = append(out, t)
 			}
 		}
-		entries, err := r.Tree(ctx, commit, dir+"/ISSUE_TEMPLATE", false)
+		entries, _, err := r.Tree(ctx, commit, dir+"/ISSUE_TEMPLATE", false)
 		if err != nil {
 			continue
 		}
@@ -942,6 +959,9 @@ func (s *GitFileService) CreateCommitStatus(ctx context.Context, req *v1.CreateC
 	state := gitStatusStateString(req.State)
 	if state == "" {
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "state is required")
+	}
+	if req.TargetUrl != "" && !utils.IsWebURL(req.TargetUrl) {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "target_url must be an http or https url")
 	}
 	st := &storage.GitCommitStatus{
 		ID:          uuid.New().String(),

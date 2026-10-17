@@ -46,6 +46,13 @@ func (m *Manager) HandleInboundMail(ctx context.Context, token *db.MailInboundTo
 	if err != nil || u == nil {
 		return fmt.Errorf("%w: user for mailed reply", ErrNotFound)
 	}
+	if !u.IsActive {
+		return fmt.Errorf("%w: account is disabled", ErrForbidden)
+	}
+	// The token reached one mailbox, only that mailbox may speak for the account
+	if from == "" || u.Email == nil || !strings.EqualFold(strings.TrimSpace(*u.Email), strings.TrimSpace(from)) {
+		return fmt.Errorf("%w: reply sender %q is not the notified address", ErrForbidden, from)
+	}
 	text := stripMailReply(body)
 	if text == "" {
 		return fmt.Errorf("%w: empty reply", ErrInvalid)

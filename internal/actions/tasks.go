@@ -5,12 +5,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
@@ -99,53 +102,73 @@ func (m *Manager) FetchTask(ctx context.Context, runner *db.ActionsRunner, wait 
 	}
 }
 
+// Queued jobs examined per poll before giving up, in pages
+const (
+	claimPageSize = 100
+	claimMaxPages = 20
+)
+
 // Claims the oldest queued job matching scope, labels, and concurrency
 func (m *Manager) tryClaim(ctx context.Context, runner *db.ActionsRunner) (*v1.Task, error) {
-	jobs, err := m.store.ListQueuedActionsJobs(ctx, 200)
-	if err != nil {
-		return nil, err
-	}
-	if len(jobs) == 0 {
-		return nil, nil
-	}
 	runnerLabels := decodeStrings(runner.Labels)
-	runs := map[string]*db.ActionsRun{}
-	repos := map[string]*db.GitRepository{}
-	var candidates []string
-	for _, j := range jobs {
-		run := runs[j.RunID]
-		if run == nil {
-			run, _ = m.store.GetActionsRunByID(ctx, j.RunID)
-			if run == nil {
+	var job *db.ActionsJob
+	var run *db.ActionsRun
+	var repo *db.GitRepository
+	// Scope is filtered in sql, labels in memory, so unservable jobs never block the queue
+	for page := 0; page < claimMaxPages && job == nil; page++ {
+		jobs, err := m.store.ListQueuedActionsJobsInScope(ctx, runner.ScopeKind, runner.ScopeID, claimPageSize, page*claimPageSize)
+		if err != nil {
+			return nil, err
+		}
+		if len(jobs) == 0 {
+			return nil, nil
+		}
+		runIDs := make([]string, 0, len(jobs))
+		for _, j := range jobs {
+			runIDs = append(runIDs, j.RunID)
+		}
+		runs, err := m.store.GetActionsRunsByIDs(ctx, runIDs)
+		if err != nil {
+			return nil, err
+		}
+		repoIDs := make([]string, 0, len(runs))
+		for _, r := range runs {
+			repoIDs = append(repoIDs, r.RepoID)
+		}
+		repos, err := m.store.GetGitRepositoriesByIDs(ctx, repoIDs)
+		if err != nil {
+			return nil, err
+		}
+		var candidates []string
+		for _, j := range jobs {
+			r := runs[j.RunID]
+			if r == nil || repos[r.RepoID] == nil || !labelsSubset(decodeStrings(j.RunsOn), runnerLabels) {
 				continue
 			}
-			runs[j.RunID] = run
-		}
-		repo := repos[run.RepoID]
-		if repo == nil {
-			repo, _ = m.store.GetGitRepositoryByID(ctx, run.RepoID)
-			if repo == nil {
+			if r.Concurrency != "" && m.groupBusy(ctx, r) {
 				continue
 			}
-			repos[run.RepoID] = repo
+			if j.Concurrency != "" && m.jobGroupBusy(ctx, r.RepoID, j) {
+				continue
+			}
+			candidates = append(candidates, j.ID)
 		}
-		if !m.runnerServes(ctx, runner, repo) || !labelsSubset(decodeStrings(j.RunsOn), runnerLabels) {
+		if len(candidates) == 0 {
+			if len(jobs) < claimPageSize {
+				return nil, nil
+			}
 			continue
 		}
-		if run.Concurrency != "" && m.groupBusy(ctx, run) {
-			continue
+		if job, err = m.store.ClaimActionsJob(ctx, runner.ID, candidates); err != nil {
+			return nil, err
 		}
-		candidates = append(candidates, j.ID)
+		if job != nil {
+			run, repo = runs[job.RunID], repos[runs[job.RunID].RepoID]
+		}
 	}
-	if len(candidates) == 0 {
+	if job == nil {
 		return nil, nil
 	}
-	job, err := m.store.ClaimActionsJob(ctx, runner.ID, candidates)
-	if err != nil || job == nil {
-		return nil, err
-	}
-	run := runs[job.RunID]
-	repo := repos[run.RepoID]
 	if run.Status != StatusRunning {
 		now := time.Now().UTC()
 		cols := map[string]any{"status": StatusRunning}
@@ -196,6 +219,20 @@ func labelsSubset(want, have []string) bool {
 }
 
 // Another run of the same concurrency group is executing
+// Another job of the same job level group is running in the repository
+func (m *Manager) jobGroupBusy(ctx context.Context, repoID string, j *db.ActionsJob) bool {
+	live, err := m.store.ListLiveJobsInGroup(ctx, repoID, j.Concurrency, j.ID)
+	if err != nil {
+		return false
+	}
+	for _, other := range live {
+		if other.Status == StatusRunning {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) groupBusy(ctx context.Context, run *db.ActionsRun) bool {
 	live, err := m.store.ListLiveRunsInGroup(ctx, run.RepoID, run.Concurrency, run.ID)
 	if err != nil {
@@ -226,9 +263,11 @@ func (m *Manager) buildTask(ctx context.Context, runner *db.ActionsRunner, repo 
 	}
 	ectx := m.jobContext(ctx, repo, run, wf, def, job, needs, status)
 	orgID := m.repoOrgID(ctx, repo)
-	secrets, err := m.repoSecrets(ctx, repo, orgID)
-	if err != nil {
-		return nil, err
+	secrets := map[string]string{}
+	if !run.FromFork {
+		if secrets, err = m.repoSecrets(ctx, repo, orgID); err != nil {
+			return nil, err
+		}
 	}
 	token, err := m.issueJobToken(ctx, repo, run, job)
 	if err != nil {
@@ -291,20 +330,12 @@ func (m *Manager) buildTask(ctx context.Context, runner *db.ActionsRunner, repo 
 			Ports: svc.Ports, Volumes: svc.Volumes, Options: interp(svc.Options),
 		})
 	}
+	// Step fields stay raw, the runner evaluates them exactly once
 	for i, st := range def.Job.Steps {
-		stepCtx := *ectx
-		stepCtx.Env = mergeEnv(def.WorkflowEnv, def.Job.Env, st.Env)
-		stepInterp := func(s string) string {
-			out, err := Interpolate(s, &stepCtx)
-			if err != nil {
-				return s
-			}
-			return out
-		}
 		ts := &v1.TaskStep{
-			Number: int32(i + 1), Name: stepInterp(st.Name), Id: st.ID,
-			Uses: stepInterp(st.Uses), Run: stepInterp(st.Run), Shell: st.Shell,
-			WorkingDirectory: stepInterp(st.WorkingDirectory),
+			Number: int32(i + 1), Name: st.Name, Id: st.ID,
+			Uses: st.Uses, Run: st.Run, Shell: st.Shell,
+			WorkingDirectory: st.WorkingDirectory,
 			Env:              map[string]string{}, With: map[string]string{},
 			Condition: st.If, ContinueOnError: st.ContinueOnError, TimeoutMinutes: int32(st.TimeoutMinutes),
 		}
@@ -318,12 +349,8 @@ func (m *Manager) buildTask(ctx context.Context, runner *db.ActionsRunner, repo 
 		if ts.WorkingDirectory == "" && def.Job.Defaults != nil {
 			ts.WorkingDirectory = def.Job.Defaults.WorkingDirectory
 		}
-		for k, v := range st.Env {
-			ts.Env[k] = stepInterp(v)
-		}
-		for k, v := range st.With {
-			ts.With[k] = stepInterp(v)
-		}
+		maps.Copy(ts.Env, st.Env)
+		maps.Copy(ts.With, st.With)
 		task.Steps = append(task.Steps, ts)
 	}
 
@@ -373,7 +400,7 @@ func (m *Manager) issueJobToken(ctx context.Context, repo *db.GitRepository, run
 	}
 	days := jobTokenDays
 	plain, row, err := m.auth.GenerateScopedAPIToken(ctx, owner, fmt.Sprintf("actions job %s", job.ID), &days, &auth.CredentialScope{
-		Type: v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_GIT_REPO, ID: repo.Namespace + "/" + repo.Name,
+		Type: v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_GIT_REPO, ID: repo.Namespace + "/" + repo.Name, ReadOnly: run.FromFork,
 	})
 	if err != nil {
 		return "", err
@@ -450,7 +477,19 @@ func (m *Manager) AppendTaskLog(ctx context.Context, runner *db.ActionsRunner, j
 	if len(data) == 0 {
 		return job.LogChunks, nil
 	}
-	if err := m.store.AppendActionsJobLog(ctx, job.ID, index, data); err != nil {
+	if len(data) > MaxJobLogChunkBytes {
+		return job.LogChunks, fmt.Errorf("%w: log chunk exceeds %d KB", ErrTooLarge, MaxJobLogChunkBytes>>10)
+	}
+	if job.LogBytes+int64(len(data)) > MaxJobLogBytes {
+		return job.LogChunks, fmt.Errorf("%w: job log exceeds %d MB", ErrTooLarge, MaxJobLogBytes>>20)
+	}
+	if err := m.store.AppendActionsJobLog(ctx, job.ID, index, data, MaxJobLogBytes); err != nil {
+		switch {
+		case errors.Is(err, stores.ErrJobLogCapped):
+			return job.LogChunks, fmt.Errorf("%w: job log exceeds %d MB", ErrTooLarge, MaxJobLogBytes>>20)
+		case errors.Is(err, stores.ErrJobLogConflict):
+			return job.LogChunks, fmt.Errorf("%w: expected log index %d", ErrConflict, job.LogChunks)
+		}
 		return job.LogChunks, err
 	}
 	return index + 1, nil
@@ -493,6 +532,9 @@ func (m *Manager) CompleteTask(ctx context.Context, runner *db.ActionsRunner, jo
 	m.clearCancel(job.ID)
 	m.compactJobLogs(ctx, job)
 	m.writeCommitStatus(ctx, repo, run, job, conclusion)
+	if conclusion == ConclusionFailure || conclusion == ConclusionTimedOut {
+		m.failFast(ctx, repo, run, job)
+	}
 	if fresh, _ := m.store.GetActionsRunByID(ctx, run.ID); fresh != nil {
 		run = fresh
 	}

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -38,6 +39,8 @@ type dockerExecutor struct {
 	services []*v1.TaskService
 	log      *logStream
 	auth     registryAuth
+	// Runner level consent to the docker socket, --privileged, and host binds
+	privileged bool
 
 	networkID   string
 	containerID string
@@ -94,6 +97,7 @@ func (d *dockerExecutor) Start(ctx context.Context) error {
 		return err
 	}
 	opts := parseContainerOptions(d.options)
+	binds := d.restrict(&opts, nil, "container")
 	d.user = opts.user
 	cfg := &container.Config{
 		Image:      d.image,
@@ -109,14 +113,16 @@ func (d *dockerExecutor) Start(ctx context.Context) error {
 		cfg.Cmd = nil
 	}
 	host := &container.HostConfig{
-		Binds:       append([]string{d.jobDir + ":" + containerWorkRoot}, opts.volumes...),
+		Binds:       append([]string{d.jobDir + ":" + containerWorkRoot}, binds...),
 		NetworkMode: container.NetworkMode(netName),
 		Privileged:  opts.privileged,
 		ExtraHosts:  opts.hosts,
 		DNS:         opts.dns,
 	}
-	if _, err := os.Stat("/var/run/docker.sock"); err == nil {
-		host.Binds = append(host.Binds, "/var/run/docker.sock:/var/run/docker.sock")
+	if d.privileged {
+		if _, err := os.Stat("/var/run/docker.sock"); err == nil {
+			host.Binds = append(host.Binds, "/var/run/docker.sock:/var/run/docker.sock")
+		}
 	}
 	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{netName: {Aliases: []string{"job"}}}}
 	resp, err := d.cli.ContainerCreate(ctx, cfg, host, netCfg, nil, "dfcli-job-"+shortID(d.jobID))
@@ -140,11 +146,12 @@ func (d *dockerExecutor) startService(ctx context.Context, svc *v1.TaskService) 
 		return err
 	}
 	opts := parseContainerOptions(svc.Options)
+	binds := d.restrict(&opts, svc.Volumes, "service "+svc.Name)
 	cfg := &container.Config{Image: svc.Image, Env: append(envSlice(svc.Env), opts.env...), Labels: d.labels(), User: opts.user, ExposedPorts: nat.PortSet{}}
 	if len(opts.entrypoint) > 0 {
 		cfg.Entrypoint = opts.entrypoint
 	}
-	host := &container.HostConfig{Binds: opts.volumes, Privileged: opts.privileged, PortBindings: nat.PortMap{}, ExtraHosts: opts.hosts, DNS: opts.dns}
+	host := &container.HostConfig{Binds: binds, Privileged: opts.privileged, PortBindings: nat.PortMap{}, ExtraHosts: opts.hosts, DNS: opts.dns}
 	for _, p := range svc.Ports {
 		hostPort, cPort, found := strings.Cut(p, ":")
 		if !found {
@@ -161,7 +168,6 @@ func (d *dockerExecutor) startService(ctx context.Context, svc *v1.TaskService) 
 		cfg.ExposedPorts[port] = struct{}{}
 		host.PortBindings[port] = append(host.PortBindings[port], nat.PortBinding{HostPort: hostPort})
 	}
-	host.Binds = append(host.Binds, svc.Volumes...)
 	netName := "dfcli-" + shortID(d.jobID)
 	host.NetworkMode = container.NetworkMode(netName)
 	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{netName: {Aliases: []string{svc.Name}}}}
@@ -209,11 +215,29 @@ func (d *dockerExecutor) waitHealthy(ctx context.Context, id, name string) error
 	}
 }
 
-// Pulls only images that are missing locally
-func (d *dockerExecutor) pull(ctx context.Context, ref string) error {
-	if _, err := d.cli.ImageInspect(ctx, ref); err == nil {
-		return nil
+// Names docker accepts as volumes, anything else is a host path
+var volumeName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`)
+
+// Drops --privileged and host binds unless the runner allows privileged jobs
+func (d *dockerExecutor) restrict(o *containerOptions, volumes []string, what string) []string {
+	if o.privileged && !d.privileged {
+		o.privileged = false
+		d.log.Line("##[warning]%s: --privileged ignored, register the runner with --privileged-jobs to allow it", what)
 	}
+	var kept []string
+	for _, v := range append(append([]string{}, o.volumes...), volumes...) {
+		src, _, bind := strings.Cut(v, ":")
+		if d.privileged || !bind || volumeName.MatchString(src) || within(d.jobDir, src) {
+			kept = append(kept, v)
+			continue
+		}
+		d.log.Line("##[warning]%s: volume %s ignored, host paths need a runner registered with --privileged-jobs", what, v)
+	}
+	return kept
+}
+
+// Pulls before every job, a local copy serves only when the pull fails
+func (d *dockerExecutor) pull(ctx context.Context, ref string) error {
 	d.log.Line("Pulling image %s", ref)
 	opts := image.PullOptions{}
 	if d.auth.token != "" && d.auth.host != "" && strings.HasPrefix(ref, d.auth.host+"/") {
@@ -221,11 +245,21 @@ func (d *dockerExecutor) pull(ctx context.Context, ref string) error {
 		opts.RegistryAuth = base64.URLEncoding.EncodeToString(raw)
 	}
 	rc, err := d.cli.ImagePull(ctx, ref, opts)
-	if err != nil {
+	if err == nil {
+		err = drainJSONStream(rc, nil)
+		rc.Close()
+	}
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
 		return fmt.Errorf("pull %s: %w", ref, err)
 	}
-	defer rc.Close()
-	return drainJSONStream(rc, nil)
+	if _, inspectErr := d.cli.ImageInspect(ctx, ref); inspectErr == nil {
+		d.log.Line("##[warning]Pull of %s failed (%v), using the local copy", ref, err)
+		return nil
+	}
+	return fmt.Errorf("pull %s: %w", ref, err)
 }
 
 // One command run inside the job environment

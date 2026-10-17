@@ -30,6 +30,8 @@ type RemoteAuth struct {
 	SSHKeyPEM  []byte
 	HostKey    string
 	OnHostKey  func(fingerprint string)
+	// Vetted dialer for ssh and git transports, nil dials directly
+	Dialer gittransport.DialContextFunc
 }
 
 // Client options for a remote url
@@ -37,6 +39,9 @@ func (a RemoteAuth) Options(e *Engine) []client.Option {
 	opts := []client.Option{client.WithLoader(e.Loader())}
 	if a.HTTPClient != nil {
 		opts = append(opts, client.WithHTTPClient(a.HTTPClient))
+	}
+	if a.Dialer != nil {
+		opts = append(opts, client.WithDialer(a.Dialer))
 	}
 	if a.Password != "" {
 		user := a.Username

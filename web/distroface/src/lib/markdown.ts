@@ -135,6 +135,7 @@ function codeLang(lang: string | undefined): string {
 const PURIFY_CONFIG = {
 	USE_PROFILES: { html: true },
 	FORBID_TAGS: ['style', 'form', 'script', 'iframe', 'object', 'embed'],
+	FORBID_ATTR: ['style'],
 	ADD_ATTR: ['align'],
 	ALLOW_UNKNOWN_PROTOCOLS: false
 };

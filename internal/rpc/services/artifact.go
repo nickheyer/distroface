@@ -81,7 +81,7 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *v1.
 		if err := s.mirrors.ValidateArtifactMirror(ctx, repoType, msg.Mirror); err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		if mirrorCfg, err = mirror.EncodeConfig(msg.Mirror); err != nil {
+		if mirrorCfg, err = s.mirrors.EncodeConfig(msg.Mirror); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 	} else if msg.Mirror != nil {
@@ -190,11 +190,11 @@ func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *v1.
 		if repo.Type == v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "file repositories do not take mirror settings")
 		}
-		merged, err := mirror.ApplyUpdate(repo.MirrorConfig, req.Mirror)
+		merged, err := s.mirrors.ApplyUpdate(repo.MirrorConfig, req.Mirror)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		full, err := mirror.ParseConfig(merged)
+		full, err := s.mirrors.Config(merged)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}

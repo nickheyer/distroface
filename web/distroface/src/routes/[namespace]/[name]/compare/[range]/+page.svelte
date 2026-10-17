@@ -154,7 +154,7 @@
 				{resetKey}
 				listFiles={async (p) => {
 					const resp = await rpcClient.gitFiles.getCompareDiff({ namespace, name, base, head, page: p }, silentCallOptions);
-					return { files: resp.diff?.files ?? [], page: resp.page, totalFiles: resp.diff?.totalFiles ?? 0, additions: resp.diff?.additions ?? 0, deletions: resp.diff?.deletions ?? 0 };
+					return { files: resp.diff?.files ?? [], page: resp.page, totalFiles: resp.diff?.totalFiles ?? 0, additions: resp.diff?.additions ?? 0, deletions: resp.diff?.deletions ?? 0, truncated: resp.diff?.truncated ?? false };
 				}}
 				loadFile={async (path) => (await rpcClient.gitFiles.getDiffFile({ namespace, name, base: diffBase, head: result?.headSha ?? '', path }, silentCallOptions)).file}
 			/>

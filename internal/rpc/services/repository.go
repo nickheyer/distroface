@@ -99,7 +99,7 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, req *v1.Create
 		if err := s.mirrors.ValidateRegistryMirror(ctx, msg.Mirror); err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		if mirrorCfg, err = mirror.EncodeConfig(msg.Mirror); err != nil {
+		if mirrorCfg, err = s.mirrors.EncodeConfig(msg.Mirror); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 	} else if msg.Mirror != nil {
@@ -192,25 +192,22 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *v1.ListRe
 	// Resolve visibility: admin sees all, authenticated users see public +
 	// owned + org membership + RBAC grants, anonymous sees public only.
 	user := auth.UserFromContext(ctx)
-	var userID string
-	var canManage bool
-	var grantedRepos []string
-
+	opts := stores.RepoListOptions{Namespace: portal.ScopeNamespace(ctx, req.Namespace), Limit: pageSize, Offset: offset}
 	if user != nil {
-		userID = user.ID
-		canManage, _ = s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, "*")
-		if !canManage {
-			grantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceRepositories, rbac.ActionRead)
+		opts.ViewerID = user.ID
+		opts.IncludePrivate, _ = s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, "*")
+		if !opts.IncludePrivate {
+			opts.GrantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceRepositories, rbac.ActionRead)
 		}
+		opts.OnlyRepo, opts.OnlyNamespace = user.ListingScope()
 	}
 
-	namespace := portal.ScopeNamespace(ctx, req.Namespace)
-	q := pages.ParseQuery(req.Page)
-	if err := stores.ReposQuery.Validate(q); err != nil {
+	opts.Query = pages.ParseQuery(req.Page)
+	if err := stores.ReposQuery.Validate(opts.Query); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
-	repos, total, err := s.store.ListRepositories(ctx, namespace, q, userID, canManage, grantedRepos, pageSize, offset)
+	repos, total, err := s.store.ListRepositories(ctx, opts)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -387,11 +384,11 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, req *v1.Update
 		if repo.Type != v1.RepositoryType_REPOSITORY_TYPE_MIRROR {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "standard repositories do not take mirror settings")
 		}
-		merged, err := mirror.ApplyUpdate(repo.MirrorConfig, req.Mirror)
+		merged, err := s.mirrors.ApplyUpdate(repo.MirrorConfig, req.Mirror)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		full, err := mirror.ParseConfig(merged)
+		full, err := s.mirrors.Config(merged)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}

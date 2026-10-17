@@ -9,14 +9,15 @@
 	import UnitInput from '$lib/components/unit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormCard from '$lib/components/form-card.svelte';
-	import { GitBranch, Terminal, HardDrive, Wrench, PenLine, Play, Loader2, RadioTower } from '@lucide/svelte';
+	import { GitBranch, Terminal, HardDrive, Wrench, PenLine, Play, Loader2, RadioTower, Fingerprint } from '@lucide/svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { Act, errText } from '$lib/act.svelte';
 	import { isLocked, patchSettings, systemScope, type SettingsPatch } from '$lib/settings-utils';
 	import type { FieldProvenance, Settings } from '$lib/proto/distroface/v1/settings_pb';
-	import { cn } from '$lib/utils';
+	import { cn, formatBytes } from '$lib/utils';
+	import type { GetGitServerInfoResponse } from '$lib/proto/distroface/v1/settings_pb';
 
 	type BoolField = {
 		key: string;
@@ -107,6 +108,9 @@
 	// Listener state of the saved port, refreshed after every ssh change
 	type SSHStatus = { port: number; ok: boolean; listening: boolean; message: string };
 	let sshStatus = $state<SSHStatus | null>(null);
+	// Host keys, signing key, storage path and usage
+	let info = $state<GetGitServerInfoResponse | null>(null);
+	let showSigningKey = $state(false);
 	let sshChecking = $state(false);
 
 	async function probe(port: number): Promise<string> {
@@ -149,6 +153,7 @@
 			prov = resp.provenance;
 			if (eff) seedForm(eff);
 			await refreshSSHStatus();
+			info = await rpcClient.settings.getGitServerInfo({}, silentCallOptions);
 		} catch (err) {
 			loadError = errText(err);
 		} finally {
@@ -304,7 +309,7 @@
 							<span>Listening on port <span class="font-mono tabular-nums">{sshStatus.port}</span></span>
 						{:else if sshStatus && !sshStatus.ok}
 							<span class="status-dot bg-destructive"></span>
-							<span class={cn('text-destructive break-words')}>{sshStatus.message}</span>
+							<span class={cn('text-destructive wrap-break-word')}>{sshStatus.message}</span>
 						{:else if sshStatus}
 							<span class="status-dot bg-amber-500"></span>
 							<span class="text-muted-foreground">Port <span class="font-mono tabular-nums">{sshStatus.port}</span> is free but not bound yet, the listener opens shortly.</span>
@@ -328,6 +333,49 @@
 				{@render numRow(nums.maxLfsObjectMb)}
 				{@render numRow(nums.maxConcurrentTransfers)}
 			</div>
+		</FormCard>
+
+		<FormCard title="Instance" description="What clients see and where repositories live" icon={Fingerprint}>
+			{#if info}
+				<div class="-my-3 divide-y divide-border/50 text-[13px]">
+					<div class="py-3">
+						<p class="font-medium">SSH host keys</p>
+						{#if info.sshHostKeyFingerprints.length === 0}
+							<p class="text-muted-foreground mt-0.5">Git over SSH is not wired on this instance.</p>
+						{:else}
+							<ul class="mt-1 space-y-0.5">
+								{#each info.sshHostKeyFingerprints as fp (fp)}
+									<li class="font-mono text-[12px] break-all">{fp}</li>
+								{/each}
+							</ul>
+						{/if}
+					</div>
+					<div class="py-3">
+						<div class="flex items-center justify-between gap-3">
+							<p class="font-medium">Signing public key</p>
+							{#if info.signingPublicKey}
+								<Button variant="ghost" size="sm" class="h-7 px-2" onclick={() => (showSigningKey = !showSigningKey)}>{showSigningKey ? 'Hide' : 'Show'}</Button>
+							{/if}
+						</div>
+						{#if !info.signingPublicKey}
+							<p class="text-muted-foreground mt-0.5">Generated the first time the instance signs a commit.</p>
+						{:else if showSigningKey}
+							<pre class="mt-1 font-mono text-[11.5px] whitespace-pre-wrap break-all bg-muted/40 rounded-md p-2">{info.signingPublicKey}</pre>
+						{:else}
+							<p class="text-muted-foreground mt-0.5">Import it to verify web commits and merges made here.</p>
+						{/if}
+					</div>
+					<div class="py-3">
+						<p class="font-medium">Storage</p>
+						<p class="font-mono text-[12px] break-all mt-0.5">{info.storagePath}</p>
+						<p class="text-muted-foreground mt-0.5">
+							{info.repositoryCount} repositor{info.repositoryCount === 1n ? 'y' : 'ies'}, {formatBytes(Number(info.repositoryBytes))} of objects, {formatBytes(Number(info.lfsBytes))} of LFS
+						</p>
+					</div>
+				</div>
+			{:else}
+				<Skeleton class="h-20 w-full" />
+			{/if}
 		</FormCard>
 
 		<FormCard title="Maintenance" description="Scheduled repack and prune" icon={Wrench}>

@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -263,30 +264,50 @@ func (s *Store) ClaimActionsJob(ctx context.Context, runnerID string, candidates
 	}
 	var claimed *db.ActionsJob
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var job db.ActionsJob
-		err := tx.Where("id IN ? AND status = ?", candidates, "queued").Order("created_at ASC").First(&job).Error
-		if err == gorm.ErrRecordNotFound {
-			return nil
-		}
-		if err != nil {
+		var jobs []db.ActionsJob
+		if err := tx.Where("id IN ? AND status = ?", candidates, "queued").Order("created_at ASC").Find(&jobs).Error; err != nil {
 			return err
 		}
 		now := time.Now().UTC()
-		res := tx.Model(&db.ActionsJob{}).Where("id = ? AND status = ?", job.ID, "queued").
-			Updates(map[string]any{"status": "running", "runner_id": runnerID, "started_at": now})
-		if res.Error != nil {
-			return res.Error
-		}
-		if res.RowsAffected == 0 {
+		for i := range jobs {
+			job := jobs[i]
+			// Matrix jobs past max-parallel stay queued until a sibling finishes
+			res := tx.Model(&db.ActionsJob{}).
+				Where("id = ? AND status = ? AND (max_parallel = 0 OR (SELECT COUNT(*) FROM actions_jobs r WHERE r.run_id = ? AND r.matrix_group = ? AND r.status = ?) < max_parallel)",
+					job.ID, "queued", job.RunID, job.MatrixGroup, "running").
+				Updates(map[string]any{"status": "running", "runner_id": runnerID, "started_at": now})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected == 0 {
+				continue
+			}
+			job.Status = "running"
+			job.RunnerID = runnerID
+			job.StartedAt = &now
+			claimed = &job
 			return nil
 		}
-		job.Status = "running"
-		job.RunnerID = runnerID
-		job.StartedAt = &now
-		claimed = &job
 		return nil
 	})
 	return claimed, err
+}
+
+// Live jobs of a job level concurrency group in one repository
+func (s *Store) ListLiveJobsInGroup(ctx context.Context, repoID, group, exceptID string) ([]*db.ActionsJob, error) {
+	var out []*db.ActionsJob
+	err := s.db.WithContext(ctx).Model(&db.ActionsJob{}).
+		Joins("JOIN actions_runs ON actions_runs.id = actions_jobs.run_id").
+		Where("actions_runs.repo_id = ? AND actions_jobs.concurrency = ? AND actions_jobs.id <> ? AND actions_jobs.status IN ?", repoID, group, exceptID, []string{"waiting", "queued", "running"}).
+		Find(&out).Error
+	return out, err
+}
+
+// Queued jobs created before the cutoff that no runner took
+func (s *Store) ListQueuedActionsJobsBefore(ctx context.Context, cutoff time.Time) ([]*db.ActionsJob, error) {
+	var out []*db.ActionsJob
+	err := s.db.WithContext(ctx).Where("status = ? AND created_at < ?", "queued", cutoff).Find(&out).Error
+	return out, err
 }
 
 // Queued jobs, oldest first, across every repo a runner can serve
@@ -296,6 +317,39 @@ func (s *Store) ListQueuedActionsJobs(ctx context.Context, limit int) ([]*db.Act
 	return out, err
 }
 
+// Queued jobs inside one runner scope, oldest first, paged
+func (s *Store) ListQueuedActionsJobsInScope(ctx context.Context, scopeKind, scopeID string, limit, offset int) ([]*db.ActionsJob, error) {
+	q := s.db.WithContext(ctx).Model(&db.ActionsJob{}).
+		Joins("JOIN actions_runs ON actions_runs.id = actions_jobs.run_id").
+		Where("actions_jobs.status = ?", "queued")
+	switch scopeKind {
+	case db.ActionsScopeOrg:
+		q = q.Joins("JOIN git_repositories ON git_repositories.id = actions_runs.repo_id").
+			Where("git_repositories.is_org_namespace = ? AND git_repositories.namespace = (SELECT name FROM organizations WHERE id = ?)", true, scopeID)
+	case db.ActionsScopeRepo:
+		q = q.Where("actions_runs.repo_id = ?", scopeID)
+	}
+	var out []*db.ActionsJob
+	err := q.Order("actions_jobs.created_at ASC").Limit(limit).Offset(offset).Find(&out).Error
+	return out, err
+}
+
+// Runs by id in one query
+func (s *Store) GetActionsRunsByIDs(ctx context.Context, ids []string) (map[string]*db.ActionsRun, error) {
+	out := map[string]*db.ActionsRun{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []*db.ActionsRun
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.ID] = r
+	}
+	return out, nil
+}
+
 // Running jobs whose runner stopped reporting
 func (s *Store) ListStaleRunningJobs(ctx context.Context, cutoff time.Time) ([]*db.ActionsJob, error) {
 	var out []*db.ActionsJob
@@ -303,18 +357,43 @@ func (s *Store) ListStaleRunningJobs(ctx context.Context, cutoff time.Time) ([]*
 	return out, err
 }
 
-func (s *Store) AppendActionsJobLog(ctx context.Context, jobID string, index int, data []byte) error {
+// Append refused because the job log would pass its byte cap
+var ErrJobLogCapped = errors.New("job log cap reached")
+
+// Append refused because another chunk already took the index
+var ErrJobLogConflict = errors.New("job log index taken")
+
+// Appends a chunk, counting its bytes against the cap in the same transaction
+func (s *Store) AppendActionsJobLog(ctx context.Context, jobID string, index int, data []byte, maxBytes int64) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if err := tx.Create(&db.ActionsJobLog{JobID: jobID, Index: index, Data: data}).Error; err != nil {
-			return err
+		res := tx.Model(&db.ActionsJob{}).
+			Where("id = ? AND log_chunks <= ? AND log_bytes + ? <= ?", jobID, index, len(data), maxBytes).
+			Updates(map[string]any{"log_chunks": index + 1, "log_bytes": gorm.Expr("log_bytes + ?", len(data))})
+		if res.Error != nil {
+			return res.Error
 		}
-		return tx.Model(&db.ActionsJob{}).Where("id = ? AND log_chunks <= ?", jobID, index).Update("log_chunks", index+1).Error
+		if res.RowsAffected == 0 {
+			var job db.ActionsJob
+			if err := tx.First(&job, "id = ?", jobID).Error; err != nil {
+				return err
+			}
+			if job.LogBytes+int64(len(data)) > maxBytes {
+				return ErrJobLogCapped
+			}
+			return ErrJobLogConflict
+		}
+		return tx.Create(&db.ActionsJobLog{JobID: jobID, Index: index, Data: data}).Error
 	})
 }
 
-func (s *Store) ListActionsJobLogs(ctx context.Context, jobID string, fromIndex int) ([]*db.ActionsJobLog, error) {
+// Chunks from an index onward, zero limit returns them all
+func (s *Store) ListActionsJobLogs(ctx context.Context, jobID string, fromIndex, limit int) ([]*db.ActionsJobLog, error) {
 	var out []*db.ActionsJobLog
-	err := s.db.WithContext(ctx).Where("job_id = ? AND \"index\" >= ?", jobID, fromIndex).Order("\"index\" ASC").Find(&out).Error
+	q := s.db.WithContext(ctx).Where("job_id = ? AND \"index\" >= ?", jobID, fromIndex).Order("\"index\" ASC")
+	if limit > 0 {
+		q = q.Limit(limit)
+	}
+	err := q.Find(&out).Error
 	return out, err
 }
 
@@ -345,6 +424,17 @@ func (s *Store) UpsertActionsSecret(ctx context.Context, sec *db.ActionsSecret) 
 	}
 	sec.ID = existing.ID
 	return s.db.WithContext(ctx).Model(&existing).Updates(map[string]any{"sealed": sec.Sealed, "updated_at": time.Now().UTC()}).Error
+}
+
+// Every secret on the instance, for resealing
+func (s *Store) ListAllActionsSecrets(ctx context.Context) ([]*db.ActionsSecret, error) {
+	var out []*db.ActionsSecret
+	err := s.db.WithContext(ctx).Find(&out).Error
+	return out, err
+}
+
+func (s *Store) SetActionsSecretSealed(ctx context.Context, id string, sealed []byte) error {
+	return s.db.WithContext(ctx).Model(&db.ActionsSecret{}).Where("id = ?", id).Updates(map[string]any{"sealed": sealed, "updated_at": time.Now().UTC()}).Error
 }
 
 func (s *Store) ListActionsSecrets(ctx context.Context, scopeKind, scopeID string, limit, offset int) ([]*db.ActionsSecret, int64, error) {

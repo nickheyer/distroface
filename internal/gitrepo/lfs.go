@@ -1,6 +1,7 @@
 package gitrepo
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -84,21 +85,27 @@ type lfsLock struct {
 	} `json:"owner"`
 }
 
+// Strict parse shared by the write classifier and the handler, body restored
+func parseLFSBatch(r *http.Request) (*lfsBatchRequest, error) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	var req lfsBatchRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		return nil, err
+	}
+	return &req, nil
+}
+
 // Reports whether a request under info/lfs writes
 func (l *LFS) IsWrite(r *http.Request, rest string) bool {
 	switch {
 	case rest == "objects/batch" && r.Method == http.MethodPost:
-		// Peek the operation without consuming the body for the handler
-		body, err := io.ReadAll(io.LimitReader(r.Body, 4<<20))
-		if err != nil {
-			return false
-		}
-		r.Body = io.NopCloser(strings.NewReader(string(body)))
-		var req lfsBatchRequest
-		if json.Unmarshal(body, &req) != nil {
-			return false
-		}
-		return req.Operation == "upload"
+		// Malformed bodies count as writes, the handler rejects them anyway
+		req, err := parseLFSBatch(r)
+		return err != nil || req.Operation == "upload"
 	case strings.HasPrefix(rest, "objects/") && r.Method == http.MethodPut:
 		return true
 	case strings.HasPrefix(rest, "locks"):
@@ -150,8 +157,8 @@ func (l *LFS) objectURL(ctx context.Context, repo *db.GitRepository, oid string)
 }
 
 func (l *LFS) batch(w http.ResponseWriter, r *http.Request, repo *db.GitRepository, user *auth.AuthenticatedUser) {
-	var req lfsBatchRequest
-	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&req); err != nil {
+	req, err := parseLFSBatch(r)
+	if err != nil {
 		lfsFail(w, http.StatusBadRequest, "invalid batch request")
 		return
 	}
@@ -191,9 +198,11 @@ func (l *LFS) batch(w http.ResponseWriter, r *http.Request, repo *db.GitReposito
 			if existing != nil {
 				continue
 			}
-			// Another repo may already hold the bytes, link without a transfer
-			if _, _, err := l.manager.Blobs().OpenBlob("sha256:" + o.OID); err == nil {
-				_ = l.manager.Store().UpsertLFSObject(ctx, repo.ID, o.OID, o.Size)
+			// Only bytes the caller could read anyway link without a transfer
+			if l.readableElsewhere(ctx, user, o.OID) {
+				if err := l.manager.Store().UpsertLFSObject(ctx, repo.ID, o.OID, o.Size); err != nil {
+					obj.Error = &lfsError{Code: 500, Message: "could not record object"}
+				}
 				continue
 			}
 			obj.Actions = map[string]*lfsAction{
@@ -210,6 +219,24 @@ func (l *LFS) batch(w http.ResponseWriter, r *http.Request, repo *db.GitReposito
 		obj.Actions = map[string]*lfsAction{"download": {Href: l.objectURL(ctx, repo, o.OID), Header: header, ExpiresIn: 3600}}
 	}
 	writeLFSJSON(w, http.StatusOK, resp)
+}
+
+// Whether a repository the caller may read already holds the object
+func (l *LFS) readableElsewhere(ctx context.Context, user *auth.AuthenticatedUser, oid string) bool {
+	ids, err := l.manager.Store().ListLFSLinkRepoIDs(ctx, oid, 25)
+	if err != nil {
+		return false
+	}
+	for _, id := range ids {
+		other, err := l.manager.Store().GetGitRepositoryByID(ctx, id)
+		if err != nil || other == nil {
+			continue
+		}
+		if l.manager.Access().CanSee(ctx, user, other) {
+			return true
+		}
+	}
+	return false
 }
 
 // Streams an object from the shared blob store
@@ -406,7 +433,12 @@ func (l *LFS) AuthenticateJSON(ctx context.Context, repo *db.GitRepository, user
 	if operation == "upload" {
 		actions = append(actions, "push")
 	}
-	tok, err := l.tokens.SignTokenAudience(LFSAudience, time.Hour, user.Username, []*auth.ResourceActions{{Type: "git", Name: repo.Namespace + "/" + repo.Name, Actions: actions}})
+	// Deploy keys carry their id, a username can never collide with the prefix
+	subject := user.Username
+	if user.IsDeployKey() {
+		subject = user.ID
+	}
+	tok, err := l.tokens.SignTokenAudience(LFSAudience, time.Hour, subject, []*auth.ResourceActions{{Type: "git", Name: repo.Namespace + "/" + repo.Name, Actions: actions}})
 	if err != nil {
 		return nil, err
 	}

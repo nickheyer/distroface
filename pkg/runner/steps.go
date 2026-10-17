@@ -131,7 +131,7 @@ func (j *job) execStep(ctx context.Context, st *v1.TaskStep, ectx *exprContext) 
 	}
 	cw.Flush()
 	j.applyCommandFiles(files, outputs)
-	return outputs, err
+	return outputs, firstErr(err, cw.failure())
 }
 
 func exitErr(code int, err error) error {
@@ -153,15 +153,6 @@ func (j *job) newCommandWriter(step int32, outputs map[string]string) *commandWr
 		},
 		onMask:   j.log.AddMask,
 		onOutput: func(k, v string) { outputs[k] = v },
-		onEnv: func(k, v string) {
-			j.mu.Lock()
-			defer j.mu.Unlock()
-			if k == "" {
-				j.path = append([]string{v}, j.path...)
-				return
-			}
-			j.env[k] = v
-		},
 	}
 }
 

@@ -71,7 +71,7 @@
 </script>
 
 <div class={cn('rounded-lg border border-border/60 overflow-x-auto', className)}>
-	<div class="min-w-[22rem]">
+	<div class="min-w-88">
 		<div class="grid grid-cols-[1fr_repeat(3,4.5rem)] items-center bg-muted/30 px-4 py-2 text-xs font-medium text-muted-foreground">
 			<span>Unit</span>
 			{#each LEVELS as l (l.value)}

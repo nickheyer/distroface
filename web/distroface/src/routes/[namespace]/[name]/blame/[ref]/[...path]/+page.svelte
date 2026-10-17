@@ -121,7 +121,7 @@
 									{#if li === 0}
 										<td
 											rowspan={r.lines.length}
-											class="align-top border-t border-border/40 border-r px-3 py-1 text-[12px] whitespace-nowrap w-72 max-w-[18rem] font-sans"
+											class="align-top border-t border-border/40 border-r px-3 py-1 text-[12px] whitespace-nowrap w-72 max-w-72 font-sans"
 											style="background-color: color-mix(in oklch, var(--primary) {Math.round(heat(r) * 100)}%, transparent)"
 										>
 											{#if c}

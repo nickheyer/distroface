@@ -55,7 +55,9 @@
 	const isLoginPage = $derived(page.url.pathname === '/login');
 	// Mailed link pages render bare, no sign in redirect
 	const isAuthPage = $derived(
-		isLoginPage || /^\/(forgot-password|reset-password|verify-email)(\/|$)/.test(page.url.pathname)
+		isLoginPage ||
+			/^\/(forgot-password|reset-password|verify-email)(\/|$)/.test(page.url.pathname) ||
+			(page.url.pathname === '/settings/notifications' && page.url.searchParams.has('token'))
 	);
 	const isChangePasswordPage = $derived(page.url.pathname === '/change-password');
 

@@ -25,6 +25,8 @@ type jobDefinition struct {
 	WorkflowEnv  map[string]string `json:"workflow_env,omitempty"`
 	MatrixOrder  []string          `json:"matrix_order,omitempty"`
 	WorkflowName string            `json:"workflow_name,omitempty"`
+	// Planning failure recorded at run creation, fails the job on advance
+	Error string `json:"error,omitempty"`
 }
 
 func decodeDefinition(j *db.ActionsJob) (*jobDefinition, error) {
@@ -103,7 +105,7 @@ func (m *Manager) createRun(ctx context.Context, repo *db.GitRepository, f *Work
 		ID: uuid.New().String(), RepoID: repo.ID, Number: number,
 		WorkflowPath: f.Path, WorkflowName: name,
 		Event: in.Event, Ref: in.Ref, SHA: in.SHA,
-		Status: StatusQueued, NeedsApproval: in.NeedsApproval, PullNumber: in.PullNumber,
+		Status: StatusQueued, NeedsApproval: in.NeedsApproval, FromFork: in.FromFork, PullNumber: in.PullNumber,
 		Payload: mustJSON(in.Payload), Workflow: f.Source,
 	}
 	if in.Actor != nil && !in.Actor.IsAnonymous() {
@@ -123,6 +125,7 @@ func (m *Manager) createRun(ctx context.Context, repo *db.GitRepository, f *Work
 	if err != nil {
 		return nil, err
 	}
+	run.Notes = mustJSON(orEmpty(wf.Notes))
 	if err := m.store.CreateActionsRun(ctx, run, jobs); err != nil {
 		return nil, err
 	}
@@ -152,14 +155,30 @@ func (m *Manager) planJobs(wf *Workflow, base *ExprContext) ([]*db.ActionsJob, e
 	for _, key := range wf.JobOrder {
 		job := wf.Jobs[key]
 		strategy := job.Strategy
+		var planErr error
 		if strategy != nil && strategy.MatrixExpr != "" {
-			expanded, err := matrixFromExpr(strategy, base)
-			if err != nil {
-				return nil, fmt.Errorf("job %s matrix: %w", key, err)
+			if strategy, planErr = matrixFromExpr(strategy, base); planErr != nil {
+				strategy = nil
 			}
-			strategy = expanded
 		}
-		combos, order := MatrixCombinations(strategy)
+		combos, order, err := MatrixCombinations(strategy)
+		if planErr == nil {
+			planErr = err
+		}
+		if planErr != nil {
+			// One failed job carries the reason instead of a silent log line
+			def := jobDefinition{Job: job, WorkflowEnv: wf.Env, WorkflowName: wf.Name, Error: fmt.Sprintf("matrix: %v", planErr)}
+			out = append(out, &db.ActionsJob{
+				ID: uuid.New().String(), Name: job.Name, JobKey: key, MatrixGroup: key,
+				RunsOn: "[]", Needs: mustJSON(orEmpty(job.Needs)), Matrix: "{}", Status: StatusWaiting, Attempt: 1,
+				Steps: "[]", Outputs: "{}", Annotations: "[]", Definition: mustJSON(def),
+			})
+			continue
+		}
+		maxParallel := 0
+		if job.Strategy != nil {
+			maxParallel = job.Strategy.MaxParallel
+		}
 		for _, combo := range combos {
 			ectx := *base
 			ectx.Matrix = combo
@@ -173,10 +192,15 @@ func (m *Manager) planJobs(wf *Workflow, base *ExprContext) ([]*db.ActionsJob, e
 			}
 			def := jobDefinition{Job: job, WorkflowEnv: wf.Env, MatrixOrder: order, WorkflowName: wf.Name}
 			row := &db.ActionsJob{
-				ID: uuid.New().String(), Name: name, JobKey: key + MatrixSuffix(combo, order),
+				ID: uuid.New().String(), Name: name, JobKey: key + MatrixSuffix(combo, order), MatrixGroup: key, MaxParallel: maxParallel,
 				RunsOn: mustJSON(m.resolveRunsOn(job.RunsOn, &ectx)), Needs: mustJSON(orEmpty(job.Needs)),
 				Matrix: mustJSON(orEmptyMap(combo)), Status: StatusWaiting, Attempt: 1,
 				Steps: "[]", Outputs: "{}", Annotations: "[]", Definition: mustJSON(def),
+			}
+			if job.Concurrency != nil {
+				if group, err := Interpolate(job.Concurrency.Group, &ectx); err == nil && !HasDeferred(group) {
+					row.Concurrency = strings.TrimSpace(group)
+				}
 			}
 			out = append(out, row)
 		}
@@ -458,6 +482,11 @@ func (m *Manager) advanceRun(ctx context.Context, repo *db.GitRepository, run *d
 				changed = true
 				continue
 			}
+			if def.Error != "" {
+				m.failJob(ctx, repo, run, j, ConclusionFailure, def.Error)
+				changed = true
+				continue
+			}
 			done, status, outputs := needsState(def.Job.Needs, jobs)
 			if !done {
 				continue
@@ -491,9 +520,17 @@ func (m *Manager) advanceRun(ctx context.Context, repo *db.GitRepository, run *d
 					}
 				}
 			}
+			if !m.runnerRegisteredFor(ctx, repo, runsOn) {
+				m.failJob(ctx, repo, run, j, ConclusionFailure, fmt.Sprintf("no registered runner matches runs-on %s for this repository, its organization, or the instance", strings.Join(runsOn, ", ")))
+				changed = true
+				continue
+			}
 			j.Status, j.RunsOn = StatusQueued, mustJSON(orEmpty(runsOn))
 			_ = m.store.UpdateActionsJobColumns(ctx, j.ID, map[string]any{"status": StatusQueued, "runs_on": j.RunsOn})
 			m.writeCommitStatus(ctx, repo, run, j, "pending")
+			if def.Job.Concurrency != nil && def.Job.Concurrency.CancelInProgress && j.Concurrency != "" {
+				m.cancelJobGroup(ctx, repo, j)
+			}
 			queued, changed = true, true
 		}
 	}
@@ -811,4 +848,70 @@ func (m *Manager) Dispatch(ctx context.Context, repo *db.GitRepository, actor *a
 	}
 	in := &triggerInput{Event: "workflow_dispatch", Ref: fullRef, SHA: commit.String(), Actor: actor, Payload: payload, Inputs: typed, OnlyPath: wfPath}
 	return m.createRun(ctx, repo, file, in)
+}
+
+// Reports whether a registered runner in scope carries every label
+func (m *Manager) runnerRegisteredFor(ctx context.Context, repo *db.GitRepository, runsOn []string) bool {
+	runners, err := m.store.ListActionsRunnersForRepo(ctx, repo.ID, m.repoOrgID(ctx, repo))
+	if err != nil {
+		return true
+	}
+	for _, r := range runners {
+		if labelsSubset(runsOn, decodeStrings(r.Labels)) {
+			return true
+		}
+	}
+	return false
+}
+
+// Cancels the other live jobs of a job level concurrency group
+func (m *Manager) cancelJobGroup(ctx context.Context, repo *db.GitRepository, j *db.ActionsJob) {
+	live, err := m.store.ListLiveJobsInGroup(ctx, repo.ID, j.Concurrency, j.ID)
+	if err != nil {
+		return
+	}
+	touched := map[string]*db.ActionsRun{}
+	for _, other := range live {
+		run := touched[other.RunID]
+		if run == nil {
+			if run, _ = m.store.GetActionsRunByID(ctx, other.RunID); run == nil {
+				continue
+			}
+			touched[other.RunID] = run
+		}
+		switch other.Status {
+		case StatusWaiting, StatusQueued:
+			m.failJob(ctx, repo, run, other, ConclusionCancelled, "cancelled by concurrency group "+j.Concurrency)
+		case StatusRunning:
+			m.requestCancel(other.ID)
+		}
+	}
+	for id, run := range touched {
+		if id != j.RunID {
+			m.advanceRun(ctx, repo, run)
+		}
+	}
+}
+
+// Cancels the remaining jobs of a matrix once one of them failed
+func (m *Manager) failFast(ctx context.Context, repo *db.GitRepository, run *db.ActionsRun, failed *db.ActionsJob) {
+	def, err := decodeDefinition(failed)
+	if err != nil || def.Job.ContinueOnError || def.Job.Strategy == nil || (def.Job.Strategy.FailFast != nil && !*def.Job.Strategy.FailFast) {
+		return
+	}
+	jobs, err := m.store.ListActionsJobs(ctx, run.ID)
+	if err != nil {
+		return
+	}
+	for _, j := range jobs {
+		if j.ID == failed.ID || j.MatrixGroup != failed.MatrixGroup {
+			continue
+		}
+		switch j.Status {
+		case StatusWaiting, StatusQueued:
+			m.failJob(ctx, repo, run, j, ConclusionCancelled, "cancelled by fail-fast after "+failed.Name+" failed")
+		case StatusRunning:
+			m.requestCancel(j.ID)
+		}
+	}
 }

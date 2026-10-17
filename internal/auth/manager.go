@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,6 +39,41 @@ type Manager struct {
 	enforcer  *rbac.Enforcer
 	res       *settings.Resolver
 	jwtSecret []byte
+	// Key behind sealed secrets, independent of the session signing secret
+	sealKey []byte
+}
+
+// Installs the sealing key from config or the data dir, generating it once
+func (m *Manager) LoadSealingKey(configured, dataDir string) error {
+	if configured != "" {
+		m.sealKey = []byte(configured)
+		return nil
+	}
+	path := filepath.Join(dataDir, "sealing.key")
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		key, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+		if err != nil || len(key) == 0 {
+			return fmt.Errorf("sealing key %s is not hex encoded", path)
+		}
+		m.sealKey = key
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reading sealing key: %w", err)
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return fmt.Errorf("generating sealing key: %w", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return fmt.Errorf("creating data dir for the sealing key: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("writing sealing key: %w", err)
+	}
+	m.sealKey = key
+	return nil
 }
 
 const jwtSecretSettingKey = "jwt_secret"

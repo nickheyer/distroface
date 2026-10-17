@@ -417,10 +417,10 @@
 			{placeholder}
 			spellcheck="true"
 			onkeydown={onKeydown}
-			class="w-full min-h-[28rem] max-h-[75vh] resize-y bg-transparent px-5 py-4 text-[14px] leading-7 outline-none placeholder:text-muted-foreground"
+			class="w-full min-h-112 max-h-[75vh] resize-y bg-transparent px-5 py-4 text-[14px] leading-7 outline-none placeholder:text-muted-foreground"
 		></textarea>
 	{:else}
-		<div class="px-5 py-4 min-h-[28rem] text-sm min-w-0 overflow-x-auto">
+		<div class="px-5 py-4 min-h-112 text-sm min-w-0 overflow-x-auto">
 			{#if value.trim()}
 				<Markdown source={value} baseHref={wikiBase} {wikiBase} {rawBase} />
 			{:else}

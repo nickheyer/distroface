@@ -5,8 +5,8 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"errors"
+	"fmt"
 	"regexp"
 
 	"github.com/nickheyer/distroface/internal/db"
@@ -20,8 +20,7 @@ func ValidSecretName(name string) bool {
 }
 
 func (m *Manager) sealKey() []byte {
-	sum := sha256.Sum256(append(append([]byte{}, m.auth.JWTSecret()...), []byte("actions")...))
-	return sum[:]
+	return m.auth.DerivedKey("actions")
 }
 
 // Seal encrypts a secret value with AES-GCM, nonce first
@@ -41,9 +40,50 @@ func (m *Manager) Seal(plaintext string) ([]byte, error) {
 	return append(nonce, gcm.Seal(nil, nonce, []byte(plaintext), nil)...), nil
 }
 
-// Open decrypts a sealed secret value
+// Open decrypts a sealed secret value, accepting the jwt derived key it may predate
 func (m *Manager) Open(sealed []byte) (string, error) {
-	block, err := aes.NewCipher(m.sealKey())
+	out, err := openWith(m.sealKey(), sealed)
+	if err != nil {
+		if legacy, lerr := openWith(m.auth.LegacyDerivedKey("actions"), sealed); lerr == nil {
+			return legacy, nil
+		}
+	}
+	return out, err
+}
+
+// ResealLegacy rewraps secrets sealed under the jwt secret with the sealing key
+func (m *Manager) ResealLegacy(ctx context.Context) error {
+	rows, err := m.store.ListAllActionsSecrets(ctx)
+	if err != nil {
+		return err
+	}
+	n := 0
+	for _, row := range rows {
+		if _, err := openWith(m.sealKey(), row.Sealed); err == nil {
+			continue
+		}
+		plain, err := openWith(m.auth.LegacyDerivedKey("actions"), row.Sealed)
+		if err != nil {
+			m.log.Warn("actions: secret %s at %s scope cannot be opened with any key, re-enter it", row.Name, row.ScopeKind)
+			continue
+		}
+		sealed, err := m.Seal(plain)
+		if err != nil {
+			return err
+		}
+		if err := m.store.SetActionsSecretSealed(ctx, row.ID, sealed); err != nil {
+			return err
+		}
+		n++
+	}
+	if n > 0 {
+		m.log.Info("actions: resealed %d secrets under the sealing key", n)
+	}
+	return nil
+}
+
+func openWith(key, sealed []byte) (string, error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", err
 	}
@@ -78,8 +118,8 @@ func (m *Manager) repoSecrets(ctx context.Context, repo *db.GitRepository, orgID
 		}
 		val, err := m.Open(row.Sealed)
 		if err != nil {
-			m.log.Warn("actions: cannot open secret %s at %s scope: %v", row.Name, row.ScopeKind, err)
-			continue
+			// A job silently missing a secret fails somewhere far away, say why here
+			return nil, fmt.Errorf("secret %s at %s scope cannot be decrypted, re-enter it", row.Name, row.ScopeKind)
 		}
 		out[row.Name] = val
 		rank[row.Name] = scopeRank[row.ScopeKind]

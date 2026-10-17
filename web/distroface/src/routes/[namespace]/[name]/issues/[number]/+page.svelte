@@ -201,7 +201,7 @@
 				</div>
 			{:else}
 				<div class="flex items-start gap-3">
-					<h1 class="text-xl sm:text-2xl font-semibold tracking-tight leading-snug flex-1 min-w-0 break-words">
+					<h1 class="text-xl sm:text-2xl font-semibold tracking-tight leading-snug flex-1 min-w-0 wrap-break-word">
 						{issue.title} <span class="text-muted-foreground font-normal">#{issue.number}</span>
 					</h1>
 					{#if issue.pinned}<Pin class="h-4 w-4 text-muted-foreground mt-1.5 shrink-0" aria-label="Pinned" />{/if}

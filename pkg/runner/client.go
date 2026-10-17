@@ -172,7 +172,7 @@ func permanent(err error) bool {
 		return false
 	}
 	switch ce.Code() {
-	case connect.CodeNotFound, connect.CodeInvalidArgument, connect.CodePermissionDenied, connect.CodeUnauthenticated, connect.CodeFailedPrecondition:
+	case connect.CodeNotFound, connect.CodeInvalidArgument, connect.CodePermissionDenied, connect.CodeUnauthenticated, connect.CodeFailedPrecondition, connect.CodeResourceExhausted:
 		return true
 	}
 	return false

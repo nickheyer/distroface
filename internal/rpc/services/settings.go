@@ -219,7 +219,40 @@ func (s *SettingsService) GetEffectiveSettings(ctx context.Context, req *v1.GetE
 	}
 	out := proto.Clone(eff).(*v1.Settings)
 	settings.Redact(out)
+	// Members see that mail works, only scope admins see the relay behind it
+	if s.requireScopeAdmin(ctx, scope) != nil {
+		out.Mail = &v1.MailSettings{Enabled: proto.Bool(eff.GetMail().GetEnabled())}
+		kept := prov[:0]
+		for _, p := range prov {
+			if !strings.HasPrefix(p.GetPath(), "mail.") || p.GetPath() == "mail.enabled" {
+				kept = append(kept, p)
+			}
+		}
+		prov = kept
+	}
 	return &v1.GetEffectiveSettingsResponse{Settings: out, Provenance: prov}, nil
+}
+
+// Host keys, signing key, storage path and usage for the admin git page
+func (s *SettingsService) GetGitServerInfo(ctx context.Context, req *v1.GetGitServerInfoRequest) (*v1.GetGitServerInfoResponse, error) {
+	if err := s.requireScopeAdmin(ctx, &v1.SettingsScope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM}); err != nil {
+		return nil, err
+	}
+	out := &v1.GetGitServerInfoResponse{}
+	if s.git != nil {
+		out.StoragePath = s.git.Engine().ReposDir()
+		out.SigningPublicKey = s.git.Signing().InstancePublicKey()
+	}
+	if s.ssh != nil {
+		out.SshHostKeys = s.ssh.HostKeys()
+		out.SshHostKeyFingerprints = s.ssh.HostKeyFingerprints()
+	}
+	count, bytes, lfs, err := s.store.GitStorageTotals(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	out.RepositoryCount, out.RepositoryBytes, out.LfsBytes = count, bytes, lfs
+	return out, nil
 }
 
 func (s *SettingsService) UpdateSettings(ctx context.Context, req *v1.UpdateSettingsRequest) (*v1.UpdateSettingsResponse, error) {
@@ -233,6 +266,11 @@ func (s *SettingsService) UpdateSettings(ctx context.Context, req *v1.UpdateSett
 	}
 	if err := validateSettingsPatch(patch); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
+	}
+	if scope.GetType() == v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG {
+		if err := s.checkOrgTightens(ctx, patch); err != nil {
+			return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
+		}
 	}
 	if err := s.checkDirectoryNotSelf(ctx, patch); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
@@ -343,6 +381,22 @@ func (s *SettingsService) checkDirectoryNotSelf(ctx context.Context, patch *v1.S
 	}
 	if strings.EqualFold(u.Hostname(), strings.TrimSpace(self)) {
 		return fmt.Errorf("acme directory cannot point at this instance, use the org ca or instance ca certificate source instead")
+	}
+	return nil
+}
+
+// An org may tighten the instance git limits, never loosen them
+func (s *SettingsService) checkOrgTightens(ctx context.Context, patch *v1.Settings) error {
+	g := patch.GetGit()
+	if g == nil {
+		return nil
+	}
+	sys := s.resolver.System(ctx).GetGit()
+	if g.MaxRepoSizeMb != nil && sys.GetMaxRepoSizeMb() > 0 && (*g.MaxRepoSizeMb <= 0 || *g.MaxRepoSizeMb > sys.GetMaxRepoSizeMb()) {
+		return fmt.Errorf("max repository size cannot exceed the instance limit of %d MB", sys.GetMaxRepoSizeMb())
+	}
+	if g.LfsEnabled != nil && *g.LfsEnabled && !sys.GetLfsEnabled() {
+		return fmt.Errorf("lfs is disabled on this instance")
 	}
 	return nil
 }

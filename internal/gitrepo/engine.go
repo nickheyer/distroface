@@ -49,6 +49,20 @@ type Engine struct {
 	transfer *limiter
 	keysDir  string
 	repos    string
+	// Repositories whose directory is moving right now
+	renaming sync.Map
+}
+
+// Flags a repository as moving until the returned func runs
+func (e *Engine) MarkRenaming(id string) func() {
+	e.renaming.Store(id, struct{}{})
+	return func() { e.renaming.Delete(id) }
+}
+
+// Reports whether a repository directory is moving
+func (e *Engine) Renaming(id string) bool {
+	_, ok := e.renaming.Load(id)
+	return ok
 }
 
 // Opens the storage root, creating it, and wires the shared caches
@@ -230,40 +244,85 @@ func (e *Engine) Size(namespace, name string, wiki bool) (int64, error) {
 	return total, err
 }
 
-// Shared mutex table keyed by repository id
+// Shared lock table keyed by repository id
 type lockTable struct {
 	mu    sync.Mutex
-	locks map[string]*refLock
+	locks map[string]*repoLock
 }
 
-type refLock struct {
-	mu   sync.Mutex
-	refs int
+// Push serializes writes with fan out, store guards disk
+type repoLock struct {
+	push  sync.Mutex
+	store sync.Mutex
+	refs  int
 }
 
 func newLockTable() *lockTable {
-	return &lockTable{locks: map[string]*refLock{}}
+	return &lockTable{locks: map[string]*repoLock{}}
 }
 
-// Takes the writer lock for one repository, the returned func releases it
-func (e *Engine) LockRepo(id string) func() {
-	e.locks.mu.Lock()
-	l, ok := e.locks.locks[id]
+func (t *lockTable) acquire(id string) *repoLock {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	l, ok := t.locks[id]
 	if !ok {
-		l = &refLock{}
-		e.locks.locks[id] = l
+		l = &repoLock{}
+		t.locks[id] = l
 	}
 	l.refs++
-	e.locks.mu.Unlock()
+	return l
+}
 
-	l.mu.Lock()
+func (t *lockTable) release(id string, l *repoLock) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	l.refs--
+	if l.refs == 0 {
+		delete(t.locks, id)
+	}
+}
+
+// Writer lock on one repository, released in two phases
+type RepoLock struct {
+	table      *lockTable
+	id         string
+	l          *repoLock
+	holdsStore bool
+	holdsPush  bool
+}
+
+// Takes both locks for one write and its fan out
+func (e *Engine) LockRepo(id string) *RepoLock {
+	l := e.locks.acquire(id)
+	l.push.Lock()
+	l.store.Lock()
+	return &RepoLock{table: e.locks, id: id, l: l, holdsStore: true, holdsPush: true}
+}
+
+// Store lock only, safe inside a post receive fan out
+func (e *Engine) LockStore(id string) func() {
+	l := e.locks.acquire(id)
+	l.store.Lock()
 	return func() {
-		l.mu.Unlock()
-		e.locks.mu.Lock()
-		l.refs--
-		if l.refs == 0 {
-			delete(e.locks.locks, id)
-		}
-		e.locks.mu.Unlock()
+		l.store.Unlock()
+		e.locks.release(id, l)
+	}
+}
+
+// Frees the store for fan out, keeps the push lock
+func (l *RepoLock) UnlockStore() {
+	if l.holdsStore {
+		l.holdsStore = false
+		l.l.store.Unlock()
+	}
+}
+
+// Releases every lock still held
+func (l *RepoLock) Unlock() {
+	l.UnlockStore()
+	if l.holdsPush {
+		l.holdsPush = false
+		l.l.push.Unlock()
+		l.table.release(l.id, l.l)
 	}
 }

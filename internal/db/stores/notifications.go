@@ -95,16 +95,41 @@ func (s *Store) DeleteGitNotificationsByIssue(ctx context.Context, issueID strin
 	return s.db.WithContext(ctx).Where("issue_id = ?", issueID).Delete(&db.GitNotification{}).Error
 }
 
+func defaultNotificationPrefs(userID string) *db.UserNotificationPrefs {
+	return &db.UserNotificationPrefs{
+		UserID: userID, WebMode: "participating", EmailMode: "participating",
+		EmailMentions: true, EmailReviewRequests: true, EmailAssignments: true,
+	}
+}
+
 func (s *Store) GetUserNotificationPrefs(ctx context.Context, userID string) (*db.UserNotificationPrefs, error) {
 	var p db.UserNotificationPrefs
 	err := s.db.WithContext(ctx).First(&p, "user_id = ?", userID).Error
 	if err == gorm.ErrRecordNotFound {
-		return &db.UserNotificationPrefs{
-			UserID: userID, WebMode: "participating", EmailMode: "participating",
-			EmailMentions: true, EmailReviewRequests: true, EmailAssignments: true,
-		}, nil
+		return defaultNotificationPrefs(userID), nil
 	}
 	return &p, err
+}
+
+// Preferences of many users, defaults for those without a row
+func (s *Store) GetUserNotificationPrefsByIDs(ctx context.Context, ids []string) (map[string]*db.UserNotificationPrefs, error) {
+	out := make(map[string]*db.UserNotificationPrefs, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []*db.UserNotificationPrefs
+	if err := s.db.WithContext(ctx).Where("user_id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, p := range rows {
+		out[p.UserID] = p
+	}
+	for _, id := range ids {
+		if out[id] == nil {
+			out[id] = defaultNotificationPrefs(id)
+		}
+	}
+	return out, nil
 }
 
 func (s *Store) SaveUserNotificationPrefs(ctx context.Context, p *db.UserNotificationPrefs) error {

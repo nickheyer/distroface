@@ -232,7 +232,7 @@
 							<StIcon class="h-4 w-4 mt-0.5 shrink-0 {st.color}" />
 							<div class="min-w-0 flex-1">
 								<div class="flex flex-wrap items-center gap-2">
-									<a href={resolve('/[namespace]/[name]/pulls/[number]', { namespace, name, number: String(n) })} class="text-[14px] font-medium hover:text-primary leading-tight min-w-0 break-words">{p.issue?.title}</a>
+									<a href={resolve('/[namespace]/[name]/pulls/[number]', { namespace, name, number: String(n) })} class="text-[14px] font-medium hover:text-primary leading-tight min-w-0 wrap-break-word">{p.issue?.title}</a>
 									{#if p.draft && !p.mergedAt && p.issue?.state === IssueState.OPEN}
 										<Badge variant="outline" class="text-[10px] h-4.5 px-1.5 text-muted-foreground">Draft</Badge>
 									{/if}
@@ -270,7 +270,7 @@
 									<CkIcon class="h-4 w-4 {ck.color}" aria-label={ck.title} />
 								{/if}
 								{#if p.issue?.assignees?.length}
-									<span class="truncate max-w-[8rem]" title="Assignees">{p.issue.assignees.map((a) => a.username).join(', ')}</span>
+									<span class="truncate max-w-32" title="Assignees">{p.issue.assignees.map((a) => a.username).join(', ')}</span>
 								{/if}
 								{#if (p.issue?.commentCount ?? 0) > 0}
 									<span class="inline-flex items-center gap-1 tabular-nums"><MessageSquare class="h-3.5 w-3.5" />{p.issue?.commentCount}</span>

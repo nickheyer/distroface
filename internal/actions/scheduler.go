@@ -140,9 +140,20 @@ func (m *Manager) reaperLoop(ctx context.Context) {
 	}
 }
 
-// Fails jobs past their timeout or whose runner went silent
+// Queued jobs no runner picked up within this long fail
+const queuedJobMaxAge = 24 * time.Hour
+
+// One job the reaper decided to fail and why
+type reapTarget struct {
+	job        *db.ActionsJob
+	conclusion string
+	reason     string
+}
+
+// Fails jobs past their timeout, whose runner went silent, or that no runner ever took
 func (m *Manager) reapJobs(ctx context.Context) {
 	now := time.Now().UTC()
+	var targets []reapTarget
 	running, err := m.store.ListRunningActionsJobs(ctx)
 	if err != nil {
 		return
@@ -153,32 +164,35 @@ func (m *Manager) reapJobs(ctx context.Context) {
 			stale[j.ID] = true
 		}
 	}
-	touched := map[string]*db.ActionsRun{}
-	repos := map[string]*db.GitRepository{}
 	for _, j := range running {
-		reason, conclusion := "", ""
 		switch {
 		case stale[j.ID]:
-			reason, conclusion = "runner stopped reporting", ConclusionFailure
+			targets = append(targets, reapTarget{j, ConclusionFailure, "runner stopped reporting"})
 		case j.StartedAt != nil:
 			timeout := defaultJobTimeout
 			if def, err := decodeDefinition(j); err == nil && def.Job.TimeoutMinutes > 0 {
 				timeout = def.Job.TimeoutMinutes
 			}
 			if now.Sub(*j.StartedAt) > time.Duration(timeout)*time.Minute {
-				reason, conclusion = "job exceeded its timeout", ConclusionTimedOut
+				targets = append(targets, reapTarget{j, ConclusionTimedOut, "job exceeded its timeout"})
 			}
 		}
-		if reason == "" {
-			continue
+	}
+	if old, err := m.store.ListQueuedActionsJobsBefore(ctx, now.Add(-queuedJobMaxAge)); err == nil {
+		for _, j := range old {
+			targets = append(targets, reapTarget{j, ConclusionFailure, "no runner picked the job up within 24 hours"})
 		}
-		run := touched[j.RunID]
+	}
+	touched := map[string]*db.ActionsRun{}
+	repos := map[string]*db.GitRepository{}
+	for _, t := range targets {
+		run := touched[t.job.RunID]
 		if run == nil {
-			run, _ = m.store.GetActionsRunByID(ctx, j.RunID)
+			run, _ = m.store.GetActionsRunByID(ctx, t.job.RunID)
 			if run == nil {
 				continue
 			}
-			touched[j.RunID] = run
+			touched[t.job.RunID] = run
 		}
 		repo := repos[run.RepoID]
 		if repo == nil {
@@ -188,8 +202,11 @@ func (m *Manager) reapJobs(ctx context.Context) {
 			}
 			repos[run.RepoID] = repo
 		}
-		m.failJob(ctx, repo, run, j, conclusion, reason)
-		m.compactJobLogs(ctx, j)
+		m.failJob(ctx, repo, run, t.job, t.conclusion, t.reason)
+		m.compactJobLogs(ctx, t.job)
+		if t.conclusion != ConclusionCancelled {
+			m.failFast(ctx, repo, run, t.job)
+		}
 	}
 	for _, run := range touched {
 		if repo := repos[run.RepoID]; repo != nil {

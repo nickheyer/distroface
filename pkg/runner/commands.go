@@ -3,6 +3,7 @@ package runner
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
 	"strconv"
 	"strings"
@@ -27,7 +28,7 @@ type commandWriter struct {
 	onAnnotation func(Annotation)
 	onMask       func(string)
 	onOutput     func(key, value string)
-	onEnv        func(key, value string)
+	disabled     string
 	stopToken    string
 	partial      []byte
 	depth        int
@@ -108,18 +109,26 @@ func (w *commandWriter) line(line string) {
 		if w.onOutput != nil {
 			w.onOutput(props["name"], value)
 		}
-	case "set-env":
-		if w.onEnv != nil {
-			w.onEnv(props["name"], value)
+	case "set-env", "add-path":
+		// Log injection reaches these, the files cannot be forged from output
+		w.disabled = cmd
+		msg := "The `" + cmd + "` command is disabled, write to $GITHUB_ENV or $GITHUB_PATH instead"
+		if w.onAnnotation != nil {
+			w.onAnnotation(Annotation{Level: "error", Message: msg})
 		}
-	case "add-path":
-		if w.onEnv != nil {
-			w.onEnv("", value)
-		}
+		io.WriteString(w.out, "##[error]"+msg+"\n")
 	case "echo", "save-state":
 	default:
 		io.WriteString(w.out, line+"\n")
 	}
+}
+
+// Error once a disabled command was seen, nil otherwise
+func (w *commandWriter) failure() error {
+	if w.disabled == "" {
+		return nil
+	}
+	return errors.New("the `" + w.disabled + "` workflow command is disabled")
 }
 
 // Splits a workflow command into name, properties, and value

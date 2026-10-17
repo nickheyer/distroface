@@ -197,7 +197,7 @@
 	{/if}
 </div>
 
-<FormPanel bind:open={createOpen} title="Add Push Mirror" description="Credentials are stored encrypted and never shown again." icon={Upload}>
+<FormPanel bind:open={createOpen} title="Add Push Mirror" description="Every branch and tag is force pushed and anything only on the remote is deleted. Credentials are stored encrypted and never shown again." icon={Upload}>
 	<div class="space-y-3">
 		<FormField label="Remote URL" id="pm-url" required help="https or ssh clone URL of the destination">
 			<Input id="pm-url" bind:value={remoteUrl} placeholder="https://github.com/owner/repo.git" class="font-mono text-sm" autocomplete="off" />

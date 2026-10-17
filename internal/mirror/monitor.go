@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-git/go-git/v6/plumbing/transport"
 	"net/http"
 	"slices"
 	"strings"
@@ -49,14 +50,16 @@ func (e *CooldownError) Error() string {
 
 // Monitor polls mirror repos and pulls new upstream content
 type Monitor struct {
-	store     *stores.Store
-	res       *settings.Resolver
-	artifacts *artifacts.Manager
-	oci       *ociSyncer
-	git       *gitrepo.Manager
-	sealer    *auth.Sealer
-	log       *logger.Logger
-	client    *http.Client
+	store        *stores.Store
+	res          *settings.Resolver
+	artifacts    *artifacts.Manager
+	oci          *ociSyncer
+	git          *gitrepo.Manager
+	sealer       *auth.Sealer
+	legacySealer *auth.Sealer
+	log          *logger.Logger
+	client       *http.Client
+	dial         transport.DialContextFunc
 
 	baseCtx     context.Context
 	mu          sync.Mutex
@@ -74,6 +77,7 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		return res.System(context.Background()).GetMirror().GetAllowPrivateNetworks()
 	}
 	pace := newPacer()
+	dial := safeDialer(allowPrivate).DialContext
 	client := &http.Client{
 		Transport: &pacedTransport{inner: safeTransport(allowPrivate), pace: pace},
 		Timeout:   0,
@@ -99,6 +103,7 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		oci:         oci,
 		log:         log,
 		client:      client,
+		dial:        dial,
 		baseCtx:     context.Background(),
 		inflight:    make(map[string]bool),
 		cancels:     make(map[string]context.CancelFunc),
@@ -245,7 +250,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 		m.log.Error("mirror sweep artifact repo list: %v", err)
 	}
 	for _, repo := range repos {
-		cfg, err := ParseConfig(repo.MirrorConfig)
+		cfg, err := m.Config(repo.MirrorConfig)
 		if err != nil {
 			m.log.Error("mirror config for artifact repo %s/%s: %v", repo.Namespace, repo.Name, err)
 			continue
@@ -270,7 +275,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 			m.log.Error("mirror sweep image repo list: %v", err)
 		}
 		for _, repo := range imageRepos {
-			cfg, err := ParseConfig(repo.MirrorConfig)
+			cfg, err := m.Config(repo.MirrorConfig)
 			if err != nil {
 				m.log.Error("mirror config for image repo %s/%s: %v", repo.Namespace, repo.Name, err)
 				continue
@@ -308,7 +313,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 
 // SyncArtifactRepoNow starts an immediate background sync
 func (m *Monitor) SyncArtifactRepoNow(repo *db.ArtifactRepository) error {
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}
@@ -338,7 +343,7 @@ func (m *Monitor) SyncImageRepoNow(repo *db.Repository) error {
 	if m.oci == nil || repo.Type != v1.RepositoryType_REPOSITORY_TYPE_MIRROR {
 		return fmt.Errorf("%w: repository is not a mirror", ErrInvalid)
 	}
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}

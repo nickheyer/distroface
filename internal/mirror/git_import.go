@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -285,29 +286,6 @@ func importMarker(source string, u forgeUser, link string) string {
 	return string(b)
 }
 
-type authorCache map[string]string
-
-// Local account for an upstream author, empty when none matches
-func (m *Monitor) importAuthor(ctx context.Context, cache authorCache, u forgeUser) string {
-	key := strings.ToLower(u.Login) + "|" + strings.ToLower(u.Email)
-	if id, ok := cache[key]; ok {
-		return id
-	}
-	id := ""
-	if u.Email != "" {
-		if user, _ := m.store.GetUserByEmail(ctx, u.Email); user != nil {
-			id = user.ID
-		}
-	}
-	if id == "" && u.Login != "" {
-		if user, _ := m.store.GetUserByUsername(ctx, u.Login); user != nil {
-			id = user.ID
-		}
-	}
-	cache[key] = id
-	return id
-}
-
 func (m *Monitor) execImport(ctx context.Context, repo *db.GitRepository, imp *db.GitImport) {
 	if imp.Phase == importDone {
 		return
@@ -352,7 +330,7 @@ func (m *Monitor) execImport(ctx context.Context, repo *db.GitRepository, imp *d
 
 // Walks phases from the saved cursor, saving after each
 func (m *Monitor) runImport(ctx context.Context, repo *db.GitRepository, imp *db.GitImport, st *importState, progress func(string)) error {
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}
@@ -378,7 +356,6 @@ func (m *Monitor) runImport(ctx context.Context, repo *db.GitRepository, imp *db
 		return fmt.Errorf("%w: unsupported import source %q", ErrInvalid, st.Forge)
 	}
 	f := forgeCtx{client: m.client, up: up, token: cfg.GetAuthToken()}
-	cache := authorCache{}
 	if imp.Phase == "" {
 		imp.Phase = importPhaseFetch
 	}
@@ -397,11 +374,11 @@ func (m *Monitor) runImport(ctx context.Context, repo *db.GitRepository, imp *db
 		case importPhaseMilestones:
 			err = m.importMilestones(ctx, repo, drv, f, st)
 		case importPhaseIssues:
-			err = m.importIssues(ctx, repo, drv, f, st, cache, progress)
+			err = m.importIssues(ctx, repo, drv, f, st, progress)
 		case importPhasePulls:
-			err = m.importPulls(ctx, repo, cfg, up, drv, f, st, cache, progress)
+			err = m.importPulls(ctx, repo, cfg, up, drv, f, st, progress)
 		case importPhaseReleases:
-			err = m.importReleases(ctx, repo, drv, f, st, cache)
+			err = m.importReleases(ctx, repo, drv, f, st)
 		default:
 			err = fmt.Errorf("unknown import phase %q", imp.Phase)
 		}
@@ -465,7 +442,10 @@ func (m *Monitor) importFetch(ctx context.Context, repo *db.GitRepository, cfg *
 
 func (m *Monitor) importWiki(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, st *importState) error {
 	state := parseGitMirrorState(repo.MirrorState)
-	auth := m.gitAuth(up, cfg, &state)
+	auth, err := m.gitAuth(up, cfg, &state)
+	if err != nil {
+		return err
+	}
 	wikiURL := up.wikiURL()
 	refs, err := m.git.ListRemote(ctx, wikiURL, auth, gitProbeTimeout)
 	if err != nil {
@@ -632,6 +612,10 @@ func (m *Monitor) lfsBatch(ctx context.Context, batchURL, user, pass string, obj
 
 // Streams one upstream object into the blob store
 func (m *Monitor) downloadLFSObject(ctx context.Context, repo *db.GitRepository, p gitrepo.LFSPointer, act lfsAction) error {
+	maxBytes := m.git.GitSettings(ctx, repo).GetMaxLfsObjectMb() * 1024 * 1024
+	if maxBytes > 0 && p.Size > maxBytes {
+		return fmt.Errorf("object %s exceeds the %d MB limit", p.OID, maxBytes/(1024*1024))
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, act.Href, nil)
 	if err != nil {
 		return err
@@ -652,9 +636,18 @@ func (m *Monitor) downloadLFSObject(ctx context.Context, repo *db.GitRepository,
 	if err != nil {
 		return err
 	}
-	if _, err := blobs.AppendChunk(uploadID, resp.Body); err != nil {
+	var body io.Reader = resp.Body
+	if maxBytes > 0 {
+		body = io.LimitReader(resp.Body, maxBytes+1)
+	}
+	n, err := blobs.AppendChunk(uploadID, body)
+	if err != nil {
 		_ = blobs.CancelUpload(uploadID)
 		return err
+	}
+	if maxBytes > 0 && n > maxBytes {
+		_ = blobs.CancelUpload(uploadID)
+		return fmt.Errorf("object %s exceeds the %d MB limit", p.OID, maxBytes/(1024*1024))
 	}
 	digest, size, _, err := blobs.CompleteUpload(uploadID)
 	if err != nil {
@@ -796,9 +789,8 @@ func (m *Monitor) importMilestones(ctx context.Context, repo *db.GitRepository, 
 	return nil
 }
 
-// Writes the issue row, labels, and imported marker event
-func (m *Monitor) importIssueRow(ctx context.Context, repo *db.GitRepository, st *importState, cache authorCache, is forgeIssue, number int64, isPull bool) (*db.GitIssue, error) {
-	authorID := m.importAuthor(ctx, cache, is.Author)
+// Writes the issue row, labels, and imported marker event, no local author
+func (m *Monitor) importIssueRow(ctx context.Context, repo *db.GitRepository, st *importState, is forgeIssue, number int64, isPull bool) (*db.GitIssue, error) {
 	row := &db.GitIssue{
 		ID:        uuid.New().String(),
 		RepoID:    repo.ID,
@@ -807,7 +799,6 @@ func (m *Monitor) importIssueRow(ctx context.Context, repo *db.GitRepository, st
 		Title:     is.Title,
 		Body:      is.Body,
 		State:     normalizeIssueState(is.State),
-		AuthorID:  authorID,
 		Locked:    is.Locked,
 		ClosedAt:  is.ClosedAt,
 		CreatedAt: is.CreatedAt,
@@ -838,7 +829,7 @@ func (m *Monitor) importIssueRow(ctx context.Context, repo *db.GitRepository, st
 			return nil, err
 		}
 	}
-	if err := m.addImportEvent(ctx, row, authorID, commentKindImported, importMarker(st.Forge, is.Author, is.URL), row.CreatedAt); err != nil {
+	if err := m.addImportEvent(ctx, row, "", commentKindImported, importMarker(st.Forge, is.Author, is.URL), row.CreatedAt); err != nil {
 		return nil, err
 	}
 	return row, nil
@@ -851,7 +842,9 @@ func (m *Monitor) addImportEvent(ctx context.Context, issue *db.GitIssue, author
 	return m.store.CreateGitComment(ctx, &db.GitComment{IssueID: issue.ID, AuthorID: authorID, Type: kind, Payload: payload, CreatedAt: at, UpdatedAt: at})
 }
 
-func (m *Monitor) importComments(ctx context.Context, drv forgeDriver, f forgeCtx, st *importState, cache authorCache, issue *db.GitIssue, number int64, pull bool) error {
+// Every comment page comes down before any row is written, so a cut off resumes cleanly
+func (m *Monitor) fetchComments(ctx context.Context, drv forgeDriver, f forgeCtx, number int64, pull bool) ([]forgeComment, error) {
+	var all []forgeComment
 	for page := 1; page <= importMaxPages; page++ {
 		var (
 			items []forgeComment
@@ -864,30 +857,35 @@ func (m *Monitor) importComments(ctx context.Context, drv forgeDriver, f forgeCt
 			items, more, err = drv.comments(ctx, f, number, page)
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
-		for _, c := range items {
-			at := c.CreatedAt
-			if at.IsZero() {
-				at = time.Now().UTC()
-			}
-			row := &db.GitComment{
-				IssueID:   issue.ID,
-				AuthorID:  m.importAuthor(ctx, cache, c.Author),
-				Type:      commentKindComment,
-				Body:      c.Body,
-				Payload:   importMarker(st.Forge, c.Author, ""),
-				CreatedAt: at,
-				UpdatedAt: at,
-			}
-			if err := m.store.CreateGitComment(ctx, row); err != nil {
-				return err
-			}
-			st.Counts["comments"]++
-		}
+		all = append(all, items...)
 		if !more {
 			break
 		}
+	}
+	return all, nil
+}
+
+// Comments carry the upstream author in their marker and no local author
+func (m *Monitor) writeComments(ctx context.Context, st *importState, issue *db.GitIssue, items []forgeComment) error {
+	for _, c := range items {
+		at := c.CreatedAt
+		if at.IsZero() {
+			at = time.Now().UTC()
+		}
+		row := &db.GitComment{
+			IssueID:   issue.ID,
+			Type:      commentKindComment,
+			Body:      c.Body,
+			Payload:   importMarker(st.Forge, c.Author, ""),
+			CreatedAt: at,
+			UpdatedAt: at,
+		}
+		if err := m.store.CreateGitComment(ctx, row); err != nil {
+			return err
+		}
+		st.Counts["comments"]++
 	}
 	return nil
 }
@@ -897,7 +895,7 @@ func (m *Monitor) restoreIssueTime(ctx context.Context, issue *db.GitIssue) {
 	_ = m.store.UpdateGitIssueColumns(ctx, issue.ID, map[string]any{"updated_at": issue.UpdatedAt})
 }
 
-func (m *Monitor) importIssues(ctx context.Context, repo *db.GitRepository, drv forgeDriver, f forgeCtx, st *importState, cache authorCache, progress func(string)) error {
+func (m *Monitor) importIssues(ctx context.Context, repo *db.GitRepository, drv forgeDriver, f forgeCtx, st *importState, progress func(string)) error {
 	for page := max(st.Cursor["issues"], 1); page <= importMaxPages; page++ {
 		items, more, err := drv.issues(ctx, f, page)
 		if err != nil {
@@ -915,11 +913,15 @@ func (m *Monitor) importIssues(ctx context.Context, repo *db.GitRepository, drv 
 			if existing != nil {
 				continue
 			}
-			row, err := m.importIssueRow(ctx, repo, st, cache, is, is.Number, false)
+			comments, err := m.fetchComments(ctx, drv, f, is.Number, false)
 			if err != nil {
 				return err
 			}
-			if err := m.importComments(ctx, drv, f, st, cache, row, is.Number, false); err != nil {
+			row, err := m.importIssueRow(ctx, repo, st, is, is.Number, false)
+			if err != nil {
+				return err
+			}
+			if err := m.writeComments(ctx, st, row, comments); err != nil {
 				return err
 			}
 			if row.State == db.IssueStateClosed {
@@ -1000,9 +1002,12 @@ func normalizeReviewState(s string) (string, bool) {
 	return "", false
 }
 
-func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, drv forgeDriver, f forgeCtx, st *importState, cache authorCache, progress func(string)) error {
+func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, drv forgeDriver, f forgeCtx, st *importState, progress func(string)) error {
 	keys := parseGitMirrorState(repo.MirrorState)
-	auth := m.gitAuth(up, cfg, &keys)
+	auth, err := m.gitAuth(up, cfg, &keys)
+	if err != nil {
+		return err
+	}
 	if st.Forge == forgeGitLab {
 		if err := m.ensureIssueCounter(ctx, repo, st.MaxNumber); err != nil {
 			return err
@@ -1044,7 +1049,15 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 			if pr.Merged {
 				issue.State = db.IssueStateClosed
 			}
-			row, err := m.importIssueRow(ctx, repo, st, cache, issue, number, true)
+			comments, err := m.fetchComments(ctx, drv, f, pr.Number, true)
+			if err != nil {
+				return err
+			}
+			reviews, err := drv.reviews(ctx, f, pr.Number)
+			if err != nil {
+				return err
+			}
+			row, err := m.importIssueRow(ctx, repo, st, issue, number, true)
 			if err != nil {
 				return err
 			}
@@ -1063,11 +1076,7 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 			if err := m.store.CreateGitPullRequest(ctx, prRow); err != nil {
 				return err
 			}
-			if err := m.importComments(ctx, drv, f, st, cache, row, pr.Number, true); err != nil {
-				return err
-			}
-			reviews, err := drv.reviews(ctx, f, pr.Number)
-			if err != nil {
+			if err := m.writeComments(ctx, st, row, comments); err != nil {
 				return err
 			}
 			for _, rv := range reviews {
@@ -1079,13 +1088,14 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 				if rv.SubmittedAt != nil {
 					at = *rv.SubmittedAt
 				}
+				// Upstream reviewers are not local accounts, so the review never counts
 				review := &db.GitReview{
 					IssueID:     row.ID,
-					ReviewerID:  m.importAuthor(ctx, cache, rv.Author),
 					State:       state,
 					Body:        rv.Body,
 					CommitSHA:   rv.CommitSHA,
 					Dismissed:   rv.Dismissed,
+					Imported:    true,
 					SubmittedAt: &at,
 					CreatedAt:   at,
 				}
@@ -1163,7 +1173,7 @@ func releaseRow(repoID string, rel forgeRelease, authorID, targetSHA string) *db
 	return row
 }
 
-func (m *Monitor) importReleases(ctx context.Context, repo *db.GitRepository, drv forgeDriver, f forgeCtx, st *importState, cache authorCache) error {
+func (m *Monitor) importReleases(ctx context.Context, repo *db.GitRepository, drv forgeDriver, f forgeCtx, st *importState) error {
 	for page := max(st.Cursor["releases"], 1); page <= importMaxPages; page++ {
 		items, more, err := drv.releases(ctx, f, page)
 		if err != nil {
@@ -1180,7 +1190,7 @@ func (m *Monitor) importReleases(ctx context.Context, repo *db.GitRepository, dr
 			if existing != nil {
 				continue
 			}
-			row := releaseRow(repo.ID, rel, m.importAuthor(ctx, cache, rel.Author), m.tagCommit(repo, rel.Tag, rel.TargetSHA))
+			row := releaseRow(repo.ID, rel, "", m.tagCommit(repo, rel.Tag, rel.TargetSHA))
 			if err := m.store.CreateGitRelease(ctx, row); err != nil {
 				return err
 			}
@@ -1232,7 +1242,6 @@ func (m *Monitor) syncLinkedReleases(ctx context.Context, art *db.ArtifactReposi
 		return
 	}
 	f := forgeCtx{client: m.client, up: up, token: cfg.GetAuthToken()}
-	cache := authorCache{}
 	for page := 1; page <= maxReleasePages; page++ {
 		items, more, err := drv.releases(ctx, f, page)
 		if err != nil {
@@ -1248,7 +1257,7 @@ func (m *Monitor) syncLinkedReleases(ctx context.Context, art *db.ArtifactReposi
 				return
 			}
 			if existing == nil {
-				row := releaseRow(repo.ID, rel, m.importAuthor(ctx, cache, rel.Author), m.tagCommit(repo, rel.Tag, rel.TargetSHA))
+				row := releaseRow(repo.ID, rel, "", m.tagCommit(repo, rel.Tag, rel.TargetSHA))
 				if err := m.store.CreateGitRelease(ctx, row); err != nil {
 					m.log.Warn("release row %s for %s/%s: %v", rel.Tag, repo.Namespace, repo.Name, err)
 				}

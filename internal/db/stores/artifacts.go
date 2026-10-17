@@ -31,7 +31,7 @@ func PropsFingerprint(properties map[string]string) string {
 	sort.Strings(keys)
 	h := sha256.New()
 	for _, k := range keys {
-		fmt.Fprintf(h, "%d:%s%d:%s;", len(k), k, len(properties[k]), properties[k])
+		h.Write(fmt.Appendf(nil, "%d:%s%d:%s;", len(k), k, len(properties[k]), properties[k]))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -59,6 +59,8 @@ type ArtifactRepoListOptions struct {
 	ViewerID       string      // Owner whose private repos are visible
 	IncludePrivate bool        // True bypasses visibility filtering
 	GrantedRepos   []string    // RBAC granted repos as namespace/name
+	OnlyRepo       string      // Credential scope, same name or linked source
+	OnlyNamespace  string      // Credential scope, exact namespace
 	Query          pages.Query // Structured filter against ArtifactReposQuery
 	Limit          int         // Zero means no limit
 	Offset         int
@@ -79,6 +81,7 @@ func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoL
 	if opts.Namespace != "" {
 		q = q.Where("namespace = ?", opts.Namespace)
 	}
+	q = q.Scopes(packageScope(opts.OnlyRepo, opts.OnlyNamespace))
 	if !opts.IncludePrivate {
 		if opts.ViewerID != "" {
 			cond := "is_private = ? OR owner_id = ? " +

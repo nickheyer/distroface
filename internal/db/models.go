@@ -116,7 +116,7 @@ type Repository struct {
 	PushCount       int64             `json:"push_count" gorm:"default:0"`
 	LastPush        *time.Time        `json:"last_push"`
 	Type            v1.RepositoryType `json:"type" gorm:"not null;default:1"`
-	MirrorConfig    string            `json:"-" gorm:"type:text;not null;default:'';column:mirror_config"` // Protojson, token plaintext for upstream auth
+	MirrorConfig    string            `json:"-" gorm:"type:text;not null;default:'';column:mirror_config"` // Protojson, token sealed for upstream auth
 	MirrorState     string            `json:"-" gorm:"type:text;not null;default:'';column:mirror_state"`  // Sync cursor and cooldown bookkeeping
 	MirrorLastSync  *time.Time        `json:"mirror_last_sync" gorm:"column:mirror_last_sync"`
 	MirrorLastError string            `json:"mirror_last_error" gorm:"column:mirror_last_error"`
@@ -218,7 +218,7 @@ type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v
 	OwnerID         string              `json:"owner_id" gorm:"index;column:owner_id"`
 	IsPrivate       bool                `json:"private" gorm:"not null;default:false"`
 	Type            v1.ArtifactRepoType `json:"type" gorm:"not null;default:1"`
-	MirrorConfig    string              `json:"-" gorm:"type:text;not null;default:'';column:mirror_config"` // Protojson, token plaintext for upstream auth
+	MirrorConfig    string              `json:"-" gorm:"type:text;not null;default:'';column:mirror_config"` // Protojson, token sealed for upstream auth
 	MirrorState     string              `json:"-" gorm:"type:text;not null;default:'';column:mirror_state"`  // Sync cursor and cooldown bookkeeping
 	MirrorLastSync  *time.Time          `json:"mirror_last_sync" gorm:"column:mirror_last_sync"`
 	MirrorLastError string              `json:"mirror_last_error" gorm:"column:mirror_last_error"`
@@ -771,6 +771,7 @@ type GitReview struct {
 	CommitSHA   string `gorm:"not null;default:'';column:commit_sha"`
 	Dismissed   bool   `gorm:"not null;default:false"`
 	DismissedBy string `gorm:"not null;default:''"`
+	Imported    bool   `gorm:"not null;default:false"` // Copied from another forge, never counts toward required reviews
 	SubmittedAt *time.Time
 	CreatedAt   time.Time `gorm:"autoCreateTime"`
 	Issue       *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
@@ -965,11 +966,13 @@ type ActionsRun struct {
 	Status        string `gorm:"not null;default:'queued';index"`
 	Conclusion    string `gorm:"not null;default:''"`
 	NeedsApproval bool   `gorm:"not null;default:false"`
+	FromFork      bool   `gorm:"not null;default:false"` // Head code from a fork, no secrets and a read only token
 	SkipCI        bool   `gorm:"not null;default:false;column:skip_ci"`
 	PullNumber    int64  `gorm:"not null;default:0"`
 	Payload       string `gorm:"type:text;not null;default:'{}'"` // Event payload as json
 	Workflow      string `gorm:"type:text;not null;default:''"`   // Workflow source at trigger time
 	Concurrency   string `gorm:"not null;default:''"`
+	Notes         string `gorm:"type:text;not null;default:'[]'"` // Parser notes shown on the run
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
 	CreatedAt     time.Time      `gorm:"autoCreateTime;index:idx_run_repo_created"`
@@ -984,6 +987,9 @@ type ActionsJob struct {
 	RunsOn      string `gorm:"type:text;not null;default:'[]'"`
 	Needs       string `gorm:"type:text;not null;default:'[]'"`
 	Matrix      string `gorm:"type:text;not null;default:'{}'"`
+	MatrixGroup string `gorm:"not null;default:''"` // Job key before the matrix suffix
+	MaxParallel int    `gorm:"not null;default:0"`
+	Concurrency string `gorm:"not null;default:'';index"` // Job level concurrency group
 	Status      string `gorm:"not null;default:'waiting';index"`
 	Conclusion  string `gorm:"not null;default:''"`
 	RunnerID    string `gorm:"not null;default:''"`
@@ -994,6 +1000,7 @@ type ActionsJob struct {
 	Definition  string `gorm:"type:text;not null;default:'{}'"` // Resolved job definition as json
 	TokenID     string `gorm:"not null;default:''"`
 	LogChunks   int    `gorm:"not null;default:0"`
+	LogBytes    int64  `gorm:"not null;default:0"`
 	LogDigest   string `gorm:"not null;default:''"` // Compacted log blob after completion
 	StartedAt   *time.Time
 	FinishedAt  *time.Time

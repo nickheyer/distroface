@@ -57,6 +57,14 @@ func (s *OrganizationService) teamOrg(ctx context.Context, orgID string) (*stora
 	if org == nil {
 		return nil, connect.Errorf(connect.CodeNotFound, "organization not found")
 	}
+	// Teams, their members, and their repositories are the organization's own business
+	user := auth.UserFromContext(ctx)
+	if user == nil || user.IsAnonymous() {
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	if member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID); member == nil && !s.enforcer.HasPermission(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage) {
+		return nil, connect.Errorf(connect.CodeNotFound, "organization not found")
+	}
 	return org, nil
 }
 

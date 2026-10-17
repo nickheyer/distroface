@@ -12,6 +12,7 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/mailer"
@@ -75,6 +76,16 @@ func (s *AuthService) RequestPasswordReset(ctx context.Context, req *v1.RequestP
 	identifier := strings.TrimSpace(req.Identifier)
 	if identifier == "" {
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "identifier is required")
+	}
+	ip := ""
+	if info, ok := connect.CallInfoForServerContext(ctx); ok {
+		ip = admin.ClientIP(info.PeerAddr, info.RequestHeader())
+	}
+	if ok, _, _ := s.resets.Take("ip:" + ip); !ok {
+		return nil, connect.Errorf(connect.CodeResourceExhausted, "too many reset requests, try again later")
+	}
+	if ok, _, _ := s.resets.Take("id:" + strings.ToLower(identifier)); !ok {
+		return nil, connect.Errorf(connect.CodeResourceExhausted, "too many reset requests, try again later")
 	}
 	// The answer never reveals whether the account exists
 	user, err := s.store.GetUserByIdentifier(ctx, identifier)

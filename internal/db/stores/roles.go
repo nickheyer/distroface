@@ -167,6 +167,22 @@ func (s *Store) GetUserRoleNamesBySource(ctx context.Context, userID, source str
 	return names, nil
 }
 
+// Role names of many users keyed by user id
+func (s *Store) GetUserRoleNamesByIDs(ctx context.Context, ids []string) (map[string][]string, error) {
+	out := make(map[string][]string, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []db.UserRole
+	if err := s.db.WithContext(ctx).Where("user_id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.UserID] = append(out[r.UserID], r.RoleName)
+	}
+	return out, nil
+}
+
 func (s *Store) GetUserRoleNames(ctx context.Context, userID string) ([]string, error) {
 	var names []string
 	err := s.db.WithContext(ctx).

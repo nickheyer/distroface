@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing/transport"
-	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
@@ -42,20 +41,19 @@ type SSHPortalResolver interface {
 
 // SSHServer accepts git over ssh on one listener
 type SSHServer struct {
-	manager     *Manager
-	lfs         *LFS
-	authLimiter *admin.Limiter
-	portals     SSHPortalResolver
-	log         *logger.Logger
-	config      *ssh.ServerConfig
-	hostKeys    []ssh.Signer
+	manager  *Manager
+	lfs      *LFS
+	portals  SSHPortalResolver
+	log      *logger.Logger
+	config   *ssh.ServerConfig
+	hostKeys []ssh.Signer
 
 	mu       sync.Mutex
 	sessions map[string]int
 }
 
-func newSSHServer(manager *Manager, lfs *LFS, hostKeys []ssh.Signer, authLimiter *admin.Limiter, portals SSHPortalResolver, log *logger.Logger) *SSHServer {
-	s := &SSHServer{manager: manager, lfs: lfs, authLimiter: authLimiter, portals: portals, log: log, sessions: map[string]int{}, hostKeys: hostKeys}
+func newSSHServer(manager *Manager, lfs *LFS, hostKeys []ssh.Signer, portals SSHPortalResolver, log *logger.Logger) *SSHServer {
+	s := &SSHServer{manager: manager, lfs: lfs, portals: portals, log: log, sessions: map[string]int{}, hostKeys: hostKeys}
 	s.config = &ssh.ServerConfig{
 		PublicKeyCallback: s.publicKey,
 		ServerVersion:     "SSH-2.0-distroface",
@@ -128,19 +126,11 @@ func (s *SSHServer) publicKey(conn ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Pe
 	if host, _, err := net.SplitHostPort(ip); err == nil {
 		ip = host
 	}
-	if s.authLimiter != nil && s.authLimiter.Blocked(ip) {
-		return nil, errors.New("too many failed attempts")
-	}
+	// An agent offering unregistered keys is not an attack, MaxAuthTries bounds the probe
 	row, err := s.manager.Store().GetSSHKeyByFingerprint(ctx, fp)
 	if err != nil || row == nil || (row.ExpiresAt != nil && row.ExpiresAt.Before(time.Now())) || row.Usage == "signing" {
-		if s.authLimiter != nil {
-			s.authLimiter.Record(ip)
-		}
 		s.manager.Audit(ctx, audit.Event{Action: "Git/auth", Resource: "auth", Outcome: audit.OutcomeDenied, Detail: "ssh " + fp, SourceIP: ip})
 		return nil, errors.New("unknown key")
-	}
-	if s.authLimiter != nil {
-		s.authLimiter.Reset(ip)
 	}
 	_ = s.manager.Store().TouchSSHKey(ctx, row.ID)
 	return &ssh.Permissions{Extensions: map[string]string{"key-id": row.ID, "fingerprint": fp}}, nil
@@ -398,7 +388,8 @@ func (s *SSHServer) resolvePath(ctx context.Context, raw string, p *portal.Porta
 
 // Runs one git command over the channel, returning the exit status
 func (s *SSHServer) exec(sconn *ssh.ServerConn, ch ssh.Channel, command string, env map[string]string, remote string, p *portal.Portal) int {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	ip := remote
 	if host, _, err := net.SplitHostPort(remote); err == nil {
 		ip = host
@@ -449,18 +440,44 @@ func (s *SSHServer) exec(sconn *ssh.ServerConn, ch ssh.Channel, command string, 
 			return fail("repository is archived")
 		}
 	}
+	if s.manager.Engine().Renaming(repo.ID) {
+		return fail("repository is moving, retry shortly")
+	}
 	release, err := s.manager.Engine().Transfers().Acquire(ctx, 10*time.Second)
 	if err != nil {
 		return fail("server busy")
 	}
 	defer release()
+	// Writers lock before opening so a rename in flight cannot leave a ghost directory
+	var lock *RepoLock
+	if cmd.service == transport.ReceivePackService {
+		lock = s.manager.Engine().LockRepo(repo.ID)
+		defer lock.Unlock()
+		current, err := s.manager.Store().GetGitRepositoryByID(ctx, repo.ID)
+		if err != nil || current == nil {
+			return fail("repository not found")
+		}
+		repo = current
+	}
 	st, closer, err := s.manager.Engine().Storer(repo.Namespace, repo.Name, wiki)
 	if err != nil {
 		return fail("repository unavailable")
 	}
 	defer closer()
-	reader := io.NopCloser(ch)
-	writer := &channelWriter{ch: ch}
+	// A client that stops moving bytes loses the channel and its locks
+	watch := &idleWatch{}
+	go watch.run(ctx, transferIdleTimeout, func() {
+		fmt.Fprintln(ch.Stderr(), "fatal: session idle timeout")
+		cancel()
+		_ = ch.Close()
+	})
+	var reader io.ReadCloser = io.NopCloser(&touchReader{r: ch, w: watch})
+	if cmd.service == transport.ReceivePackService {
+		if budget, over := s.manager.pushBudget(ctx, repo, wiki); budget > 0 {
+			reader = &budgetReader{ReadCloser: reader, left: budget, err: over}
+		}
+	}
+	writer := &channelWriter{ch: ch, watch: watch}
 	switch cmd.service {
 	case transport.UploadPackService:
 		err = transport.UploadPack(ctx, st, reader, writer, &transport.UploadPackRequest{GitProtocol: env["GIT_PROTOCOL"]})
@@ -469,11 +486,10 @@ func (s *SSHServer) exec(sconn *ssh.ServerConn, ch ssh.Channel, command string, 
 			s.manager.Audit(ctx, audit.Event{Action: "Git/fetch", Resource: "git", Outcome: audit.OutcomeSuccess, Detail: repo.Namespace + "/" + repo.Name, SourceIP: ip, Actor: user.Username, ActorID: user.ID})
 		}
 	case transport.ReceivePackService:
-		unlock := s.manager.Engine().LockRepo(repo.ID)
 		err = transport.ReceivePack(ctx, st, reader, writer, &transport.ReceivePackRequest{
-			GitProtocol: env["GIT_PROTOCOL"], Hooks: s.manager.Hooks(ctx, repo, user, HookOptions{Wiki: wiki}),
+			GitProtocol: env["GIT_PROTOCOL"], Hooks: s.manager.Hooks(ctx, repo, user, HookOptions{Wiki: wiki}, lock),
 		})
-		unlock()
+		lock.Unlock()
 	case transport.UploadArchiveService:
 		err = transport.UploadArchive(ctx, st, reader, writer, &transport.UploadArchiveRequest{})
 	case "git-lfs-authenticate":
@@ -503,11 +519,19 @@ func (s *SSHServer) exec(sconn *ssh.ServerConn, ch ssh.Channel, command string, 
 
 // Channel writer whose close half closes the write side
 type channelWriter struct {
-	ch ssh.Channel
+	ch    ssh.Channel
+	watch *idleWatch
 }
 
-func (c *channelWriter) Write(p []byte) (int, error) { return c.ch.Write(p) }
-func (c *channelWriter) Close() error                { return c.ch.CloseWrite() }
+func (c *channelWriter) Write(p []byte) (int, error) {
+	n, err := c.ch.Write(p)
+	if n > 0 && c.watch != nil {
+		c.watch.touch()
+	}
+	return n, err
+}
+
+func (c *channelWriter) Close() error { return c.ch.CloseWrite() }
 
 // Parses host and port from an address for logs
 func addrPort(addr string) int {

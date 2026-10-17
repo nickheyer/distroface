@@ -98,6 +98,10 @@ func (m *Manager) resolveHead(ctx context.Context, repo *db.GitRepository, actor
 		if other.ID != repo.ID && (other.ForkOfID == nil || *other.ForkOfID != repo.ID) && (repo.ForkOfID == nil || *repo.ForkOfID != other.ID) {
 			return nil, "", fmt.Errorf("%w: head repository must be a fork of the base repository", ErrInvalid)
 		}
+		// Proposing a branch means being able to push it, as on GitHub
+		if other.ID != repo.ID && m.git.Access().Level(ctx, actor.User, other, db.GitUnitCode) < gitrepo.LevelWrite {
+			return nil, "", fmt.Errorf("%w: you need push access to %s to open a pull request from it", ErrForbidden, ns)
+		}
 		headRepo, branch = other, rest
 	}
 	if branch == "" {
@@ -135,7 +139,7 @@ func (m *Manager) refreshPullRef(ctx context.Context, repo *db.GitRepository, pr
 		}
 		return tip, nil
 	}
-	unlock := m.git.Engine().LockRepo(repo.ID)
+	unlock := m.git.Engine().LockStore(repo.ID)
 	defer unlock()
 	r, err := m.git.Engine().OpenRepo(repo.Namespace, repo.Name, false)
 	if err != nil {
@@ -203,7 +207,8 @@ func (m *Manager) CreatePull(ctx context.Context, repo *db.GitRepository, actor 
 	}
 	pr := &db.GitPullRequest{
 		IssueID: issue.ID, HeadRepoID: headRepo.ID, HeadBranch: headBranch, HeadSHA: headTip.String(), BaseBranch: base,
-		Draft: in.Draft, MergeableState: MergeableUnknown, ConflictPaths: "[]", AllowMaintainerEdits: in.AllowMaintainerEdits || headRepo.ID == repo.ID,
+		Draft: in.Draft, MergeableState: MergeableUnknown, ConflictPaths: "[]",
+		AllowMaintainerEdits: headRepo.ID == repo.ID || (in.AllowMaintainerEdits && forkOwnedBy(headRepo, actor.User.ID)),
 	}
 	if err := m.store.CreateGitPullRequest(ctx, pr); err != nil {
 		_ = m.store.DeleteGitIssue(ctx, issue.ID)
@@ -391,6 +396,10 @@ func (m *Manager) UpdatePull(ctx context.Context, repo *db.GitRepository, actor 
 		m.Trigger(ctx, repo, "pull_request", action, PullRef(issue.Number).String(), pr.HeadSHA, actor.User, m.pullPayloadMap(ctx, repo, issue, pr))
 	}
 	if up.AllowMaintainerEdits != nil && actor.User.ID == issue.AuthorID {
+		headRepo, _ := m.store.GetGitRepositoryByID(ctx, pr.HeadRepoID)
+		if headRepo != nil && headRepo.ID != repo.ID && !forkOwnedBy(headRepo, actor.User.ID) {
+			return fmt.Errorf("%w: only the owner of the fork can allow maintainer edits", ErrForbidden)
+		}
 		pr.AllowMaintainerEdits = *up.AllowMaintainerEdits
 		cols["allow_maintainer_edits"] = pr.AllowMaintainerEdits
 	}
@@ -411,14 +420,11 @@ func (m *Manager) ClosePull(ctx context.Context, repo *db.GitRepository, actor A
 	if !m.canEdit(actor, issue) {
 		return ErrForbidden
 	}
-	if pr.MergedAt != nil {
-		return fmt.Errorf("%w: pull request is already merged", ErrInvalid)
+	if repo.IsArchived {
+		return gitrepo.ErrArchived
 	}
-	if err := m.setState(ctx, repo, actor, issue, "closed", ""); err != nil {
+	if err := m.setState(ctx, repo, actor, issue, pr, "closed", ""); err != nil {
 		return err
-	}
-	if pr.AutoMergeMethod != "" {
-		_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"auto_merge_method": "", "auto_merge_by": ""})
 	}
 	if deleteBranch {
 		_ = m.DeleteHeadBranch(ctx, repo, actor, issue, pr)
@@ -431,23 +437,10 @@ func (m *Manager) ReopenPull(ctx context.Context, repo *db.GitRepository, actor 
 	if !m.canEdit(actor, issue) {
 		return ErrForbidden
 	}
-	if pr.MergedAt != nil {
-		return fmt.Errorf("%w: merged pull requests cannot reopen", ErrInvalid)
+	if repo.IsArchived {
+		return gitrepo.ErrArchived
 	}
-	headRepo, _ := m.store.GetGitRepositoryByID(ctx, pr.HeadRepoID)
-	if headRepo == nil || m.branchTip(headRepo, pr.HeadBranch).IsZero() {
-		return fmt.Errorf("%w: the head branch no longer exists, restore it first", ErrInvalid)
-	}
-	if err := m.setState(ctx, repo, actor, issue, "open", ""); err != nil {
-		return err
-	}
-	tip, _ := m.refreshPullRef(ctx, repo, pr, issue.Number, headRepo)
-	if !tip.IsZero() {
-		pr.HeadSHA = tip.String()
-		_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"head_sha": pr.HeadSHA, "head_deleted": false})
-	}
-	m.refreshPullStats(ctx, repo, pr)
-	return nil
+	return m.setState(ctx, repo, actor, issue, pr, "open", "")
 }
 
 // Reports whether the actor may push the head branch of a pull request
@@ -458,7 +451,13 @@ func (m *Manager) canPushHead(ctx context.Context, repo, headRepo *db.GitReposit
 	if m.git.Access().Level(ctx, actor.User, headRepo, db.GitUnitCode) >= gitrepo.LevelWrite {
 		return true
 	}
-	return headRepo.ID != repo.ID && pr.AllowMaintainerEdits && actor.CanWrite
+	// Only a fork the author personally owns can be opened to base writers
+	return headRepo.ID != repo.ID && pr.AllowMaintainerEdits && actor.CanWrite && forkOwnedBy(headRepo, issue.AuthorID)
+}
+
+// A fork in the user's own namespace, org owned forks never qualify
+func forkOwnedBy(fork *db.GitRepository, userID string) bool {
+	return !fork.IsOrgNamespace && fork.OwnerID != "" && fork.OwnerID == userID
 }
 
 // Deletes the head branch after a merge or close
@@ -481,7 +480,7 @@ func (m *Manager) DeleteHeadBranch(ctx context.Context, repo *db.GitRepository, 
 	if tip.IsZero() {
 		return nil
 	}
-	if err := m.git.UpdateRef(ctx, headRepo, actor.User, plumbing.NewBranchReferenceName(pr.HeadBranch), tip, plumbing.ZeroHash, gitrepo.HookOptions{BypassPullRequest: true}); err != nil {
+	if err := m.git.UpdateRef(ctx, headRepo, actor.User, plumbing.NewBranchReferenceName(pr.HeadBranch), tip, plumbing.ZeroHash, gitrepo.HookOptions{}); err != nil {
 		return err
 	}
 	pr.HeadDeleted = true
@@ -504,11 +503,13 @@ func (m *Manager) RestoreHeadBranch(ctx context.Context, repo *db.GitRepository,
 	}
 	head := plumbing.NewHash(pr.HeadSHA)
 	if headRepo.ID != repo.ID {
-		if err := m.git.FetchLocal(ctx, headRepo, repo, false, "+"+PullRef(issue.Number).String()+":refs/distroface/restore/"+pr.HeadSHA); err != nil {
+		staging := plumbing.ReferenceName("refs/distroface/restore/" + pr.HeadSHA)
+		if err := m.git.FetchLocal(ctx, headRepo, repo, false, "+"+PullRef(issue.Number).String()+":"+staging.String()); err != nil {
 			return err
 		}
+		defer m.git.DropStagingRef(ctx, headRepo, staging)
 	}
-	if err := m.git.UpdateRef(ctx, headRepo, actor.User, plumbing.NewBranchReferenceName(pr.HeadBranch), plumbing.ZeroHash, head, gitrepo.HookOptions{BypassPullRequest: true, BypassSignedCommits: true}); err != nil {
+	if err := m.git.UpdateRef(ctx, headRepo, actor.User, plumbing.NewBranchReferenceName(pr.HeadBranch), plumbing.ZeroHash, head, gitrepo.HookOptions{}); err != nil {
 		return err
 	}
 	pr.HeadDeleted = false
@@ -535,9 +536,11 @@ func (m *Manager) UpdateBranch(ctx context.Context, repo *db.GitRepository, acto
 		return fmt.Errorf("%w: a branch no longer exists", ErrInvalid)
 	}
 	if headRepo.ID != repo.ID {
-		if err := m.git.FetchLocal(ctx, headRepo, repo, false, "+refs/heads/"+pr.BaseBranch+":refs/distroface/base/"+baseTip.String()); err != nil {
+		staging := plumbing.ReferenceName("refs/distroface/base/" + baseTip.String())
+		if err := m.git.FetchLocal(ctx, headRepo, repo, false, "+refs/heads/"+pr.BaseBranch+":"+staging.String()); err != nil {
 			return err
 		}
+		defer m.git.DropStagingRef(ctx, headRepo, staging)
 	}
 	r, err := m.git.Engine().OpenRepo(headRepo.Namespace, headRepo.Name, false)
 	if err != nil {
@@ -561,13 +564,14 @@ func (m *Manager) UpdateBranch(ctx context.Context, repo *db.GitRepository, acto
 		if err != nil {
 			return err
 		}
-		return m.git.UpdateRef(ctx, headRepo, actor.User, plumbing.NewBranchReferenceName(pr.HeadBranch), headTip, newHead, gitrepo.HookOptions{BypassPullRequest: true, BypassSignedCommits: true})
+		// The head branch keeps its own rules, a protected head refuses the rewrite
+		return m.git.UpdateRef(ctx, headRepo, actor.User, plumbing.NewBranchReferenceName(pr.HeadBranch), headTip, newHead, gitrepo.HookOptions{})
 	}
 	msg := fmt.Sprintf("Merge branch '%s' into %s\n", pr.BaseBranch, pr.HeadBranch)
 	_, err = m.git.CommitToBranch(ctx, headRepo, actor.User, gitrepo.CommitRequest{
-		Branch: pr.HeadBranch, ExpectedHead: headTip, Message: msg, Options: gitrepo.HookOptions{BypassPullRequest: true, BypassSignedCommits: true},
+		Branch: pr.HeadBranch, ExpectedHead: headTip, Message: msg,
 		Build: func(r *gitrepo.Repo, head plumbing.Hash) (plumbing.Hash, error) {
-			res, err := r.Merge3(ctx, mergeBase, head, baseTip, true)
+			res, err := r.MergeCommits(ctx, head, baseTip, true)
 			if err != nil {
 				return plumbing.ZeroHash, err
 			}

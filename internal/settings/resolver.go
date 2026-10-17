@@ -73,6 +73,14 @@ func (r *Resolver) Invalidate() {
 	r.mu.Unlock()
 }
 
+// Drops what is cached for one repository after a move or delete
+func (r *Resolver) ForgetRepo(repoID string) {
+	r.mu.Lock()
+	delete(r.repoOrg, repoID)
+	delete(r.rows, scopeKey{v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, repoID})
+	r.mu.Unlock()
+}
+
 func (r *Resolver) notify() {
 	r.mu.RLock()
 	subs := append([]func(){}, r.subs...)
@@ -166,12 +174,14 @@ func (r *Resolver) Repo(ctx context.Context, repoID string) *v1.Settings {
 	return eff
 }
 
+// One stored row and the tier it speaks for
+type tierRow struct {
+	row  *v1.Settings
+	tier v1.SettingsTier
+}
+
 // Effective resolves the full chain for a scope with provenance
 func (r *Resolver) Effective(ctx context.Context, scope v1.SettingsScopeType, scopeID string) (*v1.Settings, []*v1.FieldProvenance, error) {
-	type tierRow struct {
-		row  *v1.Settings
-		tier v1.SettingsTier
-	}
 	chain := []tierRow{}
 
 	system, err := r.Stored(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
@@ -227,10 +237,35 @@ func (r *Resolver) Effective(ctx context.Context, scope v1.SettingsScopeType, sc
 	for _, t := range chain {
 		overlay(eff.ProtoReflect(), t.row.ProtoReflect(), "", t.tier, prov)
 	}
+	sealMail(eff, chain, prov)
 	if r.overrides != nil {
 		overlay(eff.ProtoReflect(), r.overrides.ProtoReflect(), "", v1.SettingsTier_SETTINGS_TIER_FILE, prov)
 	}
+	if scope != v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM {
+		sys := proto.Clone(Defaults()).(*v1.Settings)
+		overlay(sys.ProtoReflect(), system.ProtoReflect(), "", v1.SettingsTier_SETTINGS_TIER_SYSTEM, map[string]v1.SettingsTier{})
+		if r.overrides != nil {
+			overlay(sys.ProtoReflect(), r.overrides.ProtoReflect(), "", v1.SettingsTier_SETTINGS_TIER_FILE, map[string]v1.SettingsTier{})
+		}
+		clampGit(eff, sys.GetGit(), prov)
+	}
 	return eff, provenanceList(prov), nil
+}
+
+// Lower tiers may tighten the instance git limits, a looser value falls back to the instance
+func clampGit(eff *v1.Settings, sys *v1.GitSettings, prov map[string]v1.SettingsTier) {
+	g := eff.GetGit()
+	if g == nil || sys == nil {
+		return
+	}
+	if sys.GetMaxRepoSizeMb() > 0 && (g.GetMaxRepoSizeMb() <= 0 || g.GetMaxRepoSizeMb() > sys.GetMaxRepoSizeMb()) {
+		g.MaxRepoSizeMb = proto.Int64(sys.GetMaxRepoSizeMb())
+		prov["git.max_repo_size_mb"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	}
+	if !sys.GetLfsEnabled() && g.GetLfsEnabled() {
+		g.LfsEnabled = proto.Bool(false)
+		prov["git.lfs_enabled"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	}
 }
 
 // System is the common case shorthand

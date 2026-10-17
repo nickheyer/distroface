@@ -271,12 +271,26 @@ func notifPrefsProto(p *storage.UserNotificationPrefs) *v1.NotificationPrefs {
 	}
 }
 
+// Owner of the preferences being touched, a mailed token outranks the session
+func (s *NotificationService) prefsUser(ctx context.Context, token string) (string, error) {
+	if token != "" {
+		if userID := s.forge.VerifyUnsubscribeToken(token); userID != "" {
+			return userID, nil
+		}
+		return "", connect.Errorf(connect.CodePermissionDenied, "this notification link is invalid or has expired, sign in to manage preferences")
+	}
+	if user := auth.UserFromContext(ctx); user != nil && !user.IsAnonymous() {
+		return user.ID, nil
+	}
+	return "", connect.NewError(connect.CodeUnauthenticated, "")
+}
+
 func (s *NotificationService) GetNotificationPrefs(ctx context.Context, req *v1.GetNotificationPrefsRequest) (*v1.GetNotificationPrefsResponse, error) {
-	user, err := s.user(ctx)
+	userID, err := s.prefsUser(ctx, req.UnsubscribeToken)
 	if err != nil {
 		return nil, err
 	}
-	p, err := s.store.GetUserNotificationPrefs(ctx, user.ID)
+	p, err := s.store.GetUserNotificationPrefs(ctx, userID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -284,19 +298,9 @@ func (s *NotificationService) GetNotificationPrefs(ctx context.Context, req *v1.
 }
 
 func (s *NotificationService) UpdateNotificationPrefs(ctx context.Context, req *v1.UpdateNotificationPrefsRequest) (*v1.UpdateNotificationPrefsResponse, error) {
-	userID := ""
-	if user := auth.UserFromContext(ctx); user != nil && !user.IsAnonymous() {
-		userID = user.ID
-	}
-	if req.UnsubscribeToken != "" {
-		tokenUser := s.forge.VerifyUnsubscribeToken(req.UnsubscribeToken)
-		if tokenUser == "" {
-			return nil, connect.Errorf(connect.CodePermissionDenied, "invalid unsubscribe token")
-		}
-		userID = tokenUser
-	}
-	if userID == "" {
-		return nil, connect.NewError(connect.CodeUnauthenticated, "")
+	userID, err := s.prefsUser(ctx, req.UnsubscribeToken)
+	if err != nil {
+		return nil, err
 	}
 	if req.Prefs == nil {
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "prefs are required")

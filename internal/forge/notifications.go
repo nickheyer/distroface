@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/mail"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -88,6 +89,13 @@ func (h *notifyHub) subscribe(userID string) (<-chan int64, func()) {
 	}
 }
 
+// Reports whether any stream is open for the user
+func (h *notifyHub) listening(userID string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.subs[userID]) > 0
+}
+
 func (h *notifyHub) publish(userID string, count int64) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -113,11 +121,53 @@ func (m *Manager) PublishUnread(ctx context.Context, userID string) int64 {
 	return n
 }
 
+// Fan outs give up after this long
+const notifyTimeout = 2 * time.Minute
+
+// Kinds that offer access, their explicit recipients hold none yet
+func offersAccess(kind string) bool {
+	return kind == NotifyInvite || kind == NotifyTransfer
+}
+
 // Creates or bumps notification rows for watchers and participants and queues mail
 func (m *Manager) Notify(ctx context.Context, n Notification) {
 	if n.Repo == nil {
 		return
 	}
+	repo := *n.Repo
+	n.Repo = &repo
+	if n.Issue != nil {
+		issue := *n.Issue
+		n.Issue = &issue
+	}
+	if n.Actor != nil {
+		actor := *n.Actor
+		n.Actor = &actor
+	}
+	m.pending.Add(1)
+	go func() {
+		defer m.pending.Done()
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), notifyTimeout)
+		defer cancel()
+		m.fanOut(ctx, n)
+	}()
+}
+
+// Blocks until in flight fan outs finish or the context ends
+func (m *Manager) Wait(ctx context.Context) {
+	done := make(chan struct{})
+	go func() {
+		m.pending.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
+}
+
+// Resolves recipients, writes their rows, and queues their mail
+func (m *Manager) fanOut(ctx context.Context, n Notification) {
 	actorID := ""
 	if n.Actor != nil {
 		actorID = n.Actor.ID
@@ -137,11 +187,12 @@ func (m *Manager) Notify(ctx context.Context, n Notification) {
 	add(n.Reviewers, "review_requested")
 	add(n.Assigned, "assigned")
 	add(n.Recipients, n.Reason)
+	var participants []string
+	if n.Issue != nil {
+		participants, _ = m.store.GitIssueParticipants(ctx, n.Issue)
+	}
 	if !n.ExplicitOnly {
-		if n.Issue != nil {
-			participants, _ := m.store.GitIssueParticipants(ctx, n.Issue)
-			add(participants, n.Reason)
-		}
+		add(participants, n.Reason)
 		watchers, _ := m.store.ListGitWatchers(ctx, n.Repo.ID, "all")
 		add(watchers, n.Reason)
 	}
@@ -153,13 +204,20 @@ func (m *Manager) Notify(ctx context.Context, n Notification) {
 		delete(recipients, id)
 	}
 	if n.Issue != nil {
-		for id := range recipients {
-			if sub, _ := m.store.GetGitIssueSubscription(ctx, n.Issue.ID, id); sub != nil && !*sub && !contains(n.Mentioned, id) {
+		subs, _ := m.store.GetGitIssueSubscriptions(ctx, n.Issue.ID, recipientIDs(recipients))
+		for id, on := range subs {
+			if !on && !contains(n.Mentioned, id) {
 				delete(recipients, id)
 			}
 		}
 	}
+	users := m.allowedRecipients(ctx, n, recipients)
 	if len(recipients) == 0 {
+		return
+	}
+	prefs, err := m.store.GetUserNotificationPrefsByIDs(ctx, recipientIDs(recipients))
+	if err != nil {
+		m.log.Error("notification prefs: %v", err)
 		return
 	}
 	title := n.Subject
@@ -170,6 +228,7 @@ func (m *Manager) Notify(ctx context.Context, n Notification) {
 	if n.Actor != nil {
 		actorName = n.Actor.Username
 	}
+	mc := m.mailContext(ctx, n.Repo)
 	for id, reason := range recipients {
 		row := &db.GitNotification{
 			ID:        uuid.New().String(),
@@ -184,18 +243,53 @@ func (m *Manager) Notify(ctx context.Context, n Notification) {
 		if n.Issue != nil {
 			row.IssueID = &n.Issue.ID
 		}
-		prefs := m.prefs(ctx, id)
-		if prefs.WebMode != "none" {
+		p := prefs[id]
+		if p.WebMode != "none" {
 			if err := m.store.UpsertGitNotification(ctx, row); err != nil {
 				m.log.Error("notification for %s: %v", id, err)
-			} else {
+			} else if hub.listening(id) {
 				m.PublishUnread(ctx, id)
 			}
 		}
-		if m.wantsMail(prefs, reason, recipients, id, n) {
-			m.sendNotificationMail(ctx, n, id, reason)
+		if mc != nil && wantsMail(p, reason, participants, id, n) {
+			m.sendNotificationMail(ctx, mc, n, users[id], reason)
 		}
 	}
+}
+
+func recipientIDs(recipients map[string]string) []string {
+	out := make([]string, 0, len(recipients))
+	for id := range recipients {
+		out = append(out, id)
+	}
+	return out
+}
+
+// Drops inactive recipients and any who cannot see the repository
+func (m *Manager) allowedRecipients(ctx context.Context, n Notification, recipients map[string]string) map[string]*db.User {
+	ids := recipientIDs(recipients)
+	users, err := m.store.GetUsersByIDs(ctx, ids)
+	if err != nil {
+		clear(recipients)
+		return nil
+	}
+	roles, _ := m.store.GetUserRoleNamesByIDs(ctx, ids)
+	for id := range recipients {
+		u := users[id]
+		if u == nil || !u.IsActive {
+			delete(recipients, id)
+			continue
+		}
+		if offersAccess(n.Kind) && contains(n.Recipients, id) {
+			continue
+		}
+		p := m.principal(u)
+		p.Roles = roles[id]
+		if !m.git.Access().CanSee(ctx, p, n.Repo) {
+			delete(recipients, id)
+		}
+	}
+	return users
 }
 
 func contains(list []string, v string) bool {
@@ -207,17 +301,8 @@ func contains(list []string, v string) bool {
 	return false
 }
 
-// Preferences with defaults applied
-func (m *Manager) prefs(ctx context.Context, userID string) *db.UserNotificationPrefs {
-	p, _ := m.store.GetUserNotificationPrefs(ctx, userID)
-	if p == nil {
-		p = &db.UserNotificationPrefs{UserID: userID, WebMode: "participating", EmailMode: "participating", EmailMentions: true, EmailReviewRequests: true, EmailAssignments: true}
-	}
-	return p
-}
-
 // Email delivery rule per the recipient's mode and per kind toggles
-func (m *Manager) wantsMail(p *db.UserNotificationPrefs, reason string, all map[string]string, id string, n Notification) bool {
+func wantsMail(p *db.UserNotificationPrefs, reason string, participants []string, id string, n Notification) bool {
 	switch reason {
 	case "mentioned":
 		return p.EmailMentions
@@ -235,20 +320,31 @@ func (m *Manager) wantsMail(p *db.UserNotificationPrefs, reason string, all map[
 	if n.Issue == nil {
 		return contains(n.Recipients, id)
 	}
-	participants, _ := m.store.GitIssueParticipants(context.Background(), n.Issue)
 	return contains(participants, id) || contains(n.Recipients, id)
 }
 
-// Queues one notification mail with threading headers
-func (m *Manager) sendNotificationMail(ctx context.Context, n Notification, userID, reason string) {
+// Repository mail facts shared by every recipient of one fan out
+type mailContext struct {
+	scope    mailer.Scope
+	host     string
+	incoming *v1.MailIncomingSettings
+}
+
+// Nil when mail is off for the repository
+func (m *Manager) mailContext(ctx context.Context, repo *db.GitRepository) *mailContext {
 	if m.mail == nil {
-		return
+		return nil
 	}
-	scope := mailer.Scope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, ID: n.Repo.ID}
+	scope := mailer.Scope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, ID: repo.ID}
 	if !m.mail.Enabled(ctx, scope) {
-		return
+		return nil
 	}
-	u, _ := m.store.GetUserByID(ctx, userID)
+	settings := m.mail.Settings(ctx, scope)
+	return &mailContext{scope: scope, host: mailDomain(settings.GetFromAddress()), incoming: settings.GetIncoming()}
+}
+
+// Queues one notification mail with threading headers
+func (m *Manager) sendNotificationMail(ctx context.Context, mc *mailContext, n Notification, u *db.User, reason string) {
 	if u == nil || u.Email == nil || *u.Email == "" {
 		return
 	}
@@ -256,28 +352,27 @@ func (m *Manager) sendNotificationMail(ctx context.Context, n Notification, user
 		return
 	}
 	full := n.Repo.Namespace + "/" + n.Repo.Name
-	host := mailDomain(m.mail.Settings(ctx, scope).GetFromAddress())
 	headers := map[string]string{
-		"List-Id":                 fmt.Sprintf("%s <%s.%s>", full, strings.ReplaceAll(full, "/", "."), host),
+		"List-Id":                 fmt.Sprintf("%s <%s.%s>", full, strings.ReplaceAll(full, "/", "."), mc.host),
 		"X-Distroface-Reason":     reason,
 		"X-Distroface-Repository": full,
 	}
 	if n.Issue != nil {
-		root := fmt.Sprintf("<%s/%s/issues/%d@%s>", n.Repo.Namespace, n.Repo.Name, n.Issue.Number, host)
+		root := fmt.Sprintf("<%s/%s/issues/%d@%s>", n.Repo.Namespace, n.Repo.Name, n.Issue.Number, mc.host)
 		if n.CommentID != "" {
-			headers["Message-ID"] = fmt.Sprintf("<%s/%s/issues/%d/%s@%s>", n.Repo.Namespace, n.Repo.Name, n.Issue.Number, n.CommentID, host)
+			headers["Message-ID"] = fmt.Sprintf("<%s/%s/issues/%d/%s@%s>", n.Repo.Namespace, n.Repo.Name, n.Issue.Number, n.CommentID, mc.host)
 			headers["In-Reply-To"] = root
 			headers["References"] = root
 		} else {
 			headers["Message-ID"] = root
 		}
-		if reply := m.replyAddress(ctx, scope, userID, n.Issue); reply != "" {
+		if reply := m.replyAddress(ctx, mc.incoming, u.ID, n.Issue); reply != "" {
 			headers["Reply-To"] = reply
 		}
 	}
 	footer := fmt.Sprintf("\n\n--\nYou are receiving this because you were %s.\nView it at %s\nManage notifications at %s/settings/notifications?token=%s",
-		reasonText(reason), n.URL, m.git.BaseURL(ctx), m.UnsubscribeToken(userID))
-	_ = m.mail.Enqueue(ctx, scope, mailer.Message{To: []string{*u.Email}, Subject: n.Subject, Text: n.Text + footer, Headers: headers})
+		reasonText(reason), n.URL, m.git.BaseURL(ctx), m.UnsubscribeToken(u.ID))
+	_ = m.mail.Enqueue(ctx, mc.scope, mailer.Message{To: []string{*u.Email}, Subject: n.Subject, Text: n.Text + footer, Headers: headers})
 }
 
 func reasonText(reason string) string {
@@ -305,8 +400,7 @@ func mailDomain(from string) string {
 }
 
 // Reply address carrying a token bound to the recipient and issue
-func (m *Manager) replyAddress(ctx context.Context, scope mailer.Scope, userID string, issue *db.GitIssue) string {
-	in := m.mail.Settings(ctx, scope).GetIncoming()
+func (m *Manager) replyAddress(ctx context.Context, in *v1.MailIncomingSettings, userID string, issue *db.GitIssue) string {
 	if !in.GetEnabled() || in.GetReplyAddress() == "" {
 		return ""
 	}
@@ -327,31 +421,40 @@ func (m *Manager) replyAddress(ctx context.Context, scope mailer.Scope, userID s
 	return fmt.Sprintf("%s+%s@%s", local, token, domain)
 }
 
+// Mailed unsubscribe links stop working after this long
+const unsubscribeTokenTTL = 30 * 24 * time.Hour
+
 // Signed token that lets an unsubscribe link change preferences without a session
 func (m *Manager) UnsubscribeToken(userID string) string {
-	mac := hmac.New(sha256.New, m.tokenKey())
-	mac.Write([]byte("unsubscribe:" + userID))
-	return userID + "." + base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-}
-
-// User id carried by a valid unsubscribe token, empty when invalid
-func (m *Manager) VerifyUnsubscribeToken(token string) string {
-	userID, sig, ok := strings.Cut(token, ".")
-	if !ok || userID == "" {
+	if len(m.tokenKey) == 0 || userID == "" {
 		return ""
 	}
-	mac := hmac.New(sha256.New, m.tokenKey())
-	mac.Write([]byte("unsubscribe:" + userID))
-	want := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	if !hmac.Equal([]byte(want), []byte(sig)) {
+	expires := strconv.FormatInt(time.Now().Add(unsubscribeTokenTTL).Unix(), 10)
+	return userID + "." + expires + "." + m.signUnsubscribe(userID, expires)
+}
+
+// User id carried by a valid unexpired unsubscribe token, empty when invalid
+func (m *Manager) VerifyUnsubscribeToken(token string) string {
+	if len(m.tokenKey) == 0 {
+		return ""
+	}
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 || parts[0] == "" {
+		return ""
+	}
+	userID, expires, sig := parts[0], parts[1], parts[2]
+	exp, err := strconv.ParseInt(expires, 10, 64)
+	if err != nil || time.Now().Unix() > exp {
+		return ""
+	}
+	if !hmac.Equal([]byte(m.signUnsubscribe(userID, expires)), []byte(sig)) {
 		return ""
 	}
 	return userID
 }
 
-// Key for signed notification tokens, derived from the stored jwt secret
-func (m *Manager) tokenKey() []byte {
-	secret, _ := m.store.GetSystemSetting(context.Background(), "jwt_secret")
-	sum := sha256.Sum256([]byte("notifications:" + secret))
-	return sum[:]
+func (m *Manager) signUnsubscribe(userID, expires string) string {
+	mac := hmac.New(sha256.New, m.tokenKey)
+	mac.Write([]byte("unsubscribe:" + userID + ":" + expires))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }

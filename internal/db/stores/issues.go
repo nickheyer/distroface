@@ -48,25 +48,28 @@ func (s *Store) GetGitIssuesByIDs(ctx context.Context, ids []string) ([]*db.GitI
 }
 
 type IssueListOptions struct {
-	RepoID    string
-	RepoIDs   []string
-	State     string
-	Labels    []string
-	Milestone string
-	Assignee  string
-	Author    string
-	Mentioned string
-	Involved  string
-	IsPull    *bool
-	ProjectID string
-	Reviewer  string
-	Base      string
-	Head      string
-	Draft     *bool
-	Query     pages.Query
-	OrderBy   string
-	Limit     int
-	Offset    int
+	RepoID string
+	// Repos whose issues the viewer may read
+	IssueRepoIDs []string
+	// Repos whose pull requests the viewer may read
+	PullRepoIDs []string
+	State       string
+	Labels      []string
+	Milestone   string
+	Assignee    string
+	Author      string
+	Mentioned   string
+	Involved    string
+	IsPull      *bool
+	ProjectID   string
+	Reviewer    string
+	Base        string
+	Head        string
+	Draft       *bool
+	Query       pages.Query
+	OrderBy     string
+	Limit       int
+	Offset      int
 }
 
 // IssuesQuery allowlists issue list filters
@@ -95,8 +98,13 @@ func (s *Store) issueQuery(ctx context.Context, opts IssueListOptions) *gorm.DB 
 	if opts.RepoID != "" {
 		q = q.Where("git_issues.repo_id = ?", opts.RepoID)
 	}
-	if len(opts.RepoIDs) > 0 {
-		q = q.Where("git_issues.repo_id IN ?", opts.RepoIDs)
+	switch {
+	case len(opts.IssueRepoIDs) > 0 && len(opts.PullRepoIDs) > 0:
+		q = q.Where("((git_issues.repo_id IN ? AND git_issues.is_pull = ?) OR (git_issues.repo_id IN ? AND git_issues.is_pull = ?))", opts.IssueRepoIDs, false, opts.PullRepoIDs, true)
+	case len(opts.IssueRepoIDs) > 0:
+		q = q.Where("git_issues.repo_id IN ? AND git_issues.is_pull = ?", opts.IssueRepoIDs, false)
+	case len(opts.PullRepoIDs) > 0:
+		q = q.Where("git_issues.repo_id IN ? AND git_issues.is_pull = ?", opts.PullRepoIDs, true)
 	}
 	if opts.State != "" {
 		q = q.Where("git_issues.state = ?", opts.State)
@@ -748,6 +756,22 @@ func (s *Store) SetGitIssueSubscription(ctx context.Context, issueID, userID str
 		return err
 	}
 	return s.db.WithContext(ctx).Model(&existing).Update("subscribed", subscribed).Error
+}
+
+// Explicit subscriptions of many users on one issue
+func (s *Store) GetGitIssueSubscriptions(ctx context.Context, issueID string, userIDs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	var rows []db.GitIssueSubscription
+	if err := s.db.WithContext(ctx).Where("issue_id = ? AND user_id IN ?", issueID, userIDs).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.UserID] = r.Subscribed
+	}
+	return out, nil
 }
 
 func (s *Store) GetGitIssueSubscription(ctx context.Context, issueID, userID string) (*bool, error) {

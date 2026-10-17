@@ -243,7 +243,7 @@ func (s *RoleService) ListScopeableObjects(ctx context.Context, req *v1.ListScop
 
 	switch req.Resource {
 	case rbac.ResourceRepositories:
-		repos, t, err := s.store.ListRepositories(ctx, "", query, "", true, nil, limit, offset)
+		repos, t, err := s.store.ListRepositories(ctx, stores.RepoListOptions{IncludePrivate: true, Query: query, Limit: limit, Offset: offset})
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}

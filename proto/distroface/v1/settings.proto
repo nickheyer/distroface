@@ -18,6 +18,22 @@ service SettingsService {
   rpc GetEffectiveSettings(GetEffectiveSettingsRequest) returns (GetEffectiveSettingsResponse) {}
   // Checks a git ssh port binds on this host before it is saved
   rpc ProbeGitSSHPort(ProbeGitSSHPortRequest) returns (ProbeGitSSHPortResponse) {}
+  // Host keys, signing key, storage path and usage for the admin git page
+  rpc GetGitServerInfo(GetGitServerInfoRequest) returns (GetGitServerInfoResponse) {}
+}
+
+// GetGitServerInfoRequest has no fields, the answer is instance wide.
+message GetGitServerInfoRequest {}
+
+// GetGitServerInfoResponse describes the git server as the admin page shows it.
+message GetGitServerInfoResponse {
+  repeated string ssh_host_keys = 1; // Public key lines in authorized_keys form
+  repeated string ssh_host_key_fingerprints = 2; // Key type and SHA256 fingerprint, same order as ssh_host_keys
+  string signing_public_key = 3; // Armored OpenPGP public key of the instance
+  string storage_path = 4;
+  int64 repository_count = 5;
+  int64 repository_bytes = 6;
+  int64 lfs_bytes = 7;
 }
 
 // ProbeGitSSHPortRequest names the port, zero probes the effective one

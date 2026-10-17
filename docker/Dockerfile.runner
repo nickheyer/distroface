@@ -1,4 +1,14 @@
 # syntax=docker/dockerfile:1
+# Actions runner. Jobs run as sibling containers through the host docker daemon,
+# so the job work tree must sit at the same path inside this container and on the
+# host, and the registration must live on a volume:
+#
+#   docker run -d --name dfcli-runner \
+#     -v /var/run/docker.sock:/var/run/docker.sock \
+#     -v /var/lib/dfcli-runner:/var/lib/dfcli-runner \
+#     -v dfcli-runner-home:/home/runner \
+#     distroface-runner register --scope system --token dfr_... --name ci
+#   docker start dfcli-runner   # subsequent starts run "dfcli runner start"
 ARG APP_VERSION=dev
 
 FROM --platform=$BUILDPLATFORM bufbuild/buf:latest AS proto-builder
@@ -30,17 +40,15 @@ FROM alpine:latest
 
 RUN apk --no-cache add ca-certificates git
 
-RUN addgroup -g 1000 -S runner && \
-    adduser -u 1000 -S -G runner -h /home/runner -s /sbin/nologin runner
-
+# Root inside the container, the docker socket it drives is root on the host anyway
 WORKDIR /home/runner
-
 COPY --from=builder /app/dfcli /usr/local/bin/dfcli
 
-# Jobs run in sibling containers through the mounted docker socket
-ENV DFCLI_RUNNER_CONFIG=/home/runner/runner.json
-
-USER 1000:1000
+# Registration persists on the home volume, job trees share one host path
+ENV DFCLI_RUNNER_CONFIG=/home/runner/runner.json \
+    DFCLI_RUNNER_WORK_DIR=/var/lib/dfcli-runner
+VOLUME ["/home/runner"]
+RUN mkdir -p /var/lib/dfcli-runner
 
 ENTRYPOINT ["dfcli", "runner"]
 CMD ["start"]

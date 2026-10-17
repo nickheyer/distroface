@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { CheckCircle2, XCircle, Clock, AlertCircle, ExternalLink, ChevronDown, ChevronRight, RefreshCw, CircleDashed } from '@lucide/svelte';
+	import { safeHref } from '$lib/utils';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
@@ -196,9 +197,9 @@
 						{/if}
 						<span class="ml-auto flex items-center gap-1.5 shrink-0">
 							<span class="text-[11px] text-muted-foreground">{when(g.latest)}</span>
-							{#if g.latest.targetUrl}
+							{#if safeHref(g.latest.targetUrl)}
 								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-								<a href={g.latest.targetUrl} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline inline-flex items-center gap-1 text-[11.5px]">
+								<a href={safeHref(g.latest.targetUrl)} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline inline-flex items-center gap-1 text-[11.5px]">
 									Details<ExternalLink class="h-3 w-3" />
 								</a>
 							{/if}
@@ -218,9 +219,9 @@
 									<HIcon class="h-3 w-3 shrink-0 {color(h.state)}" />
 									<span class="truncate">{h.description || h.creator || h.context}</span>
 									<span class="ml-auto text-[11px] shrink-0">{when(h)}</span>
-									{#if h.targetUrl}
+									{#if safeHref(h.targetUrl)}
 										<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-										<a href={h.targetUrl} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline shrink-0"><ExternalLink class="h-3 w-3" /></a>
+										<a href={safeHref(h.targetUrl)} target="_blank" rel="noopener noreferrer" class="text-primary hover:underline shrink-0"><ExternalLink class="h-3 w-3" /></a>
 									{/if}
 								</li>
 							{/each}

@@ -13,6 +13,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/protocol/packp"
 	"github.com/go-git/go-git/v6/plumbing/storer"
 	"github.com/go-git/go-git/v6/plumbing/transport"
+	"github.com/go-git/go-git/v6/storage"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -61,10 +62,12 @@ type HookOptions struct {
 	BypassPullRequest    bool
 	BypassSignedCommits  bool
 	BypassAllowedPushers bool
+	// Deleting the old name of a renamed branch, its content lives on
+	Rename bool
 }
 
-// Hooks bound to one repository and the pushing identity
-func (m *Manager) Hooks(ctx context.Context, repo *db.GitRepository, actor *auth.AuthenticatedUser, opts HookOptions) transport.ReceivePackHooks {
+// Hooks bound to one repository and its held write lock
+func (m *Manager) Hooks(ctx context.Context, repo *db.GitRepository, actor *auth.AuthenticatedUser, opts HookOptions, lock *RepoLock) transport.ReceivePackHooks {
 	return transport.ReceivePackHooks{
 		PreReceive: func(hctx context.Context, info *transport.PreReceiveInfo) error {
 			return m.preReceive(hctx, repo, actor, opts, info)
@@ -83,7 +86,7 @@ func (m *Manager) Hooks(ctx context.Context, repo *db.GitRepository, actor *auth
 			m.AfterRefUpdate(context.WithoutCancel(hctx), RefEvent{
 				Repo: repo, Actor: actor, Updates: updates, PushOptions: info.PushOptions,
 				Wiki: opts.Wiki, Mirror: opts.Mirror, SkipCI: hasSkipCI(info.PushOptions),
-			})
+			}, lock)
 			m.pullHint(hctx, repo, actor, opts, updates, info.Progress)
 			return nil
 		},
@@ -200,15 +203,18 @@ func (m *Manager) preReceive(ctx context.Context, repo *db.GitRepository, actor 
 	return nil
 }
 
+// New commits one push may carry past a signed or linear history rule
+const maxVerifiedCommits = 10000
+
 // Enforces one branch protection rule for one command
-func (m *Manager) checkBranchRule(ctx context.Context, repo *db.GitRepository, actor *auth.AuthenticatedUser, opts HookOptions, st storer.EncodedObjectStorer, rule *db.GitBranchProtection, c *packp.Command, say func(string, ...any)) error {
+func (m *Manager) checkBranchRule(ctx context.Context, repo *db.GitRepository, actor *auth.AuthenticatedUser, opts HookOptions, st storage.Storer, rule *db.GitBranchProtection, c *packp.Command, say func(string, ...any)) error {
 	branch := c.Name.Short()
 	bypass := m.access.InAllowList(ctx, actor, repo, DecodeIDs(rule.BypassIDs))
 	if bypass {
 		return nil
 	}
 	if c.New.IsZero() {
-		if rule.BlockDeletion {
+		if rule.BlockDeletion && !opts.Rename {
 			say("branch %s is protected from deletion", branch)
 			return fmt.Errorf("protected branch")
 		}
@@ -224,15 +230,24 @@ func (m *Manager) checkBranchRule(ctx context.Context, repo *db.GitRepository, a
 	}
 	if !c.Old.IsZero() && rule.BlockForcePush {
 		ok, err := isAncestorIn(st, c.Old, c.New)
-		if err == nil && !ok {
+		if err != nil {
+			// Unverifiable history is refused, never waved through
+			say("cannot verify that %s moves forward: %v", branch, err)
+			return fmt.Errorf("force push check failed: %w", err)
+		}
+		if !ok {
 			say("force pushes to %s are blocked", branch)
 			return fmt.Errorf("force push blocked")
 		}
 	}
 	if rule.RequireLinearHistory || (rule.RequireSignedCommits && !opts.BypassSignedCommits) {
-		commits, err := newCommits(st, c.Old, c.New, 1000)
+		commits, truncated, err := newCommits(st, c.Old, c.New, maxVerifiedCommits)
 		if err != nil {
 			return err
+		}
+		if truncated {
+			say("%s receives more than %d new commits, push them in smaller batches", branch, maxVerifiedCommits)
+			return fmt.Errorf("too many new commits to verify")
 		}
 		for _, commit := range commits {
 			if rule.RequireLinearHistory && commit.NumParents() > 1 {
@@ -287,26 +302,51 @@ func isAncestorIn(st storer.EncodedObjectStorer, ancestor, descendant plumbing.H
 	return a.IsAncestor(d)
 }
 
-// Commits introduced by an update, newest first, capped
-func newCommits(st storer.EncodedObjectStorer, old, new plumbing.Hash, limit int) ([]*object.Commit, error) {
+// Commits reachable from new but not from old, or for a new branch from any
+// existing ref, like rev-list new --not old. Newest first, truncated past limit.
+func newCommits(st storage.Storer, old, new plumbing.Hash, limit int) ([]*object.Commit, bool, error) {
 	head, err := object.GetCommit(st, new)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	var ignore []plumbing.Hash
+	var excludes []plumbing.Hash
 	if !old.IsZero() {
-		ignore = []plumbing.Hash{old}
+		excludes = append(excludes, old)
+	} else if refs, err := st.IterReferences(); err == nil {
+		_ = refs.ForEach(func(ref *plumbing.Reference) error {
+			if ref.Type() == plumbing.HashReference && (ref.Name().IsBranch() || ref.Name().IsTag()) && ref.Hash() != new {
+				excludes = append(excludes, ref.Hash())
+			}
+			return nil
+		})
+	}
+	seen := map[plumbing.Hash]bool{}
+	for _, h := range excludes {
+		c, err := object.GetCommit(st, h)
+		if err != nil {
+			if tag, terr := object.GetTag(st, h); terr == nil {
+				c, err = tag.Commit()
+			}
+			if err != nil {
+				continue
+			}
+		}
+		_ = object.NewCommitPreorderIter(c, seen, nil).ForEach(func(c *object.Commit) error {
+			seen[c.Hash] = true
+			return nil
+		})
 	}
 	var out []*object.Commit
-	iter := object.NewCommitPreorderIter(head, nil, ignore)
-	err = iter.ForEach(func(c *object.Commit) error {
+	truncated := false
+	err = object.NewCommitPreorderIter(head, seen, nil).ForEach(func(c *object.Commit) error {
 		if limit > 0 && len(out) >= limit {
+			truncated = true
 			return storer.ErrStop
 		}
 		out = append(out, c)
 		return nil
 	})
-	return out, err
+	return out, truncated, err
 }
 
 // Progress writer that discards when the transport offers none

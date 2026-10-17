@@ -104,7 +104,13 @@ func (a *RepoAccess) Can(ctx context.Context, user *AuthenticatedUser, repo *sto
 	return isMember
 }
 
-// Public repos or any read relationship
+// Public repos or any read relationship, scoped credentials only their object
 func (a *RepoAccess) CanSee(ctx context.Context, user *AuthenticatedUser, repo *storage.Repository) bool {
-	return repo != nil && (!repo.IsPrivate || a.HasRepoAccess(ctx, user, repo, rbac.ActionRead))
+	if repo == nil {
+		return false
+	}
+	if user != nil && user.IsScoped() && !ScopeAllows(user, rbac.ActionRead, repo.Namespace+"/"+repo.Name, repo.Namespace, a.sourceName(ctx, repo)) {
+		return false
+	}
+	return !repo.IsPrivate || a.HasRepoAccess(ctx, user, repo, rbac.ActionRead)
 }

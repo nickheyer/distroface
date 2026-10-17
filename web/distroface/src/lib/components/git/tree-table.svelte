@@ -89,7 +89,7 @@
 						<td class="px-3 py-2 w-8">
 							<Icon class="h-4 w-4 {entry.type === 'tree' ? 'text-primary/70 fill-primary/15' : 'text-muted-foreground/60'}" />
 						</td>
-						<td class="px-2 py-2 min-w-0 md:max-w-[16rem]">
+						<td class="px-2 py-2 min-w-0 md:max-w-64">
 							{#if entry.isSubmodule || entry.type === 'commit'}
 								<span class="truncate block text-foreground/90" title="Submodule {entry.sha.slice(0, 7)}">
 									{entry.name} <span class="text-muted-foreground font-mono text-[11px]">@ {entry.sha.slice(0, 7)}</span>
@@ -108,7 +108,7 @@
 						</td>
 						<td class="px-2 py-2 hidden md:table-cell min-w-0">
 							{#if commit}
-								<a href={resolve('/[namespace]/[name]/commit/[sha]', { namespace, name, sha: commit.sha })} class="text-muted-foreground hover:text-primary truncate block max-w-[36rem]" title={title(entry)}>
+								<a href={resolve('/[namespace]/[name]/commit/[sha]', { namespace, name, sha: commit.sha })} class="text-muted-foreground hover:text-primary truncate block max-w-xl" title={title(entry)}>
 									{title(entry)}
 								</a>
 							{/if}

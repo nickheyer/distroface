@@ -362,7 +362,7 @@ func (m *Manager) UpdateIssue(ctx context.Context, repo *db.GitRepository, actor
 		m.recordReferences(ctx, repo, issue, actor, issue.Body)
 	}
 	if up.State != nil && *up.State != issue.State {
-		if err := m.setState(ctx, repo, actor, issue, *up.State, ""); err != nil {
+		if err := m.setState(ctx, repo, actor, issue, nil, *up.State, ""); err != nil {
 			return err
 		}
 	}
@@ -411,12 +411,30 @@ func (m *Manager) issueEvent(issue *db.GitIssue) string {
 }
 
 // Closes or reopens, honoring dependencies and recording who closed
-func (m *Manager) setState(ctx context.Context, repo *db.GitRepository, actor Actor, issue *db.GitIssue, state, via string) error {
+func (m *Manager) setState(ctx context.Context, repo *db.GitRepository, actor Actor, issue *db.GitIssue, pr *db.GitPullRequest, state, via string) error {
 	if state != "open" && state != "closed" {
 		return fmt.Errorf("%w: state must be open or closed", ErrInvalid)
 	}
 	if state == issue.State {
 		return nil
+	}
+	var headRepo *db.GitRepository
+	if issue.IsPull {
+		if pr == nil {
+			var err error
+			if pr, err = m.Pull(ctx, issue); err != nil {
+				return err
+			}
+		}
+		if pr.MergedAt != nil {
+			return fmt.Errorf("%w: merged pull requests cannot change state", ErrInvalid)
+		}
+		if state == "open" {
+			headRepo, _ = m.store.GetGitRepositoryByID(ctx, pr.HeadRepoID)
+			if headRepo == nil || m.branchTip(headRepo, pr.HeadBranch).IsZero() {
+				return fmt.Errorf("%w: the head branch no longer exists, restore it first", ErrInvalid)
+			}
+		}
 	}
 	cols := map[string]any{"state": state, "updated_at": time.Now().UTC()}
 	if state == "closed" {
@@ -449,6 +467,20 @@ func (m *Manager) setState(ctx context.Context, repo *db.GitRepository, actor Ac
 	action := "closed"
 	if state == "open" {
 		action = "reopened"
+	}
+	if pr != nil {
+		if state == "closed" {
+			if pr.AutoMergeMethod != "" {
+				pr.AutoMergeMethod, pr.AutoMergeBy = "", ""
+				_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"auto_merge_method": "", "auto_merge_by": ""})
+			}
+		} else {
+			if tip, _ := m.refreshPullRef(ctx, repo, pr, issue.Number, headRepo); !tip.IsZero() {
+				pr.HeadSHA, pr.HeadDeleted = tip.String(), false
+				_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"head_sha": pr.HeadSHA, "head_deleted": false})
+			}
+			m.refreshPullStats(ctx, repo, pr)
+		}
 	}
 	m.recordBlockerState(ctx, repo, actor, issue, state)
 	m.notifyIssue(ctx, repo, issue, actor, action, issue.Title, nil)
@@ -484,7 +516,7 @@ func (m *Manager) SetIssueState(ctx context.Context, repo *db.GitRepository, act
 	if !m.canEdit(actor, issue) {
 		return ErrForbidden
 	}
-	return m.setState(ctx, repo, actor, issue, state, "")
+	return m.setState(ctx, repo, actor, issue, nil, state, "")
 }
 
 func (m *Manager) setMilestone(ctx context.Context, repo *db.GitRepository, actor Actor, issue *db.GitIssue, id string, cols map[string]any) error {
@@ -773,12 +805,12 @@ func (m *Manager) BulkUpdate(ctx context.Context, repo *db.GitRepository, actor 
 	changed := 0
 	for _, n := range numbers {
 		issue, err := m.Issue(ctx, repo, n)
-		if err != nil {
+		if err != nil || issue.IsPull {
 			continue
 		}
 		touched := false
 		if up.State != nil && *up.State != issue.State {
-			if err := m.setState(ctx, repo, actor, issue, *up.State, ""); err == nil {
+			if err := m.setState(ctx, repo, actor, issue, nil, *up.State, ""); err == nil {
 				touched = true
 			}
 		}
@@ -837,22 +869,28 @@ func (m *Manager) ListIssues(ctx context.Context, opts stores.IssueListOptions) 
 }
 
 // Repository ids the viewer may read, for cross repository searches
-func (m *Manager) VisibleRepoIDs(ctx context.Context, user *auth.AuthenticatedUser, namespace string) ([]string, map[string]*db.GitRepository, error) {
+func (m *Manager) VisibleRepoIDs(ctx context.Context, user *auth.AuthenticatedUser, namespace string) (issueIDs, pullIDs []string, repos map[string]*db.GitRepository, err error) {
 	opts := m.git.Access().ListOptions(user, namespace)
 	opts.IncludeArchived = true
-	repos, _, err := m.store.ListGitRepositories(ctx, opts)
+	rows, _, err := m.store.ListGitRepositories(ctx, opts)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	ids := make([]string, 0, len(repos))
-	byID := make(map[string]*db.GitRepository, len(repos))
-	for _, r := range repos {
-		if gitrepo.UnitEnabled(r, db.GitUnitIssues) || gitrepo.UnitEnabled(r, db.GitUnitPulls) {
-			ids = append(ids, r.ID)
-			byID[r.ID] = r
+	repos = make(map[string]*db.GitRepository, len(rows))
+	for _, r := range rows {
+		issues := m.git.Access().UnitReadable(ctx, user, r, db.GitUnitIssues)
+		pulls := m.git.Access().UnitReadable(ctx, user, r, db.GitUnitPulls)
+		if issues {
+			issueIDs = append(issueIDs, r.ID)
+		}
+		if pulls {
+			pullIDs = append(pullIDs, r.ID)
+		}
+		if issues || pulls {
+			repos[r.ID] = r
 		}
 	}
-	return ids, byID, nil
+	return issueIDs, pullIDs, repos, nil
 }
 
 // Page url of an issue or pull request
@@ -942,7 +980,7 @@ func (m *Manager) notifyIssue(ctx context.Context, repo *db.GitRepository, issue
 	})
 }
 
-// User ids for mentioned usernames who can read the repository
+// User ids behind mentioned usernames and org teams
 func (m *Manager) resolveMentions(ctx context.Context, repo *db.GitRepository, names []string) []string {
 	var out []string
 	for _, name := range names {
@@ -950,12 +988,7 @@ func (m *Manager) resolveMentions(ctx context.Context, repo *db.GitRepository, n
 			out = append(out, m.teamMembers(ctx, repo, name)...)
 			continue
 		}
-		u, _ := m.store.GetUserByUsername(ctx, name)
-		if u == nil {
-			continue
-		}
-		principal := &auth.AuthenticatedUser{ID: u.ID, Username: u.Username, Roles: []string{"user"}, Provider: u.AuthProvider}
-		if m.git.Access().CanSee(ctx, principal, repo) {
+		if u, _ := m.store.GetUserByUsername(ctx, name); u != nil {
 			out = append(out, u.ID)
 		}
 	}

@@ -23,8 +23,9 @@ var ErrGitUnavailable = errors.New("git mirroring is not available")
 
 // Installs the git manager used by git syncs
 // SetSealer installs the key used to protect stored ssh keys
-func (m *Monitor) SetSealer(s *auth.Sealer) {
-	m.sealer = s
+func (m *Monitor) SetSealer(current, legacy *auth.Sealer) {
+	m.sealer = current
+	m.legacySealer = legacy
 }
 
 func (m *Monitor) SetGit(g *gitrepo.Manager) {
@@ -76,7 +77,7 @@ func (m *Monitor) SyncGitRepoNow(repo *db.GitRepository) error {
 	if repo.Type != v1.GitRepoType_GIT_REPO_TYPE_MIRROR {
 		return fmt.Errorf("%w: repository is not a mirror", ErrInvalid)
 	}
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}
@@ -178,7 +179,7 @@ func (m *Monitor) StartGitImport(repo *db.GitRepository) error {
 		return ErrGitUnavailable
 	}
 	ctx := m.baseCtx
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}
@@ -219,7 +220,7 @@ func (m *Monitor) SetupCompositeMirror(ctx context.Context, repo *db.GitReposito
 	if m.git == nil {
 		return ErrGitUnavailable
 	}
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}

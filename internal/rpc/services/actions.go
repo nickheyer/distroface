@@ -665,6 +665,7 @@ func (s *ActionsService) actionsRunProto(ctx context.Context, repo *storage.GitR
 		NeedsApproval: run.NeedsApproval, PullRequestNumber: run.PullNumber,
 		HtmlUrl:   s.manager.HTMLURL(ctx, repo) + "/actions/runs/" + run.ID,
 		CreatedAt: timestamppb.New(run.CreatedAt),
+		Notes:     actions.StringList(run.Notes),
 	}
 	if run.TriggerUserID != "" {
 		if u, _ := s.store.GetUserByID(ctx, run.TriggerUserID); u != nil {
@@ -766,6 +767,8 @@ func mapActionsErr(err error) error {
 		return connect.NewError(connect.CodePermissionDenied, err.Error()).WithCause(err)
 	case errors.Is(err, actions.ErrConflict):
 		return connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
+	case errors.Is(err, actions.ErrTooLarge):
+		return connect.NewError(connect.CodeResourceExhausted, err.Error()).WithCause(err)
 	case errors.Is(err, actions.ErrDisabled):
 		return connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 	}

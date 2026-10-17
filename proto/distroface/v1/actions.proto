@@ -172,6 +172,8 @@ message WorkflowRun {
   google.protobuf.Timestamp started_at = 16;
   google.protobuf.Timestamp finished_at = 17;
   google.protobuf.Timestamp created_at = 18;
+  // Parser notes, keys the workflow used that this instance ignores
+  repeated string notes = 19;
 }
 
 // Bytes of log appended to a job

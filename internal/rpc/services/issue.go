@@ -175,8 +175,15 @@ func (s *IssueService) ListIssues(ctx context.Context, req *v1.ListIssuesRequest
 		f := false
 		opts.IsPull = &f
 	}
-	if !gitrepo.UnitEnabled(repo, storage.GitUnitIssues) && !*opts.IsPull {
+	unit := storage.GitUnitIssues
+	if *opts.IsPull {
+		unit = storage.GitUnitPulls
+	}
+	if !gitrepo.UnitEnabled(repo, unit) {
 		return &v1.ListIssuesResponse{Page: pages.Info(offset, limit, 0)}, nil
+	}
+	if s.forge.Git().Access().Levels(ctx, user, repo).Unit(unit) < gitrepo.LevelRead {
+		return nil, connect.Errorf(connect.CodeNotFound, "repository not found")
 	}
 	issues, total, err := s.forge.ListIssues(ctx, opts)
 	if err != nil {
@@ -199,17 +206,17 @@ func (s *IssueService) ListIssues(ctx context.Context, req *v1.ListIssuesRequest
 
 func (s *IssueService) SearchIssues(ctx context.Context, req *v1.SearchIssuesRequest) (*v1.SearchIssuesResponse, error) {
 	user := auth.UserFromContext(ctx)
-	ids, repos, err := s.forge.VisibleRepoIDs(ctx, user, portal.ScopeNamespace(ctx, req.Namespace))
+	issueIDs, pullIDs, repos, err := s.forge.VisibleRepoIDs(ctx, user, portal.ScopeNamespace(ctx, req.Namespace))
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	limit, offset := pages.Parse(req.Page)
-	if len(ids) == 0 {
+	if len(issueIDs) == 0 && len(pullIDs) == 0 {
 		return &v1.SearchIssuesResponse{Page: pages.Info(offset, limit, 0)}, nil
 	}
 	opts := stores.IssueListOptions{
-		RepoIDs: ids, State: issueStateString(req.State), IsPull: req.IsPull, Query: pages.ParseQuery(req.Page),
-		OrderBy: issueOrder(req.Page), Limit: limit, Offset: offset,
+		IssueRepoIDs: issueIDs, PullRepoIDs: pullIDs, State: issueStateString(req.State), IsPull: req.IsPull,
+		Query: pages.ParseQuery(req.Page), OrderBy: issueOrder(req.Page), Limit: limit, Offset: offset,
 	}
 	if req.Involved && user != nil && !user.IsAnonymous() {
 		opts.Involved = user.ID

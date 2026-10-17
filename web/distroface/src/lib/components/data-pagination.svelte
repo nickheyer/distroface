@@ -55,7 +55,7 @@
 					value={String(pager.pageSize)}
 					onValueChange={(v) => { if (v) apply(pager.setPageSize(Number(v))); }}
 				>
-					<SelectTrigger class="h-8 w-[4.5rem] text-[13px] tabular-nums" size="sm" aria-label="Rows per page">
+					<SelectTrigger class="h-8 w-18 text-[13px] tabular-nums" size="sm" aria-label="Rows per page">
 						{pager.pageSize}
 					</SelectTrigger>
 					<SelectContent>

@@ -184,12 +184,15 @@ func (s *Signing) verify(ctx context.Context, payload []byte, signature, email s
 		if !emailMatches(k.Emails, email) {
 			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "committer email does not match the key", KeyID: k.KeyID}
 		}
+		// A key may carry any uid, only the account's own address vouches for it
 		user, _ := s.store.GetUserByID(ctx, k.UserID)
-		username := ""
-		if user != nil {
-			username = user.Username
+		if user == nil {
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "key owner not found", KeyID: k.KeyID}
 		}
-		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_VERIFIED, Signer: username, KeyID: k.KeyID}
+		if user.Email == nil || !strings.EqualFold(*user.Email, email) {
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "committer email does not match the key owner", KeyID: k.KeyID}
+		}
+		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_VERIFIED, Signer: user.Username, KeyID: k.KeyID}
 	}
 	return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "no known key signed this object"}
 }

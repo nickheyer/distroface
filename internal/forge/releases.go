@@ -287,11 +287,15 @@ func (m *Manager) DetachReleaseAsset(ctx context.Context, repo *db.GitRepository
 	if !actor.CanWrite {
 		return ErrForbidden
 	}
+	pkg, err := m.ReleasePackage(ctx, repo, false)
+	if err != nil {
+		return err
+	}
 	art, err := m.store.GetArtifact(ctx, artifactID)
 	if err != nil {
 		return err
 	}
-	if art == nil || art.Version != rel.Tag {
+	if pkg == nil || art == nil || art.RepoID != pkg.ID || art.Version != rel.Tag {
 		return fmt.Errorf("%w: asset", ErrNotFound)
 	}
 	props := map[string]string{}
@@ -303,13 +307,14 @@ func (m *Manager) DetachReleaseAsset(ctx context.Context, repo *db.GitRepository
 	return m.store.SetArtifactProperties(ctx, art.ID, props)
 }
 
-// Image repository of the namespace by name
-func (m *Manager) releaseImageRepo(ctx context.Context, repo *db.GitRepository, imageName string) (*db.Repository, error) {
+// Image repository of the namespace the release may pin, linked here or managed by the actor
+func (m *Manager) releaseImageRepo(ctx context.Context, repo *db.GitRepository, actor Actor, imageName string) (*db.Repository, error) {
 	img, err := m.store.GetRepository(ctx, repo.Namespace, imageName)
 	if err != nil {
 		return nil, err
 	}
-	if img == nil {
+	linked := img != nil && img.GitRepoID != nil && *img.GitRepoID == repo.ID
+	if img == nil || (!linked && !m.git.CanManageImage(ctx, actor.User, img)) {
 		return nil, fmt.Errorf("%w: image repository %s/%s", ErrNotFound, repo.Namespace, imageName)
 	}
 	return img, nil
@@ -320,7 +325,7 @@ func (m *Manager) AttachReleaseImage(ctx context.Context, repo *db.GitRepository
 	if !actor.CanWrite {
 		return nil, ErrForbidden
 	}
-	img, err := m.releaseImageRepo(ctx, repo, imageName)
+	img, err := m.releaseImageRepo(ctx, repo, actor, imageName)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +343,7 @@ func (m *Manager) DetachReleaseImage(ctx context.Context, repo *db.GitRepository
 	if !actor.CanWrite {
 		return ErrForbidden
 	}
-	img, err := m.releaseImageRepo(ctx, repo, imageName)
+	img, err := m.releaseImageRepo(ctx, repo, actor, imageName)
 	if err != nil {
 		return err
 	}

@@ -4,20 +4,32 @@ import (
 	"context"
 
 	"github.com/nickheyer/distroface/internal/artifacts"
+	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/gitrepo"
+	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 )
 
-// Deletes and moves image and artifact packages on behalf of their source repository
+// Deletes, moves, and vets image and artifact packages for their source repository
 type packageManager struct {
 	store     *stores.Store
 	registry  *registry.RegistryAccess
 	artifacts *artifacts.Manager
+	images    *auth.RepoAccess
+	artAccess *artifacts.Access
 }
 
 var _ gitrepo.PackageManager = (*packageManager)(nil)
+
+func (p *packageManager) CanManageImageRepo(ctx context.Context, user *auth.AuthenticatedUser, repo *db.Repository) bool {
+	return user != nil && !user.IsAnonymous() && p.images.HasRepoAccess(ctx, user, repo, rbac.ActionManage)
+}
+
+func (p *packageManager) CanManageArtifactRepo(ctx context.Context, user *auth.AuthenticatedUser, repo *db.ArtifactRepository) bool {
+	return user != nil && !user.IsAnonymous() && p.artAccess.HasRepoAccess(ctx, user, repo, rbac.ActionManage)
+}
 
 func (p *packageManager) DeleteImageRepo(ctx context.Context, repo *db.Repository) error {
 	if err := p.store.DeleteRepository(ctx, repo.Namespace, repo.Name); err != nil {

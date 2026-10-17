@@ -297,7 +297,7 @@
 					{#if mode === 'write'}
 						<Textarea id="release-body" bind:value={body} rows={14} placeholder="Describe this release in markdown" class="font-mono text-[13px]" />
 					{:else}
-						<div class="rounded-xl border border-border/60 px-5 py-4 min-h-[16rem] min-w-0 overflow-x-auto">
+						<div class="rounded-xl border border-border/60 px-5 py-4 min-h-64 min-w-0 overflow-x-auto">
 							{#if body.trim()}
 								<Markdown source={body} />
 							{:else}

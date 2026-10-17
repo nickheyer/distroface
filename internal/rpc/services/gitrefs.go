@@ -273,9 +273,21 @@ func (s *GitRefService) RenameBranch(ctx context.Context, req *v1.RenameBranchRe
 	if exists {
 		return nil, connect.Errorf(connect.CodeAlreadyExists, "branch %q already exists", req.NewName)
 	}
-	// Renaming the default branch bypasses its own deletion guard
+	protections, err := s.store.ListGitBranchProtections(ctx, repo.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	// The default branch and protected names move only under an admin, rules travel along
 	isDefault := req.Branch == repo.DefaultBranch
-	if err := s.manager.UpdateRef(ctx, repo, user, plumbing.NewBranchReferenceName(req.NewName), plumbing.ZeroHash, old, gitrepo.HookOptions{}); err != nil {
+	guarded := isDefault || gitrepo.MatchProtection(protections, req.Branch) != nil || gitrepo.MatchProtection(protections, req.NewName) != nil
+	opts := gitrepo.HookOptions{}
+	if guarded {
+		if _, err := s.admin(ctx, user, req.Namespace, req.Name); err != nil {
+			return nil, err
+		}
+		opts = gitrepo.HookOptions{BypassPullRequest: true, BypassSignedCommits: true, BypassAllowedPushers: true}
+	}
+	if err := s.manager.UpdateRef(ctx, repo, user, plumbing.NewBranchReferenceName(req.NewName), plumbing.ZeroHash, old, opts); err != nil {
 		return nil, mapGitErr(err)
 	}
 	if isDefault {
@@ -288,14 +300,22 @@ func (s *GitRefService) RenameBranch(ctx context.Context, req *v1.RenameBranchRe
 			r.Close()
 		}
 	}
-	if err := s.manager.UpdateRef(ctx, repo, user, plumbing.NewBranchReferenceName(req.Branch), old, plumbing.ZeroHash, gitrepo.HookOptions{}); err != nil {
-		return nil, mapGitErr(err)
+	for _, rule := range protections {
+		if rule.Pattern == req.Branch {
+			rule.Pattern = req.NewName
+			_ = s.store.SaveGitBranchProtection(ctx, rule)
+		}
 	}
+	// Pull requests follow before the old name goes, else they read as head deleted
 	for _, pr := range s.openPullsOnBranch(ctx, repo, req.Branch) {
 		_ = s.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"head_branch": req.NewName})
 	}
 	for _, pr := range s.openPullsOnBase(ctx, repo, req.Branch) {
 		_ = s.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"base_branch": req.NewName})
+	}
+	opts.Rename = true
+	if err := s.manager.UpdateRef(ctx, repo, user, plumbing.NewBranchReferenceName(req.Branch), old, plumbing.ZeroHash, opts); err != nil {
+		return nil, mapGitErr(err)
 	}
 	return &v1.RenameBranchResponse{Branch: s.branchAfterWrite(ctx, repo, req.NewName)}, nil
 }

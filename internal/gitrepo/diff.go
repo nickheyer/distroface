@@ -20,6 +20,8 @@ const (
 	MaxDiffFileLines = 20000
 	MaxDiffFileBytes = 2 << 20
 	DiffContextLines = 3
+	// Changed files past this count are listed without stats or hunks
+	MaxDiffFiles = 1000
 )
 
 // Diff options
@@ -82,9 +84,13 @@ func (r *Repo) DiffTrees(ctx context.Context, from, to *object.Tree, opts DiffOp
 			return nil, ctx.Err()
 		}
 		inPage := i >= opts.Offset && (opts.Limit <= 0 || len(out.Files) < opts.Limit)
-		file, err := r.changeToFile(ctx, ch, maxLines, withHunks && inPage)
+		withStats := i < MaxDiffFiles
+		file, err := r.changeToFile(ctx, ch, maxLines, withHunks && inPage && withStats, withStats)
 		if err != nil {
 			return nil, err
+		}
+		if !withStats {
+			out.Truncated = true
 		}
 		out.Additions += file.Additions
 		out.Deletions += file.Deletions
@@ -158,7 +164,7 @@ func (r *Repo) CommitStats(ctx context.Context, c *object.Commit) (int32, int32,
 }
 
 // One changed file, stats from the blob pair cache and hunks only when asked
-func (r *Repo) changeToFile(ctx context.Context, ch *object.Change, maxLines int, withHunks bool) (*v1.DiffFile, error) {
+func (r *Repo) changeToFile(ctx context.Context, ch *object.Change, maxLines int, withHunks, withStats bool) (*v1.DiffFile, error) {
 	file := &v1.DiffFile{OldPath: ch.From.Name, NewPath: ch.To.Name}
 	action, err := ch.Action()
 	if err != nil {
@@ -188,6 +194,10 @@ func (r *Repo) changeToFile(ctx context.Context, ch *object.Change, maxLines int
 	}
 	if ch.From.TreeEntry.Mode == filemode.Submodule || ch.To.TreeEntry.Mode == filemode.Submodule {
 		file.IsSubmodule = true
+		return file, nil
+	}
+	if !withStats {
+		file.Truncated = true
 		return file, nil
 	}
 	key := ch.From.TreeEntry.Hash.String() + ":" + ch.To.TreeEntry.Hash.String()
@@ -306,9 +316,10 @@ func hunksFromChunks(chunks []fdiff.Chunk, maxLines int) ([]*v1.DiffHunk, int32,
 		if start < 0 {
 			start = 0
 		}
-		// Rewind the numbers for the leading context
+		// Rewind the numbers for the leading context, it is emitted again below
 		lead := i - start
-		h := &v1.DiffHunk{OldStart: int32(oldNo - lead), NewStart: int32(newNo - lead)}
+		oldNo, newNo = oldNo-lead, newNo-lead
+		h := &v1.DiffHunk{OldStart: int32(oldNo), NewStart: int32(newNo)}
 		j := start
 		for j < len(lines) {
 			l := lines[j]

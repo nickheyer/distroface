@@ -38,36 +38,28 @@
 
 	type RuleDraft = { pattern: string; replace: string };
 	type PortalMode = 'registry' | 'proxy';
+	let mode = $derived<PortalMode>(portal?.backendUrl ? 'proxy' : 'registry');
+	let name = $derived(portal?.name ?? '');
+	let hostname = $derived(portal?.hostname ?? '');
+	let portText = $derived(portal && portal.port > 0 ? String(portal.port) : '');
+	let sshPortText = $derived(portal && portal.sshPort > 0 ? String(portal.sshPort) : '');
+	let mapUnqualified = $derived(portal?.mapUnqualified ?? true);
+	let allowPush = $derived(portal?.allowPush ?? true);
+	let showExitLink = $derived(!(portal?.hidePrimaryLink ?? false));
+	let tls = $derived(portal?.tls ?? false);
+	let backendUrl = $derived(portal?.backendUrl ?? '');
+	let backendRewriteHost = $derived(portal?.backendRewriteHost ?? false);
+	let backendInsecure = $derived(portal?.backendInsecure ?? false);
+	let certSource = $derived<CertSource>(portal?.certSource || CertSource.NONE);
+	const rules = $derived.by(() => {
+		const draft = $state<RuleDraft[]>(portal?.rules.map((r) => ({ pattern: r.pattern, replace: r.replace })) ?? []);
+		return draft;
+	});
 
-	// Draft snapshot on mount, parent keys this component per portal
-	/* svelte-ignore state_referenced_locally */
-	let mode = $state<PortalMode>(portal?.backendUrl ? 'proxy' : 'registry');
-	/* svelte-ignore state_referenced_locally */
-	let name = $state(portal?.name ?? '');
-	/* svelte-ignore state_referenced_locally */
-	let hostname = $state(portal?.hostname ?? '');
-	/* svelte-ignore state_referenced_locally */
-	let portText = $state(portal && portal.port > 0 ? String(portal.port) : '');
-	/* svelte-ignore state_referenced_locally */
-	let mapUnqualified = $state(portal?.mapUnqualified ?? true);
-	/* svelte-ignore state_referenced_locally */
-	let allowPush = $state(portal?.allowPush ?? true);
 	type AnonymousMode = 'inherit' | 'allow' | 'deny';
 	let anonymousMode = $state<AnonymousMode>('inherit');
 	let savedAnonymousMode = $state<AnonymousMode>('inherit');
 	let orgAnonymous = $state(false);
-	/* svelte-ignore state_referenced_locally */
-	let showExitLink = $state(!(portal?.hidePrimaryLink ?? false));
-	/* svelte-ignore state_referenced_locally */
-	let tls = $state(portal?.tls ?? false);
-	/* svelte-ignore state_referenced_locally */
-	let backendUrl = $state(portal?.backendUrl ?? '');
-	/* svelte-ignore state_referenced_locally */
-	let backendRewriteHost = $state(portal?.backendRewriteHost ?? false);
-	/* svelte-ignore state_referenced_locally */
-	let backendInsecure = $state(portal?.backendInsecure ?? false);
-	/* svelte-ignore state_referenced_locally */
-	let certSource = $state<CertSource>(portal?.certSource || CertSource.NONE);
 	let acmeEmail = $state('');
 	let acmeDirectory = $state('');
 	let savedAcmeEmail = $state('');
@@ -82,10 +74,6 @@
 	let acmeEmailInherited = $state('');
 	let mtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_UNSPECIFIED);
 	let savedMtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_UNSPECIFIED);
-	/* svelte-ignore state_referenced_locally */
-	let rules = $state<RuleDraft[]>(
-		portal?.rules.map((r) => ({ pattern: r.pattern, replace: r.replace })) ?? []
-	);
 	const submitAct = new Act();
 
 	const sourceOptions = [
@@ -280,6 +268,7 @@
 			name: name.trim(),
 			hostname: hostname.trim().toLowerCase(),
 			port: Number(portText.trim()) || 0,
+			sshPort: Number(sshPortText.trim()) || 0,
 			tls,
 			certSource,
 			...(isProxy
@@ -427,6 +416,13 @@
 						inputmode="numeric"
 						placeholder={mainPort ? String(mainPort) : 'app port'}
 					/>
+				</FormField>
+				<FormField
+					label="Git SSH port"
+					id="portal-ssh-port"
+					help="Dedicated git over ssh listener, unqualified names and this portal's push rules apply there. Empty serves canonical paths on the primary ssh port"
+				>
+					<Input id="portal-ssh-port" bind:value={sshPortText} class="font-mono" inputmode="numeric" placeholder="none" />
 				</FormField>
 			</div>
 		</FormCard>
@@ -633,13 +629,13 @@
 										variant="ghost"
 										size="icon"
 										class="h-8 w-8 shrink-0 text-destructive hover:text-destructive"
-										onclick={() => (rules = rules.filter((_, idx) => idx !== i))}
+										onclick={() => rules.splice(i, 1)}
 									>
 										<X class="h-3.5 w-3.5" />
 									</Button>
 								</div>
 							{/each}
-							<Button variant="outline" size="sm" onclick={() => (rules = [...rules, { pattern: '', replace: '' }])}>
+							<Button variant="outline" size="sm" onclick={() => rules.push({ pattern: '', replace: '' })}>
 								<Plus class="h-3.5 w-3.5 mr-1.5" />Add Rule
 							</Button>
 						</div>

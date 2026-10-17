@@ -270,7 +270,7 @@
 											{/if}
 											{#if location(a)}<span class="font-mono break-all">{location(a)}</span>{/if}
 										</div>
-										<div class="whitespace-pre-wrap break-words">{a.message}</div>
+										<div class="whitespace-pre-wrap wrap-break-word">{a.message}</div>
 									</div>
 								</div>
 							{/each}

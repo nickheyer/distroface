@@ -264,7 +264,7 @@
 			<span class="text-muted-foreground text-[12px]">&lt;-</span>
 			{#if forks.length > 0 || headRepoFull}
 				<Select type="single" value={headRepoFull || repoFullName} onValueChange={(v) => { if (v) pickHeadRepo(v); }}>
-					<SelectTrigger class="h-8 max-w-full sm:max-w-[16rem] text-[12.5px] font-mono" size="sm" aria-label="Head repository">
+					<SelectTrigger class="h-8 max-w-full sm:max-w-64 text-[12.5px] font-mono" size="sm" aria-label="Head repository">
 						<GitFork class="h-3.5 w-3.5 text-muted-foreground" />
 						{headRepoFull || repoFullName}
 					</SelectTrigger>
@@ -380,7 +380,7 @@
 						{resetKey}
 						listFiles={async (p) => {
 							const resp = await rpcClient.gitFiles.getCompareDiff({ namespace, name, base, head: compareHead, page: p }, silentCallOptions);
-							return { files: resp.diff?.files ?? [], page: resp.page, totalFiles: resp.diff?.totalFiles ?? 0, additions: resp.diff?.additions ?? 0, deletions: resp.diff?.deletions ?? 0 };
+							return { files: resp.diff?.files ?? [], page: resp.page, totalFiles: resp.diff?.totalFiles ?? 0, additions: resp.diff?.additions ?? 0, deletions: resp.diff?.deletions ?? 0, truncated: resp.diff?.truncated ?? false };
 						}}
 						loadFile={async (path) => (await rpcClient.gitFiles.getDiffFile({ namespace, name, base: diffBase, head: result?.headSha ?? '', path }, silentCallOptions)).file}
 					/>

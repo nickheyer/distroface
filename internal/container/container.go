@@ -49,6 +49,7 @@ type App struct {
 	PortalProxies  *portal.Manager
 	CertEngine     *certs.Engine
 	GitSSH         *gitrepo.SSHManager
+	Forge          *forge.Manager
 	Server         *http.Server
 	cancel         context.CancelFunc
 }
@@ -122,6 +123,9 @@ func New() (*App, error) {
 	log.Info("RBAC enforcer initialized")
 
 	authManager, err := auth.NewManager(store, enforcer, cfg.Auth.JWTSecret, resolver)
+	if err == nil {
+		err = authManager.LoadSealingKey(cfg.Auth.SealingKey, cfg.Storage.DataDir)
+	}
 	if err != nil {
 		return fail("initializing auth manager", err)
 	}
@@ -254,7 +258,7 @@ func New() (*App, error) {
 	// Pushes go straight into the embedded registry handler
 	ociSyncer := mirror.NewOCISyncer(registryApp, tokenService)
 	mirrorMonitor := mirror.NewMonitor(store, resolver, artifactManager, ociSyncer, log)
-	mirrorMonitor.SetSealer(authManager.Sealer("mirror"))
+	mirrorMonitor.SetSealer(authManager.Sealer("mirror"), authManager.LegacySealer("mirror"))
 
 	// Git hosting, the forge, mail, and actions share one manager chain
 	gitEngine, err := gitrepo.NewEngine(cfg.Git.StoragePath, cfg.Storage.DataDir)
@@ -263,23 +267,35 @@ func New() (*App, error) {
 	}
 	gitAccess := gitrepo.NewAccess(store, enforcer)
 	gitManager := gitrepo.NewManager(store, gitEngine, blobStore, resolver, gitAccess, dispatcher, auditRecorder, log)
-	gitManager.SetPackageManager(&packageManager{store: store, registry: registryAccess, artifacts: artifactManager})
+	gitManager.SetPackageManager(&packageManager{
+		store: store, registry: registryAccess, artifacts: artifactManager,
+		images: auth.NewRepoAccess(store, enforcer), artAccess: artifacts.NewAccess(store, enforcer),
+	})
 	registry.SetSourceLinker(gitManager)
 	tokenHandler.SetLinkedAccess(gitAccess)
 	artifactV1Facade.SetLinkedAccess(gitAccess)
 	mailService := mailer.NewService(store, resolver, log)
+	mailService.SetAuditRecorder(auditRecorder)
 	forgeManager := forge.NewManager(store, gitManager, mailService, resolver, log)
+	forgeManager.SetTokenKey(authManager.DerivedKey("notifications"))
 	actionsManager := actions.NewManager(store, gitManager, forgeManager, artifactManager, authManager, resolver, log)
 	forgeManager.SetTrigger(actionsManager.Trigger)
 	mailService.SetInboundHandler(forgeManager.HandleInboundMail)
-	gitManager.Subscribe(forgeManager.OnRefUpdate, actionsManager.OnRefUpdate)
+	gitManager.Subscribe(forgeManager.OnRefUpdate, actionsManager.OnRefUpdate, mirrorMonitor.OnRefUpdate)
+	if err := actionsManager.ResealLegacy(ctx); err != nil {
+		log.Error("resealing action secrets: %v", err)
+	}
+	if err := mirrorMonitor.ResealLegacy(ctx); err != nil {
+		log.Error("resealing mirror credentials: %v", err)
+	}
 	gitHTTP := gitrepo.NewHTTP(gitManager, authManager, tokenService, authLimiter, pullLimiter, anonPullLimiter, log)
-	gitSSH, err := gitrepo.NewSSHManager(gitManager, tokenService, portalResolver, cfg.Server.Host, authLimiter, log)
+	gitSSH, err := gitrepo.NewSSHManager(gitManager, tokenService, portalResolver, cfg.Server.Host, log)
 	if err != nil {
 		return fail("initializing git ssh", err)
 	}
 	resolver.Subscribe(gitSSH.Reconcile)
 	portalService.OnChange(gitSSH.Reconcile)
+	portalService.SetSSHProbe(gitSSH.Probe)
 	mirrorMonitor.SetGit(gitManager)
 	mirrorMonitor.Schedule(ctx)
 	gitManager.ScheduleMaintenance(ctx)
@@ -338,6 +354,7 @@ func New() (*App, error) {
 
 	return &App{
 		Config:         cfg,
+		Forge:          forgeManager,
 		Log:            log,
 		Store:          store,
 		Resolver:       resolver,
@@ -437,6 +454,9 @@ func (a *App) Start() error {
 	}
 	if err := a.Server.Shutdown(ctx); err != nil {
 		a.Log.Error("Server forced to shutdown: %v", err)
+	}
+	if a.Forge != nil {
+		a.Forge.Wait(ctx)
 	}
 
 	a.Log.Info("Server stopped")

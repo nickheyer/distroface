@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -8,10 +9,12 @@ import (
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/go-git/go-git/v6/utils/diff"
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"github.com/sergi/go-diff/diffmatchpatch"
 )
 
 // Review states stored on rows
@@ -496,24 +499,42 @@ func (m *Manager) ApplySuggestion(ctx context.Context, repo *db.GitRepository, a
 	if headTip.IsZero() {
 		return plumbing.ZeroHash, fmt.Errorf("%w: head branch no longer exists", ErrInvalid)
 	}
+	if c.CommitSHA == "" {
+		return plumbing.ZeroHash, fmt.Errorf("%w: the comment is not anchored to a commit", ErrInvalid)
+	}
 	r, err := m.git.Engine().OpenRepo(headRepo.Namespace, headRepo.Name, false)
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
+	defer r.Close()
 	blob, err := r.Blob(headTip, c.Path, 1<<26)
-	r.Close()
 	if err != nil {
 		return plumbing.ZeroHash, fmt.Errorf("%w: file %s", ErrNotFound, c.Path)
 	}
 	if blob.IsBinary {
 		return plumbing.ZeroHash, fmt.Errorf("%w: cannot apply suggestions to binary files", ErrInvalid)
 	}
-	lines := strings.Split(string(blob.Content), "\n")
 	start, end := c.StartLine, c.Line
 	if start <= 0 {
 		start = end
 	}
-	if start < 1 || end < start || end > len(lines) {
+	if start < 1 || end < start {
+		return plumbing.ZeroHash, fmt.Errorf("%w: the suggested lines are out of range", ErrInvalid)
+	}
+	if c.CommitSHA != headTip.String() {
+		anchored, err := r.Blob(plumbing.NewHash(c.CommitSHA), c.Path, 1<<26)
+		if err != nil {
+			return plumbing.ZeroHash, fmt.Errorf("%w: the commit the suggestion was made on is no longer available", ErrInvalid)
+		}
+		if !bytes.Equal(anchored.Content, blob.Content) {
+			var ok bool
+			if start, end, ok = remapLines(string(anchored.Content), string(blob.Content), start, end); !ok {
+				return plumbing.ZeroHash, fmt.Errorf("%w: the suggested lines changed since the comment was made", ErrInvalid)
+			}
+		}
+	}
+	lines := strings.Split(string(blob.Content), "\n")
+	if end > len(lines) {
 		return plumbing.ZeroHash, fmt.Errorf("%w: the suggested lines are out of range in the current head", ErrInvalid)
 	}
 	replacement := strings.Split(match[1], "\n")
@@ -528,11 +549,57 @@ func (m *Manager) ApplySuggestion(ctx context.Context, repo *db.GitRepository, a
 	sha, err := m.git.CommitToBranch(ctx, headRepo, actor.User, gitrepo.CommitRequest{
 		Branch: pr.HeadBranch, ExpectedHead: headTip, Message: message,
 		Edits:   []gitrepo.TreeEdit{{Path: c.Path, Mode: blob.Mode, Content: strings.NewReader(content)}},
-		Options: gitrepo.HookOptions{BypassPullRequest: true},
+		Options: gitrepo.HookOptions{},
 	})
 	if err != nil {
 		return plumbing.ZeroHash, err
 	}
 	_ = m.store.ResolveGitReviewThread(ctx, issue.ID, c.ThreadID, actor.User.ID, true)
 	return sha, nil
+}
+
+// Maps a line range of the old text onto the new text, false when any line in it changed
+func remapLines(oldText, newText string, start, end int) (int, int, bool) {
+	oldLine, newLine := 1, 1
+	for _, d := range mergedLineDiffs(oldText, newText) {
+		n := countLines(d.Text)
+		switch d.Type {
+		case diffmatchpatch.DiffEqual:
+			if start >= oldLine && end < oldLine+n {
+				shift := newLine - oldLine
+				return start + shift, end + shift, true
+			}
+			oldLine += n
+			newLine += n
+		case diffmatchpatch.DiffDelete:
+			oldLine += n
+		case diffmatchpatch.DiffInsert:
+			newLine += n
+		}
+	}
+	return 0, 0, false
+}
+
+// Line oriented diff with adjacent chunks of one type joined
+func mergedLineDiffs(oldText, newText string) []diffmatchpatch.Diff {
+	var out []diffmatchpatch.Diff
+	for _, d := range diff.Do(oldText, newText) {
+		if d.Text == "" {
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1].Type == d.Type {
+			out[n-1].Text += d.Text
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
+}
+
+func countLines(s string) int {
+	n := strings.Count(s, "\n")
+	if s != "" && !strings.HasSuffix(s, "\n") {
+		n++
+	}
+	return n
 }

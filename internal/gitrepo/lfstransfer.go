@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -194,14 +195,27 @@ func (l *LFS) ServeSSHTransfer(ctx context.Context, ch ssh.Channel, repo *db.Git
 				return 1
 			}
 			size, _ := strconv.ParseInt(args["size"], 10, 64)
+			maxBytes := l.manager.gitSettings(ctx, repo).GetMaxLfsObjectMb() * 1024 * 1024
+			tooLarge := fmt.Sprintf("object exceeds the %d MB limit", maxBytes/(1024*1024))
+			if maxBytes > 0 && size > maxBytes {
+				if err := drainPktData(rd); err != nil {
+					return 1
+				}
+				_ = status(413, tooLarge)
+				continue
+			}
 			blobs := l.manager.Blobs()
 			uploadID, err := blobs.InitiateUpload()
 			if err != nil {
 				_ = status(500, "upload failed")
 				continue
 			}
-			if err := readPktData(rd, uploadID, blobs.AppendChunk); err != nil {
+			if err := readPktData(rd, uploadID, blobs.AppendChunk, maxBytes); err != nil {
 				blobs.CancelUpload(uploadID)
+				if errors.Is(err, errLFSTooLarge) {
+					_ = status(413, tooLarge)
+					continue
+				}
 				return 1
 			}
 			digest, gotSize, _, err := blobs.CompleteUpload(uploadID)
@@ -240,6 +254,10 @@ func (l *LFS) ServeSSHTransfer(ctx context.Context, ch ssh.Channel, repo *db.Git
 			args, err := readArgs()
 			if err != nil {
 				return 1
+			}
+			if !canWrite {
+				_ = status(403, "read only transfer")
+				continue
 			}
 			path := args["path"]
 			if path == "" {
@@ -301,6 +319,10 @@ func (l *LFS) ServeSSHTransfer(ctx context.Context, ch ssh.Channel, repo *db.Git
 			if err != nil {
 				return 1
 			}
+			if !canWrite {
+				_ = status(403, "read only transfer")
+				continue
+			}
 			lk, _ := l.manager.Store().GetLFSLock(ctx, repo.ID, fields[1])
 			if lk == nil {
 				_ = status(404, "lock not found")
@@ -359,17 +381,47 @@ func writePktData(w io.Writer, r io.Reader) error {
 }
 
 // Reads data pkt-lines until a flush, appending to an upload session
-func readPktData(rd *bufio.Reader, uploadID string, appendChunk func(string, io.Reader) (int64, error)) error {
+// Object data passed the configured cap
+var errLFSTooLarge = errors.New("lfs object too large")
+
+// Streams data packets into the upload, draining the rest once the cap is passed
+func readPktData(rd *bufio.Reader, uploadID string, appendChunk func(string, io.Reader) (int64, error), maxBytes int64) error {
+	var total int64
+	over := false
 	for {
 		l, p, err := pktline.ReadLine(rd)
 		if err != nil {
 			return err
 		}
 		if l == pktline.Flush {
+			if over {
+				return errLFSTooLarge
+			}
 			return nil
+		}
+		if over {
+			continue
+		}
+		total += int64(len(p))
+		if maxBytes > 0 && total > maxBytes {
+			over = true
+			continue
 		}
 		if _, err := appendChunk(uploadID, strings.NewReader(string(p))); err != nil {
 			return err
+		}
+	}
+}
+
+// Discards data packets up to the flush that ends them
+func drainPktData(rd *bufio.Reader) error {
+	for {
+		l, _, err := pktline.ReadLine(rd)
+		if err != nil {
+			return err
+		}
+		if l == pktline.Flush {
+			return nil
 		}
 	}
 }

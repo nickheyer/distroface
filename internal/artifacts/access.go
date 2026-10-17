@@ -117,6 +117,7 @@ func (a *Access) ListOptions(user *auth.AuthenticatedUser, namespace string) sto
 		if !opts.IncludePrivate {
 			opts.GrantedRepos = a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
 		}
+		opts.OnlyRepo, opts.OnlyNamespace = user.ListingScope()
 	}
 	return opts
 }

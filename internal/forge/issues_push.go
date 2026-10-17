@@ -50,7 +50,7 @@ func (m *Manager) onPushIssues(ctx context.Context, ev gitrepo.RefEvent) {
 				}
 				payload := map[string]any{"sha": c.Hash.String(), "repo": repo.Namespace + "/" + repo.Name, "branch": u.Name.Short()}
 				if ref.Closes && onDefault && issue.State == "open" && target.ID == repo.ID && actor.CanWrite {
-					if err := m.setState(ctx, target, actor, issue, "closed", c.Hash.String()); err == nil {
+					if err := m.setState(ctx, target, actor, issue, nil, "closed", c.Hash.String()); err == nil {
 						continue
 					}
 				}

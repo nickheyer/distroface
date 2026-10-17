@@ -139,7 +139,10 @@ message PinNotificationResponse {
 message WatchNotificationsRequest {}
 
 // GetNotificationPrefsRequest is empty.
-message GetNotificationPrefsRequest {}
+message GetNotificationPrefsRequest {
+  // Mailed unsubscribe token, reads the token owner's preferences without a session
+  string unsubscribe_token = 1;
+}
 
 // GetNotificationPrefsResponse contains the preferences.
 message GetNotificationPrefsResponse {

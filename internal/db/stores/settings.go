@@ -220,7 +220,14 @@ func (s *Store) migrateInternalACMEFlag() error {
 			doc["acme"], _ = json.Marshal(acme)
 		}
 		ca := map[string]json.RawMessage{}
-		json.Unmarshal(doc["ca"], &ca)
+		if raw, ok := doc["ca"]; ok {
+			if err := json.Unmarshal(raw, &ca); err != nil {
+				continue
+			}
+			if ca == nil {
+				ca = map[string]json.RawMessage{}
+			}
+		}
 		ca["acme_enabled"] = flag
 		doc["ca"], _ = json.Marshal(ca)
 		value, err := json.Marshal(doc)

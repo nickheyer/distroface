@@ -43,6 +43,9 @@ func (s *TokenService) CreateAPIToken(ctx context.Context, req *v1.CreateAPIToke
 	if req.Name == "" {
 		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
+	if user.IsScoped() {
+		return nil, connect.Errorf(connect.CodePermissionDenied, "scoped credentials cannot mint tokens")
+	}
 
 	scope, err := s.validateScope(ctx, user, req.Scope)
 	if err != nil {
@@ -63,9 +66,6 @@ func (s *TokenService) CreateAPIToken(ctx context.Context, req *v1.CreateAPIToke
 func (s *TokenService) validateScope(ctx context.Context, user *auth.AuthenticatedUser, scope *v1.CredentialScope) (*auth.CredentialScope, error) {
 	if scope == nil || scope.Type == v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_UNSPECIFIED {
 		return nil, nil
-	}
-	if user.IsScoped() {
-		return nil, connect.Errorf(connect.CodePermissionDenied, "scoped credentials cannot mint tokens")
 	}
 	store := s.authManager.GetStore()
 	switch scope.Type {

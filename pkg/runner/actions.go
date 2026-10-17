@@ -140,7 +140,7 @@ func safeSegment(s string) string {
 // Instance first, github.com second, following the DEFAULT_ACTIONS_URL rule
 func (j *job) fetchAction(ctx context.Context, repo, version, dest string, out io.Writer) error {
 	var errs []string
-	if base := j.cloneBase(); base != "" {
+	if base := j.cloneBase(); base != "" && !githubOnly(repo) {
 		fmt.Fprintf(out, "Fetching action %s@%s from %s\n", repo, version, base)
 		if err := j.cloneHost(ctx, base+"/"+repo+".git", dest, version, 1, j.task.Token); err == nil {
 			return nil
@@ -328,7 +328,7 @@ func (j *job) runCompositeStep(ctx context.Context, act *actionDef, st actionSte
 			err = j.runAction(ctx, nested, with, senv, ectx, outputs, cw, depth+1)
 			cw.Flush()
 			j.applyCommandFiles(files, outputs)
-			return outputs, err
+			return outputs, firstErr(err, cw.failure())
 		}
 		name, _, _ := strings.Cut(ref, "@")
 		switch strings.ToLower(name) {
@@ -347,13 +347,22 @@ func (j *job) runCompositeStep(ctx context.Context, act *actionDef, st actionSte
 		}
 		cw.Flush()
 		j.applyCommandFiles(files, outputs)
-		return outputs, err
+		return outputs, firstErr(err, cw.failure())
 	}
 	dir := j.workDir(interpolate(st.WorkingDirectory, ectx))
 	code, err := j.runScript(ctx, interpolate(st.Run, ectx), st.Shell, dir, senv, cw)
 	cw.Flush()
 	j.applyCommandFiles(files, outputs)
-	return outputs, exitErr(code, err)
+	return outputs, firstErr(exitErr(code, err), cw.failure())
+}
+
+func firstErr(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (j *job) runNodeAction(ctx context.Context, act *actionDef, env map[string]string, inputs map[string]any, out io.Writer) error {
@@ -677,10 +686,14 @@ func (j *job) collectFiles(spec string) ([]string, error) {
 		if line == "" {
 			continue
 		}
+		pat, err := j.hostPattern(strings.TrimPrefix(line, "!"))
+		if err != nil {
+			return nil, err
+		}
 		if strings.HasPrefix(line, "!") {
-			exclude = append(exclude, j.hostPattern(line[1:]))
+			exclude = append(exclude, pat)
 		} else {
-			include = append(include, j.hostPattern(line))
+			include = append(include, pat)
 		}
 	}
 	seen := map[string]bool{}
@@ -721,21 +734,75 @@ func (j *job) collectFiles(spec string) ([]string, error) {
 			kept = append(kept, f)
 		}
 	}
+	for _, f := range kept {
+		if !j.realInside(f) {
+			return nil, fmt.Errorf("path %q resolves outside the job directory", j.pathOf(f))
+		}
+	}
 	sort.Strings(kept)
 	return kept, nil
 }
 
-// Maps executor side paths back onto the host
-func (j *job) hostPattern(p string) string {
+// Host path for an executor path, confined to the job dir in containers
+func (j *job) hostPattern(p string) (string, error) {
 	p = filepath.ToSlash(p)
 	root := filepath.ToSlash(j.pathOf(j.dir))
-	if root != "" && (p == root || strings.HasPrefix(p, root+"/")) {
-		return filepath.Join(j.dir, filepath.FromSlash(strings.TrimPrefix(p, root)))
+	var host string
+	switch {
+	case root != "" && (p == root || strings.HasPrefix(p, root+"/")):
+		host = filepath.Join(j.dir, filepath.FromSlash(strings.TrimPrefix(p, root)))
+	case path.IsAbs(p):
+		host = filepath.FromSlash(p)
+	default:
+		host = filepath.Join(j.workspace, filepath.FromSlash(p))
 	}
-	if path.IsAbs(p) {
-		return filepath.FromSlash(p)
+	if j.confined && !within(j.dir, host) {
+		return "", fmt.Errorf("path %q is outside the job directory", p)
 	}
-	return filepath.Join(j.workspace, filepath.FromSlash(p))
+	return host, nil
+}
+
+// Whether target sits under root after cleaning, symlinks not followed
+func within(root, target string) bool {
+	rel, err := filepath.Rel(root, filepath.Clean(target))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+// Symlink resolved containment, always true outside containers
+func (j *job) realInside(p string) bool {
+	if !j.confined {
+		return true
+	}
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(j.dir)
+	if err != nil {
+		return false
+	}
+	return within(root, real)
+}
+
+// Creates a directory in the job, refusing symlinked escapes
+func (j *job) mkdirInside(dir string) error {
+	if j.confined {
+		existing := dir
+		for {
+			if _, err := os.Lstat(existing); err == nil {
+				break
+			}
+			parent := filepath.Dir(existing)
+			if parent == existing {
+				break
+			}
+			existing = parent
+		}
+		if !j.realInside(existing) {
+			return fmt.Errorf("path %q resolves outside the job directory", j.pathOf(dir))
+		}
+	}
+	return os.MkdirAll(dir, 0o777)
 }
 
 func commonDir(files []string) string {
@@ -755,7 +822,10 @@ func (j *job) downloadArtifact(ctx context.Context, with map[string]string, out 
 	name := strings.TrimSpace(with["name"])
 	dest := j.workspace
 	if p := strings.TrimSpace(with["path"]); p != "" {
-		dest = j.hostPattern(p)
+		var err error
+		if dest, err = j.hostPattern(p); err != nil {
+			return err
+		}
 	}
 	ns, repo, _ := strings.Cut(j.task.RepoFullName, "/")
 	version := "actions-" + stringify(j.github["run_number"])
@@ -800,12 +870,15 @@ func (j *job) downloadArtifact(ctx context.Context, with map[string]string, out 
 			rel = strings.TrimPrefix(rel, prefix)
 		}
 		rel = path.Clean(rel)
-		if rel == "." || strings.HasPrefix(rel, "../") {
+		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
 			continue
 		}
 		target := filepath.Join(dest, filepath.FromSlash(rel))
-		if err := os.MkdirAll(filepath.Dir(target), 0o777); err != nil {
+		if err := j.mkdirInside(filepath.Dir(target)); err != nil {
 			return err
+		}
+		if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			os.Remove(target)
 		}
 		rc, err := f.Open()
 		if err != nil {
@@ -845,4 +918,14 @@ func sanitizeArtifactName(name string) string {
 		return "artifact"
 	}
 	return s
+}
+
+// Namespaces reserved on the instance resolve on github.com alone
+func githubOnly(repo string) bool {
+	owner, _, _ := strings.Cut(repo, "/")
+	switch strings.ToLower(owner) {
+	case "actions", "docker", "github":
+		return true
+	}
+	return false
 }

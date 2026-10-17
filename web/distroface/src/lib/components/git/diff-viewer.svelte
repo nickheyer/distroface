@@ -12,6 +12,7 @@
 		totalFiles: number;
 		additions: number;
 		deletions: number;
+		truncated?: boolean;
 	}
 </script>
 
@@ -96,6 +97,7 @@
 	let totalFiles = $state(0);
 	let additions = $state(0);
 	let deletions = $state(0);
+	let truncated = $state(false);
 	let listing = $state(true);
 	let listFailed = $state(false);
 	let selected = $state('');
@@ -127,11 +129,13 @@
 			totalFiles = resp.totalFiles;
 			additions = resp.additions;
 			deletions = resp.deletions;
+			truncated = resp.truncated ?? false;
 			pager.apply(resp.page);
 		} catch {
 			if (mine !== listSeq) return;
 			files = [];
 			totalFiles = 0;
+			truncated = false;
 			listFailed = true;
 			pager.apply(undefined);
 		} finally {
@@ -334,7 +338,7 @@
 {/snippet}
 
 <div class="rounded-xl border border-border/60 bg-card overflow-hidden">
-	<div class="relative sticky top-14 z-20 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border/50 bg-card/95 backdrop-blur text-[13px]">
+	<div class="sticky top-14 z-20 flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border/50 bg-card/95 backdrop-blur text-[13px]">
 		<Button variant="ghost" size="sm" class="h-8 px-2 hidden lg:inline-flex" onclick={() => (showTree = !showTree)} title="Toggle file tree" aria-pressed={showTree}>
 			<PanelLeft class="h-3.5 w-3.5" />
 		</Button>
@@ -348,6 +352,11 @@
 			<span class="text-emerald-600 dark:text-emerald-400">+{additions}</span>
 			<span class="text-red-600 dark:text-red-400 ml-1">-{deletions}</span>
 		</span>
+		{#if truncated}
+			<span class="text-amber-600 dark:text-amber-400 whitespace-nowrap" title="This diff is too large to count every file, files past the cap are listed without stats">
+				partial totals
+			</span>
+		{/if}
 		{#if viewed}
 			<span class="inline-flex items-center gap-1 text-muted-foreground tabular-nums whitespace-nowrap" title="{viewedPct}% reviewed">
 				<Eye class="h-3.5 w-3.5" />{viewedCount} / {totalFiles}
@@ -385,7 +394,7 @@
 
 	<div class="grid {showTree ? 'lg:grid-cols-[17rem_minmax(0,1fr)]' : ''}">
 		{#if showTree}
-			<aside class="hidden lg:flex flex-col border-r border-border/50 bg-muted/10 sticky top-[6.5rem] self-start max-h-[calc(100vh-7rem)]">
+			<aside class="hidden lg:flex flex-col border-r border-border/50 bg-muted/10 sticky top-26 self-start max-h-[calc(100vh-7rem)]">
 				<div class="px-2 pt-2 pb-1">{@render filterBox()}</div>
 				{#if listing && files.length === 0}
 					<div class="space-y-2 p-3">
@@ -399,7 +408,7 @@
 			</aside>
 		{/if}
 
-		<section class="min-w-0 lg:min-h-[24rem]">
+		<section class="min-w-0 lg:min-h-96">
 			{#if listFailed}
 				<div class="px-4 py-12 text-center text-[13px] text-muted-foreground space-y-2">
 					<p>The diff could not be loaded.</p>
@@ -422,7 +431,7 @@
 				</div>
 			{:else}
 				{@const f = current}
-				<div class="relative lg:sticky lg:top-[6.5rem] z-10 flex items-center gap-2 px-3 py-2 bg-card/95 backdrop-blur border-b border-border/50 min-w-0" aria-busy={fileLoading}>
+				<div class="relative lg:sticky lg:top-26 z-10 flex items-center gap-2 px-3 py-2 bg-card/95 backdrop-blur border-b border-border/50 min-w-0" aria-busy={fileLoading}>
 					<div class="inline-flex rounded-md border border-border/60 overflow-hidden shrink-0">
 						<button type="button" class="h-7 w-7 inline-flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted/60 disabled:opacity-40" onclick={prevFile} disabled={!hasPrev || listing} title="Previous file (k)" aria-label="Previous file">
 							<ChevronLeft class="h-4 w-4" />

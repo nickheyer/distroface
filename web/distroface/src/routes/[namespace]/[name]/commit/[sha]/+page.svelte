@@ -3,6 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { GitCommit as GitCommitIcon, GitBranch, Tag, Undo2, Cherry, ExternalLink, CheckCircle2, XCircle, Clock, AlertCircle } from '@lucide/svelte';
+	import { safeHref } from '$lib/utils';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -142,7 +143,7 @@
 			<div class="px-5 py-4 space-y-3">
 				<div class="flex items-start gap-4 flex-wrap">
 					<div class="flex-1 min-w-0 space-y-2">
-						<h2 class="text-lg font-semibold leading-snug break-words">{title}</h2>
+						<h2 class="text-lg font-semibold leading-snug wrap-break-word">{title}</h2>
 						{#if body}
 							<pre class="text-[13px] whitespace-pre-wrap font-mono text-muted-foreground bg-muted/30 rounded-lg p-3 border border-border/40">{body}</pre>
 						{/if}
@@ -218,9 +219,9 @@
 							{#if s.description}
 								<span class="text-muted-foreground truncate">{s.description}</span>
 							{/if}
-							{#if s.targetUrl}
+							{#if safeHref(s.targetUrl)}
 								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-								<a href={s.targetUrl} target="_blank" rel="noopener noreferrer" class="ml-auto text-primary hover:underline inline-flex items-center gap-1 shrink-0">
+								<a href={safeHref(s.targetUrl)} target="_blank" rel="noopener noreferrer" class="ml-auto text-primary hover:underline inline-flex items-center gap-1 shrink-0">
 									Details<ExternalLink class="h-3 w-3" />
 								</a>
 							{/if}
@@ -238,7 +239,7 @@
 			resetKey={commit.sha}
 			listFiles={async (p) => {
 				const resp = await rpcClient.gitFiles.getCommitDiff({ namespace, name, sha: commit?.sha ?? sha, parent: 0, page: p }, silentCallOptions);
-				return { files: resp.diff?.files ?? [], page: resp.page, totalFiles: resp.diff?.totalFiles ?? 0, additions: resp.diff?.additions ?? 0, deletions: resp.diff?.deletions ?? 0 };
+				return { files: resp.diff?.files ?? [], page: resp.page, totalFiles: resp.diff?.totalFiles ?? 0, additions: resp.diff?.additions ?? 0, deletions: resp.diff?.deletions ?? 0, truncated: resp.diff?.truncated ?? false };
 			}}
 			loadFile={async (path) => (await rpcClient.gitFiles.getDiffFile({ namespace, name, base: parentSha, head: commit?.sha ?? sha, path }, silentCallOptions)).file}
 		/>

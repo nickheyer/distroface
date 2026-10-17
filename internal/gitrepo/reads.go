@@ -76,13 +76,20 @@ func (r *Repo) Resolve(rev string) (plumbing.Hash, error) {
 		}
 		return head.Hash(), nil
 	}
-	for _, candidate := range []string{rev, "refs/heads/" + rev, "refs/tags/" + rev} {
-		h, err := r.Repo.ResolveRevision(plumbing.Revision(candidate))
-		if err == nil && h != nil {
-			return r.peelToCommit(*h)
+	// Branches win over tags, both win over abbreviated hashes
+	for _, name := range []plumbing.ReferenceName{plumbing.NewBranchReferenceName(rev), plumbing.NewTagReferenceName(rev)} {
+		if ref, err := r.Repo.Reference(name, true); err == nil {
+			return r.peelToCommit(ref.Hash())
 		}
 	}
-	return plumbing.ZeroHash, ErrNotFound
+	if plumbing.IsHash(rev) {
+		return r.peelToCommit(plumbing.NewHash(rev))
+	}
+	h, err := r.Repo.ResolveRevision(plumbing.Revision(rev))
+	if err != nil || h == nil {
+		return plumbing.ZeroHash, ErrNotFound
+	}
+	return r.peelToCommit(*h)
 }
 
 // Follows annotated tags down to the commit
@@ -216,6 +223,27 @@ func mustCommit(r *Repo, h plumbing.Hash) *object.Commit {
 		return &object.Commit{Hash: h}
 	}
 	return c
+}
+
+// Every merge base of two commits, empty when histories are unrelated
+func (r *Repo) MergeBases(a, b plumbing.Hash) ([]plumbing.Hash, error) {
+	ca, err := r.Commit(a)
+	if err != nil {
+		return nil, err
+	}
+	cb, err := r.Commit(b)
+	if err != nil {
+		return nil, err
+	}
+	bases, err := ca.MergeBase(cb)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]plumbing.Hash, 0, len(bases))
+	for _, c := range bases {
+		out = append(out, c.Hash)
+	}
+	return out, nil
 }
 
 // Merge base of two commits, zero when histories are unrelated
@@ -371,21 +399,27 @@ type Entry struct {
 	IsLFS       bool
 }
 
-// Lists one directory of a commit's tree
-func (r *Repo) Tree(ctx context.Context, commit plumbing.Hash, dir string, recursive bool) ([]Entry, error) {
+// Entries a single listing may return before it is cut short
+const MaxTreeEntries = 100000
+
+// Listing stopped at the entry cap
+var errTreeCapped = errors.New("tree listing capped")
+
+// Lists one directory of a commit's tree, true when the entry cap cut it short
+func (r *Repo) Tree(ctx context.Context, commit plumbing.Hash, dir string, recursive bool) ([]Entry, bool, error) {
 	c, err := r.Commit(commit)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	tree, err := c.Tree()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	dir = strings.Trim(dir, "/")
 	if dir != "" {
 		tree, err = tree.Tree(dir)
 		if err != nil {
-			return nil, ErrNotFound
+			return nil, false, ErrNotFound
 		}
 	}
 	var out []Entry
@@ -394,6 +428,9 @@ func (r *Repo) Tree(ctx context.Context, commit plumbing.Hash, dir string, recur
 		for _, te := range t.Entries {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if len(out) >= MaxTreeEntries {
+				return errTreeCapped
 			}
 			p := te.Name
 			if prefix != "" {
@@ -422,8 +459,12 @@ func (r *Repo) Tree(ctx context.Context, commit plumbing.Hash, dir string, recur
 		}
 		return nil
 	}
+	truncated := false
 	if err := walk(tree, dir); err != nil {
-		return nil, err
+		if !errors.Is(err, errTreeCapped) {
+			return nil, false, err
+		}
+		truncated = true
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		di, dj := out[i].Mode == filemode.Dir, out[j].Mode == filemode.Dir
@@ -432,7 +473,7 @@ func (r *Repo) Tree(ctx context.Context, commit plumbing.Hash, dir string, recur
 		}
 		return out[i].Path < out[j].Path
 	})
-	return out, nil
+	return out, truncated, nil
 }
 
 // File content and metadata at a path
@@ -544,7 +585,7 @@ var readmeNames = []string{"README.md", "README.markdown", "README", "README.txt
 // Finds a readme in a directory, then in docs or the config folder
 func (r *Repo) Readme(commit plumbing.Hash, dir string) (*Blob, error) {
 	for _, candidate := range []string{dir, path.Join(dir, ".distroface"), path.Join(dir, "docs"), path.Join(dir, ".github")} {
-		entries, err := r.Tree(context.Background(), commit, candidate, false)
+		entries, _, err := r.Tree(context.Background(), commit, candidate, false)
 		if err != nil {
 			continue
 		}
@@ -631,14 +672,48 @@ type BlameRun struct {
 }
 
 // Attributes a file's lines, grouped into runs
-func (r *Repo) Blame(commit plumbing.Hash, p string) ([]BlameRun, error) {
+// Largest text file blame will walk history for
+const MaxBlameBytes = 1 << 20
+
+// Longest a single blame may run
+const blameTimeout = 30 * time.Second
+
+// Attributes every line of a text file, refusing binaries, oversized files and slow walks
+func (r *Repo) Blame(ctx context.Context, commit plumbing.Hash, p string) ([]BlameRun, error) {
 	c, err := r.Commit(commit)
 	if err != nil {
 		return nil, err
 	}
-	res, err := git.Blame(c, strings.Trim(p, "/"))
+	probe, err := r.Blob(commit, p, 8192)
 	if err != nil {
-		return nil, ErrNotFound
+		return nil, err
+	}
+	if probe.IsBinary {
+		return nil, fmt.Errorf("%w: binary files cannot be blamed", ErrInvalid)
+	}
+	if probe.Size > MaxBlameBytes {
+		return nil, fmt.Errorf("%w: files over %d KB cannot be blamed", ErrTooLarge, MaxBlameBytes/1024)
+	}
+	ctx, cancel := context.WithTimeout(ctx, blameTimeout)
+	defer cancel()
+	type outcome struct {
+		res *git.BlameResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		res, err := git.Blame(c, strings.Trim(p, "/"))
+		done <- outcome{res, err}
+	}()
+	var res *git.BlameResult
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: blame took longer than %s", ErrTooLarge, blameTimeout)
+	case o := <-done:
+		if o.err != nil {
+			return nil, ErrNotFound
+		}
+		res = o.res
 	}
 	var runs []BlameRun
 	for i, line := range res.Lines {

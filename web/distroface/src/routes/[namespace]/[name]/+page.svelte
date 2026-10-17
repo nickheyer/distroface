@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { safeHref } from '$lib/utils';
 	import {
 		Code, GitBranch, Tag, BookOpen, Plus, Package, Archive, Users, Link as LinkIcon, Star, GitFork, Clock, ChevronDown, Upload, FilePlus
 	} from '@lucide/svelte';
@@ -309,7 +310,7 @@ git push -u origin {ref || 'main'}</pre>
 										{/if}
 										<span class="truncate">{l.fullName}</span>
 										{#if l.latest}
-											<span class="ml-auto font-mono text-[11px] text-muted-foreground truncate max-w-[6rem] shrink-0">{l.latest}</span>
+											<span class="ml-auto font-mono text-[11px] text-muted-foreground truncate max-w-24 shrink-0">{l.latest}</span>
 										{/if}
 									</a>
 								</li>
@@ -370,13 +371,13 @@ git push -u origin {ref || 'main'}</pre>
 	<section class="space-y-3 min-w-0">
 		<h3 class="text-[13px] font-semibold">About</h3>
 		{#if repo.description}
-			<p class="text-[13px] text-muted-foreground break-words">{repo.description}</p>
+			<p class="text-[13px] text-muted-foreground wrap-break-word">{repo.description}</p>
 		{:else}
 			<p class="text-[13px] text-muted-foreground/60 italic">No description</p>
 		{/if}
-		{#if repo.website}
+		{#if safeHref(repo.website)}
 			<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-			<a href={repo.website} target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 text-[12.5px] text-primary hover:underline min-w-0">
+			<a href={safeHref(repo.website)} target="_blank" rel="noopener noreferrer" class="flex items-center gap-1.5 text-[12.5px] text-primary hover:underline min-w-0">
 				<LinkIcon class="h-3.5 w-3.5 shrink-0" /><span class="truncate">{repo.website.replace(/^https?:\/\//, '')}</span>
 			</a>
 		{/if}

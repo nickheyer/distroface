@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -29,14 +28,14 @@ type SSHManager struct {
 	bindErrs  map[int]error
 }
 
-func NewSSHManager(manager *Manager, tokens *auth.TokenService, portals *portal.Resolver, bindHost string, authLimiter *admin.Limiter, log *logger.Logger) (*SSHManager, error) {
+func NewSSHManager(manager *Manager, tokens *auth.TokenService, portals *portal.Resolver, bindHost string, log *logger.Logger) (*SSHManager, error) {
 	keys, err := LoadHostKeys(manager.Engine().KeysDir())
 	if err != nil {
 		return nil, fmt.Errorf("ssh host keys: %w", err)
 	}
 	lfs := NewLFS(manager, tokens, log)
 	return &SSHManager{
-		server:    newSSHServer(manager, lfs, keys, authLimiter, portals, log),
+		server:    newSSHServer(manager, lfs, keys, portals, log),
 		manager:   manager,
 		portals:   portals,
 		bindHost:  bindHost,
@@ -159,6 +158,15 @@ func describeBindError(port int, err error) error {
 		}
 	}
 	return fmt.Errorf("port %d cannot be bound: %v", port, err)
+}
+
+// SHA256 fingerprints in the order of HostKeys
+func (m *SSHManager) HostKeyFingerprints() []string {
+	var out []string
+	for _, k := range m.server.hostKeys {
+		out = append(out, k.PublicKey().Type()+" "+ssh.FingerprintSHA256(k.PublicKey()))
+	}
+	return out
 }
 
 // Public host key lines for the ui

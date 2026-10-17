@@ -234,6 +234,11 @@ func unitProto(u string) v1.GitUnit {
 
 // Computes every source of access for one user and repository
 func (a *Access) Levels(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository) Levels {
+	return a.levels(ctx, user, repo, true)
+}
+
+// Levels with or without the read every public repository hands out
+func (a *Access) levels(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository, public bool) Levels {
 	out := Levels{Units: map[string]Level{}}
 	if repo == nil {
 		return out
@@ -241,7 +246,7 @@ func (a *Access) Levels(ctx context.Context, user *auth.AuthenticatedUser, repo 
 	anonymous := user == nil || user.IsAnonymous()
 
 	// Public repositories admit anyone holding the read capability
-	if !repo.IsPrivate {
+	if public && !repo.IsPrivate {
 		roles := []string{"anonymous"}
 		if user != nil {
 			roles = user.Roles
@@ -275,6 +280,15 @@ func (a *Access) Levels(ctx context.Context, user *auth.AuthenticatedUser, repo 
 			return out
 		}
 		scoped := a.identityLevels(ctx, user, repo)
+		if scoped.IsOwner || scoped.CanAdmin {
+			// Owners and admins hold every unit, the scope caps them at write
+			for _, u := range AllUnits {
+				if UnitEnabled(repo, u) {
+					out.Units[u] = max(out.Units[u], level)
+				}
+			}
+			return out
+		}
 		for u, l := range scoped.Units {
 			out.Units[u] = max(out.Units[u], min(l, level))
 		}
@@ -385,6 +399,23 @@ func (a *Access) CanSee(ctx context.Context, user *auth.AuthenticatedUser, repo 
 	return repo != nil && a.Level(ctx, user, repo, db.GitUnitCode) >= LevelRead
 }
 
+// Read on an enabled unit, public repos skip the identity lookups
+func (a *Access) UnitReadable(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository, unit string) bool {
+	if repo == nil || !UnitEnabled(repo, unit) {
+		return false
+	}
+	if !repo.IsPrivate && (user == nil || !user.IsScoped()) {
+		roles := []string{"anonymous"}
+		if user != nil {
+			roles = user.Roles
+		}
+		if a.enforcer.HasPermission(roles, rbac.ResourceGit, rbac.ActionRead) {
+			return true
+		}
+	}
+	return a.Level(ctx, user, repo, unit) >= LevelRead
+}
+
 // Owner username, org team allowing creation, or manage into an existing namespace
 func (a *Access) CanCreateInNamespace(ctx context.Context, user *auth.AuthenticatedUser, namespace string) bool {
 	if user == nil || user.IsAnonymous() || user.IsScoped() {
@@ -426,17 +457,28 @@ func (a *Access) ListOptions(user *auth.AuthenticatedUser, namespace string) sto
 		if !opts.IncludePrivate {
 			opts.GrantedRepos = a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceGit, rbac.ActionRead)
 		}
+		opts.OnlyRepo, opts.OnlyNamespace = user.ListingScope()
 	}
 	return opts
 }
 
-// LinkedRepoAllows gives packages the source repository's packages unit level
+// Packages inherit the source repository's relationships, never its public visibility
 func (a *Access) LinkedRepoAllows(ctx context.Context, user *auth.AuthenticatedUser, gitRepoID string, action string) bool {
+	if user == nil || user.IsAnonymous() {
+		return false
+	}
 	repo, err := a.store.GetGitRepositoryByID(ctx, gitRepoID)
 	if err != nil || repo == nil {
 		return false
 	}
-	return a.Can(ctx, user, repo, db.GitUnitPackages, action)
+	if user.IsScoped() && !auth.ScopeAllows(user, action, repo.Namespace+"/"+repo.Name, repo.Namespace) {
+		return false
+	}
+	lv := a.levels(ctx, user, repo, false)
+	if !UnitEnabled(repo, db.GitUnitPackages) && !lv.IsOwner && !lv.CanAdmin {
+		return false
+	}
+	return lv.Unit(db.GitUnitPackages) >= levelForAction(action)
 }
 
 // Reports whether a user id or any of their team ids appears in a list

@@ -47,6 +47,7 @@ logging:
 # Secret material only, generated and persisted when unset
 # auth:
 #   jwt_secret: ""
+#   sealing_key: ""   # Encrypts stored secrets at rest
 
 # Startup seeding, entries are created once and never updated
 # bootstrap:

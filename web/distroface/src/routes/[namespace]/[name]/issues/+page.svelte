@@ -251,7 +251,7 @@
 		{/if}
 		<div class="min-w-0 flex-1">
 			<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
-				<a href={resolve('/[namespace]/[name]/issues/[number]', { namespace, name, number: String(i.number) })} class="text-[14px] font-semibold hover:text-primary leading-snug min-w-0 break-words">{i.title}</a>
+				<a href={resolve('/[namespace]/[name]/issues/[number]', { namespace, name, number: String(i.number) })} class="text-[14px] font-semibold hover:text-primary leading-snug min-w-0 wrap-break-word">{i.title}</a>
 				{#each i.labels as l (l.id)}
 					<button type="button" class="inline-flex" onclick={() => toggleLabelFilter(l.name)} title="Filter by {l.name}">
 						<LabelChip name={l.name} color={l.color} description={l.description} size="sm" />

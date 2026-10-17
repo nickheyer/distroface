@@ -42,6 +42,7 @@ var (
 	ErrDenied   = errors.New("access denied")
 	ErrConflict = errors.New("conflict")
 	ErrDisabled = errors.New("actions are disabled")
+	ErrTooLarge = errors.New("too large")
 )
 
 const (
@@ -126,6 +127,9 @@ func (m *Manager) wakeChan() <-chan struct{} {
 	defer m.wakeMu.Unlock()
 	return m.wake
 }
+
+// Decodes a stored json string list
+func StringList(raw string) []string { return decodeStrings(raw) }
 
 func (m *Manager) requestCancel(jobID string) {
 	m.cancelMu.Lock()

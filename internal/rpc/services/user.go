@@ -115,6 +115,9 @@ func (s *UserService) UpdateUser(ctx context.Context, req *v1.UpdateUserRequest)
 		if existing != nil && existing.ID != user.ID {
 			return nil, connect.NewError(connect.CodeAlreadyExists, "")
 		}
+		if user.Email == nil || *user.Email != *req.Email {
+			user.EmailVerifiedAt = nil
+		}
 		user.Email = req.Email
 	}
 
@@ -221,6 +224,9 @@ func (s *UserService) AdminUpdateUser(ctx context.Context, req *v1.AdminUpdateUs
 		}
 	}
 	if msg.Email != nil {
+		if user.Email == nil || *user.Email != *msg.Email {
+			user.EmailVerifiedAt = nil
+		}
 		user.Email = msg.Email
 	}
 	if msg.IsActive != nil {

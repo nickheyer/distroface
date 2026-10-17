@@ -40,6 +40,14 @@ func (s pushMirrorState) encode() string {
 	return string(b)
 }
 
+// Post receive subscriber, every ref change may need pushing out
+func (m *Monitor) OnRefUpdate(_ context.Context, ev gitrepo.RefEvent) {
+	if ev.Wiki {
+		return
+	}
+	m.SchedulePushMirrors(ev.Repo)
+}
+
 // Schedules a push mirror sync after a push, debounced
 func (m *Monitor) SchedulePushMirrors(repo *db.GitRepository) {
 	if m.git == nil || repo == nil {
@@ -134,7 +142,7 @@ func (m *Monitor) pushToMirror(ctx context.Context, repo *db.GitRepository, pm *
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	auth := gitrepo.RemoteAuth{HTTPClient: m.client}
+	auth := gitrepo.RemoteAuth{HTTPClient: m.client, Dialer: m.dial}
 	switch {
 	case pm.UseSSHKey:
 		keys := parseGitMirrorState(repo.MirrorState)
@@ -151,7 +159,7 @@ func (m *Monitor) pushToMirror(ctx context.Context, repo *db.GitRepository, pm *
 	case u.Scheme == "ssh":
 		return fmt.Errorf("%w: ssh remotes need the repository ssh key", ErrInvalid)
 	case pm.AuthToken != "":
-		auth.Username, auth.Password = gitBasicAuth(forgeForHost(u.Hostname()), pm.Username, pm.AuthToken)
+		auth.Username, auth.Password = gitBasicAuth(forgeForHost(u.Hostname()), pm.Username, m.openToken(pm.AuthToken))
 	}
 	return classifyGitErr(m.git.PushRemote(ctx, repo, pm.RemoteURL, mirrorRefspecs, auth))
 }

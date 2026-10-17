@@ -234,7 +234,10 @@ func TestMatrixCombinations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	combos, order := MatrixCombinations(wf.Jobs["build"].Strategy)
+	combos, order, err := MatrixCombinations(wf.Jobs["build"].Strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(combos) != 4 {
 		t.Fatalf("got %d combinations: %v", len(combos), combos)
 	}
@@ -265,9 +268,18 @@ func TestMatrixCombinations(t *testing.T) {
 	if got := MatrixSuffix(map[string]any{"os": "linux", "node": float64(20)}, []string{"os", "node"}); got != " (linux, 20)" {
 		t.Errorf("suffix = %q", got)
 	}
-	none, _ := MatrixCombinations(nil)
+	none, _, _ := MatrixCombinations(nil)
 	if len(none) != 1 || none[0] != nil {
 		t.Errorf("nil strategy should yield one empty combination")
+	}
+	big := &Strategy{Matrix: map[string][]any{}, MatrixOrder: []string{"a", "b", "c", "d", "e"}}
+	for _, k := range big.MatrixOrder {
+		for i := range 10 {
+			big.Matrix[k] = append(big.Matrix[k], i)
+		}
+	}
+	if _, _, err := MatrixCombinations(big); err == nil {
+		t.Error("ten to the fifth combinations should be refused")
 	}
 }
 

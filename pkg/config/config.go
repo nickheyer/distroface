@@ -53,6 +53,8 @@ type TLSConfig struct {
 // Secret material only, toggles are runtime settings
 type AuthConfig struct {
 	JWTSecret string `mapstructure:"jwt_secret"`
+	// Key behind stored secrets, generated into the data dir when unset
+	SealingKey string `mapstructure:"sealing_key"`
 }
 
 type DatabaseConfig struct {
@@ -159,6 +161,7 @@ func Load(configPath string) (*Config, error) {
 	_ = v.BindEnv("git.storage_path")
 	_ = v.BindEnv("logging.dir")
 	_ = v.BindEnv("auth.jwt_secret")
+	_ = v.BindEnv("auth.sealing_key")
 	_ = v.BindEnv("tls.cert_file")
 	_ = v.BindEnv("tls.key_file")
 

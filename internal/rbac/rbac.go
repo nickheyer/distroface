@@ -331,6 +331,12 @@ func (e *Enforcer) GetPermissionMatrix() map[string][]Permission {
 	return matrix
 }
 
+// Drops every scoped grant on one object
+func (e *Enforcer) RemoveObject(resource, object string) error {
+	_, err := e.enforcer.RemoveFilteredPolicy(1, resource, "", object)
+	return err
+}
+
 // Moves scoped grants on one object to its new name
 func (e *Enforcer) RenameObject(resource, oldObject, newObject string) error {
 	policies, err := e.enforcer.GetFilteredPolicy(0, "", resource, "", oldObject)

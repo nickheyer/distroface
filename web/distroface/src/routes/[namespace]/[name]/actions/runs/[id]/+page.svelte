@@ -126,7 +126,8 @@
 	});
 
 	const annotations = $derived.by(() => {
-		const out: Array<Annotation & { job: Job }> = [];
+		const out: Array<Annotation & { job?: Job }> = [];
+		for (const note of run?.notes ?? []) out.push({ level: 'warning', message: note });
 		for (const j of run?.jobs ?? []) for (const a of parseAnnotations(j.annotations)) out.push({ ...a, job: j });
 		return out;
 	});
@@ -171,7 +172,7 @@
 	}
 </script>
 
-{#snippet annotationRow(a: Annotation & { job: Job })}
+{#snippet annotationRow(a: Annotation & { job?: Job })}
 	<div class="flex items-start gap-2 px-3 py-2 text-[12.5px]">
 		{#if a.level === 'error'}
 			<AlertCircle class="h-4 w-4 text-destructive shrink-0 mt-0.5" />
@@ -182,11 +183,15 @@
 		{/if}
 		<div class="min-w-0 flex-1">
 			<div class="flex items-center gap-2 flex-wrap text-[11.5px] text-muted-foreground">
-				<a href={resolve('/[namespace]/[name]/actions/runs/[id]/jobs/[jobId]', { namespace, name, id, jobId: a.job.id })} class="font-medium text-foreground/80 hover:text-primary">{a.job.name}</a>
+				{#if a.job}
+					<a href={resolve('/[namespace]/[name]/actions/runs/[id]/jobs/[jobId]', { namespace, name, id, jobId: a.job.id })} class="font-medium text-foreground/80 hover:text-primary">{a.job.name}</a>
+				{:else}
+					<span class="font-medium text-foreground/80">Workflow</span>
+				{/if}
 				{#if a.title}<span class="font-medium text-foreground/80">{a.title}</span>{/if}
 				{#if location(a)}<span class="font-mono break-all">{location(a)}</span>{/if}
 			</div>
-			<div class="whitespace-pre-wrap break-words">{a.message}</div>
+			<div class="whitespace-pre-wrap wrap-break-word">{a.message}</div>
 		</div>
 	</div>
 {/snippet}

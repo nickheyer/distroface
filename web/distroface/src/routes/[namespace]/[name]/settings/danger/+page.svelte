@@ -205,7 +205,7 @@
 				<div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 px-6 py-4">
 					<div class="min-w-0">
 						<p class="text-sm font-medium">Rename</p>
-						<p class="text-[13px] text-muted-foreground mt-0.5">Name linked packages move with it, old clone urls stop working.</p>
+						<p class="text-[13px] text-muted-foreground mt-0.5">Name linked packages move with it, old clone urls redirect until the name is reused.</p>
 					</div>
 					<PermissionGate allowed={isOwner}>
 						<Button variant="outline" class="shrink-0 self-start sm:self-auto text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive" onclick={() => { newName = name; renameOpen = true; }}>

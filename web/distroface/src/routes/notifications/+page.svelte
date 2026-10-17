@@ -22,6 +22,7 @@
 	import { relativeTime } from '$lib/utils';
 	import { Pager } from '$lib/pager.svelte';
 	import { NotificationStatus, type Notification } from '$lib/proto/distroface/v1/notification_pb';
+	import type { GitTransfer } from '$lib/proto/distroface/v1/git_pb';
 
 	const kindIcons: Record<string, typeof Bell> = {
 		issue: CircleDot,
@@ -34,6 +35,45 @@
 	};
 
 	let notifications = $state<Notification[]>([]);
+	// Repository transfers addressed to the viewer, accepted or declined here
+	let transfers = $state<GitTransfer[]>([]);
+	let transferBusy = $state('');
+
+	async function loadTransfers() {
+		try {
+			const resp = await rpcClient.git.listTransfers({ page: { pageSize: 50 } });
+			transfers = resp.transfers;
+		} catch {
+			transfers = [];
+		}
+	}
+
+	async function acceptTransfer(t: GitTransfer) {
+		transferBusy = t.id;
+		try {
+			const resp = await rpcClient.git.acceptTransfer({ id: t.id });
+			transfers = transfers.filter((x) => x.id !== t.id);
+			toast.success(`${t.fullName} is now ${t.toNamespace}/${resp.repository?.name ?? ''}`);
+			if (resp.repository) await goto(resolve(`/${resp.repository.namespace}/${resp.repository.name}`));
+		} catch {
+			// error interceptor
+		} finally {
+			transferBusy = '';
+		}
+	}
+
+	async function rejectTransfer(t: GitTransfer) {
+		transferBusy = t.id;
+		try {
+			await rpcClient.git.rejectTransfer({ id: t.id });
+			transfers = transfers.filter((x) => x.id !== t.id);
+			toast.success('Transfer declined');
+		} catch {
+			// error interceptor
+		} finally {
+			transferBusy = '';
+		}
+	}
 	const pager = new Pager(25);
 	let loading = $state(true);
 	let loaded = $state(false);
@@ -145,7 +185,10 @@
 		return '';
 	}
 
-	onMount(load);
+	onMount(() => {
+		load();
+		loadTransfers();
+	});
 </script>
 
 <svelte:head>
@@ -162,6 +205,25 @@
 </PageHeader>
 
 <div class="space-y-4">
+	{#if transfers.length > 0}
+		<div class="rounded-xl border border-border/60 bg-card divide-y divide-border/60">
+			{#each transfers as t (t.id)}
+				<div class="flex flex-wrap items-center gap-3 px-4 py-3">
+					<ArrowRightLeft class="h-4 w-4 text-muted-foreground shrink-0" />
+					<div class="flex-1 min-w-48 text-sm">
+						<span class="font-medium">{t.requestedBy}</span> wants to transfer <span class="font-medium">{t.fullName}</span> to <span class="font-medium">{t.toNamespace}</span>
+						{#if t.expiresAt}
+							<span class="text-xs text-muted-foreground ml-1">expires {relativeTime(timestampDate(t.expiresAt))}</span>
+						{/if}
+					</div>
+					<div class="flex items-center gap-2">
+						<Button size="sm" onclick={() => acceptTransfer(t)} disabled={transferBusy === t.id}>Accept</Button>
+						<Button size="sm" variant="outline" onclick={() => rejectTransfer(t)} disabled={transferBusy === t.id}>Decline</Button>
+					</div>
+				</div>
+			{/each}
+		</div>
+	{/if}
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<Tabs.Root value={view} onValueChange={changeView}>
 			<Tabs.List>
@@ -205,7 +267,7 @@
 				{@const Icon = kindIcons[n.kind] ?? Bell}
 				{@const unread = n.status === NotificationStatus.UNREAD}
 				{@const pinned = n.status === NotificationStatus.PINNED}
-				<div class="flex items-start gap-3 px-4 py-3 {unread ? 'bg-primary/[0.03]' : ''}">
+				<div class="flex items-start gap-3 px-4 py-3 {unread ? 'bg-primary/3' : ''}">
 					<div class="relative mt-0.5 h-8 w-8 rounded-lg bg-muted/60 flex items-center justify-center shrink-0">
 						<Icon class="h-4 w-4 {unread ? 'text-primary' : 'text-muted-foreground'}" />
 						{#if unread}

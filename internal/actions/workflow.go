@@ -72,6 +72,7 @@ type Job struct {
 	Outputs         map[string]string   `json:"outputs,omitempty"`
 	Steps           []*Step             `json:"steps"`
 	Strategy        *Strategy           `json:"strategy,omitempty"`
+	Concurrency     *Concurrency        `json:"concurrency,omitempty"`
 	Defaults        *Defaults           `json:"defaults,omitempty"`
 }
 
@@ -498,6 +499,8 @@ func parseJob(key string, n *yaml.Node) (*Job, error) {
 				return nil, err
 			}
 			job.Strategy = st
+		case "concurrency":
+			job.Concurrency = parseConcurrency(v)
 		case "defaults":
 			job.Defaults = parseDefaults(v)
 		case "uses":
@@ -692,11 +695,24 @@ func parseObjectList(n *yaml.Node) []map[string]any {
 // ── Matrix ───────────────────────────────────────────────────────────────
 
 // MatrixCombinations expands a strategy into ordered combinations
-func MatrixCombinations(st *Strategy) ([]map[string]any, []string) {
+// Jobs one matrix may generate, the GitHub limit
+const MaxMatrixJobs = 256
+
+// Expands a matrix, refusing products beyond the job limit before allocating
+func MatrixCombinations(st *Strategy) ([]map[string]any, []string, error) {
 	if st == nil {
-		return []map[string]any{nil}, nil
+		return []map[string]any{nil}, nil, nil
 	}
 	keys := append([]string{}, st.MatrixOrder...)
+	total := 1
+	for _, k := range keys {
+		if total *= len(st.Matrix[k]); total > MaxMatrixJobs {
+			return nil, nil, fmt.Errorf("matrix would generate more than %d jobs", MaxMatrixJobs)
+		}
+	}
+	if total+len(st.Include) > MaxMatrixJobs {
+		return nil, nil, fmt.Errorf("matrix would generate more than %d jobs", MaxMatrixJobs)
+	}
 	combos := []map[string]any{{}}
 	for _, k := range keys {
 		vals := st.Matrix[k]
@@ -759,9 +775,9 @@ func MatrixCombinations(st *Strategy) ([]map[string]any, []string) {
 		}
 	}
 	if len(combos) == 0 {
-		return []map[string]any{nil}, nil
+		return []map[string]any{nil}, nil, nil
 	}
-	return combos, append(keys, extraKeys...)
+	return combos, append(keys, extraKeys...), nil
 }
 
 // Exclude objects match when every one of their keys agrees

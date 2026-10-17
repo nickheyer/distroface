@@ -69,6 +69,12 @@ func (m *Manager) headMoved(ctx context.Context, repo *db.GitRepository, actor A
 	oldSHA := pr.HeadSHA
 	pr.HeadSHA = u.New.String()
 	cols := map[string]any{"head_sha": pr.HeadSHA, "head_deleted": false, "mergeable_state": MergeableUnknown}
+	// New commits from anyone but the person who armed it disarm auto merge
+	if pr.AutoMergeMethod != "" && (actor.User == nil || actor.User.ID != pr.AutoMergeBy) {
+		pr.AutoMergeMethod, pr.AutoMergeBy = "", ""
+		cols["auto_merge_method"], cols["auto_merge_by"] = "", ""
+		_, _ = m.AddEvent(ctx, issue, actor.User, EventAutoMergeCancelled, map[string]string{"reason": "head_pushed"})
+	}
 	_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, cols)
 	pr.MergeableState = MergeableUnknown
 	if _, err := m.refreshPullRef(ctx, repo, pr, issue.Number, nil); err != nil {

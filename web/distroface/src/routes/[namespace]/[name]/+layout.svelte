@@ -52,6 +52,16 @@
 		tryRedirect(namespace, name);
 	});
 
+	// A renamed or moved repository answers under its new address, follow it
+	$effect(() => {
+		const r = gitRepoStore.repo;
+		if (!r || gitRepoStore.loading || gitRepoStore.loadedFor !== `${namespace}/${name}`) return;
+		if (r.namespace === namespace && r.name === name) return;
+		const prefix = `/${namespace}/${name}`;
+		const rest = page.url.pathname.startsWith(prefix) ? page.url.pathname.slice(prefix.length) : '';
+		goto(resolve(`/${r.namespace}/${r.name}${rest}${page.url.search}`), { replaceState: true });
+	});
+
 	const repo = $derived(gitRepoStore.repo);
 	const current = $derived(!!repo && repo.namespace === namespace && repo.name === name);
 

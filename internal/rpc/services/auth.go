@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"connectrpc.com/connect/v2"
+	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -35,10 +36,15 @@ type AuthService struct {
 	enforcer    *rbac.Enforcer
 	oidcHandler *auth.OIDCHandler
 	mail        *mailer.Service
+	// Password reset requests per client ip and per identifier
+	resets *admin.Limiter
 }
 
+// Reset mails allowed per hour from one address or for one identifier
+const passwordResetsPerHour = 5
+
 func NewAuthService(store *stores.Store, manager *auth.Manager, enforcer *rbac.Enforcer, oidcHandler *auth.OIDCHandler, mail *mailer.Service, log *logger.Logger) *AuthService {
-	return &AuthService{store: store, authManager: manager, enforcer: enforcer, oidcHandler: oidcHandler, log: log, mail: mail}
+	return &AuthService{store: store, authManager: manager, enforcer: enforcer, oidcHandler: oidcHandler, log: log, mail: mail, resets: admin.NewLimiter(passwordResetsPerHour, time.Hour)}
 }
 
 func (s *AuthService) Register(ctx context.Context, req *v1.RegisterRequest) (*v1.RegisterResponse, error) {
@@ -277,11 +283,12 @@ func (s *AuthService) GetAuthStatus(ctx context.Context, req *v1.GetAuthStatusRe
 	authCfg := s.authManager.Settings().System(ctx).GetAuth()
 
 	return &v1.GetAuthStatusResponse{
-		LocalEnabled:        authCfg.GetLocalEnabled(),
-		OidcEnabled:         authCfg.GetOidc().GetEnabled(),
-		RegistrationEnabled: authCfg.GetLocalEnabled() && authCfg.GetLocalAllowRegistration(),
-		AnonymousAccess:     portal.AnonymousAllowed(ctx, authCfg.GetAnonymousAccess()),
-		FirstUserSetup:      count == 0,
+		LocalEnabled:         authCfg.GetLocalEnabled(),
+		OidcEnabled:          authCfg.GetOidc().GetEnabled(),
+		RegistrationEnabled:  authCfg.GetLocalEnabled() && authCfg.GetLocalAllowRegistration(),
+		PasswordResetEnabled: authCfg.GetLocalEnabled() && s.mail != nil && s.mail.Enabled(ctx, mailer.Scope{}),
+		AnonymousAccess:      portal.AnonymousAllowed(ctx, authCfg.GetAnonymousAccess()),
+		FirstUserSetup:       count == 0,
 	}, nil
 }
 

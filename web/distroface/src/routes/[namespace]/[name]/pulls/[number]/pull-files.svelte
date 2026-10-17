@@ -314,7 +314,7 @@
 		listFiles={async (p) => {
 			const resp = await rpcClient.pull.getPullRequestDiff({ namespace, name, number, startSha: '', endSha: '', page: p }, silentCallOptions);
 			pruneViewed(resp.diff?.files ?? []);
-			return { files: resp.diff?.files ?? [], page: resp.page, totalFiles: resp.diff?.totalFiles ?? 0, additions: resp.diff?.additions ?? 0, deletions: resp.diff?.deletions ?? 0 };
+			return { files: resp.diff?.files ?? [], page: resp.page, totalFiles: resp.diff?.totalFiles ?? 0, additions: resp.diff?.additions ?? 0, deletions: resp.diff?.deletions ?? 0, truncated: resp.diff?.truncated ?? false };
 		}}
 		{loadFile}
 		{initialPath}

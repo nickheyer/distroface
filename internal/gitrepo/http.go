@@ -22,6 +22,8 @@ import (
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"github.com/nickheyer/distroface/pkg/utils"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -89,14 +91,6 @@ func (h *HTTP) serve(w http.ResponseWriter, r *http.Request, namespace, name str
 		h.notFound(w, r, hasCreds)
 		return
 	}
-	if moved && strings.HasPrefix(suffix, "info/refs") && r.Method == http.MethodGet {
-		target := h.manager.HTTPCloneURL(ctx, repo, wiki) + "/" + suffix
-		if r.URL.RawQuery != "" {
-			target += "?" + r.URL.RawQuery
-		}
-		http.Redirect(w, r, target, http.StatusMovedPermanently)
-		return
-	}
 	if portal.ForeignRef(ctx, repo.Namespace) {
 		h.notFound(w, r, hasCreds)
 		return
@@ -123,6 +117,15 @@ func (h *HTTP) serve(w http.ResponseWriter, r *http.Request, namespace, name str
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	// Old names redirect only once the caller is allowed in, so moves never leak
+	if moved && strings.HasPrefix(suffix, "info/refs") && r.Method == http.MethodGet {
+		target := h.manager.HTTPCloneURL(ctx, repo, wiki) + "/" + suffix
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		http.Redirect(w, r, target, http.StatusMovedPermanently)
+		return
+	}
 	if push {
 		if p := portal.FromContext(ctx); p != nil && !p.AllowPush {
 			http.Error(w, "portal is read-only", http.StatusForbidden)
@@ -142,12 +145,20 @@ func (h *HTTP) serve(w http.ResponseWriter, r *http.Request, namespace, name str
 	case suffix == "HEAD", strings.HasPrefix(suffix, "objects/"):
 		http.Error(w, "dumb http protocol is not supported", http.StatusForbidden)
 	case strings.HasPrefix(suffix, "info/lfs"):
+		if wiki {
+			http.NotFound(w, r)
+			return
+		}
 		h.lfs.ServeHTTP(w, r, repo, user, strings.TrimPrefix(strings.TrimPrefix(suffix, "info/lfs"), "/"))
 	case strings.HasPrefix(suffix, "-/raw/"):
 		h.raw(w, r, req, strings.TrimPrefix(suffix, "-/raw/"))
 	case strings.HasPrefix(suffix, "-/archive/"):
 		h.archive(w, r, req, strings.TrimPrefix(suffix, "-/archive/"))
 	case strings.HasPrefix(suffix, "-/lfs/"):
+		if wiki {
+			http.NotFound(w, r)
+			return
+		}
 		h.lfs.ServeObject(w, r, repo, strings.TrimPrefix(suffix, "-/lfs/"))
 	case strings.HasPrefix(suffix, "-/releases/"):
 		h.releaseAsset(w, r, req, strings.TrimPrefix(suffix, "-/releases/"))
@@ -265,13 +276,21 @@ func (h *HTTP) lfsPrincipal(ctx context.Context, subject string, access []*auth.
 				readOnly = false
 			}
 		}
+		if id, ok := strings.CutPrefix(subject, "deploykey:"); ok {
+			row, err := h.manager.Store().GetSSHKey(ctx, id)
+			if err != nil || row == nil || row.OwnerType != db.SSHKeyOwnerGitRepo || row.OwnerID != repo.ID || (row.ExpiresAt != nil && row.ExpiresAt.Before(time.Now())) {
+				return nil
+			}
+			return &auth.AuthenticatedUser{ID: "deploykey:" + row.ID, Username: "deploy-key", Roles: []string{"user"}, Provider: "deploykey",
+				Scope: &auth.CredentialScope{Type: v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_GIT_REPO, ID: full, ReadOnly: readOnly || row.ReadOnly}}
+		}
 		u, err := h.manager.Store().GetUserByUsername(ctx, subject)
-		if err != nil || u == nil {
+		if err != nil || u == nil || !u.IsActive {
 			return nil
 		}
 		roles, _ := h.manager.Store().GetUserRoleNames(ctx, u.ID)
 		return &auth.AuthenticatedUser{ID: u.ID, Username: u.Username, Roles: roles, Provider: u.AuthProvider,
-			Scope: &auth.CredentialScope{Type: 1, ID: full, ReadOnly: readOnly}}
+			Scope: &auth.CredentialScope{Type: v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_GIT_REPO, ID: full, ReadOnly: readOnly}}
 	}
 	return nil
 }
@@ -294,6 +313,16 @@ func (h *HTTP) notFound(w http.ResponseWriter, r *http.Request, hasCreds bool) {
 		return
 	}
 	http.Error(w, "repository not found", http.StatusNotFound)
+}
+
+// Transfers wait out a rename with a short retry instead of hitting a half moved directory
+func (h *HTTP) moving(w http.ResponseWriter, req *gitRequest) bool {
+	if !h.manager.Engine().Renaming(req.repo.ID) {
+		return false
+	}
+	w.Header().Set("Retry-After", "2")
+	http.Error(w, "repository is moving, retry shortly", http.StatusServiceUnavailable)
+	return true
 }
 
 func (h *HTTP) acquire(w http.ResponseWriter, r *http.Request) (func(), bool) {
@@ -319,6 +348,9 @@ func (h *HTTP) infoRefs(w http.ResponseWriter, r *http.Request, req *gitRequest)
 		http.Error(w, "dumb http protocol is not supported", http.StatusForbidden)
 		return
 	}
+	if h.moving(w, req) {
+		return
+	}
 	release, ok := h.acquire(w, r)
 	if !ok {
 		return
@@ -332,7 +364,7 @@ func (h *HTTP) infoRefs(w http.ResponseWriter, r *http.Request, req *gitRequest)
 	defer closer()
 	noCache(w)
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-git-%s-advertisement", transport.ServiceName(service)))
-	frw := &flushWriter{ResponseWriter: w}
+	frw := &flushWriter{ResponseWriter: w, rc: http.NewResponseController(w), idle: transferIdleTimeout}
 	version := r.Header.Get("Git-Protocol")
 	var serveErr error
 	if service == transport.UploadPackService {
@@ -357,6 +389,9 @@ func (h *HTTP) serviceRPC(w http.ResponseWriter, r *http.Request, req *gitReques
 		http.Error(w, "unexpected content type", http.StatusForbidden)
 		return
 	}
+	if h.moving(w, req) {
+		return
+	}
 	release, ok := h.acquire(w, r)
 	if !ok {
 		return
@@ -367,9 +402,10 @@ func (h *HTTP) serviceRPC(w http.ResponseWriter, r *http.Request, req *gitReques
 	if service == transport.UploadPackService && !h.rateLimitPull(w, req.user, clientIP) {
 		return
 	}
-	var body io.ReadCloser = r.Body
+	rc := http.NewResponseController(w)
+	var body io.ReadCloser = &deadlineReader{ReadCloser: r.Body, rc: rc, idle: transferIdleTimeout}
 	if r.Header.Get("Content-Encoding") == "gzip" {
-		gz, err := gzip.NewReader(r.Body)
+		gz, err := gzip.NewReader(body)
 		if err != nil {
 			http.Error(w, "bad gzip body", http.StatusBadRequest)
 			return
@@ -377,7 +413,27 @@ func (h *HTTP) serviceRPC(w http.ResponseWriter, r *http.Request, req *gitReques
 		defer gz.Close()
 		body = gz
 	}
-	st, closer, err := h.manager.Engine().Storer(req.repo.Namespace, req.repo.Name, req.wiki)
+	// Writers lock before opening so a rename in flight cannot leave a ghost directory
+	repo := req.repo
+	var lock *RepoLock
+	if service == transport.ReceivePackService {
+		lock = h.manager.Engine().LockRepo(repo.ID)
+		defer lock.Unlock()
+		current, err := h.manager.Store().GetGitRepositoryByID(ctx, repo.ID)
+		if err != nil || current == nil {
+			http.Error(w, "repository not found", http.StatusNotFound)
+			return
+		}
+		repo = current
+		if budget, over := h.manager.pushBudget(ctx, repo, req.wiki); budget > 0 {
+			if r.ContentLength > budget {
+				http.Error(w, over.Error(), http.StatusRequestEntityTooLarge)
+				return
+			}
+			body = &budgetReader{ReadCloser: body, left: budget, err: over}
+		}
+	}
+	st, closer, err := h.manager.Engine().Storer(repo.Namespace, repo.Name, req.wiki)
 	if err != nil {
 		http.Error(w, "repository unavailable", http.StatusInternalServerError)
 		return
@@ -386,23 +442,22 @@ func (h *HTTP) serviceRPC(w http.ResponseWriter, r *http.Request, req *gitReques
 	w.Header().Set("Content-Type", fmt.Sprintf("application/x-git-%s-result", transport.ServiceName(service)))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	noCache(w)
-	frw := &flushWriter{ResponseWriter: w}
+	frw := &flushWriter{ResponseWriter: w, rc: rc, idle: transferIdleTimeout}
 	version := r.Header.Get("Git-Protocol")
 	var serveErr error
 	switch service {
 	case transport.UploadPackService:
 		serveErr = transport.UploadPack(ctx, st, body, frw, &transport.UploadPackRequest{GitProtocol: version, StatelessRPC: true})
 		if serveErr == nil {
-			_ = h.manager.Store().IncrementGitPullCount(ctx, req.repo.ID)
-			h.manager.Audit(ctx, audit.Event{Action: "Git/fetch", Resource: "git", Outcome: audit.OutcomeSuccess, Detail: req.repo.Namespace + "/" + req.repo.Name, SourceIP: clientIP, Actor: req.user.Username, ActorID: req.user.ID})
+			_ = h.manager.Store().IncrementGitPullCount(ctx, repo.ID)
+			h.manager.Audit(ctx, audit.Event{Action: "Git/fetch", Resource: "git", Outcome: audit.OutcomeSuccess, Detail: repo.Namespace + "/" + repo.Name, SourceIP: clientIP, Actor: req.user.Username, ActorID: req.user.ID})
 		}
 	case transport.ReceivePackService:
-		unlock := h.manager.Engine().LockRepo(req.repo.ID)
 		serveErr = transport.ReceivePack(ctx, st, body, frw, &transport.ReceivePackRequest{
 			GitProtocol: version, StatelessRPC: true,
-			Hooks: h.manager.Hooks(auth.WithUser(ctx, req.user), req.repo, req.user, HookOptions{Wiki: req.wiki}),
+			Hooks: h.manager.Hooks(auth.WithUser(ctx, req.user), repo, req.user, HookOptions{Wiki: req.wiki}, lock),
 		})
-		unlock()
+		lock.Unlock()
 	case transport.UploadArchiveService:
 		serveErr = transport.UploadArchive(ctx, st, body, frw, &transport.UploadArchiveRequest{})
 	}
@@ -411,7 +466,7 @@ func (h *HTTP) serviceRPC(w http.ResponseWriter, r *http.Request, req *gitReques
 			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
 		if ctx.Err() == nil && !errors.Is(serveErr, io.EOF) {
-			h.log.Warn("git %s %s/%s: %v", service, req.repo.Namespace, req.repo.Name, serveErr)
+			h.log.Warn("git %s %s/%s: %v", service, repo.Namespace, repo.Name, serveErr)
 		}
 	}
 }
@@ -470,17 +525,15 @@ func (h *HTTP) raw(w http.ResponseWriter, r *http.Request, req *gitRequest, rest
 	head := make([]byte, 1024)
 	n, _ := io.ReadFull(rd, head)
 	head = head[:n]
-	if r.URL.Query().Get("lfs") == "1" {
+	if r.URL.Query().Get("lfs") == "1" && !req.wiki {
 		if ptr := ParseLFSPointer(head); ptr != nil {
 			h.lfs.ServeObject(w, r, req.repo, ptr.OID)
 			return
 		}
 	}
-	ct := sniffContentType(p, head)
+	ct := utils.HardenUserContent(w.Header(), sniffContentType(p, head))
 	w.Header().Set("ETag", etag)
-	w.Header().Set("Content-Type", ct)
 	w.Header().Set("Content-Length", strconv.FormatInt(file.Size, 10))
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if strings.HasPrefix(ct, "text/") || strings.HasPrefix(ct, "image/") || ct == "application/json" {
 		w.Header().Set("Content-Disposition", "inline")
 	} else {
@@ -573,6 +626,9 @@ func (h *HTTP) actionsArtifact(w http.ResponseWriter, r *http.Request, req *gitR
 type flushWriter struct {
 	http.ResponseWriter
 	started atomic.Bool
+	// Write deadline pushed out before every write, zero idle leaves it alone
+	rc   *http.ResponseController
+	idle time.Duration
 }
 
 func (f *flushWriter) WriteHeader(code int) {
@@ -582,6 +638,9 @@ func (f *flushWriter) WriteHeader(code int) {
 
 func (f *flushWriter) Write(p []byte) (int, error) {
 	f.started.Store(true)
+	if f.rc != nil && f.idle > 0 {
+		_ = f.rc.SetWriteDeadline(time.Now().Add(f.idle))
+	}
 	n, err := f.ResponseWriter.Write(p)
 	if fl, ok := f.ResponseWriter.(http.Flusher); ok {
 		fl.Flush()

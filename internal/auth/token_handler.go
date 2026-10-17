@@ -277,11 +277,11 @@ func (h *TokenHandler) filterActions(r *http.Request, user *AuthenticatedUser, r
 	for _, action := range requested {
 		switch action {
 		case "pull":
-			if h.canPull(r, user, namespace, repo) {
+			if h.canPull(r, user, repoName, repo) {
 				granted = append(granted, "pull")
 			}
 		case "push":
-			if h.canPush(r, user, namespace) {
+			if h.canPush(r, user, repoName, repo) {
 				granted = append(granted, "push")
 			}
 		}
@@ -289,21 +289,37 @@ func (h *TokenHandler) filterActions(r *http.Request, user *AuthenticatedUser, r
 	return granted
 }
 
-func (h *TokenHandler) canPull(r *http.Request, user *AuthenticatedUser, namespace string, repo *storage.Repository) bool {
+// Objects a credential scope may match for one package, source repo last
+func (h *TokenHandler) scopeIDs(r *http.Request, repoName string, repo *storage.Repository) []string {
+	namespace, _, _ := strings.Cut(repoName, "/")
+	ids := []string{repoName, namespace}
+	if repo != nil {
+		if src := h.repoAccess.sourceName(r.Context(), repo); src != "" {
+			ids = append(ids, src)
+		}
+	}
+	return ids
+}
+
+func (h *TokenHandler) canPull(r *http.Request, user *AuthenticatedUser, repoName string, repo *storage.Repository) bool {
 	if user == nil {
 		return false
 	}
 	// Unknown repo, accounts get the registry's 404, anonymous gets denied
 	if repo == nil {
-		return !user.IsAnonymous()
+		return !user.IsAnonymous() && ScopeAllows(user, rbac.ActionPull, h.scopeIDs(r, repoName, nil)...)
 	}
 	return h.repoAccess.Can(r.Context(), user, repo, rbac.ActionPull)
 }
 
-func (h *TokenHandler) canPush(r *http.Request, user *AuthenticatedUser, namespace string) bool {
+func (h *TokenHandler) canPush(r *http.Request, user *AuthenticatedUser, repoName string, repo *storage.Repository) bool {
 	if user == nil || user.IsAnonymous() {
 		return false
 	}
+	if !ScopeAllows(user, rbac.ActionPush, h.scopeIDs(r, repoName, repo)...) {
+		return false
+	}
+	namespace, _, _ := strings.Cut(repoName, "/")
 	// Namespace owner can always push
 	if user.Username == namespace {
 		return true

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { page } from '$app/state';
 	import { Button } from '$lib/components/ui/button';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -24,6 +25,8 @@
 	let loading = $state(true);
 	let loadError = $state('');
 	let saving = $state(false);
+	// Mailed links carry a signed token that stands in for a session
+	const unsubscribeToken = $derived(page.url.searchParams.get('token') ?? '');
 
 	let webMode = $state<NotificationMode>(NotificationMode.PARTICIPATING);
 	let emailMode = $state<NotificationMode>(NotificationMode.PARTICIPATING);
@@ -44,7 +47,7 @@
 		loading = true;
 		loadError = '';
 		try {
-			const resp = await rpcClient.notification.getNotificationPrefs({}, silentCallOptions);
+			const resp = await rpcClient.notification.getNotificationPrefs({ unsubscribeToken }, silentCallOptions);
 			const p = resp.prefs;
 			webMode = normalize(p?.webMode);
 			emailMode = normalize(p?.emailMode);
@@ -63,6 +66,7 @@
 		saving = true;
 		try {
 			await rpcClient.notification.updateNotificationPrefs({
+				unsubscribeToken,
 				prefs: { webMode, emailMode, emailMentions, emailReviewRequests, emailAssignments, emailOwnActivity }
 			});
 			toast.success('Preferences saved');
@@ -80,6 +84,9 @@
 	<div>
 		<h2 class="section-title">Notifications</h2>
 		<p class="section-subtitle">What reaches your inbox and your email.</p>
+		{#if unsubscribeToken}
+			<p class="mt-2 text-xs text-muted-foreground">You arrived from an email link, changes here apply to the account that received it.</p>
+		{/if}
 	</div>
 
 	{#if loading}

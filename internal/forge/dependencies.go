@@ -38,7 +38,7 @@ func (m *Manager) AddDependency(ctx context.Context, repo *db.GitRepository, act
 	if blocker.ID == issue.ID {
 		return fmt.Errorf("%w: an issue cannot block itself", ErrInvalid)
 	}
-	if m.dependsOn(ctx, blocker, issue.ID, 0) {
+	if m.dependsOn(ctx, blocker, issue.ID) {
 		return fmt.Errorf("%w: that would create a dependency cycle", ErrInvalid)
 	}
 	if err := m.store.AddGitIssueDependency(ctx, issue.ID, blocker.ID); err != nil {
@@ -69,14 +69,21 @@ func (m *Manager) repoFullName(ctx context.Context, current *db.GitRepository, i
 }
 
 // Walks blockers of an issue looking for a target id
-func (m *Manager) dependsOn(ctx context.Context, issue *db.GitIssue, targetID string, depth int) bool {
-	if depth > 50 {
-		return false
-	}
-	blockers, _ := m.store.ListGitIssueBlockers(ctx, issue.ID)
-	for _, b := range blockers {
-		if b.ID == targetID || m.dependsOn(ctx, b, targetID, depth+1) {
-			return true
+func (m *Manager) dependsOn(ctx context.Context, issue *db.GitIssue, targetID string) bool {
+	seen := map[string]bool{issue.ID: true}
+	queue := []string{issue.ID}
+	for len(queue) > 0 {
+		id := queue[0]
+		queue = queue[1:]
+		blockers, _ := m.store.ListGitIssueBlockers(ctx, id)
+		for _, b := range blockers {
+			if b.ID == targetID {
+				return true
+			}
+			if !seen[b.ID] {
+				seen[b.ID] = true
+				queue = append(queue, b.ID)
+			}
 		}
 	}
 	return false

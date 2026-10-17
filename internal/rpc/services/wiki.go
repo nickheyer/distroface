@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -138,7 +139,10 @@ func (s *WikiService) ListWikiPages(ctx context.Context, req *v1.ListWikiPagesRe
 	if err != nil {
 		return out, nil
 	}
-	entries, err := r.Tree(ctx, head, "", true)
+	entries, truncated, err := r.Tree(ctx, head, "", true)
+	if err == nil && truncated {
+		err = fmt.Errorf("%w: wiki has more than %d pages", gitrepo.ErrTooLarge, gitrepo.MaxTreeEntries)
+	}
 	if err != nil {
 		return nil, mapGitErr(err)
 	}

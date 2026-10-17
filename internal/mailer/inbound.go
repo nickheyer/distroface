@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -19,6 +20,9 @@ import (
 
 // Mailbox that collects replies that could not be posted
 const failedMailbox = "Failed"
+
+// Auto responses and list traffic are marked seen and otherwise left alone
+var errIgnoredMail = errors.New("auto generated message ignored")
 
 // Polls the configured mailbox for replies and posts them as comments
 func (s *Service) runInbound(ctx context.Context) {
@@ -50,13 +54,11 @@ func (s *Service) pollOnce(ctx context.Context, in *v1.MailIncomingSettings) err
 	opts := &imapclient.Options{TLSConfig: &tls.Config{ServerName: in.GetImapHost(), MinVersion: tls.VersionTLS12}}
 	var c *imapclient.Client
 	var err error
+	// Credentials never travel in the clear, starttls failing is an error
 	if in.GetTls() {
 		c, err = imapclient.DialTLS(addr, opts)
 	} else {
 		c, err = imapclient.DialStartTLS(addr, opts)
-		if err != nil {
-			c, err = imapclient.DialInsecure(addr, opts)
-		}
 	}
 	if err != nil {
 		return fmt.Errorf("connect %s: %w", addr, err)
@@ -90,7 +92,7 @@ func (s *Service) pollOnce(ctx context.Context, in *v1.MailIncomingSettings) err
 	seen := []imap.UID{}
 	for _, m := range msgs {
 		seen = append(seen, m.UID)
-		if err := s.handleMessage(ctx, in, m, section); err != nil {
+		if err := s.handleMessage(ctx, in, m, section); err != nil && !errors.Is(err, errIgnoredMail) {
 			s.log.Warn("mail: inbound message %d: %v", m.UID, err)
 			failed = append(failed, m.UID)
 		}
@@ -126,6 +128,9 @@ func (s *Service) handleMessage(ctx context.Context, in *v1.MailIncomingSettings
 	if err != nil {
 		return fmt.Errorf("parse: %w", err)
 	}
+	if autoResponse(mr.Header) {
+		return errIgnoredMail
+	}
 	if token == "" {
 		for _, h := range []string{"Delivered-To", "To", "X-Original-To", "Envelope-To"} {
 			for _, v := range mr.Header.Values(h) {
@@ -152,11 +157,26 @@ func (s *Service) handleMessage(ctx context.Context, in *v1.MailIncomingSettings
 	if m.Envelope != nil && len(m.Envelope.From) > 0 {
 		from = m.Envelope.From[0].Mailbox + "@" + m.Envelope.From[0].Host
 	}
+	if from == "" {
+		from = extractAddress(mr.Header.Get("From"))
+	}
 	body := textPart(mr)
 	if strings.TrimSpace(body) == "" {
 		return fmt.Errorf("no text part")
 	}
 	return s.inbound(ctx, row, from, body)
+}
+
+// Reports whether the message comes from an auto responder or a list
+func autoResponse(h gomail.Header) bool {
+	if v := strings.ToLower(strings.TrimSpace(h.Get("Auto-Submitted"))); v != "" && v != "no" {
+		return true
+	}
+	switch strings.ToLower(strings.TrimSpace(h.Get("Precedence"))) {
+	case "bulk", "junk", "auto_reply", "list":
+		return true
+	}
+	return h.Get("X-Auto-Response-Suppress") != "" || h.Get("X-Autoreply") != "" || h.Get("X-Autorespond") != ""
 }
 
 // Token carried by a plus addressed reply address

@@ -46,6 +46,20 @@ func (u *AuthenticatedUser) IsScoped() bool {
 	return u != nil && u.Scope != nil && u.Scope.Type != v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_UNSPECIFIED
 }
 
+// Source repo or namespace a scoped credential's listings are confined to
+func (u *AuthenticatedUser) ListingScope() (repo, namespace string) {
+	if !u.IsScoped() {
+		return "", ""
+	}
+	switch u.Scope.Type {
+	case v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_GIT_REPO:
+		return u.Scope.ID, ""
+	case v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_ORG:
+		return "", u.Scope.ID
+	}
+	return "", ""
+}
+
 // Actions a scope admits on an object, nil scope admits everything.
 // Git repo scopes cover the repo and its linked packages, whose ids the
 // caller passes as alternatives. Org scopes cover objects inside the org.

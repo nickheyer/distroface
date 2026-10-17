@@ -162,7 +162,7 @@
 				</div>
 			{:else}
 				<div class="flex items-start gap-2">
-					<h1 class="text-xl sm:text-2xl font-semibold tracking-tight leading-snug min-w-0 flex-1 break-words">
+					<h1 class="text-xl sm:text-2xl font-semibold tracking-tight leading-snug min-w-0 flex-1 wrap-break-word">
 						{issue.title}
 						<span class="text-muted-foreground font-normal">#{numberParam}</span>
 					</h1>

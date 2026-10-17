@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,23 +51,49 @@ var ReposQuery = pages.Spec{
 }
 
 // If userID is empty (anonymous), only public repos are returned.
-func (s *Store) ListRepositories(ctx context.Context, namespace string, q pages.Query, userID string, canManage bool, grantedRepos []string, limit, offset int) ([]*db.Repository, int64, error) {
+type RepoListOptions struct {
+	Namespace      string      // Optional exact namespace filter
+	ViewerID       string      // Owner whose private repos are visible
+	IncludePrivate bool        // True bypasses visibility filtering
+	GrantedRepos   []string    // RBAC granted repos as namespace/name
+	OnlyRepo       string      // Credential scope, same name or linked source
+	OnlyNamespace  string      // Credential scope, exact namespace
+	Query          pages.Query // Structured filter against ReposQuery
+	Limit          int
+	Offset         int
+}
+
+// Confines package listings to a credential scope, empty values pass
+func packageScope(onlyRepo, onlyNamespace string) func(*gorm.DB) *gorm.DB {
+	return func(q *gorm.DB) *gorm.DB {
+		if onlyRepo != "" {
+			namespace, name, _ := strings.Cut(onlyRepo, "/")
+			q = q.Where("(namespace || '/' || name) = ? OR git_repo_id IN (SELECT id FROM git_repositories WHERE namespace = ? AND name = ?)", onlyRepo, namespace, name)
+		}
+		if onlyNamespace != "" {
+			q = q.Where("namespace = ?", onlyNamespace)
+		}
+		return q
+	}
+}
+
+func (s *Store) ListRepositories(ctx context.Context, opts RepoListOptions) ([]*db.Repository, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Repository{})
 
-	if namespace != "" {
-		tx = tx.Where("namespace = ?", namespace)
+	if opts.Namespace != "" {
+		tx = tx.Where("namespace = ?", opts.Namespace)
 	}
-	tx = tx.Scopes(ReposQuery.Scope(q))
+	tx = tx.Scopes(ReposQuery.Scope(opts.Query), packageScope(opts.OnlyRepo, opts.OnlyNamespace))
 
-	if !canManage {
-		if userID != "" {
+	if !opts.IncludePrivate {
+		if opts.ViewerID != "" {
 			// Authenticated user: public + owned + org membership + RBAC grants
 			conditions := "is_private = ? OR owner_id = ? OR namespace IN (SELECT o.name FROM organizations o JOIN org_members om ON o.id = om.org_id WHERE om.user_id = ?)"
-			args := []any{false, userID, userID}
+			args := []any{false, opts.ViewerID, opts.ViewerID}
 
-			if len(grantedRepos) > 0 {
+			if len(opts.GrantedRepos) > 0 {
 				conditions += " OR (namespace || '/' || name) IN ?"
-				args = append(args, grantedRepos)
+				args = append(args, opts.GrantedRepos)
 			}
 
 			tx = tx.Where(conditions, args...)
@@ -82,7 +109,7 @@ func (s *Store) ListRepositories(ctx context.Context, namespace string, q pages.
 	}
 
 	var repos []*db.Repository
-	err := tx.Order("updated_at DESC").Limit(limit).Offset(offset).Find(&repos).Error
+	err := tx.Order("updated_at DESC").Limit(opts.Limit).Offset(opts.Offset).Find(&repos).Error
 	return repos, total, err
 }
 

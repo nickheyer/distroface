@@ -58,9 +58,9 @@ func parseRunnerScope(s string) (string, error) {
 }
 
 func newRunnerRegisterCmd() *cobra.Command {
-	var scope, token, name, labels, config string
+	var scope, token, name, labels, config, workDir string
 	var concurrency int
-	var host bool
+	var host, privileged bool
 
 	cmd := &cobra.Command{
 		Use:   "register",
@@ -102,7 +102,7 @@ func newRunnerRegisterCmd() *cobra.Command {
 			}
 			cfg := &runner.Config{
 				Server: client.BaseURL, Token: runnerToken, RunnerID: info.GetId(), Name: info.GetName(), Scope: scope,
-				Labels: info.GetLabels(), Images: images, Concurrency: concurrency, HostEnabled: host,
+				Labels: info.GetLabels(), Images: images, Concurrency: concurrency, HostEnabled: host, PrivilegedJobs: privileged, WorkDir: workDir,
 			}
 			if err := cfg.Save(config); err != nil {
 				return fmt.Errorf("save runner config: %w", err)
@@ -125,6 +125,8 @@ func newRunnerRegisterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&config, "config", "", "Runner config path (default ~/.dfcli/runner.json)")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 1, "Jobs to run at once")
 	cmd.Flags().BoolVar(&host, "host", false, "Enable the host executor for labels mapped to host")
+	cmd.Flags().StringVar(&workDir, "work-dir", "", "Parent of job work trees (default DFCLI_RUNNER_WORK_DIR or the temp dir), with sibling containers it must be the same path on the host")
+	cmd.Flags().BoolVar(&privileged, "privileged-jobs", false, "Let jobs mount the docker socket, run --privileged, and bind host paths (root on this machine for every workflow author)")
 	_ = cmd.MarkFlagRequired("scope")
 	_ = cmd.MarkFlagRequired("token")
 	return cmd
@@ -173,6 +175,7 @@ func newRunnerStatusCmd() *cobra.Command {
 			fmt.Printf("Labels:      %s\n", strings.Join(cfg.Labels, ","))
 			fmt.Printf("Concurrency: %d\n", cfg.Concurrency)
 			fmt.Printf("Host runs:   %v\n", cfg.HostEnabled)
+			fmt.Printf("Privileged:  %v\n", cfg.PrivilegedJobs)
 			fmt.Printf("Images:\n")
 			keys := make([]string, 0, len(cfg.Images))
 			for k := range cfg.Images {
