@@ -210,7 +210,7 @@ func textPart(mr *gomail.Reader) string {
 	html := ""
 	for {
 		p, err := mr.NextPart()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -238,7 +238,7 @@ func textPart(mr *gomail.Reader) string {
 func stripTags(s string) string {
 	var b strings.Builder
 	inTag := false
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case c == '<':

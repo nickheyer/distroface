@@ -53,7 +53,7 @@ func RegisterListenerMiddleware(store *stores.Store, log *logger.Logger, dispatc
 func init() {
 	// Distribution hands middleware the app context, so the repo is
 	// wrapped directly and every event uses its per request context
-	repositorymiddleware.Register("distroface", func(_ context.Context, repo distribution.Repository, _ map[string]any) (distribution.Repository, error) {
+	err := repositorymiddleware.Register("distroface", func(_ context.Context, repo distribution.Repository, _ map[string]any) (distribution.Repository, error) {
 		if listenerDeps.store == nil {
 			return repo, nil
 		}
@@ -65,6 +65,9 @@ func init() {
 			linker:     listenerDeps.linker,
 		}}, nil
 	})
+	if err != nil {
+		panic(err)
+	}
 }
 
 // Emits webhooks, audit rows, and counters for repository events
@@ -86,11 +89,11 @@ func (r *observedRepo) Manifests(ctx context.Context, options ...distribution.Ma
 	if err != nil {
 		return nil, err
 	}
-	return &observedManifests{ManifestService: ms, dist: r.Repository, repo: r.Repository.Named(), obs: r.obs}, nil
+	return &observedManifests{ManifestService: ms, dist: r.Repository, repo: r.Named(), obs: r.obs}, nil
 }
 
 func (r *observedRepo) Tags(ctx context.Context) distribution.TagService {
-	return &observedTags{TagService: r.Repository.Tags(ctx), repo: r.Repository.Named(), obs: r.obs}
+	return &observedTags{TagService: r.Repository.Tags(ctx), repo: r.Named(), obs: r.obs}
 }
 
 type observedManifests struct {

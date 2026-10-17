@@ -60,7 +60,8 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *v1.CreateWebhoo
 
 	// Verify permission on the target repo/org
 	var gitRepoID *string
-	if scope == storage.WebhookScopeGitRepository {
+	switch scope {
+	case storage.WebhookScopeGitRepository:
 		if msg.RepoId == "" {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "repo_id is required for repository webhooks")
 		}
@@ -69,14 +70,14 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *v1.CreateWebhoo
 		}
 		gitRepoID = &msg.RepoId
 		msg.RepoId = ""
-	} else if scope == storage.WebhookScopeRepository {
+	case storage.WebhookScopeRepository:
 		if msg.RepoId == "" {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "repo_id is required for repository webhooks")
 		}
 		if err := s.checkRepoPermission(ctx, user, msg.RepoId, rbac.ActionUpdate); err != nil {
 			return nil, err
 		}
-	} else {
+	default:
 		if msg.OrgId == "" {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "org_id is required for organization webhooks")
 		}
@@ -491,17 +492,18 @@ func (s *WebhookService) webhookToProto(ctx context.Context, wh *storage.Webhook
 
 	scopeName := ""
 	repoID := derefStr(wh.RepoID)
-	if wh.Scope == storage.WebhookScopeGitRepository {
+	switch wh.Scope {
+	case storage.WebhookScopeGitRepository:
 		repoID = derefStr(wh.GitRepoID)
 		if repo := s.getGitRepoByID(ctx, repoID); repo != nil {
 			scopeName = repo.Namespace + "/" + repo.Name
 		}
-	} else if wh.Scope == storage.WebhookScopeRepository {
+	case storage.WebhookScopeRepository:
 		repo := s.getRepoByID(ctx, derefStr(wh.RepoID))
 		if repo != nil {
 			scopeName = repo.Namespace + "/" + repo.Name
 		}
-	} else {
+	default:
 		org, _ := s.store.GetOrganizationByID(ctx, derefStr(wh.OrgID))
 		if org != nil {
 			scopeName = org.Name

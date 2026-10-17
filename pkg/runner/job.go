@@ -242,7 +242,7 @@ func (j *job) fail(format string, args ...any) {
 func (j *job) complete(ctx context.Context, conclusion v1.ActionsConclusion) {
 	steps, ann := j.snapshot()
 	outputs := j.evalOutputs()
-	for attempt := 0; attempt < 5; attempt++ {
+	for attempt := range 5 {
 		cctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := j.r.client.CompleteTask(cctx, j.task.JobId, conclusion, steps, outputs, ann)
 		cancel()
@@ -270,7 +270,7 @@ func (j *job) evalOutputs() string {
 
 // Prepares the environment, runs steps, picks the conclusion
 func (j *job) execute(ctx context.Context) v1.ActionsConclusion {
-	if err := j.prepare(ctx); err != nil {
+	if err := j.prepare(); err != nil {
 		j.fail("%v", err)
 		return j.conclusion()
 	}
@@ -287,7 +287,7 @@ func (j *job) execute(ctx context.Context) v1.ActionsConclusion {
 	j.mu.Unlock()
 	if hasSummary {
 		j.log.Line("##[group]Job summary")
-		j.log.Write([]byte(strings.TrimRight(j.summary.String(), "\n") + "\n"))
+		_, _ = j.log.Write([]byte(strings.TrimRight(j.summary.String(), "\n") + "\n"))
 		j.log.Line("##[endgroup]")
 	}
 	return j.conclusion()
@@ -309,7 +309,7 @@ func (j *job) conclusion() v1.ActionsConclusion {
 }
 
 // Lays out the job directory and picks the executor
-func (j *job) prepare(ctx context.Context) error {
+func (j *job) prepare() error {
 	root := j.r.cfg.JobRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return fmt.Errorf("job root %s: %w", root, err)
@@ -319,7 +319,7 @@ func (j *job) prepare(ctx context.Context) error {
 		return err
 	}
 	j.dir = dir
-	os.Chmod(dir, 0o777)
+	_ = os.Chmod(dir, 0o777)
 	name := j.repoName()
 	j.workspace = filepath.Join(dir, name, name)
 	j.tempDir = filepath.Join(dir, "_temp")
@@ -328,11 +328,13 @@ func (j *job) prepare(ctx context.Context) error {
 		if err := os.MkdirAll(d, 0o777); err != nil {
 			return err
 		}
-		os.Chmod(d, 0o777)
+		_ = os.Chmod(d, 0o777)
 	}
 	if ev, ok := j.github["event"]; ok {
 		raw, _ := json.MarshalIndent(ev, "", "  ")
-		os.WriteFile(filepath.Join(j.tempDir, "event.json"), raw, 0o666)
+		if err := os.WriteFile(filepath.Join(j.tempDir, "event.json"), raw, 0o666); err != nil {
+			return err
+		}
 	}
 
 	labels := j.runsOn()

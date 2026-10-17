@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -21,7 +22,7 @@ func (s *Store) SeedSystemRoles() error {
 	}
 	for _, role := range roles {
 		var existing db.Role
-		if err := s.db.Where("name = ?", role.Name).First(&existing).Error; err == gorm.ErrRecordNotFound {
+		if err := s.db.Where("name = ?", role.Name).First(&existing).Error; errors.Is(err, gorm.ErrRecordNotFound) {
 			if err := s.db.Create(&role).Error; err != nil {
 				return err
 			}
@@ -41,7 +42,7 @@ func (s *Store) GetRole(ctx context.Context, id string) (*db.Role, error) {
 	var role db.Role
 	err := s.db.WithContext(ctx).First(&role, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -53,7 +54,7 @@ func (s *Store) GetRoleByName(ctx context.Context, name string) (*db.Role, error
 	var role db.Role
 	err := s.db.WithContext(ctx).First(&role, "name = ?", name).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err

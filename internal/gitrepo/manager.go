@@ -204,7 +204,7 @@ func (m *Manager) SSHCloneURL(ctx context.Context, repo *db.GitRepository, wiki 
 	path := repo.Namespace + "/" + repo.Name + suffix
 	if p := portal.FromContext(ctx); p != nil {
 		if p.SSHPort > 0 {
-			return fmt.Sprintf("ssh://git@%s:%d/%s", portalHost(ctx, host), p.SSHPort, m.displayPath(ctx, repo)+suffix)
+			return "ssh://git@" + net.JoinHostPort(portalHost(ctx, host), strconv.Itoa(p.SSHPort)) + "/" + m.displayPath(ctx, repo) + suffix
 		}
 		if p.HidePrimaryLink {
 			return ""
@@ -213,7 +213,7 @@ func (m *Manager) SSHCloneURL(ctx context.Context, repo *db.GitRepository, wiki 
 	if port == 22 {
 		return fmt.Sprintf("git@%s:%s", host, path)
 	}
-	return fmt.Sprintf("ssh://git@%s:%d/%s", host, port, path)
+	return "ssh://git@" + net.JoinHostPort(host, strconv.Itoa(port)) + "/" + path
 }
 
 func portalHost(ctx context.Context, fallback string) string {
@@ -556,7 +556,8 @@ func (m *Manager) Move(ctx context.Context, user *auth.AuthenticatedUser, repo *
 	if existing, _ := m.store.GetGitRepository(ctx, newNamespace, newName); existing != nil {
 		return nil, fmt.Errorf("%w: %s/%s already exists", ErrInvalid, newNamespace, newName)
 	}
-	ownerID, isOrg := "", false
+	var ownerID string
+	isOrg := false
 	if org, _ := m.store.GetOrganization(ctx, newNamespace); org != nil {
 		ownerID, isOrg = org.ID, true
 	} else if u, _ := m.store.GetUserByUsername(ctx, newNamespace); u != nil {
@@ -632,7 +633,7 @@ func (m *Manager) movePackages(ctx context.Context, repo *db.GitRepository, newN
 		child := newName + strings.TrimPrefix(img.Name, repo.Name)
 		if err := m.packages.MoveImageRepo(ctx, img, newNamespace, child, ownerID, isOrg); err != nil {
 			undo()
-			return nil, fmt.Errorf("%w: moving linked image %s/%s: %v", ErrInvalid, img.Namespace, img.Name, err)
+			return nil, fmt.Errorf("%w: moving linked image %s/%s: %w", ErrInvalid, img.Namespace, img.Name, err)
 		}
 		moved := *img
 		moved.Namespace, moved.Name = newNamespace, child
@@ -653,7 +654,7 @@ func (m *Manager) movePackages(ctx context.Context, repo *db.GitRepository, newN
 		}
 		if err := m.packages.MoveArtifactRepo(ctx, art, newNamespace, newName, ownerID); err != nil {
 			undo()
-			return nil, fmt.Errorf("%w: moving linked artifact repo %s/%s: %v", ErrInvalid, art.Namespace, art.Name, err)
+			return nil, fmt.Errorf("%w: moving linked artifact repo %s/%s: %w", ErrInvalid, art.Namespace, art.Name, err)
 		}
 		moved := *art
 		moved.Namespace, moved.Name = newNamespace, newName
@@ -1113,7 +1114,7 @@ func IsStagingRef(name plumbing.ReferenceName) bool {
 }
 
 // Removes a staging ref, the objects it pinned fall to maintenance
-func (m *Manager) DropStagingRef(ctx context.Context, repo *db.GitRepository, ref plumbing.ReferenceName) {
+func (m *Manager) DropStagingRef(repo *db.GitRepository, ref plumbing.ReferenceName) {
 	if !IsStagingRef(ref) {
 		return
 	}

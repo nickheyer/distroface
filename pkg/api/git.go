@@ -44,7 +44,10 @@ stored session or personal access token. Enable it with:
   git config --global credential.helper "dfcli git credential"`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			attrs := readCredentialAttrs(os.Stdin)
+			attrs, err := readCredentialAttrs(os.Stdin)
+			if err != nil {
+				return err
+			}
 			if args[0] != "get" {
 				return nil
 			}
@@ -72,7 +75,7 @@ stored session or personal access token. Enable it with:
 }
 
 // Key value lines up to the first blank line
-func readCredentialAttrs(r io.Reader) map[string]string {
+func readCredentialAttrs(r io.Reader) (map[string]string, error) {
 	attrs := map[string]string{}
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
@@ -84,7 +87,7 @@ func readCredentialAttrs(r io.Reader) map[string]string {
 			attrs[key] = value
 		}
 	}
-	return attrs
+	return attrs, scanner.Err()
 }
 
 // Scheme, host, and port must match the server

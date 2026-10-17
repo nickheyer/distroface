@@ -88,7 +88,7 @@ func parseImportState(raw string) importState {
 	return st
 }
 
-func (s importState) encode() string {
+func (s *importState) encode() string {
 	b, err := json.Marshal(s)
 	if err != nil {
 		return "{}"
@@ -263,7 +263,7 @@ func isHexHash(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if !(r >= '0' && r <= '9') && !(r >= 'a' && r <= 'f') {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
 			return false
 		}
 	}
@@ -829,17 +829,17 @@ func (m *Monitor) importIssueRow(ctx context.Context, repo *db.GitRepository, st
 			return nil, err
 		}
 	}
-	if err := m.addImportEvent(ctx, row, "", commentKindImported, importMarker(st.Forge, is.Author, is.URL), row.CreatedAt); err != nil {
+	if err := m.addImportEvent(ctx, row, commentKindImported, importMarker(st.Forge, is.Author, is.URL), row.CreatedAt); err != nil {
 		return nil, err
 	}
 	return row, nil
 }
 
-func (m *Monitor) addImportEvent(ctx context.Context, issue *db.GitIssue, authorID, kind, payload string, at time.Time) error {
+func (m *Monitor) addImportEvent(ctx context.Context, issue *db.GitIssue, kind, payload string, at time.Time) error {
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	return m.store.CreateGitComment(ctx, &db.GitComment{IssueID: issue.ID, AuthorID: authorID, Type: kind, Payload: payload, CreatedAt: at, UpdatedAt: at})
+	return m.store.CreateGitComment(ctx, &db.GitComment{IssueID: issue.ID, Type: kind, Payload: payload, CreatedAt: at, UpdatedAt: at})
 }
 
 // Every comment page comes down before any row is written, so a cut off resumes cleanly
@@ -929,7 +929,7 @@ func (m *Monitor) importIssues(ctx context.Context, repo *db.GitRepository, drv 
 				if is.ClosedAt != nil {
 					at = *is.ClosedAt
 				}
-				_ = m.addImportEvent(ctx, row, "", commentKindClosed, importMarker(st.Forge, forgeUser{}, ""), at)
+				_ = m.addImportEvent(ctx, row, commentKindClosed, importMarker(st.Forge, forgeUser{}, ""), at)
 			}
 			m.restoreIssueTime(ctx, row)
 			st.Counts["issues"]++
@@ -1110,13 +1110,13 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 				if pr.MergedAt != nil {
 					at = *pr.MergedAt
 				}
-				_ = m.addImportEvent(ctx, row, "", commentKindMerged, importMarker(st.Forge, forgeUser{}, ""), at)
+				_ = m.addImportEvent(ctx, row, commentKindMerged, importMarker(st.Forge, forgeUser{}, ""), at)
 			case row.State == db.IssueStateClosed:
 				at := row.UpdatedAt
 				if pr.ClosedAt != nil {
 					at = *pr.ClosedAt
 				}
-				_ = m.addImportEvent(ctx, row, "", commentKindClosed, importMarker(st.Forge, forgeUser{}, ""), at)
+				_ = m.addImportEvent(ctx, row, commentKindClosed, importMarker(st.Forge, forgeUser{}, ""), at)
 			}
 			m.restoreIssueTime(ctx, row)
 			st.Counts["pulls"]++

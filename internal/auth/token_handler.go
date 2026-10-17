@@ -65,6 +65,7 @@ func (h *TokenHandler) SetLinkedAccess(l LinkedAccess) {
 }
 
 func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	service, scopeStr, account := r.FormValue("service"), r.FormValue("scope"), r.FormValue("account")
 
 	username, password, hasCreds := r.BasicAuth()

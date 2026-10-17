@@ -863,7 +863,7 @@ func (m *Manager) BulkUpdate(ctx context.Context, repo *db.GitRepository, actor 
 // Lists issues with the repository's query allowlist applied
 func (m *Manager) ListIssues(ctx context.Context, opts stores.IssueListOptions) ([]*db.GitIssue, int64, error) {
 	if err := stores.IssuesQuery.Validate(opts.Query); err != nil {
-		return nil, 0, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, 0, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return m.store.ListGitIssues(ctx, opts)
 }

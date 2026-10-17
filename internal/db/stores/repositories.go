@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -22,7 +23,7 @@ func (s *Store) GetRepository(ctx context.Context, namespace, name string) (*db.
 	var repo db.Repository
 	err := s.db.WithContext(ctx).First(&repo, "namespace = ? AND name = ?", namespace, name).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -238,7 +239,7 @@ func (s *Store) ListStarredRepositories(ctx context.Context, userID string, limi
 func (s *Store) GetRepositoryByID(ctx context.Context, id string) (*db.Repository, error) {
 	var repo db.Repository
 	err := s.db.WithContext(ctx).First(&repo, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &repo, err

@@ -73,7 +73,7 @@ func (l *LFS) ServeSSHTransfer(ctx context.Context, ch ssh.Channel, repo *db.Git
 	for {
 		line, flush, err := readPacket()
 		if err != nil {
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return 0
 			}
 			return 1
@@ -211,7 +211,7 @@ func (l *LFS) ServeSSHTransfer(ctx context.Context, ch ssh.Channel, repo *db.Git
 				continue
 			}
 			if err := readPktData(rd, uploadID, blobs.AppendChunk, maxBytes); err != nil {
-				blobs.CancelUpload(uploadID)
+				_ = blobs.CancelUpload(uploadID)
 				if errors.Is(err, errLFSTooLarge) {
 					_ = status(413, tooLarge)
 					continue
@@ -371,7 +371,7 @@ func writePktData(w io.Writer, r io.Reader) error {
 				return werr
 			}
 		}
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {

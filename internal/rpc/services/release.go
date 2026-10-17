@@ -37,38 +37,38 @@ func NewReleaseService(store *stores.Store, manager *gitrepo.Manager, fm *forge.
 }
 
 // Loads a repository with the releases unit at the needed level and the actor
-func (s *ReleaseService) repo(ctx context.Context, namespace, name string, need gitrepo.Level) (*auth.AuthenticatedUser, *storage.GitRepository, forge.Actor, error) {
+func (s *ReleaseService) repo(ctx context.Context, namespace, name string, need gitrepo.Level) (*storage.GitRepository, forge.Actor, error) {
 	user := auth.UserFromContext(ctx)
 	if need > gitrepo.LevelRead {
 		if err := portalAllowsGitWrite(ctx); err != nil {
-			return nil, nil, forge.Actor{}, err
+			return nil, forge.Actor{}, err
 		}
 	}
 	repo, err := gitRepoWithLevel(ctx, s.store, s.manager.Access(), user, namespace, name, storage.GitUnitReleases, need)
 	if err != nil {
-		return nil, nil, forge.Actor{}, err
+		return nil, forge.Actor{}, err
 	}
 	levels := s.manager.Access().Levels(ctx, user, repo)
 	actor := forge.Actor{User: user, CanWrite: levels.Unit(storage.GitUnitReleases) >= gitrepo.LevelWrite, CanAdmin: levels.CanAdmin || levels.IsOwner}
-	return user, repo, actor, nil
+	return repo, actor, nil
 }
 
-func (s *ReleaseService) release(ctx context.Context, namespace, name, tag string, need gitrepo.Level) (*auth.AuthenticatedUser, *storage.GitRepository, forge.Actor, *storage.GitRelease, error) {
-	user, repo, actor, err := s.repo(ctx, namespace, name, need)
+func (s *ReleaseService) release(ctx context.Context, namespace, name, tag string, need gitrepo.Level) (*storage.GitRepository, forge.Actor, *storage.GitRelease, error) {
+	repo, actor, err := s.repo(ctx, namespace, name, need)
 	if err != nil {
-		return nil, nil, forge.Actor{}, nil, err
+		return nil, forge.Actor{}, nil, err
 	}
 	rel, err := s.forge.Release(ctx, repo, tag)
 	if err != nil {
-		return nil, nil, forge.Actor{}, nil, mapForgeErr(err)
+		return nil, forge.Actor{}, nil, mapForgeErr(err)
 	}
 	if rel.Draft && !actor.CanWrite {
-		return nil, nil, forge.Actor{}, nil, connect.Errorf(connect.CodeNotFound, "release %s not found", tag)
+		return nil, forge.Actor{}, nil, connect.Errorf(connect.CodeNotFound, "release %s not found", tag)
 	}
-	return user, repo, actor, rel, nil
+	return repo, actor, rel, nil
 }
 
-func (s *ReleaseService) assetProto(ctx context.Context, repo *storage.GitRepository, pkg *storage.ArtifactRepository, a *storage.Artifact) *v1.ReleaseAsset {
+func (s *ReleaseService) assetProto(ctx context.Context, pkg *storage.ArtifactRepository, a *storage.Artifact) *v1.ReleaseAsset {
 	base := s.manager.BaseURL(ctx)
 	return &v1.ReleaseAsset{
 		ArtifactId:  a.ID,
@@ -149,7 +149,7 @@ func (s *ReleaseService) toProto(ctx context.Context, repo *storage.GitRepositor
 	}
 	if assets, pkg, err := s.forge.ReleaseAssets(ctx, repo, rel); err == nil && pkg != nil {
 		for _, a := range assets {
-			out.Assets = append(out.Assets, s.assetProto(ctx, repo, pkg, a))
+			out.Assets = append(out.Assets, s.assetProto(ctx, pkg, a))
 		}
 	}
 	out.Images = s.images(ctx, repo, rel)
@@ -161,7 +161,7 @@ func releaseInput(title, body *string, draft, prerelease *bool) forge.ReleaseInp
 }
 
 func (s *ReleaseService) CreateRelease(ctx context.Context, req *v1.CreateReleaseRequest) (*v1.CreateReleaseResponse, error) {
-	_, repo, actor, err := s.repo(ctx, req.Namespace, req.Name, gitrepo.LevelWrite)
+	repo, actor, err := s.repo(ctx, req.Namespace, req.Name, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +175,7 @@ func (s *ReleaseService) CreateRelease(ctx context.Context, req *v1.CreateReleas
 }
 
 func (s *ReleaseService) GetRelease(ctx context.Context, req *v1.GetReleaseRequest) (*v1.GetReleaseResponse, error) {
-	_, repo, _, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelRead)
+	repo, _, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelRead)
 	if err != nil {
 		return nil, err
 	}
@@ -183,7 +183,7 @@ func (s *ReleaseService) GetRelease(ctx context.Context, req *v1.GetReleaseReque
 }
 
 func (s *ReleaseService) ListReleases(ctx context.Context, req *v1.ListReleasesRequest) (*v1.ListReleasesResponse, error) {
-	_, repo, actor, err := s.repo(ctx, req.Namespace, req.Name, gitrepo.LevelRead)
+	repo, actor, err := s.repo(ctx, req.Namespace, req.Name, gitrepo.LevelRead)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,7 @@ func (s *ReleaseService) ListReleases(ctx context.Context, req *v1.ListReleasesR
 }
 
 func (s *ReleaseService) UpdateRelease(ctx context.Context, req *v1.UpdateReleaseRequest) (*v1.UpdateReleaseResponse, error) {
-	_, repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
+	repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +215,7 @@ func (s *ReleaseService) UpdateRelease(ctx context.Context, req *v1.UpdateReleas
 }
 
 func (s *ReleaseService) DeleteRelease(ctx context.Context, req *v1.DeleteReleaseRequest) (*v1.DeleteReleaseResponse, error) {
-	_, repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
+	repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +226,7 @@ func (s *ReleaseService) DeleteRelease(ctx context.Context, req *v1.DeleteReleas
 }
 
 func (s *ReleaseService) PublishRelease(ctx context.Context, req *v1.PublishReleaseRequest) (*v1.PublishReleaseResponse, error) {
-	_, repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
+	repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -237,7 +237,7 @@ func (s *ReleaseService) PublishRelease(ctx context.Context, req *v1.PublishRele
 }
 
 func (s *ReleaseService) AttachReleaseAsset(ctx context.Context, req *v1.AttachReleaseAssetRequest) (*v1.AttachReleaseAssetResponse, error) {
-	_, repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
+	repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -246,11 +246,11 @@ func (s *ReleaseService) AttachReleaseAsset(ctx context.Context, req *v1.AttachR
 		return nil, mapForgeErr(err)
 	}
 	pkg, _ := s.forge.ReleasePackage(ctx, repo, false)
-	return &v1.AttachReleaseAssetResponse{Asset: s.assetProto(ctx, repo, pkg, art)}, nil
+	return &v1.AttachReleaseAssetResponse{Asset: s.assetProto(ctx, pkg, art)}, nil
 }
 
 func (s *ReleaseService) DetachReleaseAsset(ctx context.Context, req *v1.DetachReleaseAssetRequest) (*v1.DetachReleaseAssetResponse, error) {
-	_, repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
+	repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +261,7 @@ func (s *ReleaseService) DetachReleaseAsset(ctx context.Context, req *v1.DetachR
 }
 
 func (s *ReleaseService) AttachReleaseImage(ctx context.Context, req *v1.AttachReleaseImageRequest) (*v1.AttachReleaseImageResponse, error) {
-	_, repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
+	repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -285,7 +285,7 @@ func (s *ReleaseService) AttachReleaseImage(ctx context.Context, req *v1.AttachR
 }
 
 func (s *ReleaseService) DetachReleaseImage(ctx context.Context, req *v1.DetachReleaseImageRequest) (*v1.DetachReleaseImageResponse, error) {
-	_, repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
+	repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -296,7 +296,7 @@ func (s *ReleaseService) DetachReleaseImage(ctx context.Context, req *v1.DetachR
 }
 
 func (s *ReleaseService) GetLatestRelease(ctx context.Context, req *v1.GetLatestReleaseRequest) (*v1.GetLatestReleaseResponse, error) {
-	_, repo, _, err := s.repo(ctx, req.Namespace, req.Name, gitrepo.LevelRead)
+	repo, _, err := s.repo(ctx, req.Namespace, req.Name, gitrepo.LevelRead)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +311,7 @@ func (s *ReleaseService) GetLatestRelease(ctx context.Context, req *v1.GetLatest
 }
 
 func (s *ReleaseService) GenerateReleaseNotes(ctx context.Context, req *v1.GenerateReleaseNotesRequest) (*v1.GenerateReleaseNotesResponse, error) {
-	_, repo, _, err := s.repo(ctx, req.Namespace, req.Name, gitrepo.LevelWrite)
+	repo, _, err := s.repo(ctx, req.Namespace, req.Name, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}

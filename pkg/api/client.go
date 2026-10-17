@@ -275,7 +275,7 @@ func (r *refreshingStream) Receive(msg any) error {
 	if r.info != nil {
 		r.info.RequestHeader().Set("Authorization", "Bearer "+r.client.Tokens.GetToken())
 	}
-	_ = r.ClientStream.Close()
+	_ = r.Close()
 
 	stream, err := r.next(r.ctx, r.spec)
 	if err != nil {
@@ -315,7 +315,7 @@ func (c *Client) refreshToken(ctx context.Context) error {
 	info.RequestHeader().Set("Authorization", "Bearer "+token)
 	resp, err := distrofacev1connect.NewAuthServiceClient(c.bareRPC()).RefreshSession(ctx, &v1.RefreshSessionRequest{})
 	if err != nil {
-		return fmt.Errorf("session refresh failed: %v - run 'dfcli login'", rpcErr(err))
+		return fmt.Errorf("session refresh failed: %w - run 'dfcli login'", rpcErr(err))
 	}
 
 	expiresAt := time.Unix(resp.ExpiresAt, 0)

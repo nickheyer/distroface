@@ -37,7 +37,7 @@ func (m *Manager) Seal(plaintext string) ([]byte, error) {
 	if _, err := rand.Read(nonce); err != nil {
 		return nil, err
 	}
-	return append(nonce, gcm.Seal(nil, nonce, []byte(plaintext), nil)...), nil
+	return gcm.Seal(nonce, nonce, []byte(plaintext), nil), nil
 }
 
 // Open decrypts a sealed secret value, accepting the jwt derived key it may predate

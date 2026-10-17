@@ -1604,7 +1604,7 @@ func (c *client) pushArchManifest(ctx context.Context, e regEntry, repo, tok, re
 	if ref == "" {
 		ref = digestOf(manifest)
 	}
-	if _, _, err := c.regRequest(ctx, http.MethodPut, e.base+"/v2/"+repo+"/manifests/"+ref, e.host, tok, manifestMT, "", manifest); err != nil {
+	if _, err := c.regRequest(ctx, http.MethodPut, e.base+"/v2/"+repo+"/manifests/"+ref, e.host, tok, manifestMT, "", manifest); err != nil {
 		return childManifest{}, fmt.Errorf("manifest %s: %w", ref, err)
 	}
 	return childManifest{digest: digestOf(manifest), size: len(manifest)}, nil
@@ -1631,7 +1631,7 @@ func (c *client) pushMultiArch(ctx context.Context, e regEntry, repo, tok, tag, 
 		"mediaType":     indexMT,
 		"manifests":     entries,
 	})
-	if _, _, err := c.regRequest(ctx, http.MethodPut, e.base+"/v2/"+repo+"/manifests/"+tag, e.host, tok, indexMT, "", index); err != nil {
+	if _, err := c.regRequest(ctx, http.MethodPut, e.base+"/v2/"+repo+"/manifests/"+tag, e.host, tok, indexMT, "", index); err != nil {
 		return fmt.Errorf("index: %w", err)
 	}
 	return nil
@@ -1651,7 +1651,7 @@ func rebase(e regEntry, loc string) (string, error) {
 }
 
 func (c *client) uploadBlob(ctx context.Context, e regEntry, repo, tok, dgst string, blob []byte) error {
-	_, hdr, err := c.regRequest(ctx, http.MethodPost, e.base+"/v2/"+repo+"/blobs/uploads/", e.host, tok, "", "", nil)
+	hdr, err := c.regRequest(ctx, http.MethodPost, e.base+"/v2/"+repo+"/blobs/uploads/", e.host, tok, "", "", nil)
 	if err != nil {
 		return err
 	}
@@ -1667,7 +1667,7 @@ func (c *client) uploadBlob(ctx context.Context, e regEntry, repo, tok, dgst str
 	if strings.Contains(putURL, "?") {
 		sep = "&"
 	}
-	_, _, err = c.regRequest(ctx, http.MethodPut, putURL+sep+"digest="+url.QueryEscape(dgst), e.host, tok, "application/octet-stream", "", blob)
+	_, err = c.regRequest(ctx, http.MethodPut, putURL+sep+"digest="+url.QueryEscape(dgst), e.host, tok, "application/octet-stream", "", blob)
 	return err
 }
 
@@ -1676,7 +1676,7 @@ func (c *client) pullManifest(ctx context.Context, e regEntry, repo, tag string)
 	if err != nil {
 		return fmt.Errorf("registry token: %w", err)
 	}
-	_, _, err = c.regRequest(ctx, http.MethodGet, e.base+"/v2/"+repo+"/manifests/"+tag, e.host, tok, "", manifestAccept, nil)
+	_, err = c.regRequest(ctx, http.MethodGet, e.base+"/v2/"+repo+"/manifests/"+tag, e.host, tok, "", manifestAccept, nil)
 	return err
 }
 
@@ -1686,13 +1686,13 @@ func (c *client) patchChunk(ctx context.Context, e regEntry, uploadURL string, p
 	if err != nil {
 		return err
 	}
-	_, _, err = c.regRequest(ctx, http.MethodPatch, target, e.host, "", "application/octet-stream", "", payload)
+	_, err = c.regRequest(ctx, http.MethodPatch, target, e.host, "", "application/octet-stream", "", payload)
 	return err
 }
 
 // Uploads through a portal's namespace mapped v1 facade
 func (c *client) uploadArtifactHTTP(ctx context.Context, e regEntry, repoName, version, path string, props map[string]string, payload []byte) error {
-	_, hdr, err := c.regRequest(ctx, http.MethodPost, e.base+"/api/v1/artifacts/"+repoName+"/upload", e.host, "", "", "", nil)
+	hdr, err := c.regRequest(ctx, http.MethodPost, e.base+"/api/v1/artifacts/"+repoName+"/upload", e.host, "", "", "", nil)
 	if err != nil {
 		return fmt.Errorf("initiate: %w", err)
 	}
@@ -1708,25 +1708,25 @@ func (c *client) uploadArtifactHTTP(ctx context.Context, e regEntry, repoName, v
 	if err != nil {
 		return err
 	}
-	if _, _, err := c.regRequest(ctx, http.MethodPatch, target, e.host, "", "application/octet-stream", "", payload); err != nil {
+	if _, err := c.regRequest(ctx, http.MethodPatch, target, e.host, "", "application/octet-stream", "", payload); err != nil {
 		return fmt.Errorf("chunk: %w", err)
 	}
 	q := url.Values{}
 	q.Set("version", version)
 	q.Set("path", path)
 	propsJSON, _ := json.Marshal(props)
-	if _, _, err := c.regRequest(ctx, http.MethodPut, target+"?"+q.Encode(), e.host, "", "application/json", "", propsJSON); err != nil {
+	if _, err := c.regRequest(ctx, http.MethodPut, target+"?"+q.Encode(), e.host, "", "application/json", "", propsJSON); err != nil {
 		return fmt.Errorf("complete: %w", err)
 	}
 	return nil
 }
 
 // Retrying HTTP request, 2xx expected, registry token optional
-func (c *client) regRequest(ctx context.Context, method, u, host, tok, contentType, accept string, body []byte) ([]byte, http.Header, error) {
+func (c *client) regRequest(ctx context.Context, method, u, host, tok, contentType, accept string, body []byte) (http.Header, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.cfg.Retries; attempt++ {
 		if attempt > 0 && !sleepCtx(ctx, backoff(attempt)) {
-			return nil, nil, ctx.Err()
+			return nil, ctx.Err()
 		}
 		var r io.Reader
 		if body != nil {
@@ -1734,7 +1734,7 @@ func (c *client) regRequest(ctx context.Context, method, u, host, tok, contentTy
 		}
 		req, err := http.NewRequestWithContext(ctx, method, u, r)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		if host != "" {
 			req.Host = host
@@ -1754,14 +1754,14 @@ func (c *client) regRequest(ctx context.Context, method, u, host, tok, contentTy
 			continue
 		}
 		if status >= 200 && status < 300 {
-			return respBody, hdr, nil
+			return hdr, nil
 		}
 		lastErr = fmt.Errorf("%s %s -> HTTP %d: %s", method, u, status, truncate(string(respBody), 300))
 		if status < 500 && status != http.StatusTooManyRequests {
-			return nil, nil, lastErr
+			return nil, lastErr
 		}
 	}
-	return nil, nil, lastErr
+	return nil, lastErr
 }
 
 func (c *client) doRaw(req *http.Request) ([]byte, int, http.Header, error) {

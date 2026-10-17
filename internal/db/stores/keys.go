@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,7 +20,7 @@ func (s *Store) CreateSSHKey(ctx context.Context, k *db.SSHKey) error {
 func (s *Store) GetSSHKey(ctx context.Context, id string) (*db.SSHKey, error) {
 	var k db.SSHKey
 	err := s.db.WithContext(ctx).First(&k, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &k, err
@@ -28,7 +29,7 @@ func (s *Store) GetSSHKey(ctx context.Context, id string) (*db.SSHKey, error) {
 func (s *Store) GetSSHKeyByFingerprint(ctx context.Context, fp string) (*db.SSHKey, error) {
 	var k db.SSHKey
 	err := s.db.WithContext(ctx).First(&k, "fingerprint = ?", fp).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &k, err
@@ -77,7 +78,7 @@ func (s *Store) CreateGPGKey(ctx context.Context, k *db.GPGKey) error {
 func (s *Store) GetGPGKey(ctx context.Context, userID, id string) (*db.GPGKey, error) {
 	var k db.GPGKey
 	err := s.db.WithContext(ctx).First(&k, "user_id = ? AND id = ?", userID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &k, err
@@ -86,7 +87,7 @@ func (s *Store) GetGPGKey(ctx context.Context, userID, id string) (*db.GPGKey, e
 func (s *Store) GetGPGKeyByKeyID(ctx context.Context, keyID string) (*db.GPGKey, error) {
 	var k db.GPGKey
 	err := s.db.WithContext(ctx).First(&k, "key_id = ? OR fingerprint = ?", keyID, keyID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &k, err

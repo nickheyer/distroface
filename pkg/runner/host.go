@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -89,26 +90,17 @@ func mergeOSEnv(extra []string) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, len(extra)+len(os.Environ()))
 	for _, kv := range extra {
-		k, _, _ := cutEnv(kv)
+		k, _, _ := strings.Cut(kv, "=")
 		seen[k] = true
 		out = append(out, kv)
 	}
 	for _, kv := range os.Environ() {
-		k, _, _ := cutEnv(kv)
+		k, _, _ := strings.Cut(kv, "=")
 		if !seen[k] {
 			out = append(out, kv)
 		}
 	}
 	return out
-}
-
-func cutEnv(kv string) (string, string, bool) {
-	for i := 0; i < len(kv); i++ {
-		if kv[i] == '=' {
-			return kv[:i], kv[i+1:], true
-		}
-	}
-	return kv, "", false
 }
 
 var errHostServices = fmt.Errorf("services need the docker executor")

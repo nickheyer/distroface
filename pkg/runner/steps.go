@@ -250,7 +250,7 @@ func (j *job) writeTemp(name, content string) (string, error) {
 	if err := os.WriteFile(p, []byte(content), 0o666); err != nil {
 		return "", err
 	}
-	os.Chmod(p, 0o666)
+	_ = os.Chmod(p, 0o666)
 	return p, nil
 }
 
@@ -264,7 +264,7 @@ func (j *job) newCommandFiles() (*commandFiles, error) {
 	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return nil, err
 	}
-	os.Chmod(dir, 0o777)
+	_ = os.Chmod(dir, 0o777)
 	id := uuid.NewString()[:8]
 	f := &commandFiles{
 		output: filepath.Join(dir, "output_"+id), env: filepath.Join(dir, "env_"+id), path: filepath.Join(dir, "path_"+id),
@@ -274,7 +274,7 @@ func (j *job) newCommandFiles() (*commandFiles, error) {
 		if err := os.WriteFile(p, nil, 0o666); err != nil {
 			return nil, err
 		}
-		os.Chmod(p, 0o666)
+		_ = os.Chmod(p, 0o666)
 	}
 	return f, nil
 }

@@ -198,7 +198,9 @@ func TestV1LoginAndRefresh(t *testing.T) {
 	var refreshResp struct {
 		Token string `json:"token"`
 	}
-	json.Unmarshal(rec.Body.Bytes(), &refreshResp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &refreshResp); err != nil {
+		t.Fatal(err)
+	}
 	if refreshResp.Token == "" {
 		t.Fatalf("refresh returned empty token")
 	}
@@ -401,7 +403,9 @@ func TestV1SearchQuirks(t *testing.T) {
 
 	// Property filter as arbitrary query param
 	rec = e.do(http.MethodGet, "/api/v1/artifacts/search?repo=myrepo&build=2", token, nil)
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
 	if resp.Total != 1 {
 		t.Fatalf("property search: got %d results", resp.Total)
 	}
@@ -697,7 +701,7 @@ func (e *testEnv) artifactID(repo, version, path string) string {
 func (e *testEnv) blobFiles() []string {
 	e.t.Helper()
 	var files []string
-	filepath.WalkDir(filepath.Join(e.blobRoot, "blobs"), func(p string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(filepath.Join(e.blobRoot, "blobs"), func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

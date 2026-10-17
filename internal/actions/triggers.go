@@ -2,6 +2,7 @@ package actions
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -59,17 +60,16 @@ func (m *Manager) LoadWorkflows(ctx context.Context, repo *db.GitRepository, rev
 	}
 	commit, err := r.Resolve(rev)
 	if err != nil {
-		if err == gitrepo.ErrEmptyRepo || err == gitrepo.ErrNotFound {
+		if errors.Is(err, gitrepo.ErrEmptyRepo) || errors.Is(err, gitrepo.ErrNotFound) {
 			return nil, plumbing.ZeroHash, nil
 		}
 		return nil, plumbing.ZeroHash, err
 	}
-	files, err := loadWorkflowFiles(ctx, r, commit)
-	return files, commit, err
+	return loadWorkflowFiles(ctx, r, commit), commit, nil
 }
 
 // Reads the first workflows directory that holds yaml files
-func loadWorkflowFiles(ctx context.Context, r *gitrepo.Repo, commit plumbing.Hash) ([]*WorkflowFile, error) {
+func loadWorkflowFiles(ctx context.Context, r *gitrepo.Repo, commit plumbing.Hash) []*WorkflowFile {
 	for _, dir := range WorkflowDirs {
 		entries, _, err := r.Tree(ctx, commit, dir, false)
 		if err != nil {
@@ -94,10 +94,10 @@ func loadWorkflowFiles(ctx context.Context, r *gitrepo.Repo, commit plumbing.Has
 			out = append(out, wf)
 		}
 		if len(out) > 0 {
-			return out, nil
+			return out
 		}
 	}
-	return nil, nil
+	return nil
 }
 
 // ── Push ─────────────────────────────────────────────────────────────────

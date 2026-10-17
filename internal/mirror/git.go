@@ -57,7 +57,7 @@ func (m *Monitor) ValidateGitMirror(ctx context.Context, cfg *v1.MirrorConfig) e
 		return err
 	}
 	if _, err := gitrepo.ValidateUpstreamURL(up.URL); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	// No per repo key exists before the repo does
 	if up.SSH {
@@ -166,7 +166,7 @@ func (m *Monitor) GenerateGitMirrorKey(ctx context.Context, repo *db.GitReposito
 }
 
 // Public half of the repo ssh key, empty when absent
-func (m *Monitor) GitMirrorPublicKey(ctx context.Context, repo *db.GitRepository) string {
+func (m *Monitor) GitMirrorPublicKey(repo *db.GitRepository) string {
 	if repo == nil {
 		return ""
 	}

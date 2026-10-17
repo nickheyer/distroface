@@ -328,40 +328,40 @@ func (s *GitFileService) GetCommitDiff(ctx context.Context, req *v1.GetCommitDif
 }
 
 // Resolves a head of the form ns/name:ref against another visible repository
-func (s *GitFileService) resolveHead(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.GitRepository, r *gitrepo.Repo, head string) (plumbing.Hash, *storage.GitRepository, error) {
+func (s *GitFileService) resolveHead(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.GitRepository, r *gitrepo.Repo, head string) (plumbing.Hash, error) {
 	if i := strings.Index(head, ":"); i > 0 && strings.Contains(head[:i], "/") {
 		ns, name, _ := strings.Cut(head[:i], "/")
 		other, err := visibleGitRepo(ctx, s.store, s.manager.Access(), user, ns, name)
 		if err != nil {
-			return plumbing.ZeroHash, nil, err
+			return plumbing.ZeroHash, err
 		}
 		or, err := s.manager.Engine().OpenRepo(other.Namespace, other.Name, false)
 		if err != nil {
-			return plumbing.ZeroHash, nil, mapGitErr(err)
+			return plumbing.ZeroHash, mapGitErr(err)
 		}
 		defer or.Close()
 		h, err := gitResolveRef(or, other, head[i+1:])
 		if err != nil {
-			return plumbing.ZeroHash, nil, err
+			return plumbing.ZeroHash, err
 		}
 		// Objects must live in the base repository for a diff to be computed
 		if _, err := r.Commit(h); err != nil {
 			if maxMB := s.manager.GitSettings(ctx, repo).GetMaxRepoSizeMb(); maxMB > 0 {
 				if size, err := s.manager.Engine().Size(repo.Namespace, repo.Name, false); err == nil && size > maxMB*1024*1024 {
-					return plumbing.ZeroHash, nil, connect.Errorf(connect.CodeResourceExhausted, "repository is over its size quota, compare across repositories is unavailable")
+					return plumbing.ZeroHash, connect.Errorf(connect.CodeResourceExhausted, "repository is over its size quota, compare across repositories is unavailable")
 				}
 			}
 			staging := plumbing.ReferenceName("refs/distroface/compare/" + h.String())
 			if err := s.manager.FetchLocal(ctx, repo, other, false, "+"+plumbing.NewBranchReferenceName(head[i+1:]).String()+":"+staging.String()); err != nil {
-				return plumbing.ZeroHash, nil, mapGitErr(err)
+				return plumbing.ZeroHash, mapGitErr(err)
 			}
 			// The ref only had to exist for the fetch, the objects stay until pruned
-			s.manager.DropStagingRef(ctx, repo, staging)
+			s.manager.DropStagingRef(repo, staging)
 		}
-		return h, other, nil
+		return h, nil
 	}
 	h, err := gitResolveRef(r, repo, head)
-	return h, repo, err
+	return h, err
 }
 
 // Resolved ends of a comparison
@@ -400,7 +400,7 @@ func (s *GitFileService) compareTarget(ctx context.Context, namespace, name, bas
 		r.Close()
 		return nil, err
 	}
-	headHash, _, err := s.resolveHead(ctx, user, repo, r, head)
+	headHash, err := s.resolveHead(ctx, user, repo, r, head)
 	if err != nil {
 		r.Close()
 		return nil, err
@@ -495,7 +495,7 @@ func (s *GitFileService) GetDiffFile(ctx context.Context, req *v1.GetDiffFileReq
 		return nil, err
 	}
 	defer r.Close()
-	head, _, err := s.resolveHead(ctx, user, repo, r, req.Head)
+	head, err := s.resolveHead(ctx, user, repo, r, req.Head)
 	if err != nil {
 		return nil, err
 	}

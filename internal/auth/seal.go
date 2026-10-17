@@ -65,7 +65,7 @@ func (s *Sealer) Seal(plaintext string) (string, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	out := append(nonce, gcm.Seal(nil, nonce, []byte(plaintext), nil)...)
+	out := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
 	return base64.StdEncoding.EncodeToString(out), nil
 }
 

@@ -6,9 +6,9 @@ import (
 	"github.com/nickheyer/distroface/internal/audit"
 )
 
-func json_marshal(v any) ([]byte, error) { return json.Marshal(v) }
+func jsonMarshal(v any) ([]byte, error) { return json.Marshal(v) }
 
-func json_unmarshal(raw string, v any) error {
+func jsonUnmarshal(raw string, v any) error {
 	if raw == "" {
 		return nil
 	}

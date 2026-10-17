@@ -3,6 +3,7 @@ package stores
 import (
 	"context"
 	"encoding/json"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
@@ -51,7 +52,7 @@ func (s *Store) EnsureDefaultTeam(ctx context.Context, orgID string) (*db.OrgTea
 	if err == nil {
 		return &t, nil
 	}
-	if err != gorm.ErrRecordNotFound {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 	t = db.OrgTeam{
@@ -73,7 +74,7 @@ func (s *Store) EnsureDefaultTeam(ctx context.Context, orgID string) (*db.OrgTea
 func (s *Store) GetOrgTeam(ctx context.Context, orgID, id string) (*db.OrgTeam, error) {
 	var t db.OrgTeam
 	err := s.db.WithContext(ctx).First(&t, "org_id = ? AND id = ?", orgID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &t, err
@@ -82,7 +83,7 @@ func (s *Store) GetOrgTeam(ctx context.Context, orgID, id string) (*db.OrgTeam, 
 func (s *Store) GetOrgTeamByName(ctx context.Context, orgID, name string) (*db.OrgTeam, error) {
 	var t db.OrgTeam
 	err := s.db.WithContext(ctx).First(&t, "org_id = ? AND name = ?", orgID, name).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &t, err

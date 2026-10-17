@@ -81,11 +81,6 @@ func (s *GitService) repo(ctx context.Context, user *auth.AuthenticatedUser, nam
 	return visibleGitRepo(ctx, s.store, s.access(), user, namespace, name)
 }
 
-// Loads a repository and requires a level on a unit
-func (s *GitService) repoAt(ctx context.Context, user *auth.AuthenticatedUser, namespace, name, unit string, need gitrepo.Level) (*storage.GitRepository, error) {
-	return gitRepoWithLevel(ctx, s.store, s.access(), user, namespace, name, unit, need)
-}
-
 // Loads a repository for an admin or owner level mutation
 func (s *GitService) repoForWrite(ctx context.Context, user *auth.AuthenticatedUser, namespace, name string, need gitrepo.Level) (*storage.GitRepository, error) {
 	if err := portalAllowsGitWrite(ctx); err != nil {
@@ -627,7 +622,7 @@ func (s *GitService) SyncFork(ctx context.Context, req *v1.SyncForkRequest) (*v1
 		return nil, connect.Errorf(connect.CodeFailedPrecondition, "branch %q does not exist upstream", branch)
 	}
 	local := r.BranchHash(branch)
-	defer s.manager.DropStagingRef(ctx, fork, staging)
+	defer s.manager.DropStagingRef(fork, staging)
 	if local == upstream {
 		r.Close()
 		return &v1.SyncForkResponse{}, nil
@@ -677,7 +672,7 @@ func (s *GitService) ListForks(ctx context.Context, req *v1.ListForksRequest) (*
 		return nil, err
 	}
 	limit, offset := pages.Parse(req.Page)
-	forks, total, err := s.store.ListGitForks(ctx, repo.ID, 0, 0)
+	forks, _, err := s.store.ListGitForks(ctx, repo.ID, 0, 0)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -687,7 +682,7 @@ func (s *GitService) ListForks(ctx context.Context, req *v1.ListForksRequest) (*
 			visible = append(visible, f)
 		}
 	}
-	total = int64(len(visible))
+	total := int64(len(visible))
 	end := min(offset+limit, len(visible))
 	if offset > len(visible) {
 		offset = len(visible)
@@ -734,11 +729,11 @@ func (s *GitService) UseTemplate(ctx context.Context, req *v1.UseTemplateRequest
 		labels, _, err := s.store.ListGitLabels(ctx, tpl.ID, "", pages.Query{}, 0, 0)
 		if err == nil {
 			for _, l := range labels {
-				copy := *l
-				copy.ID = ""
-				copy.RepoID = &repo.ID
-				copy.OrgID = nil
-				_ = s.store.CreateGitLabel(ctx, &copy)
+				clone := *l
+				clone.ID = ""
+				clone.RepoID = &repo.ID
+				clone.OrgID = nil
+				_ = s.store.CreateGitLabel(ctx, &clone)
 			}
 		}
 	}
@@ -937,7 +932,7 @@ func (s *GitService) CreatePushMirror(ctx context.Context, req *v1.CreatePushMir
 	if _, err := gitrepo.ValidateUpstreamURL(req.RemoteUrl); err != nil {
 		return nil, mapGitErr(err)
 	}
-	if req.UseSshKey && s.mirrors != nil && s.mirrors.GitMirrorPublicKey(ctx, repo) == "" {
+	if req.UseSshKey && s.mirrors != nil && s.mirrors.GitMirrorPublicKey(repo) == "" {
 		return nil, connect.Errorf(connect.CodeFailedPrecondition, "generate the repository ssh key first")
 	}
 	pm := &storage.GitPushMirror{
@@ -997,7 +992,7 @@ func (s *GitService) UpdatePushMirror(ctx context.Context, req *v1.UpdatePushMir
 		pm.Username = *req.Username
 	}
 	if req.UseSshKey != nil {
-		if *req.UseSshKey && s.mirrors != nil && s.mirrors.GitMirrorPublicKey(ctx, repo) == "" {
+		if *req.UseSshKey && s.mirrors != nil && s.mirrors.GitMirrorPublicKey(repo) == "" {
 			return nil, connect.Errorf(connect.CodeFailedPrecondition, "generate the repository ssh key first")
 		}
 		pm.UseSSHKey = *req.UseSshKey
@@ -1045,7 +1040,7 @@ func gitLinkedByName(repo *storage.GitRepository, ns, name string) bool {
 	return ns == repo.Namespace && (name == repo.Name || strings.HasPrefix(name, repo.Name+"/"))
 }
 
-func (s *GitService) linkedImage(ctx context.Context, repo *storage.GitRepository, img *storage.Repository) *v1.LinkedRepository {
+func (s *GitService) linkedImage(repo *storage.GitRepository, img *storage.Repository) *v1.LinkedRepository {
 	out := &v1.LinkedRepository{
 		Kind:         v1.LinkedRepositoryKind_LINKED_REPOSITORY_KIND_IMAGE,
 		Namespace:    img.Namespace,
@@ -1059,7 +1054,7 @@ func (s *GitService) linkedImage(ctx context.Context, repo *storage.GitRepositor
 	return out
 }
 
-func (s *GitService) linkedArtifact(ctx context.Context, repo *storage.GitRepository, art *storage.ArtifactRepository, latest map[int64]string) *v1.LinkedRepository {
+func (s *GitService) linkedArtifact(repo *storage.GitRepository, art *storage.ArtifactRepository, latest map[int64]string) *v1.LinkedRepository {
 	return &v1.LinkedRepository{
 		Kind:         v1.LinkedRepositoryKind_LINKED_REPOSITORY_KIND_ARTIFACT,
 		Namespace:    art.Namespace,
@@ -1093,10 +1088,10 @@ func (s *GitService) ListLinkedRepositories(ctx context.Context, req *v1.ListLin
 	latest, _ := s.store.LatestArtifactVersions(ctx, ids)
 	out := make([]*v1.LinkedRepository, 0, len(images)+len(arts))
 	for _, img := range images {
-		out = append(out, s.linkedImage(ctx, repo, img))
+		out = append(out, s.linkedImage(repo, img))
 	}
 	for _, a := range arts {
-		out = append(out, s.linkedArtifact(ctx, repo, a, latest))
+		out = append(out, s.linkedArtifact(repo, a, latest))
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].FullName < out[j].FullName })
 	return &v1.ListLinkedRepositoriesResponse{Repositories: out}, nil
@@ -1130,7 +1125,7 @@ func (s *GitService) LinkRepository(ctx context.Context, req *v1.LinkRepositoryR
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 		img.GitRepoID = &repo.ID
-		return &v1.LinkRepositoryResponse{Repository: s.linkedImage(ctx, repo, img)}, nil
+		return &v1.LinkRepositoryResponse{Repository: s.linkedImage(repo, img)}, nil
 	case v1.LinkedRepositoryKind_LINKED_REPOSITORY_KIND_ARTIFACT:
 		art, err := s.store.GetArtifactRepository(ctx, repo.Namespace, req.PackageName)
 		if err != nil {
@@ -1150,7 +1145,7 @@ func (s *GitService) LinkRepository(ctx context.Context, req *v1.LinkRepositoryR
 		}
 		art.GitRepoID = &repo.ID
 		latest, _ := s.store.LatestArtifactVersions(ctx, []int64{art.ID})
-		return &v1.LinkRepositoryResponse{Repository: s.linkedArtifact(ctx, repo, art, latest)}, nil
+		return &v1.LinkRepositoryResponse{Repository: s.linkedArtifact(repo, art, latest)}, nil
 	}
 	return nil, connect.Errorf(connect.CodeInvalidArgument, "kind is required")
 }

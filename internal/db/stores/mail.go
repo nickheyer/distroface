@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,7 +23,7 @@ func (s *Store) CreateMailMessage(ctx context.Context, m *db.MailMessage) error 
 func (s *Store) GetMailMessage(ctx context.Context, id string) (*db.MailMessage, error) {
 	var m db.MailMessage
 	err := s.db.WithContext(ctx).First(&m, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &m, err
@@ -65,7 +66,7 @@ func (s *Store) CreateMailInboundToken(ctx context.Context, t *db.MailInboundTok
 func (s *Store) GetMailInboundToken(ctx context.Context, hash string) (*db.MailInboundToken, error) {
 	var t db.MailInboundToken
 	err := s.db.WithContext(ctx).First(&t, "token_hash = ? AND expires_at > ?", hash, time.Now().UTC()).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &t, err
@@ -85,7 +86,7 @@ func (s *Store) CreatePasswordReset(ctx context.Context, r *db.PasswordReset) er
 func (s *Store) GetPasswordReset(ctx context.Context, hash string) (*db.PasswordReset, error) {
 	var r db.PasswordReset
 	err := s.db.WithContext(ctx).First(&r, "token_hash = ? AND used_at IS NULL AND expires_at > ?", hash, time.Now().UTC()).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &r, err
@@ -105,7 +106,7 @@ func (s *Store) CreateEmailVerification(ctx context.Context, v *db.EmailVerifica
 func (s *Store) GetEmailVerification(ctx context.Context, hash string) (*db.EmailVerification, error) {
 	var v db.EmailVerification
 	err := s.db.WithContext(ctx).First(&v, "token_hash = ? AND used_at IS NULL AND expires_at > ?", hash, time.Now().UTC()).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &v, err

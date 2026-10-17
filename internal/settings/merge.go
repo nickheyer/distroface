@@ -144,7 +144,7 @@ func overlay(dst, src protoreflect.Message, prefix string, tier v1.SettingsTier,
 // Visits every leaf path of the schema regardless of presence
 func walkLeaves(md protoreflect.MessageDescriptor, prefix string, fn func(path string)) {
 	fields := md.Fields()
-	for i := 0; i < fields.Len(); i++ {
+	for i := range fields.Len() {
 		fd := fields.Get(i)
 		path := string(fd.Name())
 		if prefix != "" {

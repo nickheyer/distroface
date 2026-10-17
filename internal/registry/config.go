@@ -7,6 +7,7 @@ import (
 	"github.com/distribution/distribution/v3/configuration"
 	"github.com/google/uuid"
 
+	// Registers the token auth and filesystem drivers
 	_ "github.com/distribution/distribution/v3/registry/auth/token"
 	_ "github.com/distribution/distribution/v3/registry/storage/driver/filesystem"
 )

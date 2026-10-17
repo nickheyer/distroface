@@ -3,6 +3,7 @@ package container
 import (
 	"context"
 	"fmt"
+	"github.com/nickheyer/distroface/pkg/utils"
 	"net"
 	"net/http"
 	"os"
@@ -219,7 +220,7 @@ func New() (*App, error) {
 	if err != nil {
 		return fail("initializing tls engine", err)
 	}
-	resolver.Subscribe(func() { certEngine.Invalidate(context.Background()) })
+	resolver.Subscribe(certEngine.Invalidate)
 	portalResolver.SetCertReady(func(ctx context.Context, p *portal.Portal, host string) bool {
 		return certEngine.PortalCertReady(ctx, p.CertSource, p.OrgID, p.ID, host)
 	})
@@ -348,6 +349,7 @@ func New() (*App, error) {
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("%s:%s", cfg.Server.Host, cfg.Server.Port),
 		Handler:           rpcServer.Handler(),
+		Protocols:         utils.CleartextProtocols(),
 		ReadHeaderTimeout: time.Duration(cfg.Server.ReadTimeout) * time.Second,
 		IdleTimeout:       time.Duration(cfg.Server.IdleTimeout) * time.Second,
 	}

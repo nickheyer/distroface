@@ -72,7 +72,6 @@ type gitRequest struct {
 	user   *auth.AuthenticatedUser
 	wiki   bool
 	suffix string
-	lfsJWT bool
 }
 
 func (h *HTTP) serve(w http.ResponseWriter, r *http.Request, namespace, name string, wiki bool, suffix string) {
@@ -455,7 +454,7 @@ func (h *HTTP) serviceRPC(w http.ResponseWriter, r *http.Request, req *gitReques
 	case transport.ReceivePackService:
 		serveErr = transport.ReceivePack(ctx, st, body, frw, &transport.ReceivePackRequest{
 			GitProtocol: version, StatelessRPC: true,
-			Hooks: h.manager.Hooks(auth.WithUser(ctx, req.user), repo, req.user, HookOptions{Wiki: req.wiki}, lock),
+			Hooks: h.manager.Hooks(repo, req.user, HookOptions{Wiki: req.wiki}, lock),
 		})
 		lock.Unlock()
 	case transport.UploadArchiveService:

@@ -3,6 +3,7 @@ package stores
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 
 	"github.com/nickheyer/distroface/internal/db"
@@ -34,7 +35,7 @@ func (s *Store) SetSystemSetting(ctx context.Context, key, value string) error {
 func (s *Store) GetSettingsValue(ctx context.Context, scope v1.SettingsScopeType, scopeID string) (string, bool, error) {
 	var row db.SettingsRow
 	err := s.db.WithContext(ctx).First(&row, "scope_type = ? AND scope_id = ?", int32(scope), scopeID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", false, nil
 	}
 	if err != nil {
@@ -100,7 +101,7 @@ func legacyBool(v string) *bool {
 }
 
 func legacyInt32(v string) *int32 {
-	n, err := strconv.Atoi(v)
+	n, err := strconv.ParseInt(v, 10, 32)
 	if err != nil {
 		return nil
 	}

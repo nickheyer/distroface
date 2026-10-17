@@ -202,7 +202,7 @@ func (s *GitService) gitRepoToProto(ctx context.Context, user *auth.Authenticate
 	}
 	if detail {
 		if s.mirrors != nil {
-			out.MirrorSshPublicKey = s.mirrors.GitMirrorPublicKey(ctx, repo)
+			out.MirrorSshPublicKey = s.mirrors.GitMirrorPublicKey(repo)
 		}
 		out.Viewer = s.manager.Access().Levels(ctx, user, repo).Proto()
 		if user != nil && !user.IsAnonymous() {
@@ -432,10 +432,6 @@ func gitBlobToProto(b *gitrepo.Blob, rawURL string, lfsPresent bool, lfsURL stri
 		out.Language, _ = enry.GetLanguageByExtension(b.Name)
 	}
 	return out
-}
-
-func gitDiffStatusString(st v1.DiffStatus) string {
-	return strings.ToLower(strings.TrimPrefix(st.String(), "DIFF_STATUS_"))
 }
 
 // Natural ordering for tag names so v1.10 sorts after v1.9

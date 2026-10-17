@@ -225,7 +225,7 @@ func (r *Repo) MergeTrees(ctx context.Context, baseTree, oursTree, theirsTree *o
 			if !carried {
 				base = baseEntry(baseTree, p)
 			}
-			edit, conflict, err := r.mergePath(ctx, p, base, o, t)
+			edit, conflict, err := r.mergePath(p, base, o, t)
 			if err != nil {
 				return nil, err
 			}
@@ -367,7 +367,7 @@ func (r *Repo) applyEntryEdits(base plumbing.Hash, edits []TreeEdit) (plumbing.H
 }
 
 // Merges one path changed on both sides
-func (r *Repo) mergePath(ctx context.Context, p string, base *object.TreeEntry, o, t sideChange) (*TreeEdit, *Conflict, error) {
+func (r *Repo) mergePath(p string, base *object.TreeEntry, o, t sideChange) (*TreeEdit, *Conflict, error) {
 	conflict := func(kind string) *Conflict {
 		c := &Conflict{Path: p, Kind: kind}
 		if base != nil {

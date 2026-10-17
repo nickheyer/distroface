@@ -507,7 +507,7 @@ func (m *Manager) RestoreHeadBranch(ctx context.Context, repo *db.GitRepository,
 		if err := m.git.FetchLocal(ctx, headRepo, repo, false, "+"+PullRef(issue.Number).String()+":"+staging.String()); err != nil {
 			return err
 		}
-		defer m.git.DropStagingRef(ctx, headRepo, staging)
+		defer m.git.DropStagingRef(headRepo, staging)
 	}
 	if err := m.git.UpdateRef(ctx, headRepo, actor.User, plumbing.NewBranchReferenceName(pr.HeadBranch), plumbing.ZeroHash, head, gitrepo.HookOptions{}); err != nil {
 		return err
@@ -540,7 +540,7 @@ func (m *Manager) UpdateBranch(ctx context.Context, repo *db.GitRepository, acto
 		if err := m.git.FetchLocal(ctx, headRepo, repo, false, "+refs/heads/"+pr.BaseBranch+":"+staging.String()); err != nil {
 			return err
 		}
-		defer m.git.DropStagingRef(ctx, headRepo, staging)
+		defer m.git.DropStagingRef(headRepo, staging)
 	}
 	r, err := m.git.Engine().OpenRepo(headRepo.Namespace, headRepo.Name, false)
 	if err != nil {

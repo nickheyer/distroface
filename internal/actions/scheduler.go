@@ -75,26 +75,23 @@ func (m *Manager) runRepoSchedules(ctx context.Context, repo *db.GitRepository, 
 	m.schedMu.Unlock()
 	if entry == nil || entry.sha != head {
 		entry = &scheduleEntry{sha: head}
-		files, err := loadWorkflowFiles(ctx, r, head)
-		if err == nil {
-			for _, f := range files {
-				if f.Err != nil || f.Workflow == nil {
-					continue
+		for _, f := range loadWorkflowFiles(ctx, r, head) {
+			if f.Err != nil || f.Workflow == nil {
+				continue
+			}
+			spec, ok := f.Workflow.On["schedule"]
+			if !ok || len(spec.Crons) == 0 {
+				continue
+			}
+			sw := scheduledWorkflow{file: f}
+			for _, c := range spec.Crons {
+				if parsed, err := ParseCron(c); err == nil {
+					sw.crons = append(sw.crons, parsed)
+					sw.specs = append(sw.specs, c)
 				}
-				spec, ok := f.Workflow.On["schedule"]
-				if !ok || len(spec.Crons) == 0 {
-					continue
-				}
-				sw := scheduledWorkflow{file: f}
-				for _, c := range spec.Crons {
-					if parsed, err := ParseCron(c); err == nil {
-						sw.crons = append(sw.crons, parsed)
-						sw.specs = append(sw.specs, c)
-					}
-				}
-				if len(sw.crons) > 0 {
-					entry.items = append(entry.items, sw)
-				}
+			}
+			if len(sw.crons) > 0 {
+				entry.items = append(entry.items, sw)
 			}
 		}
 		m.schedMu.Lock()

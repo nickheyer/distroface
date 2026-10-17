@@ -132,7 +132,7 @@ func (d githubForge) labels(ctx context.Context, f forgeCtx, page int) ([]forgeL
 	}
 	out := make([]forgeLabel, 0, len(batch))
 	for _, l := range batch {
-		out = append(out, forgeLabel{Name: l.Name, Color: l.Color, Description: l.Description})
+		out = append(out, forgeLabel(l))
 	}
 	return out, more, nil
 }

@@ -13,7 +13,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -330,7 +329,7 @@ func shellSplit(s string) []string {
 			cur.Reset()
 		}
 	}
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case quote != 0:
@@ -471,7 +470,7 @@ func (s *SSHServer) exec(sconn *ssh.ServerConn, ch ssh.Channel, command string, 
 		cancel()
 		_ = ch.Close()
 	})
-	var reader io.ReadCloser = io.NopCloser(&touchReader{r: ch, w: watch})
+	reader := io.NopCloser(&touchReader{r: ch, w: watch})
 	if cmd.service == transport.ReceivePackService {
 		if budget, over := s.manager.pushBudget(ctx, repo, wiki); budget > 0 {
 			reader = &budgetReader{ReadCloser: reader, left: budget, err: over}
@@ -487,7 +486,7 @@ func (s *SSHServer) exec(sconn *ssh.ServerConn, ch ssh.Channel, command string, 
 		}
 	case transport.ReceivePackService:
 		err = transport.ReceivePack(ctx, st, reader, writer, &transport.ReceivePackRequest{
-			GitProtocol: env["GIT_PROTOCOL"], Hooks: s.manager.Hooks(ctx, repo, user, HookOptions{Wiki: wiki}, lock),
+			GitProtocol: env["GIT_PROTOCOL"], Hooks: s.manager.Hooks(repo, user, HookOptions{Wiki: wiki}, lock),
 		})
 		lock.Unlock()
 	case transport.UploadArchiveService:
@@ -532,13 +531,3 @@ func (c *channelWriter) Write(p []byte) (int, error) {
 }
 
 func (c *channelWriter) Close() error { return c.ch.CloseWrite() }
-
-// Parses host and port from an address for logs
-func addrPort(addr string) int {
-	_, p, err := net.SplitHostPort(addr)
-	if err != nil {
-		return 0
-	}
-	n, _ := strconv.Atoi(p)
-	return n
-}

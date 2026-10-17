@@ -114,7 +114,7 @@ func (l *logStream) Line(format string, args ...any) {
 	if !strings.HasSuffix(s, "\n") {
 		s += "\n"
 	}
-	l.Write([]byte(s))
+	_, _ = l.Write([]byte(s))
 }
 
 // Pending bytes, partial line included when forced
@@ -164,7 +164,7 @@ func (l *logStream) flush(ctx context.Context, force bool) {
 // Explicit indexes dedupe retries, conflicts defer to the server
 func (l *logStream) send(ctx context.Context, chunk []byte) error {
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := range 3 {
 		sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		next, err := l.client.AppendLog(sctx, l.jobID, l.index, chunk)
 		cancel()

@@ -334,7 +334,7 @@ func (d *Dispatcher) Redeliver(ctx context.Context, deliveryID string) (*db.Webh
 }
 
 func (d *Dispatcher) deliverWithRetry(wh *db.Webhook, body []byte, event string) {
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		if attempt > 0 {
 			time.Sleep(retryDelay(attempt))
 		}

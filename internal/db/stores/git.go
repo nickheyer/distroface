@@ -27,7 +27,7 @@ func (s *Store) CreateGitRepository(ctx context.Context, repo *db.GitRepository)
 func (s *Store) GetGitRepository(ctx context.Context, namespace, name string) (*db.GitRepository, error) {
 	var repo db.GitRepository
 	err := s.db.WithContext(ctx).First(&repo, "namespace = ? AND name = ?", namespace, name).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -39,7 +39,7 @@ func (s *Store) GetGitRepository(ctx context.Context, namespace, name string) (*
 func (s *Store) GetGitRepositoryByID(ctx context.Context, id string) (*db.GitRepository, error) {
 	var repo db.GitRepository
 	err := s.db.WithContext(ctx).First(&repo, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -56,7 +56,7 @@ func (s *Store) ResolveGitRepository(ctx context.Context, namespace, name string
 	}
 	var redirect db.GitRedirect
 	err = s.db.WithContext(ctx).First(&redirect, "namespace = ? AND name = ?", namespace, name).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, false, nil
 	}
 	if err != nil {
@@ -334,7 +334,7 @@ func (s *Store) CreateGitTransfer(ctx context.Context, t *db.GitTransfer) error 
 func (s *Store) GetGitTransfer(ctx context.Context, id string) (*db.GitTransfer, error) {
 	var t db.GitTransfer
 	err := s.db.WithContext(ctx).First(&t, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &t, err
@@ -343,7 +343,7 @@ func (s *Store) GetGitTransfer(ctx context.Context, id string) (*db.GitTransfer,
 func (s *Store) GetGitTransferByRepo(ctx context.Context, repoID string) (*db.GitTransfer, error) {
 	var t db.GitTransfer
 	err := s.db.WithContext(ctx).First(&t, "repo_id = ?", repoID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &t, err
@@ -448,7 +448,7 @@ func (s *Store) GetGitStarredSet(ctx context.Context, userID string, repoIDs []s
 func (s *Store) SetGitWatch(ctx context.Context, userID, repoID, mode string) error {
 	var existing db.GitWatch
 	err := s.db.WithContext(ctx).First(&existing, "user_id = ? AND repo_id = ?", userID, repoID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return s.db.WithContext(ctx).Create(&db.GitWatch{ID: uuid.New().String(), UserID: userID, RepoID: repoID, Mode: mode}).Error
 	}
 	if err != nil {
@@ -460,7 +460,7 @@ func (s *Store) SetGitWatch(ctx context.Context, userID, repoID, mode string) er
 func (s *Store) GetGitWatch(ctx context.Context, userID, repoID string) (string, error) {
 	var w db.GitWatch
 	err := s.db.WithContext(ctx).First(&w, "user_id = ? AND repo_id = ?", userID, repoID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return "", nil
 	}
 	return w.Mode, err
@@ -478,7 +478,7 @@ func (s *Store) ListGitWatchers(ctx context.Context, repoID, mode string) ([]str
 func (s *Store) UpsertGitCollaborator(ctx context.Context, c *db.GitCollaborator) error {
 	var existing db.GitCollaborator
 	err := s.db.WithContext(ctx).First(&existing, "repo_id = ? AND user_id = ?", c.RepoID, c.UserID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		if c.ID == "" {
 			c.ID = uuid.New().String()
 		}
@@ -494,7 +494,7 @@ func (s *Store) UpsertGitCollaborator(ctx context.Context, c *db.GitCollaborator
 func (s *Store) GetGitCollaborator(ctx context.Context, repoID, userID string) (*db.GitCollaborator, error) {
 	var c db.GitCollaborator
 	err := s.db.WithContext(ctx).First(&c, "repo_id = ? AND user_id = ?", repoID, userID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &c, err
@@ -534,7 +534,7 @@ func (s *Store) ListGitBranchProtections(ctx context.Context, repoID string) ([]
 func (s *Store) GetGitBranchProtection(ctx context.Context, repoID, id string) (*db.GitBranchProtection, error) {
 	var p db.GitBranchProtection
 	err := s.db.WithContext(ctx).First(&p, "repo_id = ? AND id = ?", repoID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &p, err
@@ -631,7 +631,7 @@ func (s *Store) UpsertLFSObject(ctx context.Context, repoID, oid string, size in
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var obj db.LFSObject
 		err := tx.First(&obj, "oid = ?", oid).Error
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			if err := tx.Create(&db.LFSObject{OID: oid, Size: size}).Error; err != nil {
 				return err
 			}
@@ -640,7 +640,7 @@ func (s *Store) UpsertLFSObject(ctx context.Context, repoID, oid string, size in
 		}
 		var link db.GitLFSLink
 		err = tx.First(&link, "repo_id = ? AND oid = ?", repoID, oid).Error
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return tx.Create(&db.GitLFSLink{RepoID: repoID, OID: oid}).Error
 		}
 		return err
@@ -658,7 +658,7 @@ func (s *Store) GetLFSObject(ctx context.Context, repoID, oid string) (*db.LFSOb
 	var obj db.LFSObject
 	err := s.db.WithContext(ctx).Joins("JOIN git_lfs_links ON git_lfs_links.oid = lfs_objects.oid AND git_lfs_links.repo_id = ?", repoID).
 		First(&obj, "lfs_objects.oid = ?", oid).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &obj, err
@@ -728,7 +728,7 @@ func (s *Store) CreateLFSLock(ctx context.Context, l *db.LFSLock) error {
 func (s *Store) GetLFSLock(ctx context.Context, repoID, id string) (*db.LFSLock, error) {
 	var l db.LFSLock
 	err := s.db.WithContext(ctx).First(&l, "repo_id = ? AND id = ?", repoID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &l, err
@@ -776,7 +776,7 @@ func (s *Store) CreateGitPushMirror(ctx context.Context, m *db.GitPushMirror) er
 func (s *Store) GetGitPushMirror(ctx context.Context, repoID, id string) (*db.GitPushMirror, error) {
 	var m db.GitPushMirror
 	err := s.db.WithContext(ctx).First(&m, "repo_id = ? AND id = ?", repoID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &m, err
@@ -814,7 +814,7 @@ func (s *Store) SaveGitImport(ctx context.Context, imp *db.GitImport) error {
 func (s *Store) GetGitImport(ctx context.Context, repoID string) (*db.GitImport, error) {
 	var imp db.GitImport
 	err := s.db.WithContext(ctx).First(&imp, "repo_id = ?", repoID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &imp, err

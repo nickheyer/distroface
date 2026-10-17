@@ -234,7 +234,9 @@ func (c *Client) downloadArtifacts(ctx context.Context, ref RepoRef, q url.Value
 	if _, err := io.Copy(tempFile, resp.Body); err != nil {
 		return err
 	}
-	tempFile.Close()
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(outputPath, 0755); err != nil {
 		return err

@@ -68,11 +68,7 @@ func mustJSON(v any) string {
 
 // Creates a run per matching enabled workflow file at the commit
 func (m *Manager) startRuns(ctx context.Context, repo *db.GitRepository, r *gitrepo.Repo, commit plumbing.Hash, in *triggerInput) {
-	files, err := loadWorkflowFiles(ctx, r, commit)
-	if err != nil {
-		m.log.Error("actions: load workflows %s/%s: %v", repo.Namespace, repo.Name, err)
-		return
-	}
+	files := loadWorkflowFiles(ctx, r, commit)
 	disabled, _ := m.store.GetDisabledWorkflows(ctx, repo.ID)
 	for _, f := range files {
 		if f.Err != nil || f.Workflow == nil || disabled[f.Path] {
@@ -121,10 +117,7 @@ func (m *Manager) createRun(ctx context.Context, repo *db.GitRepository, f *Work
 			run.Concurrency = strings.TrimSpace(group)
 		}
 	}
-	jobs, err := m.planJobs(wf, ectx)
-	if err != nil {
-		return nil, err
-	}
+	jobs := m.planJobs(wf, ectx)
 	run.Notes = mustJSON(orEmpty(wf.Notes))
 	if err := m.store.CreateActionsRun(ctx, run, jobs); err != nil {
 		return nil, err
@@ -150,7 +143,7 @@ func (m *Manager) createRun(ctx context.Context, repo *db.GitRepository, f *Work
 }
 
 // Expands matrices and writes one waiting job row per combination
-func (m *Manager) planJobs(wf *Workflow, base *ExprContext) ([]*db.ActionsJob, error) {
+func (m *Manager) planJobs(wf *Workflow, base *ExprContext) []*db.ActionsJob {
 	var out []*db.ActionsJob
 	for _, key := range wf.JobOrder {
 		job := wf.Jobs[key]
@@ -205,7 +198,7 @@ func (m *Manager) planJobs(wf *Workflow, base *ExprContext) ([]*db.ActionsJob, e
 			out = append(out, row)
 		}
 	}
-	return out, nil
+	return out
 }
 
 func orEmpty(s []string) []string {
@@ -576,8 +569,8 @@ func (m *Manager) failJob(ctx context.Context, repo *db.GitRepository, run *db.A
 		var ann []any
 		_ = json.Unmarshal([]byte(j.Annotations), &ann)
 		ann = append(ann, map[string]any{"level": "error", "message": note})
-		cols["annotations"] = mustJSON(ann)
-		j.Annotations = cols["annotations"].(string)
+		j.Annotations = mustJSON(ann)
+		cols["annotations"] = j.Annotations
 	}
 	if j.StartedAt == nil {
 		cols["started_at"] = now
@@ -816,7 +809,7 @@ func (m *Manager) Dispatch(ctx context.Context, repo *db.GitRepository, actor *a
 		return nil, fmt.Errorf("%w: workflow %s not found at %s", ErrNotFound, wfPath, ref)
 	}
 	if file.Err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, file.Err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, file.Err)
 	}
 	spec, ok := file.Workflow.On["workflow_dispatch"]
 	if !ok {
@@ -828,7 +821,7 @@ func (m *Manager) Dispatch(ctx context.Context, repo *db.GitRepository, actor *a
 	}
 	typed, err := ValidateInputs(spec, inputs)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	fullRef := ref
 	if !strings.HasPrefix(ref, "refs/") {

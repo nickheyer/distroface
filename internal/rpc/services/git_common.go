@@ -11,7 +11,6 @@ import (
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/portal"
-	"github.com/nickheyer/distroface/internal/rbac"
 )
 
 // Maps engine and manager errors onto connect codes
@@ -97,20 +96,6 @@ func portalAllowsGitWrite(ctx context.Context) error {
 		return connect.Errorf(connect.CodePermissionDenied, "portal is read-only")
 	}
 	return nil
-}
-
-// Unit write access expressed as an rbac action for the access helpers
-func gitActionForLevel(l gitrepo.Level) string {
-	switch l {
-	case gitrepo.LevelRead:
-		return rbac.ActionRead
-	case gitrepo.LevelWrite:
-		return rbac.ActionPush
-	case gitrepo.LevelAdmin:
-		return rbac.ActionUpdate
-	default:
-		return rbac.ActionManage
-	}
 }
 
 // Decodes a json string list stored on a row

@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -23,7 +24,7 @@ func (s *Store) CreateGitIssue(ctx context.Context, issue *db.GitIssue) error {
 func (s *Store) GetGitIssue(ctx context.Context, repoID string, number int64) (*db.GitIssue, error) {
 	var issue db.GitIssue
 	err := s.db.WithContext(ctx).First(&issue, "repo_id = ? AND number = ?", repoID, number).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &issue, err
@@ -32,7 +33,7 @@ func (s *Store) GetGitIssue(ctx context.Context, repoID string, number int64) (*
 func (s *Store) GetGitIssueByID(ctx context.Context, id string) (*db.GitIssue, error) {
 	var issue db.GitIssue
 	err := s.db.WithContext(ctx).First(&issue, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &issue, err
@@ -241,9 +242,9 @@ func (s *Store) TouchGitIssue(ctx context.Context, id string) error {
 
 // Highest pin order plus one, capped by the caller
 func (s *Store) NextGitPinOrder(ctx context.Context, repoID string) (int, error) {
-	var max int
-	err := s.db.WithContext(ctx).Model(&db.GitIssue{}).Where("repo_id = ?", repoID).Select("COALESCE(MAX(pinned),0)").Scan(&max).Error
-	return max + 1, err
+	var last int
+	err := s.db.WithContext(ctx).Model(&db.GitIssue{}).Where("repo_id = ?", repoID).Select("COALESCE(MAX(pinned),0)").Scan(&last).Error
+	return last + 1, err
 }
 
 func (s *Store) CountPinnedGitIssues(ctx context.Context, repoID string, isPull bool) (int64, error) {
@@ -264,7 +265,7 @@ func (s *Store) CreateGitLabel(ctx context.Context, l *db.GitLabel) error {
 func (s *Store) GetGitLabel(ctx context.Context, id string) (*db.GitLabel, error) {
 	var l db.GitLabel
 	err := s.db.WithContext(ctx).First(&l, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &l, err
@@ -390,7 +391,7 @@ func (s *Store) CreateGitMilestone(ctx context.Context, m *db.GitMilestone) erro
 func (s *Store) GetGitMilestone(ctx context.Context, repoID, id string) (*db.GitMilestone, error) {
 	var m db.GitMilestone
 	err := s.db.WithContext(ctx).First(&m, "repo_id = ? AND id = ?", repoID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &m, err
@@ -528,7 +529,7 @@ func (s *Store) CreateGitComment(ctx context.Context, c *db.GitComment) error {
 func (s *Store) GetGitComment(ctx context.Context, id string) (*db.GitComment, error) {
 	var c db.GitComment
 	err := s.db.WithContext(ctx).First(&c, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &c, err
@@ -700,7 +701,7 @@ func (s *Store) CreateGitTrackedTime(ctx context.Context, t *db.GitTrackedTime) 
 func (s *Store) GetGitTrackedTime(ctx context.Context, issueID, id string) (*db.GitTrackedTime, error) {
 	var t db.GitTrackedTime
 	err := s.db.WithContext(ctx).First(&t, "issue_id = ? AND id = ?", issueID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &t, err
@@ -749,7 +750,7 @@ func (s *Store) DeleteGitTrackedTime(ctx context.Context, id string) error {
 func (s *Store) SetGitIssueSubscription(ctx context.Context, issueID, userID string, subscribed bool) error {
 	var existing db.GitIssueSubscription
 	err := s.db.WithContext(ctx).First(&existing, "issue_id = ? AND user_id = ?", issueID, userID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return s.db.WithContext(ctx).Create(&db.GitIssueSubscription{IssueID: issueID, UserID: userID, Subscribed: subscribed}).Error
 	}
 	if err != nil {
@@ -777,7 +778,7 @@ func (s *Store) GetGitIssueSubscriptions(ctx context.Context, issueID string, us
 func (s *Store) GetGitIssueSubscription(ctx context.Context, issueID, userID string) (*bool, error) {
 	var existing db.GitIssueSubscription
 	err := s.db.WithContext(ctx).First(&existing, "issue_id = ? AND user_id = ?", issueID, userID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {

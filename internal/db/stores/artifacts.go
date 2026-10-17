@@ -45,7 +45,7 @@ func (s *Store) CreateArtifactRepository(ctx context.Context, repo *db.ArtifactR
 func (s *Store) GetArtifactRepository(ctx context.Context, namespace, name string) (*db.ArtifactRepository, error) {
 	var repo db.ArtifactRepository
 	err := s.db.WithContext(ctx).First(&repo, "namespace = ? AND name = ?", namespace, name).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -190,7 +190,7 @@ func (s *Store) CreateArtifact(ctx context.Context, artifact *db.Artifact, prope
 			if err := tx.Delete(&db.Artifact{}, "id = ?", existing.ID).Error; err != nil {
 				return err
 			}
-		} else if findErr != gorm.ErrRecordNotFound {
+		} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
 			return findErr
 		}
 
@@ -221,7 +221,7 @@ func createPropertiesTx(tx *gorm.DB, artifactID string, properties map[string]st
 func (s *Store) GetArtifact(ctx context.Context, id string) (*db.Artifact, error) {
 	var artifact db.Artifact
 	err := s.db.WithContext(ctx).First(&artifact, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -238,7 +238,7 @@ func (s *Store) GetArtifactByPathVersion(ctx context.Context, repoID int64, vers
 	var artifact db.Artifact
 	err := s.db.WithContext(ctx).Order("created_at DESC, id DESC").
 		First(&artifact, "repo_id = ? AND version = ? AND path = ?", repoID, version, path).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -255,7 +255,7 @@ func (s *Store) GetArtifactByIdentity(ctx context.Context, repoID int64, version
 	var artifact db.Artifact
 	err := s.db.WithContext(ctx).First(&artifact, "repo_id = ? AND version = ? AND path = ? AND props_hash = ?",
 		repoID, version, path, PropsFingerprint(properties)).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -580,7 +580,7 @@ func (s *Store) loadArtifactProperties(ctx context.Context, artifacts []*db.Arti
 func (s *Store) GetArtifactRepositoryByID(ctx context.Context, id int64) (*db.ArtifactRepository, error) {
 	var repo db.ArtifactRepository
 	err := s.db.WithContext(ctx).First(&repo, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &repo, err

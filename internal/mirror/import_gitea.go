@@ -126,7 +126,7 @@ func (d giteaForge) labels(ctx context.Context, f forgeCtx, page int) ([]forgeLa
 	}
 	out := make([]forgeLabel, 0, len(batch))
 	for _, l := range batch {
-		out = append(out, forgeLabel{Name: l.Name, Color: l.Color, Description: l.Description})
+		out = append(out, forgeLabel(l))
 	}
 	return out, more, nil
 }

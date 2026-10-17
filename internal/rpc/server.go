@@ -30,8 +30,6 @@ import (
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"github.com/nickheyer/distroface/pkg/utils"
 	web "github.com/nickheyer/distroface/web/distroface"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 type ServerDeps struct {
@@ -218,7 +216,7 @@ func (s *Server) setupHandler() {
 	}
 	// Verified mtls identity rides the request context for auth and audit
 	root = certs.ClientCertMiddleware(root)
-	s.handler = h2c.NewHandler(root, &http2.Server{})
+	s.handler = root
 }
 
 // Live public hostname for portal aware middleware

@@ -103,7 +103,7 @@ func (e *Engine) PrimarySource(ctx context.Context) v1.CertSource {
 }
 
 // Applies setting and material changes without a restart
-func (e *Engine) Invalidate(ctx context.Context) {
+func (e *Engine) Invalidate() {
 	e.mu.Lock()
 	e.certCache = map[string]*cachedKeyPair{}
 	e.leaves = map[string]*tls.Certificate{}
@@ -256,9 +256,9 @@ func (e *Engine) TLSConfig() *tls.Config {
 
 // Returns a per connection config only when the host enforces mtls
 func (e *Engine) getConfigForClient(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-	cfg, err := e.configForClient(hello)
-	if err != nil || cfg == nil {
-		return nil, err
+	cfg := e.configForClient(hello)
+	if cfg == nil {
+		return nil, nil
 	}
 	// The chosen config is terminal, no second round of resolution
 	cfg.GetConfigForClient = nil

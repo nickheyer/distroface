@@ -33,7 +33,6 @@ require (
 	github.com/spf13/viper v1.20.1
 	github.com/wneessen/go-mail v0.8.1
 	golang.org/x/crypto v0.57.0
-	golang.org/x/net v0.59.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/term v0.46.0
 	google.golang.org/protobuf v1.36.11
@@ -143,6 +142,7 @@ require (
 	go.uber.org/multierr v1.9.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	golang.org/x/exp v0.0.0-20251219203646-944ab1f22d93 // indirect
+	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect

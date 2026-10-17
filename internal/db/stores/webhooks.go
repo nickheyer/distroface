@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
@@ -22,7 +23,7 @@ func (s *Store) GetWebhook(ctx context.Context, id string) (*db.Webhook, error) 
 	var webhook db.Webhook
 	err := s.db.WithContext(ctx).First(&webhook, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -145,7 +146,7 @@ func (s *Store) GetWebhookDelivery(ctx context.Context, id string) (*db.WebhookD
 	var delivery db.WebhookDelivery
 	err := s.db.WithContext(ctx).First(&delivery, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err

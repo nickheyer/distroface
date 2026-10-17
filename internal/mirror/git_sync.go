@@ -343,7 +343,6 @@ func (m *Monitor) gitJobs(ctx context.Context) []func() {
 		if !m.due(ctx, cfg, repo.MirrorLastSync, parseGitMirrorState(repo.MirrorState).SyncState) {
 			continue
 		}
-		repo, cfg := repo, cfg
 		jobs = append(jobs, func() {
 			key := gitKey(repo.ID)
 			if !m.try(key) {
@@ -380,7 +379,6 @@ func (m *Monitor) gitJobs(ctx context.Context) []func() {
 		if repo == nil || parseImportState(imp.State).CoolingDown(now) {
 			continue
 		}
-		imp := imp
 		jobs = append(jobs, func() {
 			key := importKey(repo.ID)
 			if !m.try(key) {
@@ -400,7 +398,6 @@ func (m *Monitor) gitJobs(ctx context.Context) []func() {
 		if !m.due(ctx, cfg, pm.LastSync, parsePushMirrorState(pm.State).SyncState) {
 			continue
 		}
-		pm := pm
 		jobs = append(jobs, func() {
 			key := pushKey(pm.ID)
 			if !m.try(key) {
@@ -470,7 +467,7 @@ func (m *Monitor) syncGitRepo(ctx context.Context, repo *db.GitRepository, cfg *
 		return err
 	}
 	if _, err := gitrepo.ValidateUpstreamURL(up.URL); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	auth, err := m.gitAuth(up, cfg, state)
 	if err != nil {

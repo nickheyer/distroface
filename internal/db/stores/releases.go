@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
@@ -19,7 +20,7 @@ func (s *Store) CreateGitRelease(ctx context.Context, r *db.GitRelease) error {
 func (s *Store) GetGitRelease(ctx context.Context, repoID, tag string) (*db.GitRelease, error) {
 	var r db.GitRelease
 	err := s.db.WithContext(ctx).First(&r, "repo_id = ? AND tag = ?", repoID, tag).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &r, err
@@ -28,7 +29,7 @@ func (s *Store) GetGitRelease(ctx context.Context, repoID, tag string) (*db.GitR
 func (s *Store) GetGitReleaseByID(ctx context.Context, id string) (*db.GitRelease, error) {
 	var r db.GitRelease
 	err := s.db.WithContext(ctx).First(&r, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &r, err
@@ -97,7 +98,7 @@ func (s *Store) LatestGitRelease(ctx context.Context, repoID string) (*db.GitRel
 	var r db.GitRelease
 	err := s.db.WithContext(ctx).Where("repo_id = ? AND draft = ? AND prerelease = ?", repoID, false, false).
 		Order("COALESCE(published_at, created_at) DESC").First(&r).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &r, err
@@ -120,7 +121,7 @@ func (s *Store) AttachGitReleaseImage(ctx context.Context, img *db.GitReleaseIma
 	if err == nil {
 		return s.db.WithContext(ctx).Model(&existing).Update("digest", img.Digest).Error
 	}
-	if err != gorm.ErrRecordNotFound {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	return s.db.WithContext(ctx).Create(img).Error

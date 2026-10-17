@@ -58,7 +58,7 @@ func TestCommandWriter(t *testing.T) {
 	var masks []string
 	outputs := map[string]string{}
 	cw := &commandWriter{out: &out, onAnnotation: func(a Annotation) { ann = append(ann, a) }, onMask: func(s string) { masks = append(masks, s) }, onOutput: func(k, v string) { outputs[k] = v }}
-	cw.Write([]byte("::group::Build\nhello\n::add-mask::secret%0A\n::error file=a.go,line=3,title=Bad%3A thing::boom\n::set-output name=v::1\n::stop-commands::tok\n::error::ignored\n::tok::\n::endgroup::\npartial"))
+	_, _ = cw.Write([]byte("::group::Build\nhello\n::add-mask::secret%0A\n::error file=a.go,line=3,title=Bad%3A thing::boom\n::set-output name=v::1\n::stop-commands::tok\n::error::ignored\n::tok::\n::endgroup::\npartial"))
 	cw.Flush()
 	text := out.String()
 	for _, want := range []string{"##[group]Build\n", "hello\n", "##[error]boom\n", "::error::ignored\n", "##[endgroup]\n", "partial\n"} {
@@ -97,8 +97,8 @@ func TestParseKeyValueFile(t *testing.T) {
 func TestLogMasking(t *testing.T) {
 	l := newLogStream(nil, "job")
 	l.AddMask("hunter2")
-	l.Write([]byte("password is hun"))
-	l.Write([]byte("ter2 ok\ntail"))
+	_, _ = l.Write([]byte("password is hun"))
+	_, _ = l.Write([]byte("ter2 ok\ntail"))
 	if got := string(l.take(false)); got != "password is *** ok\n" {
 		t.Fatalf("got %q", got)
 	}

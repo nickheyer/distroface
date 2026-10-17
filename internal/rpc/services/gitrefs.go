@@ -332,7 +332,7 @@ func (s *GitRefService) openPullsOnBase(ctx context.Context, repo *storage.GitRe
 
 // ── Tags ─────────────────────────────────────────────────────────────────
 
-func (s *GitRefService) tagProto(ctx context.Context, repo *storage.GitRepository, r *gitrepo.Repo, enrich *gitCommitEnricher, releases map[string]bool, name string, h plumbing.Hash) *v1.GitTag {
+func (s *GitRefService) tagProto(ctx context.Context, r *gitrepo.Repo, enrich *gitCommitEnricher, releases map[string]bool, name string, h plumbing.Hash) *v1.GitTag {
 	out := &v1.GitTag{Name: name, HasRelease: releases[name]}
 	commitHash := h
 	if tag := r.TagObject(h); tag != nil {
@@ -387,7 +387,7 @@ func (s *GitRefService) ListGitTags(ctx context.Context, req *v1.ListGitTagsRequ
 	enrich := newGitCommitEnricher(ctx, s.store, s.manager, repo, r)
 	out := make([]*v1.GitTag, 0, end-offset)
 	for _, n := range names[offset:end] {
-		out = append(out, s.tagProto(ctx, repo, r, enrich, releases, n, tags[n]))
+		out = append(out, s.tagProto(ctx, r, enrich, releases, n, tags[n]))
 	}
 	return &v1.ListGitTagsResponse{Tags: out, Page: pages.Info(offset, limit, total)}, nil
 }
@@ -409,7 +409,7 @@ func (s *GitRefService) GetTag(ctx context.Context, req *v1.GetTagRequest) (*v1.
 	}
 	releases, _ := s.store.GitReleaseTags(ctx, repo.ID)
 	enrich := newGitCommitEnricher(ctx, s.store, s.manager, repo, r)
-	return &v1.GetTagResponse{Tag: s.tagProto(ctx, repo, r, enrich, releases, req.Tag, h)}, nil
+	return &v1.GetTagResponse{Tag: s.tagProto(ctx, r, enrich, releases, req.Tag, h)}, nil
 }
 
 func (s *GitRefService) CreateTag(ctx context.Context, req *v1.CreateTagRequest) (*v1.CreateTagResponse, error) {
@@ -457,7 +457,7 @@ func (s *GitRefService) CreateTag(ctx context.Context, req *v1.CreateTagRequest)
 	defer r.Close()
 	releases, _ := s.store.GitReleaseTags(ctx, repo.ID)
 	enrich := newGitCommitEnricher(ctx, s.store, s.manager, repo, r)
-	return &v1.CreateTagResponse{Tag: s.tagProto(ctx, repo, r, enrich, releases, req.Tag, ref)}, nil
+	return &v1.CreateTagResponse{Tag: s.tagProto(ctx, r, enrich, releases, req.Tag, ref)}, nil
 }
 
 func (s *GitRefService) DeleteTag(ctx context.Context, req *v1.DeleteTagRequest) (*v1.DeleteTagResponse, error) {

@@ -283,12 +283,12 @@ func (l *LFS) upload(w http.ResponseWriter, r *http.Request, repo *db.GitReposit
 	}
 	n, err := blobs.AppendChunk(uploadID, body)
 	if err != nil {
-		blobs.CancelUpload(uploadID)
+		_ = blobs.CancelUpload(uploadID)
 		lfsFail(w, http.StatusInternalServerError, "upload failed")
 		return
 	}
 	if maxBytes > 0 && n > maxBytes {
-		blobs.CancelUpload(uploadID)
+		_ = blobs.CancelUpload(uploadID)
 		lfsFail(w, http.StatusRequestEntityTooLarge, "object exceeds the size limit")
 		return
 	}

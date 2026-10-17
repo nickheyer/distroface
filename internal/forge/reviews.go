@@ -169,7 +169,7 @@ func ReviewStateProto(s string) v1.ReviewState {
 }
 
 // Reports whether a review may carry the state
-func (m *Manager) reviewAllowed(ctx context.Context, repo *db.GitRepository, actor Actor, issue *db.GitIssue, state string) error {
+func (m *Manager) reviewAllowed(repo *db.GitRepository, actor Actor, issue *db.GitIssue, state string) error {
 	if actor.User == nil || actor.User.IsAnonymous() {
 		return fmt.Errorf("%w: sign in to review", ErrForbidden)
 	}
@@ -190,7 +190,7 @@ func (m *Manager) CreateReview(ctx context.Context, repo *db.GitRepository, acto
 	if state == "" {
 		state = ReviewPending
 	}
-	if err := m.reviewAllowed(ctx, repo, actor, issue, state); err != nil {
+	if err := m.reviewAllowed(repo, actor, issue, state); err != nil {
 		return nil, err
 	}
 	if commitSHA == "" {
@@ -238,7 +238,7 @@ func (m *Manager) SubmitReview(ctx context.Context, repo *db.GitRepository, acto
 	if state == "" || state == ReviewPending {
 		state = ReviewCommented
 	}
-	if err := m.reviewAllowed(ctx, repo, actor, issue, state); err != nil {
+	if err := m.reviewAllowed(repo, actor, issue, state); err != nil {
 		return nil, err
 	}
 	now := time.Now()

@@ -104,7 +104,7 @@ func prReviewCommentProto(ctx context.Context, users *gitUserCache, c *storage.G
 }
 
 // Converts a pull request view
-func (s *PullRequestService) toProto(ctx context.Context, repo *storage.GitRepository, view *forge.PullView, viewerID string) *v1.PullRequest {
+func (s *PullRequestService) toProto(ctx context.Context, view *forge.PullView, viewerID string) *v1.PullRequest {
 	users := newGitUserCache(s.store)
 	pr := view.PR
 	out := &v1.PullRequest{
@@ -171,7 +171,7 @@ func (s *PullRequestService) view(ctx context.Context, repo *storage.GitReposito
 	if err != nil {
 		return nil, mapForgeErr(err)
 	}
-	return s.toProto(ctx, repo, view, viewerID(actor.User)), nil
+	return s.toProto(ctx, view, viewerID(actor.User)), nil
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -243,7 +243,7 @@ func (s *PullRequestService) ListPullRequests(ctx context.Context, req *v1.ListP
 		if err != nil {
 			return nil, mapForgeErr(err)
 		}
-		out.PullRequests = append(out.PullRequests, s.toProto(ctx, repo, view, viewerID(user)))
+		out.PullRequests = append(out.PullRequests, s.toProto(ctx, view, viewerID(user)))
 	}
 	return out, nil
 }

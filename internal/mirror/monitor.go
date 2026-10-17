@@ -258,7 +258,6 @@ func (m *Monitor) sweep(ctx context.Context) {
 		if !m.due(ctx, cfg, repo.MirrorLastSync, ParseState(repo.MirrorState)) {
 			continue
 		}
-		repo, cfg := repo, cfg
 		jobs = append(jobs, func() {
 			key := fmt.Sprintf("artifact:%d", repo.ID)
 			if !m.try(key) {
@@ -283,7 +282,6 @@ func (m *Monitor) sweep(ctx context.Context) {
 			if !m.due(ctx, cfg, repo.MirrorLastSync, ParseState(repo.MirrorState)) {
 				continue
 			}
-			repo, cfg := repo, cfg
 			jobs = append(jobs, func() {
 				key := "image:" + repo.ID
 				if !m.try(key) {
@@ -633,7 +631,7 @@ func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository
 		return err
 	}
 	if _, err := blobs.AppendChunk(uploadID, resp.Body); err != nil {
-		blobs.CancelUpload(uploadID)
+		_ = blobs.CancelUpload(uploadID)
 		return err
 	}
 

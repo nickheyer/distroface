@@ -803,7 +803,7 @@ func hashFiles(root string, patterns []string) string {
 		if err != nil {
 			continue
 		}
-		io.Copy(h, fh)
+		_, _ = io.Copy(h, fh)
 		fh.Close()
 		total.Write(h.Sum(nil))
 	}

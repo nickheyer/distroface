@@ -43,8 +43,8 @@ func (l *limiter) Acquire(ctx context.Context, timeout time.Duration) (func(), e
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	for {
-		max := l.limit()
-		if max <= 0 || l.active < max {
+		limit := l.limit()
+		if limit <= 0 || l.active < limit {
 			l.active++
 			return l.release, nil
 		}

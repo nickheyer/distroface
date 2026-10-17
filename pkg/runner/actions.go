@@ -142,11 +142,11 @@ func (j *job) fetchAction(ctx context.Context, repo, version, dest string, out i
 	var errs []string
 	if base := j.cloneBase(); base != "" && !githubOnly(repo) {
 		fmt.Fprintf(out, "Fetching action %s@%s from %s\n", repo, version, base)
-		if err := j.cloneHost(ctx, base+"/"+repo+".git", dest, version, 1, j.task.Token); err == nil {
+		err := j.cloneHost(ctx, base+"/"+repo+".git", dest, version, 1, j.task.Token)
+		if err == nil {
 			return nil
-		} else {
-			errs = append(errs, fmt.Sprintf("%s: %v", base, err))
 		}
+		errs = append(errs, fmt.Sprintf("%s: %v", base, err))
 	}
 	fmt.Fprintf(out, "Fetching action %s@%s from github.com\n", repo, version)
 	if err := j.cloneHost(ctx, "https://github.com/"+repo+".git", dest, version, 1, ""); err != nil {
@@ -492,7 +492,7 @@ func (j *job) checkout(ctx context.Context, with map[string]string, env map[stri
 	if err := os.MkdirAll(dest, 0o777); err != nil {
 		return err
 	}
-	os.Chmod(dest, 0o777)
+	_ = os.Chmod(dest, 0o777)
 	fmt.Fprintf(out, "Checking out %s at %s into %s\n", repo, firstNonEmpty(sha, ref), j.pathOf(dest))
 	if j.exec.Has(ctx, "git") {
 		return j.checkoutWithGit(ctx, url, j.pathOf(dest), ref, sha, depth, token, with, env, out)
@@ -517,7 +517,7 @@ func firstNonEmpty(vals ...string) string {
 func (j *job) checkoutWithGit(ctx context.Context, url, dest, ref, sha string, depth int, token string, with map[string]string, env map[string]string, out io.Writer) error {
 	var sb strings.Builder
 	sb.WriteString("set -e\n")
-	sb.WriteString("cd " + shellQuote(dest) + "\n")
+	fmt.Fprintf(&sb, "cd %s\n", shellQuote(dest))
 	sb.WriteString("git init -q .\n")
 	sb.WriteString("git config --global --add safe.directory '*' 2>/dev/null || true\n")
 	if token != "" {
@@ -527,27 +527,27 @@ func (j *job) checkoutWithGit(ctx context.Context, url, dest, ref, sha string, d
 		if u, err := neturl.Parse(url); err == nil && u.Host != "" {
 			scope = u.Scheme + "://" + u.Host + "/"
 		}
-		sb.WriteString("git config --local http." + shellQuote(scope) + ".extraheader " + shellQuote("AUTHORIZATION: basic "+b64) + "\n")
+		fmt.Fprintf(&sb, "git config --local http.%s.extraheader %s\n", shellQuote(scope), shellQuote("AUTHORIZATION: basic "+b64))
 	}
-	sb.WriteString("git remote add origin " + shellQuote(url) + " 2>/dev/null || git remote set-url origin " + shellQuote(url) + "\n")
+	fmt.Fprintf(&sb, "git remote add origin %s 2>/dev/null || git remote set-url origin %s\n", shellQuote(url), shellQuote(url))
 	depthArg := ""
 	if depth > 0 {
 		depthArg = fmt.Sprintf("--depth=%d ", depth)
 	}
 	target := firstNonEmpty(sha, ref)
 	if sha != "" && ref != "" {
-		sb.WriteString(fmt.Sprintf("git fetch %sorigin %s 2>/dev/null || git fetch %sorigin %s\n", depthArg, shellQuote(sha), depthArg, shellQuote(ref)))
+		fmt.Fprintf(&sb, "git fetch %sorigin %s 2>/dev/null || git fetch %sorigin %s\n", depthArg, shellQuote(sha), depthArg, shellQuote(ref))
 	} else {
-		sb.WriteString(fmt.Sprintf("git fetch %sorigin %s\n", depthArg, shellQuote(target)))
+		fmt.Fprintf(&sb, "git fetch %sorigin %s\n", depthArg, shellQuote(target))
 	}
 	if sha != "" {
-		sb.WriteString("git checkout -q --force " + shellQuote(sha) + " 2>/dev/null || git checkout -q --force FETCH_HEAD\n")
+		fmt.Fprintf(&sb, "git checkout -q --force %s 2>/dev/null || git checkout -q --force FETCH_HEAD\n", shellQuote(sha))
 	} else {
 		sb.WriteString("git checkout -q --force FETCH_HEAD\n")
 	}
 	if ref != "" && strings.HasPrefix(ref, "refs/heads/") {
 		branch := strings.TrimPrefix(ref, "refs/heads/")
-		sb.WriteString("git checkout -q -B " + shellQuote(branch) + " 2>/dev/null || true\n")
+		fmt.Fprintf(&sb, "git checkout -q -B %s 2>/dev/null || true\n", shellQuote(branch))
 	}
 	switch strings.ToLower(strings.TrimSpace(with["submodules"])) {
 	case "true":
@@ -583,8 +583,8 @@ func (j *job) cloneHost(ctx context.Context, url, dest, ref string, depth int, t
 	clone := func(name plumbing.ReferenceName, d int) error {
 		_, err := git.PlainCloneContext(ctx, dest, &git.CloneOptions{URL: url, ReferenceName: name, SingleBranch: name != "", Depth: d, ClientOptions: copts, Tags: git.NoTags})
 		if err != nil {
-			os.RemoveAll(dest)
-			os.MkdirAll(dest, 0o777)
+			_ = os.RemoveAll(dest)
+			_ = os.MkdirAll(dest, 0o777)
 		}
 		return err
 	}
@@ -773,7 +773,7 @@ func (j *job) realInside(p string) bool {
 	if !j.confined {
 		return true
 	}
-	real, err := filepath.EvalSymlinks(p)
+	resolved, err := filepath.EvalSymlinks(p)
 	if err != nil {
 		return false
 	}
@@ -781,7 +781,7 @@ func (j *job) realInside(p string) bool {
 	if err != nil {
 		return false
 	}
-	return within(root, real)
+	return within(root, resolved)
 }
 
 // Creates a directory in the job, refusing symlinked escapes
@@ -846,8 +846,10 @@ func (j *job) downloadArtifact(ctx context.Context, with map[string]string, out 
 		return err
 	}
 	size, err := io.Copy(tmp, body)
-	body.Close()
-	tmp.Close()
+	_ = body.Close()
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
 	defer os.Remove(tmp.Name())
 	if err != nil {
 		return err
@@ -890,8 +892,10 @@ func (j *job) downloadArtifact(ctx context.Context, with map[string]string, out 
 			return err
 		}
 		_, err = io.Copy(w, rc)
-		rc.Close()
-		w.Close()
+		_ = rc.Close()
+		if cerr := w.Close(); err == nil {
+			err = cerr
+		}
 		if err != nil {
 			return err
 		}

@@ -29,7 +29,7 @@ type Mergeability struct {
 // Computes the merge state, caching conflict results on the row
 func (m *Manager) Mergeability(ctx context.Context, repo *db.GitRepository, actor Actor, issue *db.GitIssue, pr *db.GitPullRequest) (*Mergeability, error) {
 	out := &Mergeability{State: pr.MergeableState}
-	_ = json_unmarshal(pr.ConflictPaths, &out.Conflicts)
+	_ = jsonUnmarshal(pr.ConflictPaths, &out.Conflicts)
 	switch {
 	case repo.IsArchived:
 		out.Blockers = append(out.Blockers, Blocker{"archived", "the repository is archived"})
@@ -72,7 +72,7 @@ func (m *Manager) Mergeability(ctx context.Context, repo *db.GitRepository, acto
 		if len(out.Conflicts) > 0 {
 			state = MergeableConflict
 		}
-		raw, _ := json_marshal(out.Conflicts)
+		raw, _ := jsonMarshal(out.Conflicts)
 		pr.MergeableState, pr.ConflictPaths = state, string(raw)
 		_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"mergeable_state": state, "conflict_paths": string(raw)})
 	}

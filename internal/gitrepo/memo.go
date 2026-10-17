@@ -27,8 +27,8 @@ type memoCall[V any] struct {
 	err   error
 }
 
-func NewMemo[V any](ttl time.Duration, max int) *Memo[V] {
-	return &Memo[V]{ttl: ttl, max: max, entries: map[string]*memoEntry[V]{}, inflight: map[string]*memoCall[V]{}}
+func NewMemo[V any](ttl time.Duration, size int) *Memo[V] {
+	return &Memo[V]{ttl: ttl, max: size, entries: map[string]*memoEntry[V]{}, inflight: map[string]*memoCall[V]{}}
 }
 
 // Returns the cached value or computes it once for every concurrent caller

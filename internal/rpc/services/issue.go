@@ -675,24 +675,24 @@ func (s *IssueService) ListMilestones(ctx context.Context, req *v1.ListMilestone
 	return out, nil
 }
 
-func (s *IssueService) milestoneActor(ctx context.Context, namespace, name string) (*auth.AuthenticatedUser, *storage.GitRepository, forge.Actor, error) {
+func (s *IssueService) milestoneActor(ctx context.Context, namespace, name string) (*storage.GitRepository, forge.Actor, error) {
 	user := auth.UserFromContext(ctx)
 	if err := issueWriteAllowed(ctx, user); err != nil {
-		return nil, nil, forge.Actor{}, err
+		return nil, forge.Actor{}, err
 	}
 	repo, err := s.repo(ctx, user, namespace, name)
 	if err != nil {
-		return nil, nil, forge.Actor{}, err
+		return nil, forge.Actor{}, err
 	}
 	actor, err := s.actor(ctx, user, repo, false)
 	if err != nil {
-		return nil, nil, forge.Actor{}, err
+		return nil, forge.Actor{}, err
 	}
-	return user, repo, actor, nil
+	return repo, actor, nil
 }
 
 func (s *IssueService) CreateMilestone(ctx context.Context, req *v1.CreateMilestoneRequest) (*v1.CreateMilestoneResponse, error) {
-	_, repo, actor, err := s.milestoneActor(ctx, req.Namespace, req.Name)
+	repo, actor, err := s.milestoneActor(ctx, req.Namespace, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -704,7 +704,7 @@ func (s *IssueService) CreateMilestone(ctx context.Context, req *v1.CreateMilest
 }
 
 func (s *IssueService) UpdateMilestone(ctx context.Context, req *v1.UpdateMilestoneRequest) (*v1.UpdateMilestoneResponse, error) {
-	_, repo, actor, err := s.milestoneActor(ctx, req.Namespace, req.Name)
+	repo, actor, err := s.milestoneActor(ctx, req.Namespace, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -731,7 +731,7 @@ func (s *IssueService) UpdateMilestone(ctx context.Context, req *v1.UpdateMilest
 }
 
 func (s *IssueService) DeleteMilestone(ctx context.Context, req *v1.DeleteMilestoneRequest) (*v1.DeleteMilestoneResponse, error) {
-	_, repo, actor, err := s.milestoneActor(ctx, req.Namespace, req.Name)
+	repo, actor, err := s.milestoneActor(ctx, req.Namespace, req.Name)
 	if err != nil {
 		return nil, err
 	}

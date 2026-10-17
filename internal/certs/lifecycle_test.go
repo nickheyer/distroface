@@ -103,14 +103,18 @@ func TestOrgICADependents(t *testing.T) {
 	e := newTestEngine(t, store, res, "", "")
 	ctx := context.Background()
 	rootCert, rootKey, _ := GenerateRootCA("root")
-	store.SaveTLSCertificate(ctx, &storage.TLSCertificate{Scope: v1.TLSScope_TLS_SCOPE_APP_CA, CertPEM: rootCert, KeyPEM: rootKey})
+	if err := store.SaveTLSCertificate(ctx, &storage.TLSCertificate{Scope: v1.TLSScope_TLS_SCOPE_APP_CA, CertPEM: rootCert, KeyPEM: rootKey}); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := store.CreateOrganization(ctx, &storage.Organization{ID: "o1", Name: "a", CreatedBy: "n"}); err != nil {
 		t.Fatal(err)
 	}
 	// An org holding an ica depends on the root
 	ica, ikey, _ := IssueICA(rootCert, rootKey, "o1 ica")
-	store.SaveTLSCertificate(ctx, &storage.TLSCertificate{Scope: v1.TLSScope_TLS_SCOPE_ORG_CA, OrgID: "o1", CertPEM: ica, KeyPEM: ikey})
+	if err := store.SaveTLSCertificate(ctx, &storage.TLSCertificate{Scope: v1.TLSScope_TLS_SCOPE_ORG_CA, OrgID: "o1", CertPEM: ica, KeyPEM: ikey}); err != nil {
+		t.Fatal(err)
+	}
 	if deps := e.OrgICADependents(ctx); len(deps) != 1 || deps[0] != "o1" {
 		t.Fatalf("expected o1 as a dependent, got %v", deps)
 	}
@@ -120,7 +124,9 @@ func TestOrgICADependents(t *testing.T) {
 		t.Fatal(err)
 	}
 	sc, sk, _ := GenerateCA("o2 standalone")
-	store.SaveTLSCertificate(ctx, &storage.TLSCertificate{Scope: v1.TLSScope_TLS_SCOPE_ORG_CA, OrgID: "o2", CertPEM: sc, KeyPEM: sk})
+	if err := store.SaveTLSCertificate(ctx, &storage.TLSCertificate{Scope: v1.TLSScope_TLS_SCOPE_ORG_CA, OrgID: "o2", CertPEM: sc, KeyPEM: sk}); err != nil {
+		t.Fatal(err)
+	}
 	deps := e.OrgICADependents(ctx)
 	for _, d := range deps {
 		if d == "o2" {

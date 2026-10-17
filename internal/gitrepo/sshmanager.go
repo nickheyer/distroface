@@ -157,7 +157,7 @@ func describeBindError(port int, err error) error {
 			return fmt.Errorf("port %d is already in use by another process on this host", port)
 		}
 	}
-	return fmt.Errorf("port %d cannot be bound: %v", port, err)
+	return fmt.Errorf("port %d cannot be bound: %w", port, err)
 }
 
 // SHA256 fingerprints in the order of HostKeys

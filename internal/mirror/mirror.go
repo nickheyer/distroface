@@ -27,7 +27,7 @@ func ParseConfig(raw string) (*v1.MirrorConfig, error) {
 		return cfg, nil
 	}
 	if err := protojson.Unmarshal([]byte(raw), cfg); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return cfg, nil
 }

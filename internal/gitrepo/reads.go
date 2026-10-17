@@ -487,7 +487,7 @@ type Blob struct {
 }
 
 // Reads one file of a commit, capped for inline answers
-func (r *Repo) Blob(commit plumbing.Hash, p string, cap int64) (*Blob, error) {
+func (r *Repo) Blob(commit plumbing.Hash, p string, maxBytes int64) (*Blob, error) {
 	c, err := r.Commit(commit)
 	if err != nil {
 		return nil, err
@@ -515,8 +515,8 @@ func (r *Repo) Blob(commit plumbing.Hash, p string, cap int64) (*Blob, error) {
 	}
 	defer rd.Close()
 	limit := blob.Size
-	if cap > 0 && limit > cap {
-		limit = cap
+	if maxBytes > 0 && limit > maxBytes {
+		limit = maxBytes
 		out.Truncated = true
 	}
 	buf, err := io.ReadAll(io.LimitReader(rd, limit))
@@ -980,10 +980,10 @@ func SignatureToProto(s object.Signature) *v1.GitSignature {
 // Proto conversion of a listing entry
 func EntryToProto(e Entry) *v1.GitTreeEntry {
 	typ := "blob"
-	switch {
-	case e.Mode == filemode.Dir:
+	switch e.Mode {
+	case filemode.Dir:
 		typ = "tree"
-	case e.Mode == filemode.Submodule:
+	case filemode.Submodule:
 		typ = "commit"
 	}
 	return &v1.GitTreeEntry{

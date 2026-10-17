@@ -207,7 +207,7 @@ func (r *Repo) changeToFile(ctx context.Context, ch *object.Change, maxLines int
 		if stats, hunks, err = r.patchChange(ctx, ch, maxLines); err != nil {
 			return nil, err
 		}
-		blobStats.Get(ctx, key, func() (blobPairStats, error) { return stats, nil })
+		_, _ = blobStats.Get(ctx, key, func() (blobPairStats, error) { return stats, nil })
 	} else if stats, err = blobStats.Get(ctx, key, func() (blobPairStats, error) {
 		st, _, err := r.patchChange(ctx, ch, 0)
 		return st, err
@@ -332,7 +332,7 @@ func hunksFromChunks(chunks []fdiff.Chunk, maxLines int) ([]*v1.DiffHunk, int32,
 				}
 				if run > 2*DiffContextLines || j+run >= len(lines) {
 					tail := min(run, DiffContextLines)
-					for t := 0; t < tail; t++ {
+					for t := range tail {
 						h.Lines = append(h.Lines, &v1.DiffLine{Kind: l.kind, OldNumber: int32(oldNo), NewNumber: int32(newNo), Text: lines[j+t].text})
 						oldNo++
 						newNo++
@@ -342,7 +342,7 @@ func hunksFromChunks(chunks []fdiff.Chunk, maxLines int) ([]*v1.DiffHunk, int32,
 					j += tail
 					goto closeHunk
 				}
-				for t := 0; t < run; t++ {
+				for t := range run {
 					h.Lines = append(h.Lines, &v1.DiffLine{Kind: l.kind, OldNumber: int32(oldNo), NewNumber: int32(newNo), Text: lines[j+t].text})
 					oldNo++
 					newNo++

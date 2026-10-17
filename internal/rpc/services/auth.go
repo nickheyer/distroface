@@ -27,8 +27,6 @@ import (
 
 var _ distrofacev1connect.AuthServiceHandler = (*AuthService)(nil)
 
-var usernameRegex = utils.UsernameRegex
-
 type AuthService struct {
 	store       *stores.Store
 	log         *logger.Logger

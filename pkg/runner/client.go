@@ -108,7 +108,7 @@ func (c *Client) UploadArtifact(ctx context.Context, jobID, jobToken, name, relP
 	if err != nil {
 		return nil, fmt.Errorf("upload %s: %w", relPath, err)
 	}
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("upload %s: server returned %d", relPath, resp.StatusCode)

@@ -151,7 +151,7 @@ func (s *ActionsService) ListWorkflowRuns(ctx context.Context, req *v1.ListWorkf
 }
 
 func (s *ActionsService) GetWorkflowRun(ctx context.Context, req *v1.GetWorkflowRunRequest) (*v1.GetWorkflowRunResponse, error) {
-	repo, run, _, err := s.actionsRun(ctx, req.Namespace, req.Name, req.Id, gitrepo.LevelRead)
+	repo, run, err := s.actionsRun(ctx, req.Namespace, req.Name, req.Id, gitrepo.LevelRead)
 	if err != nil {
 		return nil, err
 	}
@@ -159,7 +159,7 @@ func (s *ActionsService) GetWorkflowRun(ctx context.Context, req *v1.GetWorkflow
 }
 
 func (s *ActionsService) CancelRun(ctx context.Context, req *v1.CancelRunRequest) (*v1.CancelRunResponse, error) {
-	repo, run, _, err := s.actionsRun(ctx, req.Namespace, req.Name, req.Id, gitrepo.LevelWrite)
+	repo, run, err := s.actionsRun(ctx, req.Namespace, req.Name, req.Id, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func (s *ActionsService) CancelRun(ctx context.Context, req *v1.CancelRunRequest
 }
 
 func (s *ActionsService) RerunRun(ctx context.Context, req *v1.RerunRunRequest) (*v1.RerunRunResponse, error) {
-	repo, run, _, err := s.actionsRun(ctx, req.Namespace, req.Name, req.Id, gitrepo.LevelWrite)
+	repo, run, err := s.actionsRun(ctx, req.Namespace, req.Name, req.Id, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +181,7 @@ func (s *ActionsService) RerunRun(ctx context.Context, req *v1.RerunRunRequest) 
 }
 
 func (s *ActionsService) ApproveRun(ctx context.Context, req *v1.ApproveRunRequest) (*v1.ApproveRunResponse, error) {
-	repo, run, _, err := s.actionsRun(ctx, req.Namespace, req.Name, req.Id, gitrepo.LevelWrite)
+	repo, run, err := s.actionsRun(ctx, req.Namespace, req.Name, req.Id, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func (s *ActionsService) ApproveRun(ctx context.Context, req *v1.ApproveRunReque
 }
 
 func (s *ActionsService) GetJob(ctx context.Context, req *v1.GetJobRequest) (*v1.GetJobResponse, error) {
-	_, _, job, err := s.actionsJob(ctx, req.Namespace, req.Name, req.Id)
+	job, err := s.actionsJob(ctx, req.Namespace, req.Name, req.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +200,7 @@ func (s *ActionsService) GetJob(ctx context.Context, req *v1.GetJobRequest) (*v1
 }
 
 func (s *ActionsService) StreamJobLog(ctx context.Context, req *v1.StreamJobLogRequest, stream distrofacev1connect.ActionsServiceStreamJobLogServerStream) error {
-	_, _, job, err := s.actionsJob(ctx, req.Namespace, req.Name, req.JobId)
+	job, err := s.actionsJob(ctx, req.Namespace, req.Name, req.JobId)
 	if err != nil {
 		return err
 	}
@@ -247,7 +247,7 @@ func (s *ActionsService) StreamJobLog(ctx context.Context, req *v1.StreamJobLogR
 }
 
 func (s *ActionsService) ListRunArtifacts(ctx context.Context, req *v1.ListRunArtifactsRequest) (*v1.ListRunArtifactsResponse, error) {
-	_, run, _, err := s.actionsRun(ctx, req.Namespace, req.Name, req.RunId, gitrepo.LevelRead)
+	_, run, err := s.actionsRun(ctx, req.Namespace, req.Name, req.RunId, gitrepo.LevelRead)
 	if err != nil {
 		return nil, err
 	}
@@ -448,47 +448,48 @@ func (s *ActionsService) actionsRepo(ctx context.Context, ns, name string, need 
 	return repo, user, nil
 }
 
-func (s *ActionsService) actionsRun(ctx context.Context, ns, name, id string, need gitrepo.Level) (*storage.GitRepository, *storage.ActionsRun, *auth.AuthenticatedUser, error) {
-	repo, user, err := s.actionsRepo(ctx, ns, name, need)
+func (s *ActionsService) actionsRun(ctx context.Context, ns, name, id string, need gitrepo.Level) (*storage.GitRepository, *storage.ActionsRun, error) {
+	repo, _, err := s.actionsRepo(ctx, ns, name, need)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
 	if id == "" {
-		return nil, nil, nil, connect.Errorf(connect.CodeInvalidArgument, "run id is required")
+		return nil, nil, connect.Errorf(connect.CodeInvalidArgument, "run id is required")
 	}
 	run, err := s.store.GetActionsRun(ctx, repo.ID, id)
 	if err != nil {
-		return nil, nil, nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		return nil, nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if run == nil {
-		return nil, nil, nil, connect.Errorf(connect.CodeNotFound, "run not found")
+		return nil, nil, connect.Errorf(connect.CodeNotFound, "run not found")
 	}
-	return repo, run, user, nil
+	return repo, run, nil
 }
 
-func (s *ActionsService) actionsJob(ctx context.Context, ns, name, id string) (*storage.GitRepository, *storage.ActionsRun, *storage.ActionsJob, error) {
+// The run lookup proves the job belongs to this repository
+func (s *ActionsService) actionsJob(ctx context.Context, ns, name, id string) (*storage.ActionsJob, error) {
 	repo, _, err := s.actionsRepo(ctx, ns, name, gitrepo.LevelRead)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	if id == "" {
-		return nil, nil, nil, connect.Errorf(connect.CodeInvalidArgument, "job id is required")
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "job id is required")
 	}
 	job, err := s.store.GetActionsJob(ctx, id)
 	if err != nil {
-		return nil, nil, nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if job == nil {
-		return nil, nil, nil, connect.Errorf(connect.CodeNotFound, "job not found")
+		return nil, connect.Errorf(connect.CodeNotFound, "job not found")
 	}
 	run, err := s.store.GetActionsRun(ctx, repo.ID, job.RunID)
 	if err != nil {
-		return nil, nil, nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	if run == nil {
-		return nil, nil, nil, connect.Errorf(connect.CodeNotFound, "job not found")
+		return nil, connect.Errorf(connect.CodeNotFound, "job not found")
 	}
-	return repo, run, job, nil
+	return job, nil
 }
 
 func (s *ActionsService) actionsReloadRun(ctx context.Context, repo *storage.GitRepository, run *storage.ActionsRun) *v1.WorkflowRun {

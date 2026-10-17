@@ -289,7 +289,7 @@ func (d *dockerExecutor) Exec(ctx context.Context, spec execSpec) (int, error) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		stdcopy.StdCopy(spec.Out, spec.Out, resp.Reader)
+		_, _ = stdcopy.StdCopy(spec.Out, spec.Out, resp.Reader)
 	}()
 	select {
 	case <-done:
@@ -353,7 +353,7 @@ func (d *dockerExecutor) Close(ctx context.Context) error {
 	defer cancel()
 	if d.containerID != "" {
 		// Root owned files from the container would block host cleanup
-		d.Exec(bg, execSpec{Cmd: []string{"/bin/sh", "-c", "rm -rf " + containerWorkRoot + "/* " + containerWorkRoot + "/.[!.]* 2>/dev/null; true"}, Out: io.Discard})
+		_, _ = d.Exec(bg, execSpec{Cmd: []string{"/bin/sh", "-c", "rm -rf " + containerWorkRoot + "/* " + containerWorkRoot + "/.[!.]* 2>/dev/null; true"}, Out: io.Discard})
 		_ = d.cli.ContainerRemove(bg, d.containerID, container.RemoveOptions{Force: true, RemoveVolumes: true})
 		d.containerID = ""
 	}
@@ -396,7 +396,9 @@ func runContainer(ctx context.Context, cli *client.Client, spec containerRun) (i
 	}
 	bg, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
-	defer cli.ContainerRemove(bg, resp.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
+	defer func() {
+		_ = cli.ContainerRemove(bg, resp.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
+	}()
 	waitCh, errCh := cli.ContainerWait(ctx, resp.ID, container.WaitConditionNextExit)
 	if err := cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return -1, fmt.Errorf("start container: %w", err)
@@ -407,7 +409,7 @@ func runContainer(ctx context.Context, cli *client.Client, spec containerRun) (i
 		go func() {
 			defer close(logDone)
 			defer logs.Close()
-			stdcopy.StdCopy(spec.Out, spec.Out, logs)
+			_, _ = stdcopy.StdCopy(spec.Out, spec.Out, logs)
 		}()
 	} else {
 		close(logDone)

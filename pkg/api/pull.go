@@ -137,10 +137,10 @@ func newPRCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func getPull(cmd *cobra.Command, args []string) (RepoRef, int64, *v1.PullRequest, error) {
+func getPull(cmd *cobra.Command, args []string) (int64, *v1.PullRequest, error) {
 	ref, number, err := repoNumberArgs(args)
 	if err != nil {
-		return ref, 0, nil, err
+		return 0, nil, err
 	}
 	resp, err := client.Pulls().GetPullRequest(cmd.Context(), &v1.GetPullRequestRequest{
 		Namespace: ref.Namespace,
@@ -148,9 +148,9 @@ func getPull(cmd *cobra.Command, args []string) (RepoRef, int64, *v1.PullRequest
 		Number:    number,
 	})
 	if err != nil {
-		return ref, 0, nil, rpcErr(err)
+		return 0, nil, rpcErr(err)
 	}
-	return ref, number, resp.GetPullRequest(), nil
+	return number, resp.GetPullRequest(), nil
 }
 
 func newPRViewCmd() *cobra.Command {
@@ -159,7 +159,7 @@ func newPRViewCmd() *cobra.Command {
 		Short: "Show a pull request",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, _, pr, err := getPull(cmd, args)
+			_, pr, err := getPull(cmd, args)
 			if err != nil {
 				return err
 			}
@@ -176,7 +176,7 @@ func newPRCheckoutCmd() *cobra.Command {
 		Short: "Fetch the pull request head into a local pr-<n> branch and check it out",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_, number, pr, err := getPull(cmd, args)
+			number, pr, err := getPull(cmd, args)
 			if err != nil {
 				return err
 			}

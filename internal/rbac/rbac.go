@@ -273,7 +273,9 @@ func (e *Enforcer) SetPermissionsForRole(role string, perms []Permission) error 
 		return fmt.Errorf("cannot modify admin role permissions")
 	}
 
-	e.enforcer.RemoveFilteredPolicy(0, role)
+	if _, err := e.enforcer.RemoveFilteredPolicy(0, role); err != nil {
+		return fmt.Errorf("clearing role policies: %w", err)
+	}
 
 	for _, p := range perms {
 		objectID := p.ObjectID

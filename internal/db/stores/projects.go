@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
@@ -32,7 +33,7 @@ func (s *Store) CreateGitProject(ctx context.Context, p *db.GitProject, columns 
 func (s *Store) GetGitProject(ctx context.Context, id string) (*db.GitProject, error) {
 	var p db.GitProject
 	err := s.db.WithContext(ctx).First(&p, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &p, err
@@ -102,7 +103,7 @@ func (s *Store) ListGitProjectColumns(ctx context.Context, projectID string) ([]
 func (s *Store) GetGitProjectColumn(ctx context.Context, projectID, id string) (*db.GitProjectColumn, error) {
 	var c db.GitProjectColumn
 	err := s.db.WithContext(ctx).First(&c, "project_id = ? AND id = ?", projectID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &c, err
@@ -112,11 +113,11 @@ func (s *Store) CreateGitProjectColumn(ctx context.Context, c *db.GitProjectColu
 	if c.ID == "" {
 		c.ID = uuid.New().String()
 	}
-	var max int
-	if err := s.db.WithContext(ctx).Model(&db.GitProjectColumn{}).Where("project_id = ?", c.ProjectID).Select("COALESCE(MAX(position),-1)").Scan(&max).Error; err != nil {
+	var last int
+	if err := s.db.WithContext(ctx).Model(&db.GitProjectColumn{}).Where("project_id = ?", c.ProjectID).Select("COALESCE(MAX(position),-1)").Scan(&last).Error; err != nil {
 		return err
 	}
-	c.Position = max + 1
+	c.Position = last + 1
 	return s.db.WithContext(ctx).Create(c).Error
 }
 
@@ -171,7 +172,7 @@ func (s *Store) DeleteGitProjectColumn(ctx context.Context, projectID, id string
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var fallback db.GitProjectColumn
 		err := tx.Where("project_id = ? AND id <> ?", projectID, id).Order("is_default DESC, position ASC").First(&fallback).Error
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			if err := tx.Where("project_id = ? AND column_id = ?", projectID, id).Delete(&db.GitProjectIssue{}).Error; err != nil {
 				return err
 			}
@@ -193,7 +194,7 @@ func (s *Store) ListGitProjectIssues(ctx context.Context, projectID string) ([]*
 func (s *Store) GetGitProjectIssue(ctx context.Context, issueID string) (*db.GitProjectIssue, error) {
 	var pi db.GitProjectIssue
 	err := s.db.WithContext(ctx).First(&pi, "issue_id = ?", issueID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &pi, err

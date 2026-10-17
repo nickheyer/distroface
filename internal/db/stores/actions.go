@@ -22,7 +22,7 @@ func (s *Store) CreateActionsRunner(ctx context.Context, r *db.ActionsRunner) er
 func (s *Store) GetActionsRunner(ctx context.Context, id string) (*db.ActionsRunner, error) {
 	var r db.ActionsRunner
 	err := s.db.WithContext(ctx).First(&r, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &r, err
@@ -31,7 +31,7 @@ func (s *Store) GetActionsRunner(ctx context.Context, id string) (*db.ActionsRun
 func (s *Store) GetActionsRunnerByTokenHash(ctx context.Context, hash string) (*db.ActionsRunner, error) {
 	var r db.ActionsRunner
 	err := s.db.WithContext(ctx).First(&r, "token_hash = ?", hash).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &r, err
@@ -85,7 +85,7 @@ func (s *Store) CreateActionsRunnerToken(ctx context.Context, t *db.ActionsRunne
 func (s *Store) GetActionsRunnerToken(ctx context.Context, hash string) (*db.ActionsRunnerToken, error) {
 	var t db.ActionsRunnerToken
 	err := s.db.WithContext(ctx).First(&t, "token_hash = ? AND used_at IS NULL AND expires_at > ?", hash, time.Now().UTC()).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &t, err
@@ -140,7 +140,7 @@ func (s *Store) CreateActionsRun(ctx context.Context, run *db.ActionsRun, jobs [
 func (s *Store) GetActionsRun(ctx context.Context, repoID, id string) (*db.ActionsRun, error) {
 	var run db.ActionsRun
 	err := s.db.WithContext(ctx).First(&run, "repo_id = ? AND id = ?", repoID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &run, err
@@ -149,7 +149,7 @@ func (s *Store) GetActionsRun(ctx context.Context, repoID, id string) (*db.Actio
 func (s *Store) GetActionsRunByID(ctx context.Context, id string) (*db.ActionsRun, error) {
 	var run db.ActionsRun
 	err := s.db.WithContext(ctx).First(&run, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &run, err
@@ -243,7 +243,7 @@ func (s *Store) ListActionsJobs(ctx context.Context, runID string) ([]*db.Action
 func (s *Store) GetActionsJob(ctx context.Context, id string) (*db.ActionsJob, error) {
 	var j db.ActionsJob
 	err := s.db.WithContext(ctx).First(&j, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &j, err
@@ -413,7 +413,7 @@ func (s *Store) ListFinishedRunsBefore(ctx context.Context, cutoff time.Time, li
 func (s *Store) UpsertActionsSecret(ctx context.Context, sec *db.ActionsSecret) error {
 	var existing db.ActionsSecret
 	err := s.db.WithContext(ctx).First(&existing, "scope_kind = ? AND scope_id = ? AND name = ?", sec.ScopeKind, sec.ScopeID, sec.Name).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		if sec.ID == "" {
 			sec.ID = uuid.New().String()
 		}
@@ -466,7 +466,7 @@ func (s *Store) DeleteActionsSecret(ctx context.Context, scopeKind, scopeID, nam
 func (s *Store) UpsertActionsVariable(ctx context.Context, v *db.ActionsVariable) error {
 	var existing db.ActionsVariable
 	err := s.db.WithContext(ctx).First(&existing, "scope_kind = ? AND scope_id = ? AND name = ?", v.ScopeKind, v.ScopeID, v.Name).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		if v.ID == "" {
 			v.ID = uuid.New().String()
 		}
@@ -570,7 +570,7 @@ func (s *Store) PruneActionsRunnerTokens(ctx context.Context) error {
 func (s *Store) GetActionsArtifact(ctx context.Context, id string) (*db.ActionsArtifact, error) {
 	var a db.ActionsArtifact
 	err := s.db.WithContext(ctx).First(&a, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &a, err

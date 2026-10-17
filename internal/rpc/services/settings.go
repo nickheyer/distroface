@@ -337,7 +337,7 @@ func (s *SettingsService) checkSSHPortBinds(ctx context.Context, scope *v1.Setti
 		return nil
 	}
 	if _, err := s.ssh.Probe(port); err != nil {
-		return fmt.Errorf("git ssh not saved: %v", err)
+		return fmt.Errorf("git ssh not saved: %w", err)
 	}
 	return nil
 }

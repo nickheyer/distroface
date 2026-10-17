@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,7 +25,7 @@ func (s *Store) GetAPITokenByHash(ctx context.Context, hash string) (*db.APIToke
 	var token db.APIToken
 	err := s.db.WithContext(ctx).Where("token_hash = ?", hash).First(&token).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err

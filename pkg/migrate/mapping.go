@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// namespaceRegex mirrors usernameRegex in internal/rpc/services/auth.go: org and
+// namespaceRegex mirrors utils.UsernameRegex in pkg/utils/username.go: org and
 // user names must satisfy it, and repo namespaces are org/user names.
 var namespaceRegex = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{1,38}[a-z0-9]$`)
 

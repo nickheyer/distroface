@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,7 +21,7 @@ func (s *Store) UpsertGitNotification(ctx context.Context, n *db.GitNotification
 		}
 		var existing db.GitNotification
 		err := q.First(&existing).Error
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			if n.ID == "" {
 				n.ID = uuid.New().String()
 			}
@@ -44,7 +45,7 @@ func (s *Store) UpsertGitNotification(ctx context.Context, n *db.GitNotification
 func (s *Store) GetGitNotification(ctx context.Context, userID, id string) (*db.GitNotification, error) {
 	var n db.GitNotification
 	err := s.db.WithContext(ctx).First(&n, "user_id = ? AND id = ?", userID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &n, err
@@ -105,7 +106,7 @@ func defaultNotificationPrefs(userID string) *db.UserNotificationPrefs {
 func (s *Store) GetUserNotificationPrefs(ctx context.Context, userID string) (*db.UserNotificationPrefs, error) {
 	var p db.UserNotificationPrefs
 	err := s.db.WithContext(ctx).First(&p, "user_id = ?", userID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return defaultNotificationPrefs(userID), nil
 	}
 	return &p, err

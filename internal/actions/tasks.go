@@ -179,7 +179,7 @@ func (m *Manager) tryClaim(ctx context.Context, runner *db.ActionsRunner) (*v1.T
 		run.Status = StatusRunning
 		_ = m.store.UpdateActionsRunColumns(ctx, run.ID, cols)
 	}
-	task, err := m.buildTask(ctx, runner, repo, run, job)
+	task, err := m.buildTask(ctx, repo, run, job)
 	if err != nil {
 		m.log.Error("actions: build task for job %s: %v", job.ID, err)
 		m.failJob(ctx, repo, run, job, ConclusionFailure, "server could not prepare the job: "+err.Error())
@@ -187,18 +187,6 @@ func (m *Manager) tryClaim(ctx context.Context, runner *db.ActionsRunner) (*v1.T
 		return nil, nil
 	}
 	return task, nil
-}
-
-func (m *Manager) runnerServes(ctx context.Context, runner *db.ActionsRunner, repo *db.GitRepository) bool {
-	switch runner.ScopeKind {
-	case db.ActionsScopeSystem:
-		return true
-	case db.ActionsScopeOrg:
-		return repo.IsOrgNamespace && m.repoOrgID(ctx, repo) == runner.ScopeID
-	case db.ActionsScopeRepo:
-		return runner.ScopeID == repo.ID
-	}
-	return false
 }
 
 // Every job label must appear on the runner, case insensitive
@@ -247,7 +235,7 @@ func (m *Manager) groupBusy(ctx context.Context, run *db.ActionsRun) bool {
 }
 
 // Everything the runner needs to execute one job
-func (m *Manager) buildTask(ctx context.Context, runner *db.ActionsRunner, repo *db.GitRepository, run *db.ActionsRun, job *db.ActionsJob) (*v1.Task, error) {
+func (m *Manager) buildTask(ctx context.Context, repo *db.GitRepository, run *db.ActionsRun, job *db.ActionsJob) (*v1.Task, error) {
 	def, err := decodeDefinition(job)
 	if err != nil {
 		return nil, err

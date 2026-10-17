@@ -288,7 +288,7 @@ func (a *V1API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	a.auditLogin(r, user.Username, user.ID, audit.OutcomeSuccess)
 
-	writeJSON(w, http.StatusOK, v1AuthResponse{
+	writeJSON(w, v1AuthResponse{
 		Token:     token,
 		ExpiresIn: int(time.Until(expiresAt).Seconds()),
 		IssuedAt:  time.Now().UTC(),
@@ -318,7 +318,7 @@ func (a *V1API) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, v1AuthResponse{
+	writeJSON(w, v1AuthResponse{
 		Token:     token,
 		ExpiresIn: int(time.Until(expiresAt).Seconds()),
 		IssuedAt:  time.Now().UTC(),
@@ -421,7 +421,7 @@ func (a *V1API) handleListRepos(w http.ResponseWriter, r *http.Request, user *au
 	for _, repo := range repos {
 		out = append(out, a.repoToV1(r, repo, owners))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, out)
 }
 
 func (a *V1API) handleDeleteRepo(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
@@ -666,7 +666,7 @@ func (a *V1API) handleListVersions(w http.ResponseWriter, r *http.Request, user 
 	for _, artifact := range artifacts {
 		grouped[artifact.Version] = append(grouped[artifact.Version], artifactToV1(artifact))
 	}
-	writeJSON(w, http.StatusOK, grouped)
+	writeJSON(w, grouped)
 }
 
 // ── Search ───────────────────────────────────────────────────────────────
@@ -746,7 +746,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 			return
 		}
 		if len(repos) == 0 {
-			writeJSON(w, http.StatusOK, v1SearchResponse{Results: []v1Artifact{}, Sort: sortField, Order: order})
+			writeJSON(w, v1SearchResponse{Results: []v1Artifact{}, Sort: sortField, Order: order})
 			return
 		}
 		for _, repo := range repos {
@@ -774,7 +774,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 	}
 
 	// V1 quirks, total is row count and offset zero
-	writeJSON(w, http.StatusOK, v1SearchResponse{
+	writeJSON(w, v1SearchResponse{
 		Results: results,
 		Total:   len(results),
 		Limit:   min(criteria.Limit, len(results)),
@@ -1090,8 +1090,8 @@ func (a *V1API) writeManagerErr(w http.ResponseWriter, err error) {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
+func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(v)
 }

@@ -67,7 +67,7 @@ type HookOptions struct {
 }
 
 // Hooks bound to one repository and its held write lock
-func (m *Manager) Hooks(ctx context.Context, repo *db.GitRepository, actor *auth.AuthenticatedUser, opts HookOptions, lock *RepoLock) transport.ReceivePackHooks {
+func (m *Manager) Hooks(repo *db.GitRepository, actor *auth.AuthenticatedUser, opts HookOptions, lock *RepoLock) transport.ReceivePackHooks {
 	return transport.ReceivePackHooks{
 		PreReceive: func(hctx context.Context, info *transport.PreReceiveInfo) error {
 			return m.preReceive(hctx, repo, actor, opts, info)
@@ -347,12 +347,4 @@ func newCommits(st storage.Storer, old, new plumbing.Hash, limit int) ([]*object
 		return nil
 	})
 	return out, truncated, err
-}
-
-// Progress writer that discards when the transport offers none
-func progressOrDiscard(w io.Writer) io.Writer {
-	if w == nil {
-		return io.Discard
-	}
-	return w
 }

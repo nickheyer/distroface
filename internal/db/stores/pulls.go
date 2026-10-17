@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,7 +19,7 @@ func (s *Store) CreateGitPullRequest(ctx context.Context, pr *db.GitPullRequest)
 func (s *Store) GetGitPullRequest(ctx context.Context, issueID string) (*db.GitPullRequest, error) {
 	var pr db.GitPullRequest
 	err := s.db.WithContext(ctx).First(&pr, "issue_id = ?", issueID).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &pr, err
@@ -80,7 +81,7 @@ func (s *Store) FindOpenPull(ctx context.Context, repoID, headRepoID, headBranch
 	err := s.db.WithContext(ctx).Joins("JOIN git_pull_requests pr ON pr.issue_id = git_issues.id").
 		Where("git_issues.repo_id = ? AND git_issues.state = ? AND pr.head_repo_id = ? AND pr.head_branch = ? AND pr.base_branch = ?",
 			repoID, db.IssueStateOpen, headRepoID, headBranch, baseBranch).First(&issue).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &issue, err
@@ -106,7 +107,7 @@ func (s *Store) AddGitReviewRequest(ctx context.Context, r *db.GitReviewRequest)
 	if err == nil {
 		return s.db.WithContext(ctx).Model(&existing).Update("fulfilled", false).Error
 	}
-	if err != gorm.ErrRecordNotFound {
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err
 	}
 	return s.db.WithContext(ctx).Create(r).Error
@@ -138,7 +139,7 @@ func (s *Store) CreateGitReview(ctx context.Context, r *db.GitReview) error {
 func (s *Store) GetGitReview(ctx context.Context, issueID, id string) (*db.GitReview, error) {
 	var r db.GitReview
 	err := s.db.WithContext(ctx).First(&r, "issue_id = ? AND id = ?", issueID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &r, err
@@ -147,7 +148,7 @@ func (s *Store) GetGitReview(ctx context.Context, issueID, id string) (*db.GitRe
 func (s *Store) GetPendingGitReview(ctx context.Context, issueID, reviewerID string) (*db.GitReview, error) {
 	var r db.GitReview
 	err := s.db.WithContext(ctx).First(&r, "issue_id = ? AND reviewer_id = ? AND state = ?", issueID, reviewerID, "pending").Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &r, err
@@ -217,7 +218,7 @@ func (s *Store) CreateGitReviewComment(ctx context.Context, c *db.GitReviewComme
 func (s *Store) GetGitReviewComment(ctx context.Context, issueID, id string) (*db.GitReviewComment, error) {
 	var c db.GitReviewComment
 	err := s.db.WithContext(ctx).First(&c, "issue_id = ? AND id = ?", issueID, id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	return &c, err

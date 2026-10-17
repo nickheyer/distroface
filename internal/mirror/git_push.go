@@ -140,7 +140,7 @@ func (m *Monitor) execPushSync(ctx context.Context, repo *db.GitRepository, pm *
 func (m *Monitor) pushToMirror(ctx context.Context, repo *db.GitRepository, pm *db.GitPushMirror, state *pushMirrorState) error {
 	u, err := gitrepo.ValidateUpstreamURL(pm.RemoteURL)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
+		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	auth := gitrepo.RemoteAuth{HTTPClient: m.client, Dialer: m.dial}
 	switch {
