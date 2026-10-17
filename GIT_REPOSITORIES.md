@@ -118,12 +118,15 @@ library, the diff viewer renders the structured hunks from 14.3.
   never be a UI or data plane route. `utils.ReservedNamespaces` lists `admin, api,
   artifacts, images, orgs, settings, login, logout, register, change-password,
   forgot-password, reset-password, docs, notifications, explore, v2, auth, acme, assets,
-  static, favicon.ico, robots.txt` and is enforced in `services/auth.go` Register,
-  `services/user.go` AdminCreateUser, `auth/oidc.go` through `UsernameFromClaims` (a
-  reserved slug gets a `-1` suffix), `services/organization.go` CreateOrganization, and
-  `container/bootstrap.go`. A migration following
-  `202607220001_rename_invalid_oidc_usernames.go` renames existing colliding accounts with
-  a `-user` suffix and moves their repo namespaces and casbin objects along.
+  static, favicon.ico, robots.txt, git, new, actions, docker, github` (the last three so a
+  `uses: actions/checkout` reference can never land on a local squat, the runner resolves
+  those owners on github.com alone) and is enforced in `services/auth.go`
+  Register, `services/user.go` AdminCreateUser, `auth/oidc.go` through
+  `UsernameFromClaims` (a reserved slug gets a `-1` suffix), and
+  `services/organization.go` CreateOrganization. Bootstrap accounts are operator declared,
+  so `container/bootstrap.go` checks only the name syntax and the conventional `admin`
+  operator keeps working. Existing accounts are never renamed. A reserved name that
+  already exists only loses its root profile page to the UI route of the same name.
 
 Addresses, one table so nothing is ambiguous:
 
@@ -212,18 +215,24 @@ Engine rules:
 - Writers serialize. `transport.ReceivePack` documents that callers must serialize
   concurrent ref writers. `locks.go` keeps one `sync.Mutex` per repo id, taken by
   receive-pack, web commits, merges, mirror fetches, maintenance, and rename. Reads never
-  take it. Rename additionally answers transfers 503 with `Retry-After: 2` while the
-  directory moves.
+  take it. Receive-pack takes the lock before opening the storer and re-reads the row
+  under it, so a push that waited out a rename lands in the moved directory instead of
+  recreating the old one. Rename additionally answers transfers 503 with `Retry-After: 2`
+  while the directory moves.
 - Transfer cap. One semaphore of `git.max_concurrent_transfers` (default 32) wraps every
   upload-pack, receive-pack, and upload-archive on HTTP and SSH. Pack generation in pure
   Go is CPU and memory bound, so the cap is the safety valve. A waiter gives up after ten
   seconds, HTTP answers 503 with `Retry-After: 5`, SSH exits 1 with `server busy`.
 - Size accounting. `SizeBytes` is recomputed after every ref write by walking
   `objects/`, cached on the row, shown in the UI, and summed into the storage usage page.
-- Maintenance (`maintenance.go`). `Repository.RepackObjects` then `Repository.Prune`
-  per repo on the schedule in `git.gc`, following `admin.Collector.Schedule`. Rejected
-  pushes leave their unpacked pack on disk because go-git unpacks before `PreReceive`
-  runs, maintenance reclaims it. Repo settings expose "Run maintenance now".
+- Maintenance (`maintenance.go`). A repack then `Repository.Prune` per repo on the
+  schedule in `git.gc`, following `admin.Collector.Schedule`. The repack snapshots every
+  ref, walks and writes the new pack without the writer lock, then takes the lock only to
+  drop the old packs and packed loose objects, and skips that swap when any ref moved in
+  between, so pushes never wait on a long repack. Prune runs unlocked with a one hour
+  object grace. Rejected pushes leave their unpacked pack on disk because go-git unpacks
+  before `PreReceive` runs, maintenance reclaims it. One run per repo at a time, repos
+  are visited one after another. Repo settings expose "Run maintenance now".
 - Object format. `CreateGitRepository.object_format` accepts sha1 (default) or sha256,
   go-git serves both and advertises `object-format`.
 
@@ -250,8 +259,8 @@ var gitPath = regexp.MustCompile(`^/([^/]+)/([^/]+?)(\.wiki)?(\.git)?/(info/refs
 Everything else falls through to the SPA, which is how `/ns/name` is the page and
 `/ns/name.git` is the remote. Every other data plane (`/v2/`, `/api/v1/`, `/auth/`,
 `/acme/`, `/.well-known/`, the Connect prefixes) is claimed by a more specific pattern and
-never reaches the catch all, and the reserved namespace list in 3 keeps a user or org
-from ever owning one of those first segments. The suffix set never overlaps a UI sub page
+never reaches the catch all, and the reserved namespace list in 3 keeps new users and orgs
+from owning one of those first segments. The suffix set never overlaps a UI sub page
 because UI sub pages use plain words (`tree`, `blob`, `commits`, `issues`, `pulls`,
 `settings`) and the data plane uses `info/*`, `git-*`, `objects/*`, `HEAD`, and `-/*`.
 
@@ -288,10 +297,13 @@ the 500 only when no byte has been written yet.
 
 1. Portal. Already applied by the middleware (24). `portal.FromContext` carries
    `AllowPush` and `AllowAnonymous`.
-2. Repo. Resolve `(ns, name)`. A miss consults `git_redirects` (25) and answers 301 to the
-   new location for `GET info/refs`, which git follows. Still a miss answers 401 with
+2. Repo. Resolve `(ns, name)`. A miss consults `git_redirects` (25) and, once the access
+   check in step 4 has admitted the caller to the repository at its new address, answers
+   301 to the new location for `GET info/refs`, which git follows, so a move never tells
+   an outsider where a private repository went. Still a miss answers 401 with
    `WWW-Authenticate: Basic realm="distroface"` when no credentials came, 404 otherwise,
-   so existence never leaks.
+   so existence never leaks. The wiki shares no LFS store, `info/lfs` and `-/lfs` on a
+   `.wiki` path answer 404.
 3. Identity. `Authorization: Basic` with username plus local password, or any username
    plus a `df_` token (token wins, mirrors `TokenHandler`). `Authorization: Bearer df_...`
    for tooling. `Bearer <lfs jwt>` on `info/lfs/*` paths (9.5). No credentials runs as
@@ -305,7 +317,11 @@ the 500 only when no byte has been written yet.
    uses `UnitWiki`.
 5. Limits. The transfer semaphore (5). `POST git-upload-pack` applies `pullLimiter`
    keyed by user or `anonPullLimiter` keyed by client IP, same headers and 429 body as
-   `registry.PullRateLimit`.
+   `registry.PullRateLimit`. A receive-pack body is capped at the quota headroom plus one
+   MiB when `git.max_repo_size_mb` is set, 413 up front on a known length and an unpack
+   error mid stream otherwise, so an oversized push never lands on disk. Both transports
+   cut a session that moves no bytes for five minutes, HTTP by pushing read and write
+   deadlines before each read and write, SSH by closing the channel.
 6. Service. Content type must be `application/x-git-<svc>-request`, response is
    `application/x-git-<svc>-result` or `-advertisement`, `Git-Protocol` header becomes
    `GitProtocol`, gzip bodies are decoded. `transport.UploadPack(ctx, st, body, frw,
@@ -320,7 +336,11 @@ the 500 only when no byte has been written yet.
 
 `-/raw/<ref>/<path>` resolves the ref with `ResolveRevision`, reads the blob, sniffs the
 content type, sends `inline` for text and images and `attachment` otherwise, honors
-`If-None-Match` on the blob hash, and streams. An LFS pointer blob is detected and, when
+`If-None-Match` on the blob hash, and streams. Every raw response and every artifact or
+release asset download goes through `utils.HardenUserContent`: html, xhtml, and xml types
+become `text/plain`, `nosniff` is set, and `Content-Security-Policy: default-src 'none';
+style-src 'unsafe-inline'; sandbox` puts a directly opened file (svg included) in an
+opaque sandboxed origin where no script runs and the app session is out of reach. An LFS pointer blob is detected and, when
 `?lfs=1` is set, the object bytes are served instead. `-/archive/<ref>.zip|tar.gz` calls
 `Repository.ArchiveContext` with `Prefix: <name>-<ref>/`, caps concurrency with the
 transfer semaphore, and sets `Content-Disposition`. Both go through the read access check.
@@ -330,14 +350,22 @@ transfer semaphore, and sets `Content-Disposition`. Both go through the read acc
 The git-lfs batch API over the paths in 6.1. Objects live in the artifact `BlobStore`
 through the existing `InitiateUpload`, `AppendChunk`, `CompleteUpload` calls. The computed
 sha256 must equal the requested oid or the upload is rejected and the staging file
-removed. Rows: `lfs_objects(oid, size)` and `git_lfs_links(repo_id, oid)`. Download is
+removed. Rows: `lfs_objects(oid, size)` and `git_lfs_links(repo_id, oid)`. An upload
+batch naming an oid the store already holds links it without a transfer only when the
+caller can read a repository that links it, otherwise the bytes must be uploaded and
+verified, so knowing a private blob's hash is never enough to obtain it. The write
+classifier and the batch handler share one strict parser, and a body that fails to parse
+counts as a write and is then rejected. Download is
 `BlobStore.OpenBlob` streamed with `Content-Length`. `verify` checks row and size.
 `artifacts.Manager.gcBlob` learns the second reference table so a blob shared by an
 artifact and an LFS object is kept until both are gone. Deleting a repo removes its links
 and reaps unreferenced oids. Locks are rows in `lfs_locks(id, repo_id, path, owner_id,
 created_at)` with the create, list, verify, and unlock endpoints and `force` for admins.
-Size limit `git.max_lfs_object_mb`, batch responses echo the caller's own `Authorization`
-header into action headers so HTTP users never need a second credential. `lfs_enabled`
+Creating and releasing a lock needs push, over HTTP and over `git-lfs-transfer` alike.
+Size limit `git.max_lfs_object_mb` on the batch, the basic upload, the SSH `put-object`
+(refused 413 after draining the data packets) and import downloads alike, batch responses
+echo the caller's own `Authorization` header into action headers so HTTP users never need a
+second credential. `lfs_enabled`
 false answers 404 on `info/lfs/*`.
 
 ## 7. Transport over SSH (`internal/gitrepo/ssh.go`, `sshmanager.go`)
@@ -364,7 +392,9 @@ reaches the server as the exec command `git-upload-pack 'torvalds/linux.git'`, a
 arrives as `git-upload-pack 'ci/app.git'`. The server never needs the hostname. A portal
 hostname works the same way: `git@ci.example.com:ci/app.git` resolves to our IP, the key
 authenticates the user, the path names the repo. The portal UI shows exactly that URL, the
-canonical path on the portal hostname, with no port.
+canonical path on the portal hostname, with no port. The brute force limiter clears for a
+client only once the handshake has verified a signature, offering a known public key
+without proving it counts for nothing.
 
 What SSH does not carry is the hostname the client typed. The protocol has no Host header
 and no SNI, so nothing in the connection tells the server whether `host`,
@@ -406,9 +436,10 @@ git-lfs-transfer       read or push, the pure SSH LFS protocol over the channel
 A session with no command answers "Hi <user>! You've successfully authenticated, but
 Distroface does not provide shell access." and exits 0. Exit status is sent with the
 `exit-status` request. Idle timeout 5 minutes with activity resets, per key concurrent
-session cap of 8, global connection cap from `max_concurrent_transfers`. Failed key
-lookups feed `authLimiter` by client IP and audit as `Git/auth` denied. Deploy keys
-(9.2) resolve to a repo scoped principal.
+session cap of 8, global connection cap from `max_concurrent_transfers`. Unknown keys
+audit as `Git/auth` denied but never feed the password limiter shared with docker login,
+an agent offering every key it holds is not an attack and `MaxAuthTries` bounds the probe.
+Deploy keys (9.2) resolve to a repo scoped principal.
 
 ## 8. Hooks (`internal/gitrepo/hooks.go`)
 
@@ -493,9 +524,17 @@ Scope: &CredentialScope{Type: GIT_REPO, ID: "ns/name", ReadOnly}}`.
 
 `CreateAPIToken` gains `CredentialScope scope` with types `GIT_REPO` (id `ns/name`) and
 `ORG` (id org name) plus `read_only`. A scoped token authenticates as the owning user with
-`AuthenticatedUser.Scope` set. One function, `auth.ScopeAllows(user, resource, objectID,
-action)`, runs at the top of `RepoAccess.HasRepoAccess`, `artifacts.Access.HasRepoAccess`,
-`gitrepo.Access.Can`, and `TokenHandler.filterActions`:
+`AuthenticatedUser.Scope` set. One function, `auth.ScopeAllows(user, action, objectIDs...)`,
+runs at the top of `RepoAccess.HasRepoAccess`, `artifacts.Access.HasRepoAccess`,
+`gitrepo.Access.Can`, `TokenHandler.canPull` and `canPush`, and the rpc `authorize`
+interceptor. The interceptor lets a scoped caller reach only `GetCurrentUser`, the public
+procedures, and procedures mapped to the git, repositories, and artifacts resources. Mapped
+procedures with an object are checked against the scope there, with image and artifact
+objects resolved to their linked source repo. Mapped procedures without an object pass for
+reads only, since lists filter visibility in service and creation never fits a scope.
+Everything else (tokens, keys, user and org management, settings, notifications,
+projects, transfers, stars) is refused, and `CreateAPIToken` refuses every scoped caller
+outright so a deploy or job token can never mint a wider one:
 
 - `GIT_REPO ns/name`: the git repo and its linked packages (13), read always, push unless
   read only, nothing else. This is the `GITHUB_TOKEN` analog external CI uses to publish
@@ -524,7 +563,10 @@ interface on `CommitOptions` and `CreateTagOptions` does the signing.
 info/lfs", "header": {"Authorization": "Bearer <jwt>"}, "expires_in": 3600}`. The jwt
 comes from `TokenService.SignTokenAudience("distroface-git", subject, access)` with access
 `[{Type: "git", Name: "ns/name", Actions: ["pull"|"push"]}]`, verified on the HTTP side
-with the new `VerifyAccess(raw, audience)` next to `VerifyTokenSubject`. The same ECDSA key
+with the new `VerifyAccess(raw, audience)` next to `VerifyTokenSubject`. The subject is
+the username for accounts and `deploykey:<id>` for deploy keys, a form no username can
+take, and the verifier rebuilds the deploy key principal from that row, bound to the
+repository the key belongs to. The same ECDSA key
 pair signs registry and git tokens, audiences keep them apart. On a portal the href uses
 the portal host and mapped name.
 
@@ -572,8 +614,8 @@ Gitea organizations grant access through teams, and so do ours from this feature
 includes_all_repos, admin_access, units json)`, `org_team_members(team_id, user_id)`,
 `org_team_repos(team_id, git_repo_id)`.
 
-- Every org gets a default team named `Members` with `is_default=true` at creation, and a
-  migration adds it to existing orgs. Every org member belongs to it implicitly, it cannot
+- Every org gets a default team named `Members` with `is_default=true` at creation,
+  bootstrap seeded orgs included, and a migration adds it to existing orgs. Every org member belongs to it implicitly, it cannot
   be deleted, and its permissions are editable. It starts with `can_create_repos=true`,
   `includes_all_repos=true`, and write on every unit, which is the behavior you asked for:
   members create repos in the org and push to them by default. An org that wants Gitea's
@@ -609,8 +651,10 @@ user:      git read, pull, push, create, update, delete
 anonymous: git read, pull
 ```
 
-`mapping.go` entries use object id `namespace+name` like artifacts. Reads are `AnyGrant`
-with visibility filtered in service. Issue, pull, release, wiki, and project writes map to
+`mapping.go` entries use object id `namespace+name` like artifacts. Every procedure
+appears in exactly one of the public, identity, authenticated only, or permission tables,
+and the interceptor denies a procedure it cannot find rather than letting it through.
+Reads are `AnyGrant` with visibility filtered in service. Issue, pull, release, wiki, and project writes map to
 `git/read` plus the unit check in service, because those are relationship gated, not
 grant gated. Settings mutations map to `git/update`, deletion and transfer to
 `git/delete`, branch and tag writes to `git/push`. `ListScopeableObjects` in
@@ -797,21 +841,26 @@ Compact listing of the remaining tables, columns beyond the obvious ids and time
 | `actions_runs` | repo_id, number, workflow_path, event, ref, sha, trigger_user_id, status, conclusion, started_at, finished_at, skip_ci |  |
 | `actions_jobs` | run_id, name, runs_on json, needs json, status, conclusion, runner_id, attempt, started_at, finished_at, steps json, outputs json |  |
 | `actions_job_logs` | job_id, chunk_index, bytes | appended by the runner, compacted on completion |
-| `actions_secrets`, `actions_variables` | owner scope, name, encrypted value or plain value | secrets sealed with the jwt secret derived key |
+| `actions_secrets`, `actions_variables` | owner scope, name, encrypted value or plain value | secrets sealed under the sealing key |
 | `actions_artifacts` | run_id, artifact_id, name, expires_at | rows in the linked artifact package |
 
 `SettingsRow` gains no columns, the new `SETTINGS_SCOPE_TYPE_REPO = 4` uses the git repo
 id as `scope_id` (22).
 
 Migrations in `internal/db/migrations/`: `AutoMigrate` creates the tables, then
-`202610MM0001_git_repo_links.go` backfills `git_repo_id` on existing image and artifact
-repos by the naming rules in 13, `202610MM0002_default_teams.go` creates the `Members`
-default team for every existing org, `202610MM0003_reserved_namespaces.go` renames
-colliding accounts (3), `202610MM0004_token_scope.go` adds the nullable scope columns.
+`202610MM0002_default_teams.go` creates the `Members` default team for every existing org,
+and `AutoMigrate` adds the token scope columns. Packages link to their source repository
+when either side is created, by the naming rules in 13, so no backfill runs at upgrade
+time, there are no git repositories yet to link.
+`Migrate` runs on one pinned connection with `foreign_keys` off for the schema phase,
+because the sqlite driver adds a constraint by copying the table and dropping the old one,
+and a drop with foreign keys on cascades deletes through every child table.
 
 ## 12. Protos (`proto/distroface/v1/*.proto`)
 
 Every rpc gets its own request and response message, buf lint from `buf.yaml` applies.
+Request messages are capped at 64 MiB on the connect mount, bulk bytes always travel over
+the plain http data planes.
 Every list takes `PageRequest` and answers `PageInfo` through `pkg/pages` with a
 `stores.*Query` spec. Repo scoped requests carry `namespace` and `name` so
 `ObjectIDField: "namespace+name"` works in the interceptor. Commit paging uses the opaque
@@ -849,7 +898,9 @@ RemoveCollaborator, GetRepositoryActivity, GetRepositoryLanguages, ListContribut
 RunMaintenance.
 
 `GitRefService` (`git.proto`): ListBranches (with last commit, ahead and behind the default
-branch, protection flag), GetBranch, CreateBranch (from ref), DeleteBranch, RenameBranch,
+branch, protection flag), GetBranch, CreateBranch (from ref), DeleteBranch, RenameBranch
+(admin when the branch is the default or either name is protected, rules naming the old
+branch exactly follow it, open pull requests follow before the old name is deleted),
 ListTags (natsort desc), GetTag, CreateTag (annotated with message, target), DeleteTag,
 SetBranchProtection, ListBranchProtections, DeleteBranchProtection, SetTagProtection,
 ListTagProtections, DeleteTagProtection.
@@ -858,10 +909,11 @@ ListTagProtections, DeleteTagProtection.
 entry on demand), GetBlob (inline up to 1 MiB, binary flag, lfs pointer resolution, raw
 url), GetReadme (ref, path), ListCommits (ref, path, author, since, until, cursor),
 GetCommit (stats, parents, verification, statuses), CompareRefs (base, head, commits plus
-structured diff), GetCommitDiff, GetDiffFile (one file, full), Blame (ref, path), SearchCode
+structured diff, a head in another repository is fetched through a staging ref that is
+dropped right after and refused while the repository is over its size quota), GetCommitDiff, GetDiffFile (one file, full), Blame (ref, path), SearchCode
 (ref, pattern, path glob, paged), UpdateFiles (branch, new_branch, message, author
-override, operations create, update, delete, rename with base64 or text content, expected
-head sha), RevertCommit (to branch), CherryPickCommit (to branch), GetArchiveURL,
+override, operations create, update, delete, rename with base64 or text content of at most
+25 MiB per file, expected head sha), RevertCommit (to branch), CherryPickCommit (to branch), GetArchiveURL,
 GetTemplates (issue and pull templates, CODEOWNERS presence).
 
 `ReleaseService` (`release.proto`): CreateRelease (tag, target, name, body, draft,
@@ -897,7 +949,8 @@ GetCombinedStatus.
 CreateWikiPage, UpdateWikiPage, DeleteWikiPage, ListWikiRevisions. Pages are files in
 the wiki repo, every write is a commit through the primitive in 14.4.
 
-`ProjectService` (`project.proto`): CreateProject (repo or org), GetProject, ListProjects,
+`ProjectService` (`project.proto`): CreateProject (repo or org), GetProject (cards show
+only issues the viewer may read on their own repository), ListProjects,
 UpdateProject, DeleteProject, CloseProject, CreateColumn, UpdateColumn, DeleteColumn,
 MoveColumn, AddIssueToProject, MoveIssue (column, position), RemoveIssueFromProject.
 
@@ -908,7 +961,8 @@ UpdateNotificationPrefs.
 
 `OrganizationService` additions: ListTeams, GetTeam, CreateTeam, UpdateTeam (units,
 flags), DeleteTeam, ListTeamMembers, AddTeamMember, RemoveTeamMember, ListTeamRepos,
-AddTeamRepo, RemoveTeamRepo.
+AddTeamRepo, RemoveTeamRepo. Every team read answers organization members and instance
+organization managers only, since a team names private repositories.
 
 `MailService` (`mail.proto`): SendTestEmail (scope), ListMailDeliveries (scope, status),
 RetryMailDelivery. `AuthService` additions: RequestPasswordReset (identifier), ResetPassword
@@ -927,8 +981,10 @@ DeleteVariable, ListRunners (scope), CreateRunnerToken, DeleteRunner, UpdateRunn
 
 `RunnerService` (`actions.proto`, authenticated by runner token in a header):
 RegisterRunner, Heartbeat, FetchTask (long poll up to 30 seconds), UpdateTask (step
-states, outputs), AppendTaskLog (chunks), CompleteTask, UploadTaskArtifact (initiates the
-artifact upload and returns the data plane url).
+states, outputs), AppendTaskLog (chunks of at most 1 MiB, 64 MiB per job, past that the
+server answers resource exhausted and the runner stops streaming while the job runs on),
+CompleteTask, UploadTaskArtifact (initiates the artifact upload and returns the data plane
+url). Finished logs are compacted into one blob a batch of chunks at a time.
 
 ## 13. One project: linked packages, releases, and images
 
@@ -941,13 +997,16 @@ Linking rules:
 1. By name. Image repo `ns/name` and `ns/name/<anything>` and artifact repo `ns/name` link
    to git repo `ns/name`. Applied when the child is created (`RepositoryService.
    CreateRepository`, the registry listener auto create path, `ArtifactService.
-   CreateArtifactRepository`) and when the git repo is created (existing matches are
-   adopted). The backfill migration applies it once to current rows.
+   CreateArtifactRepository`) and when the git repo is created, where existing matches
+   are adopted only when the creator already holds manage rights on them. The backfill
+   migration applies it once to current rows.
 2. By label. A manifest push whose config carries `org.opencontainers.image.source`
    pointing at this instance's own clone URL links the image repo to that git repo if it
-   is in the same namespace, the GitHub ghcr behavior. Done in the registry observer.
-3. By hand. `LinkRepository` on the git repo (admin level) links any image or artifact
-   repo in the same namespace. `UnlinkRepository` removes manual and name links alike.
+   is in the same namespace, the GitHub ghcr behavior. Done in the registry observer for
+   the image repo the push creates, an existing package is linked by hand.
+3. By hand. `LinkRepository` on the git repo (admin level) links an image or artifact repo
+   in the same namespace that the caller may manage, since a link shares the package with
+   the repository's collaborators. `UnlinkRepository` removes manual and name links alike.
 
 Effects of a link:
 
@@ -957,9 +1016,11 @@ Effects of a link:
   repository" line linking back to `/ns/name`.
 - Access is the union: `RepoAccess.HasRepoAccess` and `artifacts.Access.HasRepoAccess`
   grant an action when the linked git repo's `packages` unit grants the same action to the
-  user, so collaborators, teams, and `GIT_REPO` deploy tokens publish packages without
-  extra grants. Visibility stays per repo, new children default to the source's
-  visibility.
+  user through a relationship (owner, org role, team, collaborator, grant, or `GIT_REPO`
+  scope), so collaborators, teams, and deploy tokens publish packages without extra
+  grants. `LinkedRepoAllows` never counts the read a public git repo hands to everyone, so
+  a private package stays private behind a public source. Visibility stays per repo, new
+  children default to the source's visibility.
 - `DeleteGitRepository` refuses while links exist unless `delete_linked=true`, then deletes
   children through their managers so blobs and registry paths are reclaimed.
 - `MoveGitRepository` moves name linked children to the new `ns/name` prefix (25).
@@ -1010,7 +1071,10 @@ walks Distribution storage:
 - Refs: `Branches()`, `Tags()` with annotated tag peeling, `Head()`. Branch ahead and
   behind counts against the default branch come from `MergeBase` plus a bounded log walk,
   computed on demand and cached by `(branch sha, default sha)`.
-- Tree and blob: `ResolveRevision` then `CommitObject`, `Tree.Tree(path)`, `Tree.File`.
+- Tree and blob: a ref resolves as a branch first, then a tag, then a full hash, and only
+  then through `ResolveRevision` for expressions and abbreviated hashes, so a branch named
+  `beef` or `2024` is never mistaken for a commit prefix. Then `CommitObject`,
+  `Tree.Tree(path)`, `Tree.File`.
   Last commit per entry is a second call because it is a log walk per path and the UI
   loads it lazily. Blob answers include size, mode, binary detection, LFS pointer parsing
   (`version https://git-lfs.github.com/spec/v1`, `oid sha256:`, `size`), and the raw URL.
@@ -1020,6 +1084,9 @@ walks Distribution storage:
   Until})`. Author filter matches email or name. Cursor paging as in 12.
 - Commit detail: parents, `Stats()`, verification (9.4), statuses, the diff from 14.3.
 - Blame: `git.Blame(commit, path)` grouped into runs of consecutive lines by commit.
+  Binary files are refused, files over 1 MiB and walks over thirty seconds answer
+  resource exhausted. Recursive tree listings stop at 100000 entries and set
+  `truncated`.
 - Code search: `Repository.Grep(&GrepOptions{Patterns, ReferenceName, PathSpecs})`,
   repo scoped on one ref, results capped at 500 lines. Instance wide code search is not
   offered because go-git has no index, Gitea without its indexer has the same limit.
@@ -1048,8 +1115,11 @@ Diffs are served in two shapes. File listings (`GetCommitDiff`, `GetCompareDiff`
 `total_files`, `additions`, and `deletions` over every matching file. Single file reads
 (`GetDiffFile`, `GetPullRequestFile`) return the hunks of one path. Per file changed lines
 cap at 20000, above that `truncated` is set and hunks are withheld on every read. Whole
-file diffs over 2 MiB are reported as binary. Line counts and binary detection per blob
-pair are memoized process wide, so paging and totals cost one patch per pair. Commit
+file diffs over 2 MiB are reported as binary. Past the first 1000 changed files a listing
+carries the remaining paths without stats or hunks, each marked `truncated`, and the diff
+sets its own `truncated` so the totals are known to be partial. Line counts and binary
+detection per blob pair are memoized process wide, so paging and totals cost one patch per
+pair. Commit
 ranges (`ListCompareCommits`, `ListPullRequestCommits`) page an oldest first hash list
 memoized per `(merge base, head)` pair with an exact total.
 
@@ -1165,7 +1235,14 @@ go-git does not ship a three way merge, so this file is ours. It operates on tre
 blobs only, never a worktree:
 
 1. `DiffTree(base, ours)` and `DiffTree(base, theirs)` with rename detection give two change
-   sets keyed by path.
+   sets keyed by path. A rename is a linked delete plus insert, and before paths are
+   merged the other side's edit to the old path is carried to the new one and merged there
+   against the old base content, both sides renaming to one place merge at that place,
+   renaming to two places, renaming against a delete, and renaming onto a path the other
+   side added all conflict with kinds `rename`, `rename_delete`, and `rename_add`.
+0. The base is every merge base of the two commits: one base is its tree, a criss-cross
+   history merges its bases first through this same engine into a virtual base tree, eight
+   levels deep, and falls back to the first base when the bases themselves conflict.
 2. Paths changed on one side only take that side. Paths deleted on one side and
    unchanged on the other delete. Paths with identical results on both sides take either.
 3. Paths changed on both sides: both deleted deletes, one deleted and one modified
@@ -1198,7 +1275,9 @@ head moves, marked `outdated` when the anchored line no longer exists in the new
 (detected by re-diffing against the commit the comment was made on). Threads resolve and
 unresolve. Suggestion blocks (```` ```suggestion ````) get an Apply button that calls
 `ApplySuggestion`, which commits the replacement to the head branch through 14.4 when the
-caller may push there or when `AllowMaintainerEdits` admits a base repo writer.
+caller may push there or when `AllowMaintainerEdits` admits a base repo writer. The
+suggested lines are located in the current head by diffing the file against the commit the
+comment was made on, and the apply is refused when any of those lines changed.
 Reviewers are requested by hand, as users or teams, or by `CODEOWNERS` patterns on the
 changed paths, owners are users, `@org/team`, or emails. Approvals count toward
 `required_approvals`, authors cannot approve their own PR, dismissed reviews keep their
@@ -1208,14 +1287,22 @@ head moves.
 ### 16.5 Protection checks on merge
 
 `MergePullRequest` evaluates the base branch protection: required approvals from
-reviewers with write level on `pulls`, code owner review when required, required status
-check contexts all `success` on the head sha (statuses from Actions or from
-`CreateCommitStatus`, the Gitea commit status API external CI uses), no changes requested
-reviews outstanding, signed commits and linear history when required, head not behind base
-when `require_up_to_date` is set, and the merger in `allowed_mergers` when the list is non
-empty. Failures answer FailedPrecondition with the list of unmet rules the UI shows.
-`ScheduleAutoMerge` arms a merge that `PostReceive` and status updates retry when the state
-flips to clean and all rules pass, performed as the scheduling user.
+reviewers with write level on `pulls` (the newest review per reviewer decides, so a
+dismissed newest review leaves no approval behind, and imported reviews never count), code
+owner review when required (an owner entry that resolves to nobody blocks rather than
+passing), required status check contexts all `success` on the head sha (statuses from
+Actions or from `CreateCommitStatus`, the Gitea commit status API external CI uses, and
+with no contexts named every reported check must pass and at least one must have
+reported), no changes requested reviews outstanding, signed commits and linear history
+when required (a history beyond 1000 commits blocks instead of going unchecked), head not
+behind base when `require_up_to_date` is set, and the merger in `allowed_mergers` when the
+list is non empty. Failures answer FailedPrecondition with the list of unmet rules the UI
+shows. `ScheduleAutoMerge` arms a merge that `PostReceive` and status updates retry when
+the state flips to clean and all rules pass, performed as the scheduling user. A head push
+by anyone else disarms it, so nobody rides a maintainer's approval with new commits. In
+pre receive the signed commit and linear history rules check exactly the commits the push
+introduces (`rev-list new --not old`, or `--not --all` for a new branch), refuse more than
+10000 at once rather than skipping any, and treat an unverifiable force push as blocked.
 
 ## 17. Wiki
 
@@ -1242,8 +1329,12 @@ notifications for issues and PRs they authored, are assigned to, were mentioned 
 commented on, or review. `all` adds every new issue, PR, release, and push on the repo,
 `ignore` silences it. Creating or forking a repo watches it with `all`. Notification rows
 are created by the forge managers and the post receive fan out, deduplicated per
-`(user, repo, issue)` with `updated_at` bumped and status reset to unread. Each event also
-asks the mailer (19) to send according to the recipient's `user_notification_prefs`. The UI
+`(user, repo, issue)` with `updated_at` bumped and status reset to unread. The fan out runs
+in the background after the request returns, loads preferences and subscriptions in bulk,
+and drops recipients who are inactive or cannot see the repository, so removed
+collaborators and mentioned teams never receive private content. Invitations and transfers
+reach their explicit recipient without that check. Each event also asks the mailer (19) to
+send according to the recipient's `user_notification_prefs`. The UI
 shows a bell with the unread count fed by `WatchNotifications`, and `/notifications` lists
 them with mark read, mark all read, pin, and filters by repo. `/settings/notifications`
 edits the web and email preferences.
@@ -1277,11 +1368,16 @@ message MailSettings {
 }
 ```
 
-Tiers: system sets the instance mailer. Org scope may override every `mail.*` path so an
-organization sends from its own relay and sender. A new `SETTINGS_SCOPE_TYPE_REPO = 4`
-with the git repo id as `scope_id` may override `mail.*` for one repository. `settings/
-resolver.go` `Effective` builds the chain system, then org when the repo's namespace is an
-org, then repo. `settings/merge.go` `scopeAllowed` gains the REPO entry with `mail`.
+Tiers: system sets the instance mailer. Org scope and a new `SETTINGS_SCOPE_TYPE_REPO = 4`
+with the git repo id as `scope_id` may bring their own relay. `settings/resolver.go`
+`Effective` builds the chain system, then org when the repo's namespace is an org, then
+repo, and `sealMail` keeps the relay and sender atomic below system: a tier that sets
+`smtp_host` supplies host, port, security, credentials, tls policy and sender itself and
+inherits none of them, a tier that does not set `smtp_host` contributes only `enabled`.
+`max_per_minute`, `allow_private_networks` and `incoming.*` are system only, so a lower
+tier can neither lift the throttle, point the server at private hosts, nor spoof the
+instance sender through the instance relay. `mailer.ScopeFor` picks the tier owning the
+relay (or the nearest tier that turned mail off) so throttle windows follow the relay.
 `SettingsService.requireScopeAdmin` treats REPO as the repo's admin level and
 `requireScopeRead` as its read level. `Redact` strips the password the way it strips the
 OIDC secret. Settings UI: `/admin/mail`, an Email card in `org-settings-manager.svelte`,
@@ -1296,10 +1392,13 @@ then system, first tier with `enabled` and a host wins), renders a template, and
 (five attempts, exponential backoff, `last_error`, per message log admins can inspect
 through `ListMailDeliveries` and `RetryMailDelivery`), rate limited by `max_per_minute` per
 scope, connecting through `wneessen/go-mail` with the dial guarded by `checkMirrorIP` unless
-`allow_private_networks`. Templates are Go `html/template` and `text/template` pairs
-embedded under `internal/mailer/templates/` with a shared layout, instance name, and
-footer with the reason the mail was sent and an unsubscribe link that carries a signed
-token into `UpdateNotificationPrefs`. Every message sets `List-Id`, `Message-ID`, and
+`allow_private_networks`. A message the worker gives up on after the fifth attempt is
+audited as `Mail/send` with the recipient and the last error. `mailer.Render` produces a
+text and an html body for every templated mail from one layout with the instance name,
+and the footer carries the reason the mail was sent and an unsubscribe link with a signed
+token into `UpdateNotificationPrefs`. The token is an HMAC under a key derived from the
+live signing secret (`auth.Manager.DerivedKey("notifications")`), names the user and an
+expiry thirty days out, and is neither issued nor accepted when no key is installed. Every message sets `List-Id`, `Message-ID`, and
 threading headers so an issue's mails thread in clients.
 
 Consumers:
@@ -1324,8 +1423,13 @@ the configured mailbox. Outbound notification mails about an issue or PR set `Re
 to the recipient and the issue. A reply whose address carries a valid token is parsed with
 `emersion/go-message`, the text part is stripped of quoted history and signatures, and the
 remainder posts as a comment by that user through `IssueService.CreateComment` with a
-"via email" marker. Unknown tokens and unparsable mails are logged and left in the mailbox
-folder `Failed`.
+"via email" marker, but only when the sender address is the account's own email and the
+account is active, so a leaked token is useless from any other mailbox. Mail carrying
+`Auto-Submitted`, a bulk or list `Precedence`, or an auto reply marker is marked seen and
+dropped, which with the outbound `Auto-Submitted: auto-generated` and
+`X-Auto-Response-Suppress: All` headers keeps out of office responders from looping.
+IMAP uses implicit TLS or STARTTLS and never falls back to a cleartext login. Unknown
+tokens and unparsable mails are logged and left in the mailbox folder `Failed`.
 
 ## 20. Mirrors, push mirrors, and imports (`internal/mirror`)
 
@@ -1337,13 +1441,21 @@ A fourth kind in `Monitor` beside image and artifact, key `git:<id>`, same `try`
 gitea when the type says so), `auth_token` becomes basic auth on https (`x-access-token`
 for github, `oauth2` for gitlab, the literal `username` when set, otherwise the token as
 password with username `token`), `pattern` filters ref short names, `sync_interval_minutes`
-and `paused` apply, `sync_depth` and `include_prereleases` are ignored for git.
+and `paused` apply, `sync_depth` and `include_prereleases` are ignored for git. Every
+stored `auth_token`, on pull and push mirrors of all three kinds, is sealed under the
+sealing key with an `enc:v1:` envelope, plain rows from before are sealed on boot, and an
+update that moves a mirror to another host drops the stored token unless a new one comes
+with it. An ssh upstream whose repository key is missing or unreadable fails outright, the
+server's own ssh agent is never consulted.
 
 Fetch is `Repository.FetchContext(ctx, &FetchOptions{RemoteURL, RefSpecs: {"+refs/heads/
 *:refs/heads/*", "+refs/tags/*:refs/tags/*"}, Prune: true, Force: true, Tags: AllTags,
-ClientOptions: {client.WithHTTPClient(m.client)}})` under the repo writer mutex. The
-`http.Client` is the monitor's existing one, so `safeTransport` vets every dial against
-`checkMirrorIP`, `pacedTransport` spaces requests per host, redirects are capped, and
+ClientOptions: {client.WithHTTPClient(m.client), client.WithDialer(m.dial)}})` under the
+repo writer mutex. The `http.Client` is the monitor's existing one, so `safeTransport`
+vets every dial against `checkMirrorIP`, and the same `safeDialer` is handed to the ssh
+and git transports for pull and push mirrors, so an ssh or scp style upstream on a private
+address fails at dial time like an https one unless `mirror.allow_private_networks` is on.
+`pacedTransport` spaces requests per host, redirects are capped, and
 `allow_private_networks` applies. Rate limit answers (HTTP 429 or go-git's
 `ErrAuthorizationFailed` with a `Retry-After`) map to `rateLimitedError`. The resulting ref
 changes run the `PostReceive` fan out with the mirror as actor so webhooks, PR updates, and
@@ -1365,8 +1477,10 @@ package and image mirrors described in 13, each an independent row with its own 
 `git_push_mirrors` rows, several per repo. `Repository.PushContext(ctx, &PushOptions{
 RemoteURL, RefSpecs: {"+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*"}, Force:
 true, Prune: true, ClientOptions})` on the interval and on push when `sync_on_push` is
-set, key `git_push:<id>`, same status and cooldown bookkeeping. Credentials are a token or
-the generated ssh key.
+set, key `git_push:<id>`, same status and cooldown bookkeeping. That is `git push
+--mirror` semantics, diverged remote branches are overwritten and branches that exist only
+on the remote are deleted, and the form says so before a mirror is added. Credentials are
+a token or the generated ssh key.
 
 ### 20.3 Imports
 
@@ -1378,8 +1492,11 @@ PRs whose head refs are fetched from the upstream `refs/pull/<n>/head` or
 (the existing drivers), wiki (a second fetch of the upstream wiki repo), LFS objects (the
 upstream batch API, downloaded into the blob store). The importer is resumable through
 `git_imports.state` and runs as a monitor job with `SyncEvent.kind=import` so the UI shows
-progress. Users and emails that do not map to local accounts become plain text authors
-with an "imported" marker on the comment.
+progress. Upstream authors are never mapped to local accounts: every imported issue,
+comment, review, and release carries the upstream login in its "imported" marker and no
+local author, so a hostile upstream cannot speak as a local user, and imported reviews are
+flagged `imported` and never count toward required reviews. Comments and reviews are
+fetched before the issue row is written, so a cut off import resumes without gaps.
 
 ## 21. Actions (`internal/actions`)
 
@@ -1392,26 +1509,50 @@ Server side:
 - Triggers from `PostReceive` (push, tag), the forge (pull_request opened, synchronize,
   reopened, closed, issues, issue_comment, release), `DispatchWorkflow` (workflow_dispatch
   with typed inputs), and a scheduler for `schedule` crons. Fork PR runs wait for
-  `ApproveRun` by a user with write on `actions`. `[skip ci]` in the head commit message
-  and the `-o skip-ci` push option skip.
-- The parser evaluates `on`, `jobs`, `needs`, `strategy.matrix` with include and exclude,
+  `ApproveRun` by a user with write on `actions` unless the pull request author already
+  has it, whoever caused the event. `pull_request` runs whose head lives in a fork are
+  marked `from_fork` for life: they receive no secrets and a read only job token, approved
+  or not, like GitHub. `pull_request_target` reads the base workflow and keeps secrets.
+  `[skip ci]` in the head commit message and the `-o skip-ci` push option skip.
+- The parser evaluates `on`, `jobs`, `needs`, `strategy.matrix` with include and exclude
+  (capped at 256 jobs like GitHub, an oversized or invalid matrix becomes one failed job
+  carrying the reason),
   `runs-on` labels, `if` expressions over the `github`, `env`, `vars`, `secrets`, `needs`,
   `matrix`, `steps` contexts (the expression grammar is a small recursive descent
   evaluator with the standard functions `contains`, `startsWith`, `endsWith`, `format`,
   `join`, `toJSON`, `fromJSON`, `hashFiles` is resolved by the runner), `env` at every level,
   `timeout-minutes`, `continue-on-error`, `services`, `container`, `outputs`, `concurrency`
-  groups with cancel in progress, `permissions` ignored with a note.
-- Runs and jobs are rows, jobs become tasks a runner claims through `FetchTask` matching
-  labels. The task carries the job definition, the merged env, secrets for the scope
+  groups with cancel in progress at the workflow and at the job level, `strategy.fail-fast`
+  (default on, a failed matrix job cancels its queued and running siblings unless it is
+  `continue-on-error`) and `strategy.max-parallel` (enforced in the atomic claim, so no
+  runner race admits one job too many), `permissions` ignored with a note. Parser notes
+  are stored on the run and shown on its page.
+- Runs and jobs are rows, jobs become tasks a runner claims through `FetchTask`: the
+  runner's scope is filtered in sql, queued jobs are examined in pages of 100 up to 2000
+  deep with their runs and repositories loaded in bulk, and labels are matched in memory,
+  so jobs no runner can serve never block the queue. A job whose `runs-on` labels match
+  no runner registered for the repository, its organization, or the instance fails at
+  queue time with the labels in its annotation, and a queued job no runner took within
+  24 hours fails the same way, so nothing sits pending forever or blocks a merge. The task
+  carries the job definition, the merged env, secrets for the scope
   (system, org, repo), a `GITHUB_TOKEN` analog: a short lived `GIT_REPO` scoped API token
   for the repo that the runner uses for checkout and for publishing images and artifacts
-  to the linked packages, revoked when the job ends.
+  to the linked packages, revoked when the job ends. The server evaluates job level
+  `env`, `container`, and `services` once and ships step `name`, `uses`, `run`,
+  `working-directory`, `env`, and `with` raw, so every expression is evaluated exactly
+  once and a value such as an issue title holding `${{ toJSON(secrets) }}` stays text.
+  System secrets reach every non fork run on the instance, so they are for material every
+  repository writer may hold.
 - Logs stream from the runner in chunks into `actions_job_logs`, served to the UI by
   `StreamJobLog`, compacted into one blob in the artifact blob store on completion and
   pruned after `actions.log_retention_days`.
 - Job conclusions write `git_commit_statuses` with context `<workflow> / <job>` so branch
   protection required checks and the PR checks panel work with no special casing.
-- Secrets are sealed with an AES-GCM key derived from the jwt secret, variables are plain,
+- Secrets are sealed with an AES-GCM key derived from the sealing key (`auth.sealing_key`,
+  or `<data_dir>/sealing.key` generated once), never from the session secret, so rotating
+  `auth.jwt_secret` leaves them readable and a database copy alone cannot open them.
+  Values sealed before the key existed are resealed on the next boot and a secret that
+  cannot be opened fails the job with its name rather than vanishing. Variables are plain,
   both scoped system, org, or repo, with org and repo overriding.
 - Runners register with a one time token per scope, carry labels, heartbeat, and show
   online or offline. Admin pages at `/admin/runners`, org settings, and repo settings.
@@ -1420,8 +1561,14 @@ Runner (`dfcli runner register --scope ... --token ...` and `dfcli runner start`
 
 - Docker executor through `docker/docker/client`, one container per job from the
   `runs-on` label to image mapping in the runner config, `services` as sidecar containers
-  on a per job network, the workspace as a volume, a host executor for `runs-on:
-  [host]` labels when enabled.
+  on a per job network, the workspace as a per job directory under the runner work dir
+  bound into the job container at one path on both sides, a host executor for `runs-on:
+  [host]` labels when enabled. Images are pulled before every job and a local copy is
+  used only when the pull fails. Jobs never get the docker socket, `--privileged`, or
+  host bind mounts (named volumes and binds inside the job directory pass) unless the
+  runner was registered with `--privileged-jobs`, which is root on that machine for every
+  workflow author. `upload-artifact` and `download-artifact` paths are confined to the job
+  directory on the docker executor, symlinks included.
 - Steps: `run` with `shell`, `working-directory`, `env`, `with`. `uses` resolves
   `actions/checkout` natively (clone with the job token over HTTP), `actions/upload-artifact`
   and `actions/download-artifact` natively through the artifact package in 13, and any
@@ -1431,7 +1578,8 @@ Runner (`dfcli runner register --scope ... --token ...` and `dfcli runner start`
   instance first, then `github.com`, following the Gitea `DEFAULT_ACTIONS_URL` rule.
 - Step outputs via `$GITHUB_OUTPUT`, env via `$GITHUB_ENV`, path via `$GITHUB_PATH`, step
   summary via `$GITHUB_STEP_SUMMARY`, log groups `::group::`, masking `::add-mask::`,
-  annotations `::error::` and `::warning::` shown in the UI.
+  annotations `::error::` and `::warning::` shown in the UI. `::set-env::` and
+  `::add-path::` are disabled and fail the step, since any logged text could issue them.
 - Concurrency per runner, graceful shutdown finishes running jobs, logs stream in near
   real time, cancellation from the UI kills the container.
 
@@ -1451,7 +1599,7 @@ message GitSettings {
   optional string ssh_public_host = 4;          // host or host:port in clone urls
   optional bool lfs_enabled = 5;
   optional int64 max_lfs_object_mb = 6;
-  optional int64 max_repo_size_mb = 7;          // zero unlimited
+  optional int64 max_repo_size_mb = 7;          // zero unlimited, an org may only lower it
   optional bool private_by_default = 8;
   optional string default_branch = 9;
   optional bool release_on_tag = 10;
@@ -1463,7 +1611,11 @@ message GitSettings {
 }
 ```
 
-`defaults.go` seeds `enabled=true, ssh_enabled=true, ssh_port=22, lfs_enabled=true,
+Org rows may tighten `lfs_enabled` and `max_repo_size_mb` but never loosen them, the
+update refuses a looser value and the resolver clamps any stored one back to the instance
+limit. Members of a scope read its effective settings with the mail subtree reduced to
+`enabled`, the relay host and account are for scope admins.
+`defaults.go` seeds `enabled=true, ssh_enabled=false, ssh_port=22, lfs_enabled=true,
 max_lfs_object_mb=2048, max_repo_size_mb=0, default_branch=main, release_on_tag=false,
 max_concurrent_transfers=32, allow_forks=true, gc.enabled=true, gc.interval_hours=168,
 signing.enabled=false, actions.enabled=false, actions.artifact_retention_days=90,
@@ -1548,7 +1700,11 @@ held, renames the casbin object through the new `Enforcer.RenameObject(resource,
 new)` (the `UPDATE casbin_rule SET v3` the artifact backfill already runs), and moves name
 linked packages: image repos through `RegistryAccess.MoveRepository`, an `os.Rename` of
 `docker/registry/v2/repositories/<ns>/<name>` which holds only link files into the global
-blob tree, refused while `_uploads` has entries, and artifact repos by row update.
+blob tree, refused while `_uploads` has entries, and artifact repos by row update. The
+packages move first and any failure puts back what already moved, so a move either
+completes or changes nothing. Team repository rows of the previous org are dropped, the
+settings resolver forgets the repo's org, and removing an org member also drops their
+team seats.
 `RepositoryService.MoveRepository` and `ArtifactService.MoveArtifactRepository` expose the
 same primitive for standalone repos, which closes the existing gap where no kind could be
 renamed. Old HTTP clone URLs answer 301, old SSH paths resolve transparently, and the UI
@@ -1559,7 +1715,8 @@ transfers into an org where the caller may create repos apply immediately.
 Forks. `ForkGitRepository` creates the row with `fork_of_id`, inits the bare repo, and
 fetches every ref from the parent with the file transport in process. Forks are independent
 object stores, no alternates, so deleting a parent never breaks a fork. `SyncFork` fast
-forwards the fork's default branch from the parent, or opens a PR when it cannot. Private
+forwards the fork's default branch from the parent, or opens a PR when it cannot or when
+that branch is protected, so a fork's own rules are never bypassed. Private
 repos fork only within the namespaces the user can create in. `ListForks` shows the
 network. `allow_forks` on the system tier and the repo setting gate it.
 
@@ -1572,7 +1729,9 @@ unarchive and delete. Listings show the badge.
 
 Deletion. `DeleteGitRepository` removes rows by cascade, the bare and wiki directories,
 LFS links with blob reaping, release assets when `delete_linked`, redirects pointing at it,
-and audits. `DeleteOrganization` gains the git loop beside its image loop and drops the
+and audits. Rows no cascade reaches go in the same transaction: tokens scoped to the
+repo, deploy keys, repo scoped actions secrets, variables, runners and runner tokens, and
+the settings row, and the casbin grants on the object are removed after. `DeleteOrganization` gains the git loop beside its image loop and drops the
 org's teams. `DeleteUser` deletes the git repos in the user's namespace, which fixes the
 orphan behavior images have today in passing (noted, not changed for images here).
 
@@ -1593,8 +1752,8 @@ redirects to `/images/ns/name`, then `GetArtifactRepository` and redirects to
 becomes `routes/[namespace]/+page.svelte` and redirects to `/orgs/[name]` when the
 namespace is an org. The SvelteKit router prefers static segments, so `/images`,
 `/artifacts`, `/orgs`, `/admin`, `/settings`, `/docs`, `/login`, and `/notifications` keep
-winning over `[namespace]`, and the reserved namespace list in 3 guarantees no account can
-shadow them.
+winning over `[namespace]`, and the reserved namespace list in 3 keeps new accounts from
+shadowing them.
 
 ### 26.2 Navigation and shared state
 
@@ -1635,7 +1794,7 @@ URLs.
 | `/orgs/[name]/repos`, `/orgs/[name]/teams`, `/orgs/[name]/teams/[team]`, `/orgs/[name]/labels`, `/orgs/[name]/projects`, `/orgs/[name]/runners` | org pages reusing the repo components, team page with members, repositories, unit grid |
 | `/settings/keys`, `/settings/notifications`, `/notifications` | SSH and GPG keys, web and email preferences, inbox |
 | `/forgot-password`, `/reset-password/[token]`, `/verify-email/[token]` | password reset and verification |
-| `/admin/git`, `/admin/mail`, `/admin/runners` | settings cards in the `FormCard` and `FormField` pattern of `admin/mirroring`, mail deliveries table with retry, runner list |
+| `/admin/git`, `/admin/mail`, `/admin/runners` | settings cards in the `FormCard` and `FormField` pattern of `admin/mirroring`, an instance card with the ssh host key fingerprints, the signing public key, the storage path and usage from `GetGitServerInfo`, mail deliveries table with retry, runner list |
 
 Shared components added: `clone-box`, `ref-picker`, `tree-table`, `file-view`,
 `markdown` (marked plus dompurify, autolinks, task lists, relative link rewriting, fenced
@@ -1682,7 +1841,11 @@ Git itself is the client for clone, push, and fetch. dfcli adds:
 
 - `go.mod`: dependencies in 2.3. `go mod tidy` after the first import.
 - `docker/Dockerfile.distroface`: `EXPOSE 8080 22`. No `apk add git`, the server never
-  execs git. The runner image for dfcli is a separate small Dockerfile in `docker/`.
+  execs git. The runner image for dfcli is a separate small Dockerfile in `docker/`: it
+  runs as root because it drives the host docker socket, reads `DFCLI_RUNNER_CONFIG` from
+  the `/home/runner` volume so registration survives recreation, and keeps job trees under
+  `DFCLI_RUNNER_WORK_DIR=/var/lib/dfcli-runner`, which must be bind mounted from the same
+  host path because sibling job containers mount it through the host daemon.
 - `docker-compose.yaml` keeps host networking for dev, and `config.yaml` seeds
   `git.ssh_port: 2222` for that reason only. The README documents `-p 22:22` for
   production and `-p 2222:22` with `ssh_public_host: host:2222` when 22 is taken.
@@ -1711,8 +1874,8 @@ Each phase ships on its own and leaves the app consistent. Nothing below is opti
 - [ ] `git.proto` (GitService, GitRefService, GitFileService), `types.proto` enums,
       `GitSettings`, `portal.proto` ssh_port, buf generate
 - [ ] `GitRepository`, `GitRedirect`, `GitTopic`, `GitStar`, `GitWatch` models,
-      `stores/git.go` with `GitReposQuery`, link migration, reserved namespace migration
-- [ ] `utils.ReservedNamespaces` enforced at every account and org creation site
+      `stores/git.go` with `GitReposQuery`, link migration
+- [ ] `utils.ReservedNamespaces` enforced at every self service account and org creation site
 - [ ] `rbac/resources.go`, seeds, `mapping.go` entries, `role.go` scopeable case,
       `portalAllowsProcedure`
 - [ ] `internal/gitrepo`: engine, loader, locks, access (owner, public, grants), reads,
@@ -1835,9 +1998,9 @@ flip, otherwise the defaults stand.
 2. The default team starts with write on every unit and `can_create_repos`, so org members
    create and push by default as you asked. Gitea starts a new org with an Owners team
    only. Both are reachable by editing the default team.
-3. Reserved namespaces are enforced from now on and a migration renames colliding
-   accounts with a `-user` suffix. Tell me if you would rather the migration refuse to
-   start and list the collisions for a manual fix.
+3. Reserved namespaces are enforced for new self service accounts and orgs only. Existing
+   accounts and bootstrap names such as `admin` are left alone, no migration renames
+   anything.
 4. Release assets and workflow artifacts live in the artifact package `ns/name` as
    versions. A standalone artifact repo of the same name is adopted as that package at git
    repo creation. If you would rather keep release assets in a hidden reserved package,
