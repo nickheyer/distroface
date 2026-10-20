@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { SvelteSet } from 'svelte/reactivity';
 	import { mode } from 'mode-watcher';
 	import { Progress } from '$lib/components/ui/progress';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -34,7 +35,7 @@
 			if (Array.isArray(spec?.tags)) merged.tags.push(...spec.tags);
 		}
 
-		const seen = new Set<string>();
+		const seen = new SvelteSet<string>();
 		merged.tags = merged.tags
 			.filter((t: { name?: string }) => {
 				if (!t?.name || seen.has(t.name)) return false;
@@ -66,6 +67,7 @@
 	}
 
 	function buildFrame(): string {
+		const scriptClose = '</' + 'script>';
 		const scalarConfig = JSON.stringify({
 			darkMode: mode.current === 'dark',
 			hideDarkModeToggle: true,
@@ -86,7 +88,7 @@
 			<head>
 				<meta charset="utf-8">
 				<meta name="viewport" content="width=device-width, initial-scale=1">
-				<script src="/scalar.js"><\/script>
+				<script src="/scalar.js">${scriptClose}
 				<style>
 					a[href="https://www.scalar.com"] { display: none !important; }
 				</style>
@@ -106,7 +108,7 @@
 						});
 						window.parent.postMessage({ type: 'scalar-loaded' }, '*');
 					});
-				<\/script>
+				${scriptClose}
 			</body>
 			</html>
 		`
@@ -149,12 +151,12 @@
 	<title>API Reference - Distroface</title>
 </svelte:head>
 
-<div class="relative h-[calc(100vh-8rem)] w-full overflow-hidden rounded-lg border border-border/50">
+<div class="relative h-[calc(100vh-8rem)] w-full overflow-hidden rounded-lg border bg-card">
 	{#if isLoading}
 		<div class="absolute inset-0 z-10 flex items-center justify-center bg-background/80">
 			<div class="w-full max-w-md px-8">
 				<div class="mb-4 text-center">
-					<p class="text-sm text-muted-foreground">Loading API reference...</p>
+					<p class="text-sm text-muted-foreground">Loading API reference</p>
 				</div>
 				<Progress value={loadingProgress} max={100} class="h-2" />
 			</div>

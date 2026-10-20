@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
@@ -22,7 +23,7 @@ func (s *Store) GetUserByID(ctx context.Context, id string) (*db.User, error) {
 	var user db.User
 	err := s.db.WithContext(ctx).First(&user, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -34,7 +35,7 @@ func (s *Store) GetUserByUsername(ctx context.Context, username string) (*db.Use
 	var user db.User
 	err := s.db.WithContext(ctx).First(&user, "username = ?", username).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -46,7 +47,7 @@ func (s *Store) GetUserByUsernameAndProvider(ctx context.Context, username, prov
 	var user db.User
 	err := s.db.WithContext(ctx).First(&user, "username = ? AND auth_provider = ?", username, provider).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -58,7 +59,7 @@ func (s *Store) GetUserByEmail(ctx context.Context, email string) (*db.User, err
 	var user db.User
 	err := s.db.WithContext(ctx).First(&user, "email = ?", email).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -70,7 +71,7 @@ func (s *Store) GetUserByIdentifier(ctx context.Context, identifier string) (*db
 	var user db.User
 	err := s.db.WithContext(ctx).First(&user, "username = ? OR email = ?", identifier, identifier).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -83,7 +84,7 @@ func (s *Store) GetUserByOIDCSubject(ctx context.Context, subject, issuer string
 	var user db.User
 	err := s.db.WithContext(ctx).First(&user, "oidc_subject = ? AND oidc_issuer = ?", subject, issuer).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -202,4 +203,20 @@ func (s *Store) CountUsers(ctx context.Context) (int64, error) {
 	var count int64
 	err := s.db.WithContext(ctx).Model(&db.User{}).Count(&count).Error
 	return count, err
+}
+
+// Users by id, missing ids are absent from the map
+func (s *Store) GetUsersByIDs(ctx context.Context, ids []string) (map[string]*db.User, error) {
+	out := make(map[string]*db.User, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var users []*db.User
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&users).Error; err != nil {
+		return nil, err
+	}
+	for _, u := range users {
+		out[u.ID] = u
+	}
+	return out, nil
 }

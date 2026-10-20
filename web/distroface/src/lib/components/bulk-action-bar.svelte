@@ -15,19 +15,19 @@
 </script>
 
 {#if count > 0}
-	<div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 page-enter">
+	<div class="page-enter fixed bottom-6 left-1/2 z-40 -translate-x-1/2">
 		<div
-			class="flex items-center gap-3 rounded-xl border border-border bg-background/95 backdrop-blur px-4 py-2.5 shadow-lg"
+			class="flex items-center gap-3 rounded-lg border bg-popover px-3 py-2 text-popover-foreground shadow-xl dark:ring-1 dark:ring-white/5"
 		>
-			<span class="text-sm font-medium tabular-nums whitespace-nowrap">
+			<span class="text-sm font-medium whitespace-nowrap tabular-nums">
 				{count} selected
 			</span>
 			<div class="h-4 w-px bg-border"></div>
-			<div class="flex items-center gap-1.5">
+			<div class="flex items-center gap-1">
 				{@render children()}
 			</div>
-			<Button variant="ghost" size="icon" class="h-7 w-7" onclick={onClear} title="Clear selection">
-				<X class="h-3.5 w-3.5" />
+			<Button variant="ghost-muted" size="icon-sm" onclick={onClear} title="Clear selection">
+				<X />
 			</Button>
 		</div>
 	</div>

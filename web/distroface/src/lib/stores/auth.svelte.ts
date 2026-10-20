@@ -27,6 +27,7 @@ class AuthStore {
 	oidcEnabled = $state(false);
 	firstUserSetup = $state(false);
 	allowRegistration = $state(false);
+	passwordResetEnabled = $state(false);
 	anonymousAccessEnabled = $state(false);
 	authStatusLoaded = $state(false);
 
@@ -92,6 +93,7 @@ class AuthStore {
 			this.oidcEnabled = resp.oidcEnabled;
 			this.firstUserSetup = resp.firstUserSetup;
 			this.allowRegistration = resp.registrationEnabled;
+			this.passwordResetEnabled = resp.passwordResetEnabled;
 			this.anonymousAccessEnabled = resp.anonymousAccess;
 			this.authStatusLoaded = true;
 		} catch {

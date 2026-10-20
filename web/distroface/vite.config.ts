@@ -16,6 +16,10 @@ function getVersion() {
 	return 'dev';
 }
 
+// Mirrors the gitPath regexp in internal/gitrepo/http.go
+const gitDataPlane =
+	/^\/[^/]+\/[^/]+?(\.wiki)?(\.git)?\/(info\/refs|git-upload-pack|git-receive-pack|git-upload-archive|HEAD|objects\/.+|info\/lfs(\/.*)?|-\/.*)(\?.*)?$/;
+
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit()],
 	define: {
@@ -46,6 +50,14 @@ export default defineConfig({
 			'/api': {
 				target: 'http://localhost:8080',
 				changeOrigin: true
+			},
+			'/': {
+				target: 'http://localhost:8080',
+				changeOrigin: true,
+				bypass(req) {
+					if (req.url && gitDataPlane.test(req.url)) return undefined;
+					return req.url;
+				}
 			}
 		}
 	}

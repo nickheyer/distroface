@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -56,7 +57,8 @@ func (gitlabDriver) validate(ctx context.Context, c *http.Client, cfg *v1.Mirror
 	if _, limited := RetryAfter(err); limited {
 		return fmt.Errorf("gitlab rate limited this server, wait before validating again: %w", err)
 	}
-	if ue, ok := err.(*upstreamError); ok {
+	var ue *upstreamError
+	if errors.As(err, &ue) {
 		switch ue.status {
 		case http.StatusNotFound:
 			return fmt.Errorf("%w: gitlab project %q not found (private projects need a token with read_api scope)", ErrInvalid, cfg.GetUpstream())

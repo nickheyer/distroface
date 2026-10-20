@@ -45,8 +45,8 @@ func initConfig() {
 
 	// Missing config just means not logged in yet
 	if err := viper.ReadInConfig(); err != nil {
-		_, notFound := err.(viper.ConfigFileNotFoundError)
-		if !notFound && !errors.Is(err, fs.ErrNotExist) {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) && !errors.Is(err, fs.ErrNotExist) {
 			fmt.Fprintf(os.Stderr, "Failed to read config file: %v\n", err)
 			os.Exit(1)
 		}
@@ -80,7 +80,7 @@ func readAuthConfig() (AuthConfig, error) {
 		return config, nil
 	}
 	if err := json.Unmarshal(data, &config); err != nil {
-		return config, fmt.Errorf("failed to parse config %s: %v", configPath(), err)
+		return config, fmt.Errorf("failed to parse config %s: %w", configPath(), err)
 	}
 	return config, nil
 }
@@ -88,7 +88,7 @@ func readAuthConfig() (AuthConfig, error) {
 func saveConfig(config AuthConfig) error {
 	path := configPath()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return fmt.Errorf("failed to create config directory: %v", err)
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
 	// Preserve fields not being overwritten
@@ -98,7 +98,7 @@ func saveConfig(config AuthConfig) error {
 
 	data, err := json.MarshalIndent(config, "", "  ")
 	if err != nil {
-		return fmt.Errorf("failed to marshal config: %v", err)
+		return fmt.Errorf("failed to marshal config: %w", err)
 	}
 	return os.WriteFile(path, data, 0600)
 }

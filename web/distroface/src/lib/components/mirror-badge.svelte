@@ -6,21 +6,30 @@
 		label,
 		error = '',
 		title = '',
-		syncing = false
-	}: { label: string; error?: string; title?: string; syncing?: boolean } = $props();
+		syncing = false,
+		syncingLabel = 'Syncing'
+	}: {
+		label: string;
+		error?: string;
+		title?: string;
+		syncing?: boolean;
+		syncingLabel?: string;
+	} = $props();
 </script>
 
 {#if syncing}
-	<Badge variant="outline" class="text-xs gap-1 border-amber-500/30 text-amber-600 dark:text-amber-400" {title}>
-		<RefreshCw class="h-2.5 w-2.5 animate-spin" />Syncing
+	<Badge {title}>
+		<RefreshCw class="animate-spin" />{syncingLabel}
 	</Badge>
-{:else}
-	<Badge variant="outline" class="text-xs gap-1 border-sky-500/30 text-sky-600 dark:text-sky-400" {title}>
-		<HardDriveDownload class="h-2.5 w-2.5" />{label}
+{:else if error}
+	<Badge variant="destructive" {title}>
+		<HardDriveDownload />{label}
 	</Badge>
-{/if}
-{#if error && !syncing}
 	<span title={error}>
-		<AlertTriangle class="h-3.5 w-3.5 text-destructive" />
+		<AlertTriangle class="size-3.5 text-destructive" />
 	</span>
+{:else}
+	<Badge variant="outline" {title}>
+		<HardDriveDownload />{label}
+	</Badge>
 {/if}

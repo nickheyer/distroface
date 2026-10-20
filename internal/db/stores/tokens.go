@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -24,7 +25,7 @@ func (s *Store) GetAPITokenByHash(ctx context.Context, hash string) (*db.APIToke
 	var token db.APIToken
 	err := s.db.WithContext(ctx).Where("token_hash = ?", hash).First(&token).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -39,9 +40,17 @@ var TokensQuery = pages.Spec{
 }
 
 func (s *Store) ListAPITokens(ctx context.Context, userID string, q pages.Query, limit, offset int) ([]*db.APIToken, int64, error) {
+	return s.ListAPITokensScoped(ctx, userID, 0, "", q, limit, offset)
+}
+
+// Lists tokens, optionally only those carrying one credential scope
+func (s *Store) ListAPITokensScoped(ctx context.Context, userID string, scopeType int32, scopeID string, q pages.Query, limit, offset int) ([]*db.APIToken, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.APIToken{}).Scopes(TokensQuery.Scope(q))
 	if userID != "" {
 		tx = tx.Where("user_id = ?", userID)
+	}
+	if scopeType != 0 {
+		tx = tx.Where("scope_type = ? AND scope_id = ?", scopeType, scopeID)
 	}
 
 	var total int64
@@ -71,4 +80,14 @@ func (s *Store) DeleteAPIToken(ctx context.Context, id, userID string) error {
 
 func (s *Store) UpdateAPITokenLastUsed(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Model(&db.APIToken{}).Where("id = ?", id).Update("last_used_at", time.Now()).Error
+}
+
+// Rewrites credential scopes after a repository or org moves
+func (s *Store) RenameAPITokenScope(ctx context.Context, scopeType int32, oldID, newID string) error {
+	return s.db.WithContext(ctx).Model(&db.APIToken{}).Where("scope_type = ? AND scope_id = ?", scopeType, oldID).Update("scope_id", newID).Error
+}
+
+// Revokes one token by id regardless of owner
+func (s *Store) DeleteAPITokenByID(ctx context.Context, id string) error {
+	return s.db.WithContext(ctx).Delete(&db.APIToken{}, "id = ?", id).Error
 }

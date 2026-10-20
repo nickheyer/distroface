@@ -31,10 +31,10 @@
 	} = $props();
 </script>
 
-<div class="flex items-center justify-between gap-4 rounded-lg border border-border/60 px-4 py-3.5">
+<div class="flex items-center justify-between gap-4 rounded-lg border px-4 py-3">
 	<div class="min-w-0">
 		<p class="text-sm font-medium">{title}</p>
-		<p class="text-[13px] text-muted-foreground mt-0.5 truncate">
+		<p class="mt-0.5 truncate text-sm text-muted-foreground">
 			{#if material}
 				<span class="font-mono">{material.subject}</span>
 				{#if material.sans.length}
@@ -46,27 +46,21 @@
 			{/if}
 		</p>
 		{#if error}
-			<p class="text-[13px] text-destructive mt-0.5">{error}</p>
+			<p class="mt-0.5 text-xs text-destructive" role="alert">{error}</p>
 		{/if}
 	</div>
-	<div class="flex items-center gap-1.5 shrink-0">
+	<div class="flex shrink-0 items-center gap-1.5">
 		{#if busy}
-			<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+			<Loader2 class="size-4 animate-spin text-muted-foreground" />
 		{/if}
 		{#if material}
 			{#if onDownload}
 				<Button variant="outline" size="sm" onclick={onDownload}>Download</Button>
 			{/if}
 			<Button variant="outline" size="sm" disabled={busy} onclick={onUpload}>Replace</Button>
-			<Button
-				variant="ghost"
-				size="sm"
-				class="text-destructive hover:text-destructive"
-				disabled={busy}
-				onclick={onRemove}
+			<Button variant="outline-destructive" size="sm" disabled={busy} onclick={onRemove}
+				>Remove</Button
 			>
-				Remove
-			</Button>
 		{:else}
 			{#if onIssue}
 				<Button variant="outline" size="sm" disabled={busy} onclick={onIssue}>{issueLabel}</Button>

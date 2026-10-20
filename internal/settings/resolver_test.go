@@ -40,6 +40,10 @@ func (m *memStore) GetPortalOrgID(_ context.Context, portalID string) (string, e
 	return m.portalOrg[portalID], nil
 }
 
+func (m *memStore) GetGitRepoOrgID(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
 func provFor(list []*v1.FieldProvenance, path string) v1.SettingsTier {
 	for _, p := range list {
 		if p.Path == path {

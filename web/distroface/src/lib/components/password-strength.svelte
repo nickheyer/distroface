@@ -20,26 +20,25 @@
 				<div
 					class="h-1 flex-1 rounded-full transition-colors {strength >= level
 						? strength <= 2
-							? 'bg-destructive/70'
+							? 'bg-destructive'
 							: strength === 3
-								? 'bg-amber-500'
+								? 'bg-warning'
 								: 'bg-success'
 						: 'bg-border'}"
 				></div>
 			{/each}
 		</div>
 		<div class="grid grid-cols-2 gap-x-3 gap-y-0.5">
-			{#each [
-				{ passed: checks.length, label: '8+ characters' },
-				{ passed: checks.upper, label: 'Uppercase' },
-				{ passed: checks.lower, label: 'Lowercase' },
-				{ passed: checks.number, label: 'Number' }
-			] as { passed, label } (label)}
-				<span class="flex items-center gap-1.5 text-[11px] {passed ? 'text-success' : 'text-muted-foreground/70'}">
+			{#each [{ passed: checks.length, label: '8+ characters' }, { passed: checks.upper, label: 'Uppercase' }, { passed: checks.lower, label: 'Lowercase' }, { passed: checks.number, label: 'Number' }] as { passed, label } (label)}
+				<span
+					class="flex items-center gap-1.5 text-2xs {passed
+						? 'text-success'
+						: 'text-muted-foreground'}"
+				>
 					{#if passed}
-						<Check class="h-3 w-3" />
+						<Check class="size-3" />
 					{:else}
-						<X class="h-3 w-3" />
+						<X class="size-3" />
 					{/if}
 					{label}
 				</span>

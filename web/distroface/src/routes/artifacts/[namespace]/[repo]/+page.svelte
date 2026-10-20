@@ -2,39 +2,61 @@
 	import { onMount } from 'svelte';
 	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Input } from '$lib/components/ui/input';
-	import { Switch } from '$lib/components/ui/switch';
 	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
+		Table,
+		TableBody,
+		TableCell,
+		TableHead,
+		TableHeader,
+		TableRow
 	} from '$lib/components/ui/table';
 	import {
-		Collapsible, CollapsibleContent, CollapsibleTrigger
+		Collapsible,
+		CollapsibleContent,
+		CollapsibleTrigger
 	} from '$lib/components/ui/collapsible';
-	import FormPanel from '$lib/components/form-panel.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import MirrorBadge from '$lib/components/mirror-badge.svelte';
-	import MirrorConfigFields, {
-		emptyMirrorForm, mirrorFormFrom, mirrorInit
-	} from '$lib/components/mirror-config-fields.svelte';
 	import FormField from '$lib/components/form-field.svelte';
-	import FormSection from '$lib/components/form-section.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import {
-		Archive, ArrowDown, ArrowLeft, ArrowUp, ArrowUpDown, ChevronDown, Download,
-		Lock, Globe, Pencil, Plus, RefreshCw, Search, Settings, Square, Tag, Tags, Trash2, Upload, X
+		Archive,
+		ArrowDown,
+		ArrowLeft,
+		ArrowUp,
+		ArrowUpDown,
+		ChevronDown,
+		Download,
+		HardDrive,
+		HardDriveDownload,
+		Lock,
+		Globe,
+		Loader2,
+		Pencil,
+		Plus,
+		RefreshCw,
+		Search,
+		Settings,
+		Square,
+		Tag,
+		Tags,
+		Trash2,
+		Upload,
+		User,
+		X,
+		GitBranch,
+		Rocket
 	} from '@lucide/svelte';
-	import {
-		Select, SelectContent, SelectItem, SelectTrigger
-	} from '$lib/components/ui/select';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -45,13 +67,24 @@
 	import { ArtifactRepoType } from '$lib/proto/distroface/v1/types_pb';
 	import type { Artifact, ArtifactRepository } from '$lib/proto/distroface/v1/types_pb';
 	import type { ArtifactVersionGroup } from '$lib/proto/distroface/v1/artifact_pb';
-	import { artifactMirrorKind, artifactMirrorLabel } from '$lib/mirror';
+	import { artifactMirrorLabel } from '$lib/mirror';
 
 	const SESSION_KEY = 'distroface_session';
 	const repoName = $derived(page.params.repo ?? '');
 	const namespace = $derived(page.params.namespace ?? '');
+	const uploadHref = $derived(
+		resolve('/artifacts/[namespace]/[repo]/upload', { namespace, repo: repoName })
+	);
+	const settingsHref = $derived(
+		resolve('/artifacts/[namespace]/[repo]/settings', { namespace, repo: repoName })
+	);
 
 	let repo = $state<ArtifactRepository | null>(null);
+	// Namespace and name of the git repository this package belongs to
+	const sourceRepo = $derived.by(() => {
+		const [namespace = '', name = ''] = (repo?.sourceRepository ?? '').split('/');
+		return { namespace, name };
+	});
 	let versions = $state<ArtifactVersionGroup[]>([]);
 	let loading = $state(true);
 	let notFound = $state(false);
@@ -78,34 +111,15 @@
 	let searchLoaded = $state(false);
 	const searchPager = new Pager(20);
 
-	// Upload
-	let uploadPanelOpen = $state(false);
-	let uploadFile = $state<File | null>(null);
-	let uploadVersion = $state('');
-	let uploadPath = $state('');
-	let uploadProps = $state<{ key: string; value: string }[]>([]);
-	let uploading = $state(false);
-	let uploadStage = $state('');
-
-	// Repo settings
-	let settingsPanelOpen = $state(false);
-	let settingsDescription = $state('');
-	let settingsPrivate = $state(false);
-	let settingsMirror = $state(emptyMirrorForm());
-	let savingSettings = $state(false);
-
 	const repoIsMirror = $derived(
 		!!repo && repo.type !== ArtifactRepoType.FILE && repo.type !== ArtifactRepoType.UNSPECIFIED
 	);
 
-	// Properties editor
-	let propsPanelOpen = $state(false);
+	// Editing swaps the artifact row for an inline form
 	let propsTarget = $state<Artifact | null>(null);
 	let propsRows = $state<{ key: string; value: string }[]>([]);
 	let savingProps = $state(false);
 
-	// Rename
-	let renamePanelOpen = $state(false);
 	let renameTarget = $state<Artifact | null>(null);
 	let renamePath = $state('');
 	let renameVersion = $state('');
@@ -233,102 +247,18 @@
 		a.click();
 	}
 
-	// ── Upload ───────────────────────────────────────────────────────────
-
-	function onFileSelected(e: Event) {
-		const input = e.target as HTMLInputElement;
-		uploadFile = input.files?.[0] ?? null;
-		if (uploadFile && !uploadPath) uploadPath = uploadFile.name;
-	}
-
-	async function doUpload() {
-		if (!uploadFile || !uploadVersion.trim()) return;
-		uploading = true;
-		try {
-			uploadStage = 'Initiating...';
-			const init = await rpcClient.artifact.initiateArtifactUpload({ repoName, namespace });
-
-			uploadStage = 'Uploading...';
-			const token = localStorage.getItem(SESSION_KEY);
-			const patchResp = await fetch(init.uploadUrl, {
-				method: 'PATCH',
-				headers: token ? { Authorization: `Bearer ${token}` } : {},
-				body: uploadFile
-			});
-			if (!patchResp.ok) {
-				toast.error(`Upload failed (${patchResp.status})`);
-				return;
-			}
-
-			uploadStage = 'Finalizing...';
-			const properties: Record<string, string> = {};
-			for (const row of uploadProps) {
-				if (row.key.trim()) properties[row.key.trim()] = row.value;
-			}
-			await rpcClient.artifact.completeArtifactUpload({
-				repoName,
-				namespace,
-				uploadId: init.uploadId,
-				version: uploadVersion.trim(),
-				path: uploadPath.trim(),
-				properties
-			});
-			toast.success('Artifact uploaded');
-			closeUploadPanel();
-			await loadVersions();
-		} catch {
-			// Error interceptor already toasted
-		} finally {
-			uploading = false;
-			uploadStage = '';
-		}
-	}
-
-	function closeUploadPanel() {
-		uploadPanelOpen = false;
-		uploadFile = null;
-		uploadVersion = '';
-		uploadPath = '';
-		uploadProps = [];
-	}
-
-	// ── Repo settings ────────────────────────────────────────────────────
-
-	function openSettings() {
-		if (!repo) return;
-		settingsDescription = repo.description;
-		settingsPrivate = repo.isPrivate;
-		settingsMirror = mirrorFormFrom(repo.mirror);
-		settingsPanelOpen = true;
-	}
-
-	async function saveSettings() {
-		savingSettings = true;
-		try {
-			const resp = await rpcClient.artifact.updateArtifactRepository({
-				name: repoName,
-				namespace,
-				description: settingsDescription,
-				isPrivate: settingsPrivate,
-				mirror: repoIsMirror ? mirrorInit(settingsMirror) : undefined
-			});
-			repo = resp.repository ?? repo;
-			toast.success('Repository updated');
-			settingsPanelOpen = false;
-		} catch {
-			// Error interceptor already toasted
-		} finally {
-			savingSettings = false;
-		}
-	}
-
 	// ── Properties ───────────────────────────────────────────────────────
 
+	function closeEdit() {
+		propsTarget = null;
+		renameTarget = null;
+	}
+
 	function openProps(artifact: Artifact) {
+		renameTarget = null;
 		propsTarget = artifact;
 		propsRows = Object.entries(artifact.properties).map(([key, value]) => ({ key, value }));
 		if (propsRows.length === 0) propsRows = [{ key: '', value: '' }];
-		propsPanelOpen = true;
 	}
 
 	async function saveProps() {
@@ -346,7 +276,7 @@
 				properties
 			});
 			toast.success('Properties updated');
-			propsPanelOpen = false;
+			closeEdit();
 			await refreshAfterMutation();
 		} catch {
 			// Error interceptor already toasted
@@ -358,10 +288,10 @@
 	// ── Rename ───────────────────────────────────────────────────────────
 
 	function openRename(artifact: Artifact) {
+		propsTarget = null;
 		renameTarget = artifact;
 		renamePath = artifact.path;
 		renameVersion = artifact.version;
-		renamePanelOpen = true;
 	}
 
 	async function saveRename() {
@@ -376,7 +306,7 @@
 				version: renameVersion.trim() || undefined
 			});
 			toast.success('Artifact updated');
-			renamePanelOpen = false;
+			closeEdit();
 			await refreshAfterMutation();
 		} catch {
 			// Error interceptor already toasted
@@ -470,100 +400,215 @@
 </svelte:head>
 
 {#snippet sortHeader(label: string, col: string, current: string, toggle: (col: string) => void)}
-	<button type="button" class="inline-flex items-center gap-1 hover:text-foreground transition-colors" onclick={() => toggle(col)}>
+	<button
+		type="button"
+		class="inline-flex items-center gap-1 transition-colors hover:text-foreground"
+		onclick={() => toggle(col)}
+	>
 		{label}
 		{#if current === `${col} desc`}
-			<ArrowDown class="h-3 w-3" />
+			<ArrowDown class="size-3" />
 		{:else if current === `${col} asc`}
-			<ArrowUp class="h-3 w-3" />
+			<ArrowUp class="size-3" />
 		{:else}
-			<ArrowUpDown class="h-3 w-3 opacity-40" />
+			<ArrowUpDown class="size-3 opacity-40" />
 		{/if}
 	</button>
+{/snippet}
+
+{#snippet propertyRows(
+	rows: { key: string; value: string }[],
+	onChange: (rows: { key: string; value: string }[]) => void
+)}
+	<div class="space-y-2">
+		{#each rows as row, i (i)}
+			<div class="flex items-center gap-2">
+				<Input bind:value={row.key} placeholder="key" class="font-mono" aria-label="Property key" />
+				<Input
+					bind:value={row.value}
+					placeholder="value"
+					class="font-mono"
+					aria-label="Property value"
+				/>
+				<Button
+					variant="ghost-muted"
+					size="icon"
+					class="shrink-0"
+					onclick={() => onChange(rows.filter((_, j) => j !== i))}
+					aria-label="Remove property"
+				>
+					<X />
+				</Button>
+			</div>
+		{/each}
+	</div>
+	<Button variant="outline" size="sm" onclick={() => onChange([...rows, { key: '', value: '' }])}>
+		<Plus />
+		Add property
+	</Button>
 {/snippet}
 
 {#snippet artifactTable(artifacts: Artifact[], sortable: boolean = false)}
 	<Table>
 		<TableHeader>
-			<TableRow class="bg-muted/30 hover:bg-muted/30">
-				<TableHead class="th">
-					{#if sortable}{@render sortHeader('Path', 'path', searchSort, toggleSearchSort)}{:else}{@render sortHeader('Path', 'path', fileSort, toggleFileSort)}{/if}
+			<TableRow>
+				<TableHead>
+					{#if sortable}{@render sortHeader(
+							'Path',
+							'path',
+							searchSort,
+							toggleSearchSort
+						)}{:else}{@render sortHeader('Path', 'path', fileSort, toggleFileSort)}{/if}
 				</TableHead>
 				{#if sortable}
-					<TableHead class="th">{@render sortHeader('Version', 'version', searchSort, toggleSearchSort)}</TableHead>
+					<TableHead
+						>{@render sortHeader('Version', 'version', searchSort, toggleSearchSort)}</TableHead
+					>
 				{/if}
-				<TableHead class="th">
-					{#if sortable}{@render sortHeader('Size', 'size', searchSort, toggleSearchSort)}{:else}{@render sortHeader('Size', 'size', fileSort, toggleFileSort)}{/if}
+				<TableHead>
+					{#if sortable}{@render sortHeader(
+							'Size',
+							'size',
+							searchSort,
+							toggleSearchSort
+						)}{:else}{@render sortHeader('Size', 'size', fileSort, toggleFileSort)}{/if}
 				</TableHead>
-				<TableHead class="th">Type</TableHead>
-				<TableHead class="th">Digest</TableHead>
-				<TableHead class="th">
-					{#if sortable}{@render sortHeader('Uploaded', 'created_at', searchSort, toggleSearchSort)}{:else}{@render sortHeader('Uploaded', 'created_at', fileSort, toggleFileSort)}{/if}
+				<TableHead>Type</TableHead>
+				<TableHead>Digest</TableHead>
+				<TableHead>
+					{#if sortable}{@render sortHeader(
+							'Uploaded',
+							'created_at',
+							searchSort,
+							toggleSearchSort
+						)}{:else}{@render sortHeader('Uploaded', 'created_at', fileSort, toggleFileSort)}{/if}
 				</TableHead>
-				<TableHead class="th w-32"></TableHead>
+				<TableHead class="w-32"></TableHead>
 			</TableRow>
 		</TableHeader>
 		<TableBody>
 			{#each artifacts as artifact (artifact.id)}
-				<TableRow>
-					<TableCell class="py-3 px-3">
-						<span class="font-medium font-mono text-[13px]">{artifact.path}</span>
-						{#if Object.keys(artifact.properties).length > 0}
-							<div class="flex flex-wrap gap-1 mt-1">
-								{#each Object.entries(artifact.properties) as [key, value] (key)}
-									<Badge variant="secondary" class="text-[10px] font-mono px-1.5 py-0">{key}={value}</Badge>
-								{/each}
+				{#if propsTarget?.id === artifact.id}
+					<TableRow class="bg-muted/30 hover:[&>td]:bg-transparent">
+						<TableCell colspan={sortable ? 7 : 6} class="px-4 py-4 whitespace-normal">
+							<div class="form-fields">
+								<FormField
+									label="Properties of {artifact.path}"
+									help="Saving replaces the full set"
+								>
+									{@render propertyRows(propsRows, (rows) => (propsRows = rows))}
+								</FormField>
+								<div class="flex flex-wrap items-center gap-2">
+									<Button onclick={saveProps} disabled={savingProps}>
+										{#if savingProps}<Loader2 class="animate-spin" />{/if}
+										{savingProps ? 'Saving' : 'Save properties'}
+									</Button>
+									<Button variant="ghost-muted" onclick={closeEdit} disabled={savingProps}
+										>Cancel</Button
+									>
+								</div>
 							</div>
-						{/if}
-					</TableCell>
-					{#if sortable}
-						<TableCell class="py-3 px-3">
-							<Badge variant="secondary" class="font-mono text-xs font-medium px-2 py-0.5">{artifact.version}</Badge>
 						</TableCell>
-					{/if}
-					<TableCell class="text-sm py-3 px-3 tabular-nums">{formatBytes(Number(artifact.size))}</TableCell>
-					<TableCell class="text-muted-foreground text-xs py-3 px-3 font-mono">{artifact.mimeType || '-'}</TableCell>
-					<TableCell class="py-3 px-3">
-						<div class="flex items-center gap-1">
-							<code class="text-xs text-muted-foreground">{truncateDigest(artifact.digest, 8)}</code>
-							<CopyButton text={artifact.digest} label="Digest copied!" />
-						</div>
-					</TableCell>
-					<TableCell class="text-muted-foreground text-sm py-3 px-3">
-						{artifact.createdAt ? relativeTime(timestampDate(artifact.createdAt)) : '-'}
-					</TableCell>
-					<TableCell class="text-right py-3 px-3">
-						<div class="flex items-center justify-end gap-0.5">
-							<Button
-								variant="ghost" size="icon" class="h-7 w-7" title="Download"
-								onclick={() => downloadArtifact(artifact)}
-							>
-								<Download class="h-3.5 w-3.5" />
-							</Button>
-							{#if canMutate}
-								<Button
-									variant="ghost" size="icon" class="h-7 w-7" title="Edit properties"
-									onclick={() => openProps(artifact)}
-								>
-									<Tags class="h-3.5 w-3.5" />
-								</Button>
-								<Button
-									variant="ghost" size="icon" class="h-7 w-7" title="Rename / move"
-									onclick={() => openRename(artifact)}
-								>
-									<Pencil class="h-3.5 w-3.5" />
-								</Button>
-								<Button
-									variant="ghost" size="icon"
-									class="h-7 w-7 text-destructive hover:text-destructive" title="Delete"
-									onclick={() => openDelete(artifact)}
-								>
-									<Trash2 class="h-3.5 w-3.5" />
-								</Button>
+					</TableRow>
+				{:else if renameTarget?.id === artifact.id}
+					<TableRow class="bg-muted/30 hover:[&>td]:bg-transparent">
+						<TableCell colspan={sortable ? 7 : 6} class="px-4 py-4 whitespace-normal">
+							<div class="form-fields">
+								<FormField label="Path" id="rename-path" required span="half">
+									<Input id="rename-path" bind:value={renamePath} class="font-mono" />
+								</FormField>
+								<FormField label="Version" id="rename-version" span="half">
+									<Input id="rename-version" bind:value={renameVersion} class="font-mono" />
+								</FormField>
+								<div class="flex flex-wrap items-center gap-2">
+									<Button onclick={saveRename} disabled={renaming || !renamePath.trim()}>
+										{#if renaming}<Loader2 class="animate-spin" />{/if}
+										{renaming ? 'Saving' : 'Save changes'}
+									</Button>
+									<Button variant="ghost-muted" onclick={closeEdit} disabled={renaming}
+										>Cancel</Button
+									>
+								</div>
+							</div>
+						</TableCell>
+					</TableRow>
+				{:else}
+					<TableRow>
+						<TableCell>
+							<span class="font-mono text-sm font-medium">{artifact.path}</span>
+							{#if Object.keys(artifact.properties).length > 0}
+								<div class="mt-1 flex flex-wrap gap-1">
+									{#each Object.entries(artifact.properties) as [key, value] (key)}
+										<Badge variant="secondary" class="font-mono">{key}={value}</Badge>
+									{/each}
+								</div>
 							{/if}
-						</div>
-					</TableCell>
-				</TableRow>
+						</TableCell>
+						{#if sortable}
+							<TableCell>
+								<Badge variant="secondary" class="font-mono">{artifact.version}</Badge>
+							</TableCell>
+						{/if}
+						<TableCell class="tabular-nums">{formatBytes(Number(artifact.size))}</TableCell>
+						<TableCell class="font-mono text-xs text-muted-foreground"
+							>{artifact.mimeType || '-'}</TableCell
+						>
+						<TableCell>
+							<div class="flex items-center gap-1">
+								<code class="font-mono text-xs text-muted-foreground"
+									>{truncateDigest(artifact.digest, 8)}</code
+								>
+								<CopyButton text={artifact.digest} label="Digest copied" />
+							</div>
+						</TableCell>
+						<TableCell class="text-muted-foreground">
+							{artifact.createdAt ? relativeTime(timestampDate(artifact.createdAt)) : '-'}
+						</TableCell>
+						<TableCell class="text-right">
+							<div class="flex items-center justify-end gap-0.5">
+								<Button
+									variant="ghost-muted"
+									size="icon-sm"
+									title="Download"
+									aria-label="Download"
+									onclick={() => downloadArtifact(artifact)}
+								>
+									<Download />
+								</Button>
+								{#if canMutate}
+									<Button
+										variant="ghost-muted"
+										size="icon-sm"
+										title="Edit properties"
+										aria-label="Edit properties"
+										onclick={() => openProps(artifact)}
+									>
+										<Tags />
+									</Button>
+									<Button
+										variant="ghost-muted"
+										size="icon-sm"
+										title="Rename or move"
+										aria-label="Rename or move"
+										onclick={() => openRename(artifact)}
+									>
+										<Pencil />
+									</Button>
+									<Button
+										variant="ghost-muted"
+										size="icon-sm"
+										class="hover:text-destructive"
+										title="Delete"
+										aria-label="Delete"
+										onclick={() => openDelete(artifact)}
+									>
+										<Trash2 />
+									</Button>
+								{/if}
+							</div>
+						</TableCell>
+					</TableRow>
+				{/if}
 			{/each}
 		</TableBody>
 	</Table>
@@ -571,39 +616,59 @@
 
 <div class="space-y-6">
 	{#if loading}
-		<Skeleton class="h-16 w-full rounded-xl" />
-		<div class="space-y-2">
-			{#each Array(3)}
-				<Skeleton class="h-14 w-full rounded-xl" />
+		<div class="flex items-start gap-3 border-b pb-5">
+			<Skeleton class="size-8 rounded-md" />
+			<Skeleton class="mt-1.5 size-5" />
+			<div class="flex-1 space-y-2">
+				<Skeleton class="h-6 w-64" />
+				<Skeleton class="h-4 w-96" />
+				<Skeleton class="h-3.5 w-48" />
+			</div>
+		</div>
+		<div class="box divide-y">
+			{#each { length: 3 }, i (i)}
+				<div class="flex items-center gap-3 px-4 py-3">
+					<Skeleton class="size-4" />
+					<Skeleton class="h-4 w-32" />
+					<Skeleton class="ml-auto h-3 w-12" />
+				</div>
 			{/each}
 		</div>
 	{:else if notFound || !repo}
-		<EmptyState icon={Archive} message="Repository not found" description="It may be private or deleted.">
+		<EmptyState
+			icon={Archive}
+			message="Repository not found"
+			description="It may be private or deleted."
+		>
 			{#snippet actions()}
-				<Button variant="outline" size="sm" onclick={() => goto(resolve('/artifacts'))}>
-					<ArrowLeft class="h-4 w-4 mr-1.5" />
-					Back to Artifacts
+				<Button variant="outline" href={resolve('/artifacts')}>
+					<ArrowLeft />
+					Back to artifacts
 				</Button>
 			{/snippet}
 		</EmptyState>
 	{:else}
-		<div class="flex items-center gap-4">
-			<Button variant="ghost" size="icon" class="shrink-0" onclick={() => goto(resolve('/artifacts'))}>
-				<ArrowLeft class="h-4 w-4" />
+		<div class="flex items-start gap-3 border-b pb-5">
+			<Button
+				variant="ghost-muted"
+				size="icon"
+				class="shrink-0"
+				href={resolve('/artifacts')}
+				aria-label="Back to artifacts"
+			>
+				<ArrowLeft />
 			</Button>
-			<div class="h-12 w-12 rounded-xl bg-linear-to-br from-primary/15 to-primary/5 flex items-center justify-center shrink-0 border border-primary/10">
-				<Archive class="h-6 w-6 text-primary" />
-			</div>
-			<div class="flex-1 min-w-0">
-				<div class="flex items-center gap-2">
-					<h1 class="text-2xl font-bold tracking-tight">
-						<span class="text-muted-foreground font-normal">{namespace}/</span>{repo.name}
+			<Archive class="mt-1.5 size-5 shrink-0 text-muted-foreground" />
+			<div class="min-w-0 flex-1">
+				<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+					<h1 class="text-xl leading-7 font-semibold tracking-tight">
+						<span class="font-normal text-muted-foreground">{namespace}/</span>{repo.name}
 					</h1>
-					<Badge variant="outline" class="text-xs gap-1">
+					<Badge variant="outline">
 						{#if repo.isPrivate}
-							<Lock class="h-2.5 w-2.5" />Private
+							<Lock />Private
 						{:else}
-							<Globe class="h-2.5 w-2.5" />Public
+							<Globe />Public
 						{/if}
 					</Badge>
 					{#if repoIsMirror}
@@ -615,63 +680,85 @@
 						/>
 					{/if}
 				</div>
-				<p class="text-[13px] text-muted-foreground mt-0.5">
-					{repo.description || 'No description'}
-					<span class="text-muted-foreground/50 mx-1.5">·</span>
-					{repo.artifactCount} artifact{Number(repo.artifactCount) === 1 ? '' : 's'}
-					<span class="text-muted-foreground/50 mx-1.5">·</span>
-					{formatBytes(Number(repo.totalSize))}
+				{#if repo.sourceRepository}
+					<p class="mt-0.5 flex items-center gap-1.5 text-sm text-muted-foreground">
+						<GitBranch class="size-3.5" />
+						Source repository
+						<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+						<a href="/{repo.sourceRepository}" class="link font-medium">{repo.sourceRepository}</a>
+					</p>
+				{/if}
+				<p class="mt-0.5 text-sm text-muted-foreground">{repo.description || 'No description'}</p>
+				<div
+					class="mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs text-muted-foreground"
+				>
+					<span class="flex items-center gap-1 tabular-nums">
+						<Archive class="size-3.5" />{repo.artifactCount} artifact{Number(repo.artifactCount) ===
+						1
+							? ''
+							: 's'}
+					</span>
+					<span class="flex items-center gap-1"
+						><HardDrive class="size-3.5" />{formatBytes(Number(repo.totalSize))}</span
+					>
 					{#if repo.owner}
-						<span class="text-muted-foreground/50 mx-1.5">·</span>
-						by {repo.owner}
+						<span class="flex items-center gap-1"><User class="size-3.5" />{repo.owner}</span>
 					{/if}
 					{#if repoIsMirror && repo.mirror?.upstream}
-						<span class="text-muted-foreground/50 mx-1.5">·</span>
-						mirrors {repo.mirror.upstream}{repo.mirrorSyncing ||
-						mirrorSyncStore.syncing('artifact', repo.id)
-							? ', syncing now'
-							: repo.mirrorLastSync
-								? `, synced ${relativeTime(timestampDate(repo.mirrorLastSync))}`
-								: ', first sync queued'}
+						<span class="flex items-center gap-1">
+							<HardDriveDownload class="size-3.5" />
+							Mirrors {repo.mirror.upstream}{repo.mirrorSyncing ||
+							mirrorSyncStore.syncing('artifact', repo.id)
+								? ', syncing now'
+								: repo.mirrorLastSync
+									? `, synced ${relativeTime(timestampDate(repo.mirrorLastSync))}`
+									: ', first sync queued'}
+						</span>
 					{/if}
-				</p>
+				</div>
 			</div>
-			<div class="flex items-center gap-2">
+			<div class="flex shrink-0 items-center gap-2">
 				{#if repoIsMirror && canMutate}
 					{#if syncActive}
-						<Button variant="outline" size="sm" onclick={stopSync} disabled={stopping}>
-							<Square class="h-4 w-4 mr-1.5" />
-							Stop Sync
+						<Button variant="outline" onclick={stopSync} disabled={stopping}>
+							<Square />
+							Stop sync
 						</Button>
 					{:else}
-						<Button variant="outline" size="sm" onclick={syncNow} disabled={syncing}>
-							<RefreshCw class="h-4 w-4 mr-1.5 {syncing ? 'animate-spin' : ''}" />
-							Sync Now
+						<Button variant="outline" onclick={syncNow} disabled={syncing}>
+							<RefreshCw class={syncing ? 'animate-spin' : ''} />
+							Sync now
 						</Button>
 					{/if}
 				{/if}
 				{#if canMutate}
-					<Button variant="outline" size="sm" onclick={openSettings}>
-						<Settings class="h-4 w-4 mr-1.5" />
+					<Button variant="outline" href={settingsHref}>
+						<Settings />
 						Settings
 					</Button>
 				{/if}
 				<PermissionGate resource="artifacts" action="push">
-					<Button size="sm" onclick={() => (uploadPanelOpen = true)}>
-						<Upload class="h-4 w-4 mr-1.5" />
+					<Button href={uploadHref}>
+						<Upload />
 						Upload
 					</Button>
 				</PermissionGate>
 			</div>
 		</div>
 
-		<div class="flex items-center gap-3 flex-wrap">
-			<div class="max-w-md flex-1 min-w-64">
-				<QueryFilterBar {filter} placeholder="Filter artifacts..." onchange={runSearch} />
+		<div class="flex flex-wrap items-center gap-2">
+			<div class="w-full sm:max-w-md sm:flex-1">
+				<QueryFilterBar {filter} placeholder="Filter artifacts" onchange={runSearch} />
 			</div>
 			{#if searchResults === null}
-				<Select type="single" value={versionSort} onValueChange={(v) => { if (v) setVersionSort(v); }}>
-					<SelectTrigger class="h-9 w-52 text-[13px]" size="sm">
+				<Select
+					type="single"
+					value={versionSort}
+					onValueChange={(v) => {
+						if (v) setVersionSort(v);
+					}}
+				>
+					<SelectTrigger class="w-52" aria-label="Sort">
 						{versionSortOptions.find((o) => o.value === versionSort)?.label ?? 'Sort'}
 					</SelectTrigger>
 					<SelectContent>
@@ -685,9 +772,13 @@
 
 		{#if searchResults !== null}
 			{#if !searchLoaded}
-				<Skeleton class="h-24 w-full rounded-xl" />
+				<Skeleton class="h-24 w-full rounded-lg" />
 			{:else if searchResults.length === 0}
-				<EmptyState icon={Search} message="No matching artifacts" description="No results match the current filter" />
+				<EmptyState
+					icon={Search}
+					message="No matching artifacts"
+					description="No results match the current filter"
+				/>
 			{:else}
 				<div class="data-table transition-opacity duration-200 {searching ? 'opacity-60' : ''}">
 					{@render artifactTable(searchResults, true)}
@@ -702,31 +793,49 @@
 			>
 				{#snippet actions()}
 					<PermissionGate resource="artifacts" action="push">
-						<Button variant="outline" size="sm" onclick={() => (uploadPanelOpen = true)}>
-							<Upload class="h-4 w-4 mr-1.5" />
-							Upload Artifact
+						<Button variant="outline" href={uploadHref}>
+							<Upload />
+							Upload artifact
 						</Button>
 					</PermissionGate>
 				{/snippet}
 			</EmptyState>
 		{:else}
-			<div class="space-y-3">
+			<div class="space-y-4">
 				{#each versions as group (group.version)}
+					{@const expanded = expandedVersions[group.version] ?? false}
 					<Collapsible
-						open={expandedVersions[group.version] ?? false}
+						open={expanded}
 						onOpenChange={(v) => (expandedVersions = { ...expandedVersions, [group.version]: v })}
 					>
-						<div class="rounded-xl border border-border/50 overflow-hidden">
-							<CollapsibleTrigger
-								class="flex w-full items-center gap-2.5 px-4 py-3 bg-muted/20 hover:bg-muted/40 transition-colors text-left"
-							>
-								<ChevronDown class="h-4 w-4 text-muted-foreground transition-transform {expandedVersions[group.version] ? '' : '-rotate-90'}" />
-								<Tag class="h-3.5 w-3.5 text-primary" />
-								<span class="font-medium font-mono text-sm">{group.version}</span>
-								<span class="text-xs text-muted-foreground ml-auto tabular-nums">
-									{group.artifacts.length} file{group.artifacts.length === 1 ? '' : 's'}
-								</span>
-							</CollapsibleTrigger>
+						<div class="box">
+							<div class="flex items-center bg-muted/40 {expanded ? 'border-b' : ''}">
+								<CollapsibleTrigger
+									class="flex min-w-0 flex-1 items-center gap-2.5 px-4 py-2.5 text-left text-sm font-semibold transition-colors hover:bg-muted/60"
+								>
+									<ChevronDown
+										class="size-4 text-muted-foreground transition-transform {expanded
+											? ''
+											: '-rotate-90'}"
+									/>
+									<Tag class="size-3.5 text-muted-foreground" />
+									<span class="font-mono">{group.version}</span>
+									<span class="ml-auto text-xs font-normal text-muted-foreground tabular-nums">
+										{group.artifacts.length} file{group.artifacts.length === 1 ? '' : 's'}
+									</span>
+								</CollapsibleTrigger>
+								{#if group.hasRelease && repo.sourceRepository}
+									<Badge
+										href={resolve('/[namespace]/[name]/releases/[tag]', {
+											...sourceRepo,
+											tag: group.version
+										})}
+										class="mr-4 shrink-0"
+									>
+										<Rocket />Release
+									</Badge>
+								{/if}
+							</div>
 							<CollapsibleContent>
 								{@render artifactTable(sortedFiles(group.artifacts))}
 							</CollapsibleContent>
@@ -735,171 +844,22 @@
 				{/each}
 			</div>
 
-			<DataPagination pager={versionPager} onChange={loadVersions} pageSizeOptions={[5, 10, 20, 50]} />
+			<DataPagination
+				pager={versionPager}
+				onChange={loadVersions}
+				pageSizeOptions={[5, 10, 20, 50]}
+			/>
 		{/if}
 	{/if}
 </div>
 
-<!-- Upload panel -->
-<FormPanel
-	open={uploadPanelOpen}
-	onOpenChange={(v) => { if (!v) closeUploadPanel(); }}
-	title="Upload Artifact"
-	description="Re-uploading the same version and path replaces the artifact."
-	icon={Upload}
+<ConfirmDialog
+	bind:open={deleteDialogOpen}
+	title="Delete artifact"
+	confirmLabel="Delete"
+	onConfirm={confirmDelete}
+	loading={deleting}
 >
-	<div class="space-y-6">
-		<FormSection title="File">
-			<div class="space-y-3">
-				<FormField label="File" id="upload-file" required>
-					<Input id="upload-file" type="file" onchange={onFileSelected} />
-					{#if uploadFile}
-						<p class="text-xs text-muted-foreground mt-1">{uploadFile.name} · {formatBytes(uploadFile.size)}</p>
-					{/if}
-				</FormField>
-				<FormField label="Version" id="upload-version" required>
-					<Input id="upload-version" bind:value={uploadVersion} placeholder="1.0.0" />
-				</FormField>
-				<FormField label="Path" id="upload-path" help="Defaults to the file name">
-					<Input id="upload-path" bind:value={uploadPath} placeholder="dist/app.zip" />
-				</FormField>
-			</div>
-		</FormSection>
-
-		<FormSection title="Properties">
-			<div class="space-y-2">
-				{#each uploadProps as row, i (i)}
-					<div class="flex items-center gap-2">
-						<Input bind:value={row.key} placeholder="key" class="font-mono text-sm" />
-						<Input bind:value={row.value} placeholder="value" class="font-mono text-sm" />
-						<Button
-							variant="ghost" size="icon" class="h-8 w-8 shrink-0"
-							onclick={() => (uploadProps = uploadProps.filter((_, j) => j !== i))}
-						>
-							<X class="h-3.5 w-3.5" />
-						</Button>
-					</div>
-				{/each}
-				<Button variant="outline" size="sm" onclick={() => (uploadProps = [...uploadProps, { key: '', value: '' }])}>
-					<Plus class="h-3.5 w-3.5 mr-1.5" />
-					Add Property
-				</Button>
-			</div>
-		</FormSection>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={closeUploadPanel} disabled={uploading}>Cancel</Button>
-		<Button onclick={doUpload} disabled={uploading || !uploadFile || !uploadVersion.trim()}>
-			{uploading ? uploadStage || 'Uploading...' : 'Upload'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<!-- Repo settings panel -->
-<FormPanel
-	open={settingsPanelOpen}
-	onOpenChange={(v) => (settingsPanelOpen = v)}
-	title="Repository Settings"
-	description="Update the description and visibility of {repoName}."
-	icon={Settings}
->
-	<div class="space-y-6">
-		<FormSection title="General">
-			<div class="space-y-3">
-				<FormField label="Description" id="settings-description">
-					<Input id="settings-description" bind:value={settingsDescription} placeholder="What is stored here?" />
-				</FormField>
-				<FormField label="Private" horizontal help="Visible only to you and admins">
-					<Switch bind:checked={settingsPrivate} />
-				</FormField>
-			</div>
-		</FormSection>
-
-		{#if repoIsMirror && repo}
-			<FormSection title="Mirror Source">
-				<MirrorConfigFields
-					form={settingsMirror}
-					kind={artifactMirrorKind(repo.type)}
-					tokenSet={repo.mirror?.authTokenSet ?? false}
-					lastSync={repo.mirrorLastSync}
-					lastError={repo.mirrorLastError}
-					nextAttempt={repo.mirrorNextAttempt}
-					idPrefix="settings-mirror"
-				/>
-			</FormSection>
-		{/if}
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (settingsPanelOpen = false)}>Cancel</Button>
-		<Button onclick={saveSettings} disabled={savingSettings}>
-			{savingSettings ? 'Saving...' : 'Save'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<!-- Properties editor panel -->
-<FormPanel
-	open={propsPanelOpen}
-	onOpenChange={(v) => (propsPanelOpen = v)}
-	title="Edit Properties"
-	description="Saving replaces the full set for {propsTarget?.path ?? ''}."
-	icon={Tags}
->
-	<div class="space-y-2">
-		{#each propsRows as row, i (i)}
-			<div class="flex items-center gap-2">
-				<Input bind:value={row.key} placeholder="key" class="font-mono text-sm" />
-				<Input bind:value={row.value} placeholder="value" class="font-mono text-sm" />
-				<Button
-					variant="ghost" size="icon" class="h-8 w-8 shrink-0"
-					onclick={() => (propsRows = propsRows.filter((_, j) => j !== i))}
-				>
-					<X class="h-3.5 w-3.5" />
-				</Button>
-			</div>
-		{/each}
-		<Button variant="outline" size="sm" onclick={() => (propsRows = [...propsRows, { key: '', value: '' }])}>
-			<Plus class="h-3.5 w-3.5 mr-1.5" />
-			Add Property
-		</Button>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (propsPanelOpen = false)}>Cancel</Button>
-		<Button onclick={saveProps} disabled={savingProps}>
-			{savingProps ? 'Saving...' : 'Save Properties'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<!-- Rename panel -->
-<FormPanel
-	open={renamePanelOpen}
-	onOpenChange={(v) => (renamePanelOpen = v)}
-	title="Rename / Move Artifact"
-	description="Change the path or version of {renameTarget?.path ?? ''}."
-	icon={Pencil}
->
-	<div class="space-y-3">
-		<FormField label="Path" id="rename-path" required>
-			<Input id="rename-path" bind:value={renamePath} class="font-mono text-sm" />
-		</FormField>
-		<FormField label="Version" id="rename-version">
-			<Input id="rename-version" bind:value={renameVersion} class="font-mono text-sm" />
-		</FormField>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (renamePanelOpen = false)}>Cancel</Button>
-		<Button onclick={saveRename} disabled={renaming || !renamePath.trim()}>
-			{renaming ? 'Saving...' : 'Save'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<ConfirmDialog bind:open={deleteDialogOpen} title="Delete Artifact" confirmLabel="Delete" onConfirm={confirmDelete} loading={deleting}>
 	{#snippet description()}
 		This permanently deletes <strong>{deleteTarget?.path}</strong> ({deleteTarget?.version}).
 	{/snippet}

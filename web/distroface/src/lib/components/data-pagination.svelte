@@ -1,8 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import {
-		Select, SelectContent, SelectItem, SelectTrigger
-	} from '$lib/components/ui/select';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from '@lucide/svelte';
 	import type { Pager } from '$lib/pager.svelte';
 
@@ -41,21 +39,24 @@
 
 {#if visible}
 	<div
-		class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2
-			{attached ? 'border-t border-border/60 bg-muted/20 px-3 py-2' : 'pt-3'}"
+		class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs text-muted-foreground {attached
+			? 'border-t bg-muted/30 px-3 py-2'
+			: 'pt-3'}"
 	>
-		<p class="text-[13px] text-muted-foreground tabular-nums whitespace-nowrap">
+		<p class="whitespace-nowrap tabular-nums">
 			{rangeStart}&ndash;{rangeEnd} of {pager.totalCount}
 		</p>
-		<div class="flex flex-wrap items-center gap-x-6 gap-y-2">
+		<div class="flex flex-wrap items-center gap-x-5 gap-y-2">
 			<div class="hidden items-center gap-2 sm:flex">
-				<span class="text-[13px] text-muted-foreground whitespace-nowrap">Rows per page</span>
+				<span class="whitespace-nowrap">Rows per page</span>
 				<Select
 					type="single"
 					value={String(pager.pageSize)}
-					onValueChange={(v) => { if (v) apply(pager.setPageSize(Number(v))); }}
+					onValueChange={(v) => {
+						if (v) apply(pager.setPageSize(Number(v)));
+					}}
 				>
-					<SelectTrigger class="h-8 w-[4.5rem] text-[13px] tabular-nums" size="sm" aria-label="Rows per page">
+					<SelectTrigger class="w-16 tabular-nums" size="sm" aria-label="Rows per page">
 						{pager.pageSize}
 					</SelectTrigger>
 					<SelectContent>
@@ -65,33 +66,47 @@
 					</SelectContent>
 				</Select>
 			</div>
-			<span class="text-[13px] text-muted-foreground tabular-nums whitespace-nowrap">
+			<span class="whitespace-nowrap tabular-nums">
 				Page {pager.page} of {totalPages}
 			</span>
 			<div class="flex items-center gap-1">
 				<Button
-					variant="outline" size="icon" class="hidden h-8 w-8 sm:inline-flex"
-					disabled={!hasPrev} onclick={() => apply(pager.goTo(1))} aria-label="First page"
+					variant="outline"
+					size="icon-sm"
+					class="hidden sm:inline-flex"
+					disabled={!hasPrev}
+					onclick={() => apply(pager.goTo(1))}
+					aria-label="First page"
 				>
-					<ChevronsLeft class="h-4 w-4" />
+					<ChevronsLeft />
 				</Button>
 				<Button
-					variant="outline" size="icon" class="h-8 w-8"
-					disabled={!hasPrev} onclick={() => apply(pager.prev())} aria-label="Previous page"
+					variant="outline"
+					size="icon-sm"
+					disabled={!hasPrev}
+					onclick={() => apply(pager.prev())}
+					aria-label="Previous page"
 				>
-					<ChevronLeft class="h-4 w-4" />
+					<ChevronLeft />
 				</Button>
 				<Button
-					variant="outline" size="icon" class="h-8 w-8"
-					disabled={!hasNext} onclick={() => apply(pager.next())} aria-label="Next page"
+					variant="outline"
+					size="icon-sm"
+					disabled={!hasNext}
+					onclick={() => apply(pager.next())}
+					aria-label="Next page"
 				>
-					<ChevronRight class="h-4 w-4" />
+					<ChevronRight />
 				</Button>
 				<Button
-					variant="outline" size="icon" class="hidden h-8 w-8 sm:inline-flex"
-					disabled={!hasNext} onclick={() => apply(pager.goTo(totalPages))} aria-label="Last page"
+					variant="outline"
+					size="icon-sm"
+					class="hidden sm:inline-flex"
+					disabled={!hasNext}
+					onclick={() => apply(pager.goTo(totalPages))}
+					aria-label="Last page"
 				>
-					<ChevronsRight class="h-4 w-4" />
+					<ChevronsRight />
 				</Button>
 			</div>
 		</div>

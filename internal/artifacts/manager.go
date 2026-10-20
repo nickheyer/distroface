@@ -130,7 +130,7 @@ func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepo
 			return nil, ErrUploadNotFound
 		}
 		if size > maxBytes {
-			m.blobs.CancelUpload(uploadID)
+			_ = m.blobs.CancelUpload(uploadID)
 			return nil, fmt.Errorf("%w: artifact exceeds maximum size of %dMB", ErrInvalid, maxBytes/(1024*1024))
 		}
 	}
@@ -266,7 +266,7 @@ func (m *Manager) ApplyRetentionPolicy(ctx context.Context, repoID int64, p Rete
 			if p.MaxVersions > 0 && i >= p.MaxVersions {
 				prune = true
 			}
-			if !cutoff.IsZero() && artifact.CreatedAt.Before(cutoff) && !(p.ExcludeLatest && i == 0) {
+			if !cutoff.IsZero() && artifact.CreatedAt.Before(cutoff) && (!p.ExcludeLatest || i != 0) {
 				prune = true
 			}
 			if !prune {

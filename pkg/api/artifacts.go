@@ -113,7 +113,7 @@ func newArtifactUploadCmd() *cobra.Command {
 			path = sanitizeFilePath(path)
 
 			fmt.Printf("Uploading %s to %s (version: %s, path: %s)\n", file, ref, version, path)
-			if err := client.uploadArtifact(cmd.Context(), ref, file, version, path, properties); err != nil {
+			if _, err := client.uploadArtifact(cmd.Context(), ref, file, version, path, properties); err != nil {
 				return fmt.Errorf("upload failed: %w", err)
 			}
 			fmt.Println("Upload successful")

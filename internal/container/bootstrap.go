@@ -9,6 +9,7 @@ import (
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/config"
 	"github.com/nickheyer/distroface/pkg/logger"
+	"github.com/nickheyer/distroface/pkg/utils"
 )
 
 // Sentinel creator for orgs seeded without an owner
@@ -34,6 +35,9 @@ func seedUsers(ctx context.Context, users []config.BootstrapUser, store *stores.
 		}
 		if existing != nil {
 			continue
+		}
+		if !utils.UsernameRegex.MatchString(u.Username) {
+			return fmt.Errorf("bootstrap user %q: name is invalid", u.Username)
 		}
 
 		user, err := authManager.CreateLocalUser(ctx, u.Username, u.Email, u.Password)
@@ -83,6 +87,9 @@ func seedOrgs(ctx context.Context, orgs []config.BootstrapOrg, store *stores.Sto
 			return fmt.Errorf("bootstrap org %q: %w", o.Name, err)
 		}
 		if org == nil {
+			if !utils.UsernameRegex.MatchString(o.Name) {
+				return fmt.Errorf("bootstrap org %q: name is invalid", o.Name)
+			}
 			// Org names must not shadow usernames
 			user, err := store.GetUserByUsername(ctx, o.Name)
 			if err != nil {
@@ -104,6 +111,9 @@ func seedOrgs(ctx context.Context, orgs []config.BootstrapOrg, store *stores.Sto
 			}
 			if err := store.CreateOrganization(ctx, org); err != nil {
 				return fmt.Errorf("bootstrap org %q: %w", o.Name, err)
+			}
+			if _, err := store.EnsureDefaultTeam(ctx, org.ID); err != nil {
+				return fmt.Errorf("bootstrap org %q default team: %w", o.Name, err)
 			}
 			log.Info("Bootstrap created org %q", o.Name)
 		}

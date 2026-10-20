@@ -20,8 +20,7 @@
 		{ value: MatchKind.EQUALS, label: 'is' },
 		{ value: MatchKind.PREFIX, label: 'starts with' }
 	];
-	const matchLabel = (m: MatchKind) =>
-		matchOptions.find((o) => o.value === m)?.label ?? 'contains';
+	const matchLabel = (m: MatchKind) => matchOptions.find((o) => o.value === m)?.label ?? 'contains';
 
 	let input = $state<HTMLInputElement | null>(null);
 	let draft = $state('');
@@ -128,29 +127,29 @@
 <div class="relative">
 	<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
 	<div
-		class="flex min-h-9 w-full cursor-text flex-wrap items-center gap-1.5 rounded-md border border-input bg-transparent px-2.5 py-1 text-sm shadow-xs transition-colors focus-within:ring-2 focus-within:ring-ring"
+		class="flex min-h-8 w-full cursor-text flex-wrap items-center gap-1.5 rounded-md border border-input bg-field px-2 py-0.5 text-sm shadow-[inset_0_1px_1px_0_rgb(0_0_0/0.04)] transition-[border-color,box-shadow] duration-150 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30 hover:border-border-strong dark:shadow-[inset_0_1px_1px_0_rgb(0_0_0/0.2)]"
 		onclick={() => input?.focus()}
 	>
-		<Search class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+		<Search class="size-3.5 shrink-0 text-muted-foreground" />
 		{#each filter.filters as f, i (i)}
 			<Badge variant="secondary" class="gap-1 pr-1 font-normal">
-				<span class="font-medium">{filter.label(f.field)}</span>
-				<span class="text-muted-foreground">{matchLabel(f.match)}</span>
-				<span class="font-mono">{f.value}</span>
+				<span class="font-medium text-foreground">{filter.label(f.field)}</span>
+				<span>{matchLabel(f.match)}</span>
+				<span class="font-mono text-foreground">{f.value}</span>
 				<button
 					type="button"
-					class="ml-0.5 rounded-sm p-0.5 hover:bg-muted"
+					class="ml-0.5 rounded-full p-0.5 transition-colors hover:bg-foreground/10 hover:text-foreground"
 					onclick={() => removeFilter(i)}
 					aria-label="Remove filter"
 				>
-					<X class="h-3 w-3" />
+					<X class="size-3" />
 				</button>
 			</Badge>
 		{/each}
 		<input
 			bind:this={input}
 			bind:value={draft}
-			class="h-6 min-w-24 flex-1 bg-transparent outline-none placeholder:text-muted-foreground"
+			class="h-6 min-w-24 flex-1 bg-transparent outline-none"
 			placeholder={filter.filters.length > 0 ? '' : placeholder}
 			autocomplete="off"
 			spellcheck="false"
@@ -162,18 +161,17 @@
 		{#if filter.active || draft}
 			<button
 				type="button"
-				class="shrink-0 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+				class="shrink-0 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground"
 				onclick={clearAll}
 				aria-label="Clear search and filters"
 			>
-				<X class="h-3.5 w-3.5" />
+				<X class="size-3.5" />
 			</button>
 		{/if}
 	</div>
-
 	{#if open}
 		<div
-			class="absolute left-0 right-0 top-full z-50 mt-1 rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+			class="absolute top-full right-0 left-0 z-50 mt-1 rounded-lg border bg-popover p-1 text-popover-foreground shadow-lg dark:ring-1 dark:ring-white/5"
 		>
 			{#if qualifier}
 				{#if !qualifier.value}
@@ -185,7 +183,7 @@
 						<button
 							type="button"
 							class={cn(
-								'flex w-full items-center gap-1.5 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted',
+								'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted',
 								highlighted === i && 'bg-muted'
 							)}
 							onmousedown={(e) => e.preventDefault()}
@@ -195,20 +193,18 @@
 							<span class="text-muted-foreground">{option.label}</span>
 							<span class="truncate font-mono">{qualifier.value}</span>
 							{#if i === 0}
-								<CornerDownLeft class="ml-auto h-3 w-3 shrink-0 text-muted-foreground" />
+								<CornerDownLeft class="ml-auto size-3 shrink-0 text-muted-foreground" />
 							{/if}
 						</button>
 					{/each}
 				{/if}
 			{:else}
-				<p class="px-2 pb-1 pt-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-					Filter by
-				</p>
+				<p class="px-2 pt-1.5 pb-1 text-xs font-medium text-muted-foreground">Filter by</p>
 				{#each fieldMatches as field, i (field.key)}
 					<button
 						type="button"
 						class={cn(
-							'flex w-full items-center rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted',
+							'flex w-full items-center rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted',
 							highlighted === i && 'bg-muted'
 						)}
 						onmousedown={(e) => e.preventDefault()}

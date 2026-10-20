@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { Checkbox as CheckboxPrimitive } from "bits-ui";
-	import CheckIcon from "@lucide/svelte/icons/check";
-	import MinusIcon from "@lucide/svelte/icons/minus";
-	import { cn, type WithoutChildrenOrChild } from "$lib/utils.js";
+	import { Checkbox as CheckboxPrimitive } from 'bits-ui';
+	import CheckIcon from '@lucide/svelte/icons/check';
+	import MinusIcon from '@lucide/svelte/icons/minus';
+	import { cn, type WithoutChildrenOrChild } from '$lib/utils.js';
 
 	let {
 		ref = $bindable(null),
@@ -17,7 +17,7 @@
 	bind:ref
 	data-slot="checkbox"
 	class={cn(
-		"border-input dark:bg-input/30 data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground dark:data-[state=checked]:bg-primary data-[state=checked]:border-primary focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive shadow-xs peer flex size-4 shrink-0 items-center justify-center rounded-[4px] border outline-none transition-shadow focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
+		'peer flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-[4px] border border-input bg-field shadow-[inset_0_1px_1px_0_rgb(0_0_0/0.04)] transition-[background-color,border-color,box-shadow] duration-150 outline-none hover:border-border-strong focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-1 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground data-[state=checked]:shadow-none data-[state=indeterminate]:border-primary data-[state=indeterminate]:bg-primary data-[state=indeterminate]:text-primary-foreground',
 		className
 	)}
 	bind:checked
@@ -27,9 +27,9 @@
 	{#snippet children({ checked, indeterminate })}
 		<div data-slot="checkbox-indicator" class="text-current transition-none">
 			{#if checked}
-				<CheckIcon class="size-3.5" />
+				<CheckIcon class="size-3" strokeWidth={3} />
 			{:else if indeterminate}
-				<MinusIcon class="size-3.5" />
+				<MinusIcon class="size-3" strokeWidth={3} />
 			{/if}
 		</div>
 	{/snippet}

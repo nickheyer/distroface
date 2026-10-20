@@ -6,9 +6,25 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import {
-		Building2, Package, Archive, Users, Webhook, Globe, ShieldCheck, Settings
+		Building2,
+		Package,
+		Archive,
+		Users,
+		Webhook,
+		Globe,
+		ShieldCheck,
+		Settings,
+		GitBranch,
+		UsersRound,
+		Tag,
+		SquareKanban,
+		Cpu,
+		KeyRound,
+		Mail
 	} from '@lucide/svelte';
 	import { OrgContext, ORG_CONTEXT_KEY } from '$lib/org-context.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
+	import SideNav from '$lib/components/side-nav.svelte';
 
 	let { children } = $props();
 
@@ -24,16 +40,44 @@
 
 	const navItems: NavItem[] = $derived.by(() => {
 		const name = page.params.name ?? '';
+		const git = configStore.gitEnabled;
 		const items: NavItem[] = [
 			{ href: resolve('/orgs/[name]', { name }), label: 'Images', icon: Package },
-			{ href: resolve('/orgs/[name]/artifacts', { name }), label: 'Artifacts', icon: Archive },
-			{ href: resolve('/orgs/[name]/members', { name }), label: 'Members', icon: Users }
+			{ href: resolve('/orgs/[name]/artifacts', { name }), label: 'Artifacts', icon: Archive }
 		];
+		if (git) {
+			items.push({ href: `/orgs/${name}/repos`, label: 'Git', icon: GitBranch });
+		}
+		items.push({ href: resolve('/orgs/[name]/members', { name }), label: 'Members', icon: Users });
+		if (git) {
+			items.push({
+				href: resolve('/orgs/[name]/teams', { name }),
+				label: 'Teams',
+				icon: UsersRound
+			});
+		}
 		if (ctx.canAdmin) {
+			if (git) {
+				items.push(
+					{ href: resolve('/orgs/[name]/labels', { name }), label: 'Labels', icon: Tag },
+					{
+						href: resolve('/orgs/[name]/projects', { name }),
+						label: 'Projects',
+						icon: SquareKanban
+					},
+					{ href: resolve('/orgs/[name]/runners', { name }), label: 'Runners', icon: Cpu },
+					{ href: resolve('/orgs/[name]/secrets', { name }), label: 'Secrets', icon: KeyRound }
+				);
+			}
 			items.push(
+				{ href: resolve('/orgs/[name]/email', { name }), label: 'Email', icon: Mail },
 				{ href: resolve('/orgs/[name]/webhooks', { name }), label: 'Webhooks', icon: Webhook },
 				{ href: resolve('/orgs/[name]/portals', { name }), label: 'Portals', icon: Globe },
-				{ href: resolve('/orgs/[name]/certificates', { name }), label: 'Certificates', icon: ShieldCheck },
+				{
+					href: resolve('/orgs/[name]/certificates', { name }),
+					label: 'Certificates',
+					icon: ShieldCheck
+				},
 				{ href: resolve('/orgs/[name]/settings', { name }), label: 'Settings', icon: Settings }
 			);
 		}
@@ -41,64 +85,55 @@
 	});
 
 	function isActive(href: string): boolean {
-		return page.url.pathname === href;
+		const current = page.url.pathname.replace(/\/$/, '');
+		if (href === resolve('/orgs/[name]', { name: page.params.name ?? '' })) return current === href;
+		return current === href || current.startsWith(`${href}/`);
 	}
 </script>
 
 <div class="space-y-6">
-	<nav class="flex items-center gap-1.5 text-sm text-muted-foreground">
-		<a href={resolve('/orgs')} class="hover:text-foreground transition-colors">Organizations</a>
-		<span>/</span>
-		<span class="text-foreground font-medium">{ctx.name}</span>
+	<nav class="flex items-center gap-1.5 text-sm text-muted-foreground" aria-label="Breadcrumb">
+		<a href={resolve('/orgs')} class="transition-colors hover:text-foreground">Organizations</a>
+		<span class="text-muted-foreground/50">/</span>
+		<span class="font-medium text-foreground">{ctx.name}</span>
 	</nav>
 
 	{#if ctx.loading}
-		<div class="flex items-center gap-4">
-			<Skeleton class="h-14 w-14 rounded-xl" />
+		<div class="flex items-center gap-4 border-b pb-5">
+			<Skeleton class="size-12 rounded-lg" />
 			<div class="space-y-2">
-				<Skeleton class="h-7 w-48" />
+				<Skeleton class="h-6 w-48" />
 				<Skeleton class="h-4 w-32" />
 			</div>
 		</div>
 	{:else if ctx.org}
-		<div class="flex items-start gap-4">
-			<div class="h-14 w-14 rounded-xl bg-primary/10 flex items-center justify-center shrink-0">
-				<Building2 class="h-7 w-7 text-primary" />
+		<div class="flex items-start gap-4 border-b pb-5">
+			<div
+				class="flex size-12 shrink-0 items-center justify-center rounded-lg border bg-muted text-muted-foreground"
+			>
+				<Building2 class="size-5" />
 			</div>
-			<div class="flex-1 min-w-0 space-y-1">
-				<h1 class="text-2xl font-bold tracking-tight">{ctx.org.displayName || ctx.org.name}</h1>
-				<div class="flex items-center gap-3 text-sm text-muted-foreground">
+			<div class="min-w-0 flex-1">
+				<h1 class="truncate text-xl leading-7 font-semibold tracking-tight">
+					{ctx.org.displayName || ctx.org.name}
+				</h1>
+				<div
+					class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground"
+				>
 					{#if ctx.org.description}
 						<span class="truncate">{ctx.org.description}</span>
 					{/if}
-					<span class="flex items-center gap-1 shrink-0">
-						<Users class="h-3.5 w-3.5" />
+					<span class="flex shrink-0 items-center gap-1">
+						<Users class="size-3.5" />
 						{ctx.org.memberCount} member{ctx.org.memberCount !== 1 ? 's' : ''}
 					</span>
 				</div>
 			</div>
 		</div>
 
-		<div class="flex flex-col md:flex-row gap-8">
-			<nav class="md:w-52 shrink-0">
-				<div class="flex md:flex-col gap-0.5 overflow-x-auto md:overflow-visible pb-2 md:pb-0 md:sticky md:top-20">
-					{#each navItems as item (item.href)}
-						<!-- eslint-disable svelte/no-navigation-without-resolve -->
-						<a
-							href={item.href}
-							class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors {isActive(item.href)
-								? 'bg-accent text-accent-foreground'
-								: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
-						>
-							<item.icon class="h-4 w-4" />
-							{item.label}
-						</a>
-						<!-- eslint-enable svelte/no-navigation-without-resolve -->
-					{/each}
-				</div>
-			</nav>
-
-			<div class="flex-1 min-w-0">
+		<div class="flex flex-col gap-8 md:flex-row">
+			<SideNav items={navItems} {isActive} />
+			<div class="min-w-0 flex-1">
 				{#key page.url.pathname}
 					<div class="page-enter">
 						{@render children?.()}
@@ -107,17 +142,15 @@
 			</div>
 		</div>
 	{:else}
-		<div class="text-center py-12">
-			<div class="h-12 w-12 rounded-xl bg-muted/50 flex items-center justify-center mx-auto mb-4">
-				<Building2 class="h-6 w-6 text-muted-foreground/50" />
-			</div>
-			<h2 class="text-lg font-semibold">Organization not found</h2>
-			<p class="text-[13px] text-muted-foreground mt-1">
+		<div class="flex flex-col items-center rounded-lg border bg-card px-6 py-14 text-center">
+			<Building2 class="mb-3 size-6 text-muted-foreground/70" />
+			<h2 class="text-sm font-semibold">Organization not found</h2>
+			<p class="mt-1 text-sm text-muted-foreground">
 				{ctx.name} does not exist or you don't have access.
 			</p>
-			<Button variant="outline" class="mt-4" onclick={() => goto(resolve('/orgs'))}>
-				Back to Organizations
-			</Button>
+			<Button variant="outline" class="mt-4" onclick={() => goto(resolve('/orgs'))}
+				>Back to organizations</Button
+			>
 		</div>
 	{/if}
 </div>

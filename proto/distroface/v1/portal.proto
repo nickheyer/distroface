@@ -53,6 +53,7 @@ message RegistryPortal {
   bool backend_rewrite_host = 21; // Send the backend's host instead of the client's Host header
   bool backend_insecure = 22; // Skip tls verification for an https backend
   bool anonymous_access = 23; // Computed, signed out visitors admitted on this portal
+  int32 ssh_port = 24; // Dedicated git ssh port, 0 serves canonical paths on the primary ssh port only
 }
 
 // Fields to create a portal, hostname or port required
@@ -71,6 +72,7 @@ message CreatePortalRequest {
   string backend_url = 12; // Requires instance admin rights
   bool backend_rewrite_host = 13;
   bool backend_insecure = 14;
+  int32 ssh_port = 15;
 }
 
 // The newly created portal
@@ -93,6 +95,7 @@ message ResolvePortalResponse {
   bool map_unqualified = 7;
   string primary_host = 8;
   bool hide_primary_link = 10; // Portal asks the UI to drop the exit link
+  int32 ssh_port = 11; // Dedicated git ssh port for this portal, 0 when none
 }
 
 // Identifies a single portal within an organization
@@ -137,6 +140,7 @@ message UpdatePortalRequest {
   optional string backend_url = 15; // Setting or changing requires instance admin rights
   optional bool backend_rewrite_host = 16;
   optional bool backend_insecure = 17;
+  optional int32 ssh_port = 18;
 }
 
 // The updated portal

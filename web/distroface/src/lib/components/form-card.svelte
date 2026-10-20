@@ -19,28 +19,26 @@
 	} = $props();
 </script>
 
-<div class={cn('rounded-xl border border-border/60 bg-card overflow-hidden', className)}>
+<div class={cn('rounded-lg border bg-card', className)}>
 	{#if title}
-		<div class="flex items-center gap-3 px-6 py-4 border-b border-border/40 bg-muted/20">
+		<div class="flex items-start gap-3 border-b px-5 py-4">
 			{#if icon}
 				{@const Icon = icon}
-				<div class="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
-					<Icon class="h-4 w-4 text-primary" />
-				</div>
+				<Icon class="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 			{/if}
 			<div class="min-w-0">
-				<h3 class="text-sm font-semibold">{title}</h3>
+				<h3 class="text-sm leading-5 font-semibold">{title}</h3>
 				{#if description}
-					<p class="text-xs text-muted-foreground mt-0.5">{description}</p>
+					<p class="mt-0.5 text-xs text-muted-foreground">{description}</p>
 				{/if}
 			</div>
 		</div>
 	{/if}
-	<div class="p-6">
+	<div class="p-5">
 		{@render children()}
 	</div>
 	{#if footer}
-		<div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-border/40 bg-muted/20">
+		<div class="flex items-center justify-end gap-2 rounded-b-lg border-t bg-muted/30 px-5 py-3">
 			{@render footer()}
 		</div>
 	{/if}

@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -58,7 +59,8 @@ func (giteaDriver) validate(ctx context.Context, c *http.Client, cfg *v1.MirrorC
 	if _, limited := RetryAfter(err); limited {
 		return fmt.Errorf("the gitea instance rate limited this server, wait before validating again: %w", err)
 	}
-	if ue, ok := err.(*upstreamError); ok {
+	var ue *upstreamError
+	if errors.As(err, &ue) {
 		switch ue.status {
 		case http.StatusNotFound:
 			return fmt.Errorf("%w: repository %q not found on the gitea instance (private repos need a token with read access)", ErrInvalid, cfg.GetUpstream())

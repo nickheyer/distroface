@@ -2,7 +2,7 @@
 	import type { Descriptor, HistoryEntry } from '$lib/proto/distroface/v1/types_pb';
 	import { formatBytes, truncateDigest } from '$lib/utils';
 	import CopyButton from './copy-button.svelte';
-	import { Badge } from '$lib/components/ui/badge';
+	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { ChevronRight } from '@lucide/svelte';
 
@@ -29,50 +29,57 @@
 		return 'Blob';
 	}
 
-	function kindColor(kind: string): string {
+	function kindVariant(kind: string): BadgeVariant {
 		switch (kind) {
-			case 'Index': return 'border-blue-500/30 text-blue-600 dark:text-blue-400';
-			case 'Manifest': return 'border-purple-500/30 text-purple-600 dark:text-purple-400';
-			case 'Config': return 'border-amber-500/30 text-amber-600 dark:text-amber-400';
-			case 'Layer': return 'border-green-500/30 text-green-600 dark:text-green-400';
-			default: return '';
+			case 'Index':
+				return 'default';
+			case 'Manifest':
+				return 'done';
+			case 'Config':
+				return 'warning';
+			case 'Layer':
+				return 'success';
+			default:
+				return 'outline';
 		}
 	}
 </script>
 
 {#if loading}
-	<div class="px-6 py-5 space-y-4">
-		<Skeleton class="h-6 w-32" />
-		<Skeleton class="h-5 w-full" />
-		<Skeleton class="h-5 w-3/4" />
-		<Skeleton class="h-5 w-1/2" />
-		<Skeleton class="h-24 w-full mt-4" />
+	<div class="space-y-4 px-6 py-5">
+		<Skeleton class="h-5 w-20" />
+		<Skeleton class="h-4 w-full" />
+		<Skeleton class="h-4 w-3/4" />
+		<Skeleton class="h-4 w-1/2" />
+		<Skeleton class="h-24 w-full" />
 	</div>
 {:else if descriptor}
 	{@const kind = descriptorKind(descriptor.mediaType)}
 	{@const cfg = descriptor.imageConfig}
 	<div class="overflow-x-hidden">
-		<div class="px-6 py-5 space-y-4">
-			<Badge variant="outline" class="text-xs {kindColor(kind)}">
-				{kind}
-			</Badge>
+		<div class="space-y-4 px-6 py-5">
+			<Badge variant={kindVariant(kind)}>{kind}</Badge>
 
-			<div class="divide-y divide-border/30">
+			<div class="divide-y">
 				<div class="detail-row">
 					<span class="detail-label">Digest</span>
-					<div class="detail-value flex items-center gap-1 min-w-0">
-						<code class="font-mono truncate">{descriptor.digest}</code>
-						<CopyButton text={descriptor.digest} label="Copied!" />
+					<div class="detail-value flex min-w-0 items-center gap-1">
+						<code class="truncate font-mono">{descriptor.digest}</code>
+						<CopyButton text={descriptor.digest} label="Digest copied" />
 					</div>
 				</div>
 
 				<div class="detail-row">
-					<span class="detail-label">Media Type</span>
-					<code class="detail-value font-mono text-muted-foreground truncate">{descriptor.mediaType}</code>
+					<span class="detail-label">Media type</span>
+					<code class="detail-value truncate font-mono text-muted-foreground"
+						>{descriptor.mediaType}</code
+					>
 				</div>
 
 				<div class="detail-row">
-					<span class="detail-label">{kind === 'Manifest' || kind === 'Layer' ? 'Compressed' : 'Size'}</span>
+					<span class="detail-label"
+						>{kind === 'Manifest' || kind === 'Layer' ? 'Compressed' : 'Size'}</span
+					>
 					<span class="detail-value tabular-nums">{formatBytes(Number(descriptor.sizeBytes))}</span>
 				</div>
 
@@ -80,28 +87,31 @@
 					<div class="detail-row">
 						<span class="detail-label">Platform</span>
 						<span class="detail-value font-mono">
-							{descriptor.platform.os ?? ''}{#if descriptor.platform.os && descriptor.platform.architecture}/{/if}{descriptor.platform.architecture}{#if descriptor.platform.variant}/{descriptor.platform.variant}{/if}
+							{descriptor.platform.os ??
+								''}{#if descriptor.platform.os && descriptor.platform.architecture}/{/if}{descriptor
+								.platform.architecture}{#if descriptor.platform.variant}/{descriptor.platform
+									.variant}{/if}
 						</span>
 					</div>
 				{/if}
 
 				{#if descriptor.artifactType}
 					<div class="detail-row">
-						<span class="detail-label">Artifact Type</span>
-						<code class="detail-value font-mono text-muted-foreground truncate">{descriptor.artifactType}</code>
+						<span class="detail-label">Artifact type</span>
+						<code class="detail-value truncate font-mono text-muted-foreground"
+							>{descriptor.artifactType}</code
+						>
 					</div>
 				{/if}
 			</div>
 
 			{#if descriptor.annotations && Object.keys(descriptor.annotations).length > 0}
-				<div class="rounded-xl border border-border/60 overflow-hidden">
-					<div class="px-4 py-2.5 bg-muted/30 border-b border-border/40">
-						<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Annotations</span>
-					</div>
-					<div class="divide-y divide-border/20 overflow-x-auto">
+				<div class="box">
+					<div class="box-header">Annotations</div>
+					<div class="divide-y overflow-x-auto">
 						{#each Object.entries(descriptor.annotations) as [key, value] (key)}
-							<div class="px-4 py-2 flex gap-3 text-sm">
-								<code class="font-mono text-muted-foreground/60 shrink-0">{key}</code>
+							<div class="flex gap-3 px-4 py-2 text-xs">
+								<code class="shrink-0 font-mono text-muted-foreground">{key}</code>
 								<code class="font-mono whitespace-nowrap">{value}</code>
 							</div>
 						{/each}
@@ -110,30 +120,35 @@
 			{/if}
 		</div>
 
-		<!-- Layer context from parent manifest's build history -->
 		{#if historyEntry && kind === 'Layer'}
-			<div class="border-t border-border/40 px-6 py-4 space-y-3">
-				<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Layer Details</span>
+			<div class="space-y-3 border-t px-6 py-4">
+				<p class="eyebrow">Layer details</p>
 				<div class="detail-row items-start">
-					<span class="detail-label pt-0.5">Created By</span>
-					<code class="detail-value font-mono break-all leading-relaxed">{historyEntry.createdBy}</code>
+					<span class="detail-label pt-0.5">Created by</span>
+					<code class="detail-value font-mono text-xs leading-relaxed break-all"
+						>{historyEntry.createdBy}</code
+					>
 				</div>
 			</div>
 		{/if}
 
-		<!-- Build history / layers -->
 		{#if cfg && cfg.history.length > 0 && kind === 'Manifest'}
-			<div class="border-t border-border/40">
+			<div class="border-t">
 				<div class="flex items-center justify-between px-6 py-3">
-					<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Layers</span>
-					<Badge variant="secondary" class="text-xs">{cfg.history.length}</Badge>
+					<p class="eyebrow">Layers</p>
+					<Badge variant="secondary">{cfg.history.length}</Badge>
 				</div>
-				<div class="divide-y divide-border/20">
+				<div class="divide-y">
 					{#each cfg.history as entry, i (i)}
-						<div class="px-6 py-2.5 flex items-start gap-3 {entry.emptyLayer ? 'opacity-50' : ''}">
-							<span class="text-sm tabular-nums text-muted-foreground/60 w-6 shrink-0 text-right pt-0.5">{i}</span>
-							<code class="text-sm font-mono flex-1 min-w-0 break-all leading-relaxed">{entry.createdBy}</code>
-							<span class="text-sm tabular-nums text-muted-foreground/60 shrink-0 pt-0.5">
+						<div class="flex items-start gap-3 px-6 py-2.5 {entry.emptyLayer ? 'opacity-50' : ''}">
+							<span
+								class="w-6 shrink-0 pt-0.5 text-right text-xs text-muted-foreground tabular-nums"
+								>{i}</span
+							>
+							<code class="min-w-0 flex-1 font-mono text-xs leading-relaxed break-all"
+								>{entry.createdBy}</code
+							>
+							<span class="shrink-0 pt-0.5 text-xs text-muted-foreground tabular-nums">
 								{entry.emptyLayer ? '0 B' : formatBytes(Number(entry.sizeBytes))}
 							</span>
 						</div>
@@ -142,26 +157,25 @@
 			</div>
 		{/if}
 
-		<!-- Runtime config -->
 		{#if cfg && (cfg.cmd.length > 0 || cfg.entrypoint.length > 0 || cfg.env.length > 0)}
-			<div class="border-t border-border/40 px-6 py-4 space-y-3">
-				<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Configuration</span>
-				<div class="divide-y divide-border/30">
+			<div class="space-y-3 border-t px-6 py-4">
+				<p class="eyebrow">Configuration</p>
+				<div class="divide-y">
 					{#if cfg.entrypoint.length > 0}
 						<div class="detail-row">
 							<span class="detail-label">Entrypoint</span>
-							<code class="detail-value font-mono truncate">{JSON.stringify(cfg.entrypoint)}</code>
+							<code class="detail-value truncate font-mono">{JSON.stringify(cfg.entrypoint)}</code>
 						</div>
 					{/if}
 					{#if cfg.cmd.length > 0}
 						<div class="detail-row">
 							<span class="detail-label">Cmd</span>
-							<code class="detail-value font-mono truncate">{JSON.stringify(cfg.cmd)}</code>
+							<code class="detail-value truncate font-mono">{JSON.stringify(cfg.cmd)}</code>
 						</div>
 					{/if}
 					{#if cfg.workingDir}
 						<div class="detail-row">
-							<span class="detail-label">Working Dir</span>
+							<span class="detail-label">Working dir</span>
 							<code class="detail-value font-mono">{cfg.workingDir}</code>
 						</div>
 					{/if}
@@ -170,7 +184,7 @@
 							<span class="detail-label pt-0.5">Env</span>
 							<div class="detail-value space-y-0.5">
 								{#each cfg.env as e (e)}
-									<code class="font-mono text-sm block truncate">{e}</code>
+									<code class="block truncate font-mono text-xs">{e}</code>
 								{/each}
 							</div>
 						</div>
@@ -189,15 +203,15 @@
 					{/if}
 				</div>
 				{#if cfg.labels && Object.keys(cfg.labels).length > 0}
-					<div class="rounded-xl border border-border/60 overflow-hidden">
-						<div class="px-4 py-2.5 bg-muted/30 border-b border-border/40">
-							<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Labels</span>
-						</div>
-						<div class="divide-y divide-border/20">
+					<div class="box">
+						<div class="box-header">Labels</div>
+						<div class="divide-y">
 							{#each Object.entries(cfg.labels) as [key, value] (key)}
-								<div class="px-4 py-2 flex gap-3 text-sm">
-									<code class="font-mono text-muted-foreground/60 truncate shrink-0 max-w-[40%]">{key}</code>
-									<code class="font-mono truncate flex-1">{value}</code>
+								<div class="flex gap-3 px-4 py-2 text-xs">
+									<code class="max-w-[40%] shrink-0 truncate font-mono text-muted-foreground"
+										>{key}</code
+									>
+									<code class="flex-1 truncate font-mono">{value}</code>
 								</div>
 							{/each}
 						</div>
@@ -206,36 +220,41 @@
 			</div>
 		{/if}
 
-		<!-- Child references -->
 		{#if descriptor.children.length > 0}
-			<div class="border-t border-border/40">
+			<div class="border-t">
 				<div class="flex items-center justify-between px-6 py-3">
-					<span class="text-xs font-semibold text-muted-foreground uppercase tracking-wider">References</span>
-					<Badge variant="secondary" class="text-xs">{descriptor.children.length}</Badge>
+					<p class="eyebrow">References</p>
+					<Badge variant="secondary">{descriptor.children.length}</Badge>
 				</div>
-				<div>
+				<div class="divide-y border-t">
 					{#each descriptor.children as child (child.digest)}
 						{@const ck = descriptorKind(child.mediaType)}
-						<!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->
-						<div
-							class="px-6 py-3 flex items-center gap-3 cursor-pointer transition-colors border-t border-border/30
-								{selectedDigest === child.digest ? 'bg-muted/50 border-l-2 border-l-primary' : 'hover:bg-muted/30'}"
+						<button
+							type="button"
+							class="flex w-full items-center gap-3 px-6 py-3 text-left transition-colors {selectedDigest ===
+							child.digest
+								? 'border-l-2 border-l-primary bg-muted'
+								: 'hover:bg-muted/30'}"
 							onclick={() => onSelectChild?.(child)}
 						>
-							<Badge variant="outline" class="text-xs shrink-0 {kindColor(ck)}">
-								{ck}
-							</Badge>
-							<span class="font-mono text-sm truncate flex-1 text-muted-foreground min-w-0">{truncateDigest(child.digest, 16)}</span>
+							<Badge variant={kindVariant(ck)} class="shrink-0">{ck}</Badge>
+							<span class="min-w-0 flex-1 truncate font-mono text-sm text-muted-foreground">
+								{truncateDigest(child.digest, 16)}
+							</span>
 
 							{#if child.platform?.architecture}
-								<Badge variant="outline" class="text-xs font-mono shrink-0">
-									{child.platform.os ?? ''}{#if child.platform.os && child.platform.architecture}/{/if}{child.platform.architecture}{#if child.platform.variant}/{child.platform.variant}{/if}
+								<Badge variant="outline" class="shrink-0 font-mono">
+									{child.platform.os ??
+										''}{#if child.platform.os && child.platform.architecture}/{/if}{child.platform
+										.architecture}{#if child.platform.variant}/{child.platform.variant}{/if}
 								</Badge>
 							{/if}
 
-							<span class="text-sm tabular-nums text-muted-foreground/60 shrink-0">{formatBytes(Number(child.sizeBytes))}</span>
-							<ChevronRight class="h-4 w-4 text-muted-foreground/30 shrink-0" />
-						</div>
+							<span class="shrink-0 text-xs text-muted-foreground tabular-nums">
+								{formatBytes(Number(child.sizeBytes))}
+							</span>
+							<ChevronRight class="size-4 shrink-0 text-muted-foreground/50" />
+						</button>
 					{/each}
 				</div>
 			</div>

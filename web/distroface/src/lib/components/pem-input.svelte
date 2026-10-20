@@ -23,12 +23,18 @@
 		class?: string;
 	} = $props();
 
-	const accept = '.pem,.crt,.cer,.key,.csr,.txt,application/x-pem-file,application/pkcs8,application/x-x509-ca-cert';
+	const accept =
+		'.pem,.crt,.cer,.key,.csr,.txt,application/x-pem-file,application/pkcs8,application/x-x509-ca-cert';
 
 	// Password managers must leave key material alone
 	const secretAttrs = $derived(
 		secret
-			? { autocomplete: 'new-password' as const, 'data-1p-ignore': true, 'data-lpignore': 'true', 'data-bwignore': true }
+			? {
+					autocomplete: 'new-password' as const,
+					'data-1p-ignore': true,
+					'data-lpignore': 'true',
+					'data-bwignore': true
+				}
 			: {}
 	);
 
@@ -74,21 +80,35 @@
 		{rows}
 		{placeholder}
 		{disabled}
-		class={cn('font-mono text-xs', dragging && 'ring-[3px] ring-ring/50', className)}
+		class={cn('font-mono', dragging && 'border-ring ring-2 ring-ring/30', className)}
 		oninput={() => (fileName = '')}
 		ondragover={onDragOver}
 		ondragleave={() => (dragging = false)}
 		ondrop={onDrop}
 		{...secretAttrs}
 	/>
-	<div class="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
-		<Button type="button" variant="outline" size="sm" class="h-7 gap-1.5 shrink-0" {disabled} onclick={() => picker?.click()}>
-			<Upload class="h-3.5 w-3.5" />
+	<div class="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+		<Button
+			type="button"
+			variant="outline"
+			size="sm"
+			class="shrink-0"
+			{disabled}
+			onclick={() => picker?.click()}
+		>
+			<Upload />
 			Upload file
 		</Button>
-		<input bind:this={picker} type="file" {accept} class="sr-only" tabindex={-1} onchange={onPick} />
+		<input
+			bind:this={picker}
+			type="file"
+			{accept}
+			class="sr-only"
+			tabindex={-1}
+			onchange={onPick}
+		/>
 		{#if readError}
-			<span class="text-destructive truncate">{readError}</span>
+			<span class="truncate text-destructive">{readError}</span>
 		{:else if fileName}
 			<span class="truncate">Loaded {fileName}</span>
 		{:else}

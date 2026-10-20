@@ -31,6 +31,7 @@
 		LogIn,
 		LogOut,
 		Package,
+		GitBranch,
 		Settings,
 		Building2,
 		User,
@@ -45,12 +46,20 @@
 	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import CliSetupPrompt from '$lib/components/cli-setup-prompt.svelte';
+	import NotificationBell from '$lib/components/git/notification-bell.svelte';
+	import SideNav from '$lib/components/side-nav.svelte';
 
 	let { children } = $props();
 	let initialized = $state(false);
 	let mobileMenuOpen = $state(false);
 
 	const isLoginPage = $derived(page.url.pathname === '/login');
+	// Mailed link pages render bare, no sign in redirect
+	const isAuthPage = $derived(
+		isLoginPage ||
+			/^\/(forgot-password|reset-password|verify-email)(\/|$)/.test(page.url.pathname) ||
+			(page.url.pathname === '/settings/notifications' && page.url.searchParams.has('token'))
+	);
 	const isChangePasswordPage = $derived(page.url.pathname === '/change-password');
 
 	function getUserInitials(user: typeof authStore.user): string {
@@ -65,8 +74,9 @@
 	}
 
 	function isActive(path: string): boolean {
-		if (path === '/') return page.url.pathname === '/';
-		return page.url.pathname.startsWith(path);
+		const current = page.url.pathname;
+		if (path === '/') return current === '/' || current.startsWith('/images');
+		return current.startsWith(path);
 	}
 
 	onMount(async () => {
@@ -75,13 +85,13 @@
 		await portalStore.init();
 		initialized = true;
 
-		if (!isLoginPage && authStore.firstUserSetup) {
+		if (!isAuthPage && authStore.firstUserSetup) {
 			goto(resolve('/login'));
 			return;
 		}
 
 		if (
-			!isLoginPage &&
+			!isAuthPage &&
 			!authStore.isAuthenticated &&
 			!authStore.anonymousAccessEnabled &&
 			authStore.authStatusLoaded
@@ -100,6 +110,9 @@
 	const navLinks: NavLink[] = $derived([
 		{ href: '/', label: 'Images', icon: Package },
 		{ href: '/artifacts', label: 'Artifacts', icon: Archive },
+		...(configStore.gitEnabled
+			? [{ href: '/git', label: 'Git', icon: GitBranch } satisfies NavLink]
+			: []),
 		...(authStore.isAuthenticated && !portalStore.isPortal
 			? [{ href: '/orgs', label: 'Organizations', icon: Building2 } satisfies NavLink]
 			: []),
@@ -110,6 +123,10 @@
 	]);
 
 	const brandName = $derived(portalStore.isPortal ? portalStore.displayName : 'Distroface');
+
+	const mobileNavItems = $derived(
+		navLinks.map((l) => ({ href: resolve(l.href), label: l.label, icon: l.icon }))
+	);
 
 	// Org and instance management live on the primary UI only
 	$effect(() => {
@@ -139,64 +156,91 @@
 <LoadingBar />
 <Toaster position="bottom-center" expand={true} richColors />
 
-{#if isLoginPage || isChangePasswordPage}
+{#if isAuthPage || isChangePasswordPage}
 	{@render children?.()}
 {:else if !initialized}
-	<div class="flex h-screen flex-col items-center justify-center gap-3">
-		<img src="/splash-icon.png" alt="Distroface" class="h-14 w-14 rounded-2xl" />
-		<div class="h-5 w-5 border-2 border-primary/30 border-t-primary rounded-full animate-spin"></div>
+	<div class="flex h-screen flex-col items-center justify-center gap-4">
+		<img src="/splash-icon.png" alt="Distroface" class="size-12 rounded-xl" />
+		<div class="size-4 animate-spin rounded-full border-2 border-primary/25 border-t-primary"></div>
 	</div>
 {:else}
-	<div class="min-h-screen flex flex-col">
-		<header class="sticky top-0 z-50 border-b border-border/50 bg-background/95 backdrop-blur supports-backdrop-filter:bg-background/80">
-			<div class="mx-auto flex h-14 max-w-7xl items-center gap-6 px-4 sm:px-6">
-				<a href={resolve('/')} class="flex items-center gap-2.5 shrink-0">
-					<img src="/adaptive-icon.png" alt={brandName} class="h-7 w-7 rounded-lg" />
-					<span class="font-bold text-lg tracking-tight hidden sm:inline">{brandName}</span>
+	<div class="flex min-h-screen flex-col">
+		<header
+			class="sticky top-0 z-40 border-b bg-background/90 backdrop-blur supports-backdrop-filter:bg-background/75"
+		>
+			<div class="mx-auto flex h-13 max-w-7xl items-center gap-5 px-4 sm:px-6">
+				<a
+					href={resolve('/')}
+					class="flex shrink-0 items-center gap-2.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+				>
+					<img src="/adaptive-icon.png" alt={brandName} class="size-6 rounded-md" />
+					<span class="hidden text-sm font-semibold tracking-tight sm:inline">{brandName}</span>
 					{#if portalStore.isPortal}
-						<span class="rounded-full border border-border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Portal</span>
+						<span
+							class="rounded-full border px-1.5 py-px text-2xs font-medium text-muted-foreground"
+							>Portal</span
+						>
 					{/if}
 				</a>
 
-				<nav class="hidden md:flex items-center gap-0.5">
+				<nav class="hidden h-full items-stretch gap-1 md:flex" aria-label="Primary">
 					{#each navLinks as link (link.href)}
+						{@const active = isActive(link.href)}
 						<a
 							href={resolve(link.href)}
-							class="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors {isActive(link.href)
-								? 'bg-accent text-accent-foreground'
-								: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
+							aria-current={active ? 'page' : undefined}
+							class="group relative flex items-center px-1 text-sm font-medium outline-none {active
+								? 'text-foreground'
+								: 'text-muted-foreground hover:text-foreground'}"
 						>
-							<link.icon class="h-4 w-4" />
-							{link.label}
+							<span
+								class="flex items-center gap-1.5 rounded-md px-2 py-1 transition-colors group-hover:bg-muted group-focus-visible:ring-2 group-focus-visible:ring-ring/50"
+							>
+								<link.icon class="size-4 opacity-80" />
+								{link.label}
+							</span>
+							{#if active}
+								<span
+									class="absolute inset-x-1 -bottom-px h-0.5 rounded-full bg-primary"
+									aria-hidden="true"
+								></span>
+							{/if}
 						</a>
 					{/each}
 				</nav>
 
 				<div class="flex-1"></div>
 
-				<div class="flex items-center gap-1.5">
-					<span class="text-muted-foreground/60 text-[11px] hidden lg:inline mr-2">{__APP_VERSION__}</span>
+				<div class="flex items-center gap-1">
+					<span class="mr-2 hidden font-mono text-2xs text-muted-foreground lg:inline"
+						>{__APP_VERSION__}</span
+					>
 
 					{#if portalStore.isPortal && portalStore.primaryOrigin && !portalStore.hidePrimaryLink}
 						<!-- eslint-disable svelte/no-navigation-without-resolve -->
-						<a
+						<Button
+							variant="ghost-muted"
+							size="sm"
 							href={portalStore.primaryOrigin}
-							class="flex items-center gap-1.5 h-8 px-2.5 rounded-md text-sm font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
 							title="Open the primary Distroface UI"
 						>
-							<ExternalLink class="h-3.5 w-3.5" />
+							<ExternalLink />
 							<span class="hidden sm:inline">Exit portal</span>
-						</a>
+						</Button>
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					{/if}
 
-					<Button variant="ghost" size="icon" class="h-8 w-8" onclick={toggleMode}>
+					<Button variant="ghost-muted" size="icon" onclick={toggleMode} aria-label="Toggle theme">
 						{#if mode.current === 'light'}
-							<Moon class="h-4 w-4 text-muted-foreground" />
+							<Moon />
 						{:else}
-							<Sun class="h-4 w-4 text-muted-foreground" />
+							<Sun />
 						{/if}
 					</Button>
+
+					{#if authStore.isAuthenticated && configStore.gitEnabled}
+						<NotificationBell />
+					{/if}
 
 					{#if authStore.isAuthenticated && authStore.user}
 						<DropdownMenu>
@@ -204,55 +248,64 @@
 								{#snippet child({ props })}
 									<button
 										{...props}
-										class="flex items-center gap-2 rounded-full focus:outline-none focus-visible:ring-2 focus-visible:ring-ring ml-1"
+										class="ml-1 flex items-center rounded-full ring-offset-2 ring-offset-background outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+										aria-label="Account menu"
 									>
-										<Avatar class="h-8 w-8">
-											<AvatarFallback class="text-xs bg-primary/10 text-primary font-medium">
-												{getUserInitials(authStore.user)}
-											</AvatarFallback>
+										<Avatar class="size-7 ring-1 ring-border">
+											<AvatarFallback>{getUserInitials(authStore.user)}</AvatarFallback>
 										</Avatar>
 									</button>
 								{/snippet}
 							</DropdownMenuTrigger>
 							<DropdownMenuContent align="end" class="w-56">
-								<DropdownMenuLabel>
+								<DropdownMenuLabel class="font-normal">
 									<div class="flex flex-col">
-										<span class="font-medium">{authStore.user.displayName || authStore.user.username}</span>
+										<span class="text-sm font-medium text-foreground"
+											>{authStore.user.displayName || authStore.user.username}</span
+										>
 										{#if authStore.user.email}
-											<span class="text-xs font-normal text-muted-foreground">{authStore.user.email}</span>
+											<span class="truncate text-xs text-muted-foreground"
+												>{authStore.user.email}</span
+											>
 										{/if}
 									</div>
 								</DropdownMenuLabel>
 								<DropdownMenuSeparator />
 								<DropdownMenuItem onclick={() => goto(resolve(`/${authStore.user?.username}`))}>
-									<User class="h-4 w-4 mr-2" />
+									<User />
 									Profile
 								</DropdownMenuItem>
 								<DropdownMenuItem onclick={() => goto(resolve('/settings'))}>
-									<Settings class="h-4 w-4 mr-2" />
+									<Settings />
 									Settings
 								</DropdownMenuItem>
 								<DropdownMenuSeparator />
 								<DropdownMenuItem onclick={handleLogout}>
-									<LogOut class="h-4 w-4 mr-2" />
+									<LogOut />
 									Sign out
 								</DropdownMenuItem>
 							</DropdownMenuContent>
 						</DropdownMenu>
 					{:else if !authStore.loading}
-						<Button variant="outline" size="sm" class="ml-1" onclick={() => goto(resolve('/login'))}>
-							<LogIn class="h-4 w-4 mr-1.5" />
+						<Button
+							variant="outline"
+							size="sm"
+							class="ml-1"
+							onclick={() => goto(resolve('/login'))}
+						>
+							<LogIn />
 							Sign in
 						</Button>
 					{/if}
 
 					<Button
-						variant="ghost"
+						variant="ghost-muted"
 						size="icon"
-						class="h-8 w-8 md:hidden"
+						class="md:hidden"
 						onclick={() => (mobileMenuOpen = true)}
+						aria-label="Open navigation"
 					>
-						<Menu class="h-4 w-4" />
+						<Menu />
 					</Button>
 				</div>
 			</div>
@@ -260,7 +313,7 @@
 
 		<main class="flex-1">
 			{#key page.url.pathname}
-				<div class="mx-auto max-w-7xl px-4 sm:px-6 py-6 page-enter">
+				<div class="page-enter mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
 					{@render children?.()}
 				</div>
 			{/key}
@@ -275,20 +328,14 @@
 				<SheetTitle>Navigation</SheetTitle>
 				<SheetDescription class="sr-only">Navigation menu</SheetDescription>
 			</SheetHeader>
-			<nav class="flex flex-col gap-1 mt-4">
-				{#each navLinks as link (link.href)}
-					<a
-						href={resolve(link.href)}
-						class="flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors {isActive(link.href)
-							? 'bg-accent text-accent-foreground'
-							: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
-						onclick={() => (mobileMenuOpen = false)}
-					>
-						<link.icon class="h-4 w-4" />
-						{link.label}
-					</a>
-				{/each}
-			</nav>
+			<div class="p-3">
+				<SideNav
+					items={mobileNavItems}
+					isActive={(href) => isActive(href)}
+					onNavigate={() => (mobileMenuOpen = false)}
+					class="md:w-auto"
+				/>
+			</div>
 		</SheetContent>
 	</Sheet>
 {/if}

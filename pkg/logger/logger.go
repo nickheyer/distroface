@@ -45,7 +45,10 @@ func New() *Logger {
 }
 
 func NewWithConfig(cfg *Config) *Logger {
-	module := cfg.DefaultModule
+	module := "distroface"
+	if cfg != nil && cfg.DefaultModule != "" {
+		module = cfg.DefaultModule
+	}
 
 	writers := []io.Writer{os.Stdout}
 

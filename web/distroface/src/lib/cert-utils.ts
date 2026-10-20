@@ -5,6 +5,7 @@ import {
 	type CertificateInfo
 } from '$lib/proto/distroface/v1/certificate_pb';
 import { hostnamePattern } from '$lib/portal-address';
+import type { BadgeVariant } from '$lib/components/ui/badge';
 
 export const certSourceLabels: Record<CertSource, string> = {
 	[CertSource.UNSPECIFIED]: 'None (cleartext only)',
@@ -17,23 +18,17 @@ export const certSourceLabels: Record<CertSource, string> = {
 	[CertSource.APP_CA]: 'Instance CA (self signed)'
 };
 
-export type CertStateBadge = { label: string; cls: string };
+export type CertStateBadge = { label: string; variant: BadgeVariant };
 
 // Badge presentation for a computed cert state, null hides the badge
 export function certStateBadge(state: CertState | undefined): CertStateBadge | null {
 	switch (state) {
 		case CertState.READY:
-			return {
-				label: 'https',
-				cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400'
-			};
+			return { label: 'https', variant: 'success' };
 		case CertState.PENDING:
-			return {
-				label: 'https pending',
-				cls: 'border-amber-500/40 text-amber-600 dark:text-amber-400'
-			};
+			return { label: 'https pending', variant: 'warning' };
 		case CertState.ERROR:
-			return { label: 'https broken', cls: 'border-red-500/40 text-red-600 dark:text-red-400' };
+			return { label: 'https broken', variant: 'destructive' };
 		default:
 			return null;
 	}
@@ -63,16 +58,16 @@ export function certHealth(cert?: CertificateInfo): CertHealth {
 	return { issued: true, expired: false, daysLeft, label, tone: 'ok' };
 }
 
-export function certBadgeClass(tone: CertHealth['tone']): string {
+export function certHealthVariant(tone: CertHealth['tone']): BadgeVariant {
 	switch (tone) {
 		case 'ok':
-			return 'border-primary/30 text-primary';
+			return 'success';
 		case 'warn':
-			return 'border-amber-500/40 text-amber-600 dark:text-amber-400';
+			return 'warning';
 		case 'danger':
-			return 'border-destructive/40 text-destructive';
+			return 'destructive';
 		default:
-			return 'text-muted-foreground';
+			return 'outline';
 	}
 }
 

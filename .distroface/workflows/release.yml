@@ -1,0 +1,369 @@
+name: DistroFace Dev Releaser
+
+on:
+  push:
+    tags:
+      - 'd*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  generate-proto:
+    name: Generate Proto Code
+    if: ${{ github.server_url != 'https://github.com' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install buf
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          curl -fsSL "https://github.com/bufbuild/buf/releases/latest/download/buf-$(uname -s)-$(uname -m)" -o "$RUNNER_TEMP/bin/buf"
+          chmod +x "$RUNNER_TEMP/bin/buf"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Generate proto code
+        run: buf generate
+
+      - name: Bundle generated code
+        run: tar -czf proto-gen.tar.gz pkg/proto web/distroface/src/lib/proto
+
+      - name: Upload generated code
+        uses: actions/upload-artifact@v4
+        with:
+          name: proto-gen
+          path: proto-gen.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  build-frontend:
+    name: Build Frontend
+    needs: generate-proto
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !endsWith(github.ref_name, '-dev') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download generated code
+        uses: actions/download-artifact@v4
+        with:
+          name: proto-gen
+
+      - name: Unpack generated code
+        run: tar -xzf proto-gen.tar.gz && rm proto-gen.tar.gz
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: 'npm'
+          cache-dependency-path: web/distroface/package-lock.json
+
+      - name: Install frontend dependencies
+        run: |
+          cd web/distroface
+          npm ci
+
+      - name: Build frontend
+        run: |
+          cd web/distroface
+          APP_VERSION=${{ github.ref_name }} npm run build
+
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-build
+          path: web/distroface/build
+          if-no-files-found: error
+          retention-days: 1
+
+  build-distroface:
+    name: Build DistroFace Binaries
+    needs: [generate-proto, build-frontend]
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !endsWith(github.ref_name, '-dev') }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download generated code
+        uses: actions/download-artifact@v4
+        with:
+          name: proto-gen
+
+      - name: Unpack generated code
+        run: tar -xzf proto-gen.tar.gz && rm proto-gen.tar.gz
+
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-build
+          path: web/distroface/build
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Foreign arch cgo builds need that arch's gcc, decided by host
+      - name: Prepare C toolchain
+        run: |
+          HOST="$(uname -m)"
+          CC=""
+          CXX=""
+          case "${{ matrix.goos }}/${{ matrix.goarch }}" in
+            linux/amd64)
+              if [ "$HOST" != "x86_64" ]; then
+                sudo apt-get update
+                sudo apt-get install -y gcc-x86-64-linux-gnu
+                CC=x86_64-linux-gnu-gcc
+              fi ;;
+            linux/arm64)
+              if [ "$HOST" != "aarch64" ]; then
+                sudo apt-get update
+                sudo apt-get install -y gcc-aarch64-linux-gnu
+                CC=aarch64-linux-gnu-gcc
+              fi ;;
+            windows/amd64)
+              sudo apt-get update
+              sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+              CC=x86_64-w64-mingw32-gcc
+              CXX=x86_64-w64-mingw32-g++ ;;
+          esac
+          echo "Host $HOST builds ${{ matrix.goos }}/${{ matrix.goarch }} with CC=${CC:-gcc}"
+          echo "CC=$CC" >> "$GITHUB_ENV"
+          echo "CXX=$CXX" >> "$GITHUB_ENV"
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '1'
+        run: |
+          BIN=distroface
+          if [ "${{ matrix.goos }}" = "windows" ]; then BIN=distroface.exe; fi
+          go build -ldflags "-s -w" -o "$BIN" ./cmd/distroface
+
+      - name: Package binary
+        run: |
+          VERSION="${GITHUB_REF_NAME#d}"
+          NAME="distroface_${VERSION}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "${NAME}.zip" distroface.exe
+          else
+            tar -czf "${NAME}.tar.gz" distroface
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            distroface_*.tar.gz
+            distroface_*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  build-dfcli:
+    name: Build dfcli Binaries
+    needs: generate-proto
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !endsWith(github.ref_name, '-dev') }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download generated code
+        uses: actions/download-artifact@v4
+        with:
+          name: proto-gen
+
+      - name: Unpack generated code
+        run: tar -xzf proto-gen.tar.gz && rm proto-gen.tar.gz
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build dfcli
+        run: |
+          VERSION="${GITHUB_REF_NAME#d}"
+          mkdir -p dist
+          for TARGET in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
+            GOOS="${TARGET%/*}"
+            GOARCH="${TARGET#*/}"
+            BIN=dfcli
+            if [ "$GOOS" = "windows" ]; then BIN=dfcli.exe; fi
+            OUT="dist/${GOOS}_${GOARCH}"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -ldflags "-s -w -X main.Version=${VERSION}" -o "${OUT}/${BIN}" ./cmd/dfcli
+            NAME="dfcli_${VERSION}_${GOOS}_${GOARCH}"
+            if [ "$GOOS" = "windows" ]; then
+              (cd "$OUT" && zip -q "../${NAME}.zip" "$BIN")
+            else
+              tar -C "$OUT" -czf "dist/${NAME}.tar.gz" "$BIN"
+            fi
+          done
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dfcli-dist
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  build-docker:
+    name: Build Docker
+    if: ${{ github.server_url != 'https://github.com' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Resolve registry and version
+        run: |
+          echo "REGISTRY=${GITHUB_SERVER_URL#*://}" >> "$GITHUB_ENV"
+          VERSION="$GITHUB_REF_NAME"
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then VERSION="${GITHUB_REF_NAME#d}"; fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to the instance registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          flavor: |
+            latest=false
+          tags: |
+            type=ref,event=tag
+            type=raw,value=${{ env.VERSION }},enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !endsWith(github.ref_name, '-dev') }}
+            type=raw,value=dev,enable=${{ github.ref_type != 'tag' || endsWith(github.ref_name, '-dev') }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.distroface
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            APP_VERSION=${{ github.ref_name }}
+
+      - name: Report pushed image
+        run: |
+          echo "digest ${{ steps.build.outputs.digest }}"
+          echo "${{ steps.meta.outputs.tags }}"
+
+  create-release:
+    name: Create Release
+    needs: [build-distroface, build-dfcli, build-docker]
+    if: ${{ startsWith(github.ref, 'refs/tags/') && !endsWith(github.ref_name, '-dev') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download distroface linux amd64
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-linux-amd64
+          path: ./assets
+
+      - name: Download distroface linux arm64
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-linux-arm64
+          path: ./assets
+
+      - name: Download distroface windows amd64
+        uses: actions/download-artifact@v4
+        with:
+          name: binary-windows-amd64
+          path: ./assets
+
+      - name: Download dfcli binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: dfcli-dist
+          path: ./assets
+
+      - name: Generate checksums
+        run: |
+          cd assets
+          sha256sum * > checksums.txt
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          git fetch --tags --force --quiet origin
+
+          PREV_TAG=$(git describe --tags --abbrev=0 ${VERSION}^ 2>/dev/null || echo "")
+
+          if [ -z "$PREV_TAG" ]; then
+            echo "No previous tag found"
+            CHANGELOG="Initial release"
+          else
+            echo "Generating changelog from ${PREV_TAG} to ${VERSION}"
+            CHANGELOG=$(git log --pretty=format:"- %s (%h)" ${PREV_TAG}..${VERSION})
+          fi
+
+          cat << NOTES > RELEASE_NOTES.md
+          ## What's Changed
+
+          ${CHANGELOG}
+          NOTES
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: distroface ${{ github.ref_name }}
+          body_path: RELEASE_NOTES.md
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            ./assets/*

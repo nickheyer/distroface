@@ -134,7 +134,7 @@ func (s *ACMEServer) Handler() http.Handler {
 
 func (s *ACMEServer) handleDirectory(w http.ResponseWriter, r *http.Request) {
 	base := s.baseURL(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
+	s.writeJSON(w, http.StatusOK, map[string]any{
 		"newNonce":   base + "/new-nonce",
 		"newAccount": base + "/new-account",
 		"newOrder":   base + "/new-order",
@@ -230,7 +230,7 @@ func (s *ACMEServer) handleNewAccount(w http.ResponseWriter, r *http.Request) {
 	acctURL := s.baseURL(r) + "/acct/" + jws.thumbprint
 	if existing != nil {
 		w.Header().Set("Location", acctURL)
-		s.writeJSON(w, r, http.StatusOK, s.accountBody(existing))
+		s.writeJSON(w, http.StatusOK, s.accountBody(existing))
 		return
 	}
 	if payload.OnlyReturnExisting {
@@ -251,7 +251,7 @@ func (s *ACMEServer) handleNewAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	s.e.log.Info("acme account registered %s", jws.thumbprint)
 	w.Header().Set("Location", acctURL)
-	s.writeJSON(w, r, http.StatusCreated, s.accountBody(acct))
+	s.writeJSON(w, http.StatusCreated, s.accountBody(acct))
 }
 
 func (s *ACMEServer) handleAccount(w http.ResponseWriter, r *http.Request) {
@@ -265,7 +265,7 @@ func (s *ACMEServer) handleAccount(w http.ResponseWriter, r *http.Request) {
 		s.problem(w, http.StatusBadRequest, "accountDoesNotExist", "unknown account")
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, s.accountBody(acct))
+	s.writeJSON(w, http.StatusOK, s.accountBody(acct))
 }
 
 func (s *ACMEServer) accountBody(a *storage.ACMEAccount) map[string]any {
@@ -336,7 +336,7 @@ func (s *ACMEServer) handleNewOrder(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	w.Header().Set("Location", s.orderURL(r, order.id))
-	s.writeJSON(w, r, http.StatusCreated, s.orderBody(r, order))
+	s.writeJSON(w, http.StatusCreated, s.orderBody(r, order))
 }
 
 func (s *ACMEServer) orderURL(r *http.Request, id string) string {
@@ -385,7 +385,7 @@ func (s *ACMEServer) handleAuthz(w http.ResponseWriter, r *http.Request) {
 		s.problem(w, http.StatusNotFound, "malformed", "unknown authorization")
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, s.authzBody(r, authz))
+	s.writeJSON(w, http.StatusOK, s.authzBody(r, authz))
 }
 
 func (s *ACMEServer) authzBody(r *http.Request, a *acmeAuthz) map[string]any {
@@ -446,7 +446,7 @@ func (s *ACMEServer) handleChallenge(w http.ResponseWriter, r *http.Request) {
 
 	base := s.baseURL(r)
 	w.Header().Set("Link", fmt.Sprintf(`<%s/authz/%s>;rel="up"`, base, authz.id))
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
+	s.writeJSON(w, http.StatusOK, map[string]any{
 		"type":   chalType,
 		"url":    base + "/challenge/" + authz.id + "/" + chalType,
 		"token":  authz.token,
@@ -583,7 +583,7 @@ func (s *ACMEServer) validateTLSALPN01(domain, keyAuth string) error {
 		NextProtos:         []string{"acme-tls/1"},
 	})
 	defer tlsConn.Close()
-	tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
 		return fmt.Errorf("tls-alpn-01 handshake: %w", err)
 	}
@@ -677,7 +677,7 @@ func (s *ACMEServer) handleFinalize(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	w.Header().Set("Location", s.orderURL(r, order.id))
-	s.writeJSON(w, r, http.StatusOK, s.orderBody(r, order))
+	s.writeJSON(w, http.StatusOK, s.orderBody(r, order))
 }
 
 // SANs of the csr must equal the order identifiers as a set
@@ -842,7 +842,7 @@ func accountIDFromKID(kid string) string {
 
 // ── Response helpers ────────────────────────────────────────────────────
 
-func (s *ACMEServer) writeJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
+func (s *ACMEServer) writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Replay-Nonce", s.newNonce())
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -931,8 +931,14 @@ func ecJWK(j jwkFields) (*ecdsa.PublicKey, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid ec y")
 	}
-	pub := &ecdsa.PublicKey{Curve: curve, X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
-	if !curve.IsOnCurve(pub.X, pub.Y) {
+	size := (curve.Params().BitSize + 7) / 8
+	if len(x) != size || len(y) != size {
+		return nil, "", fmt.Errorf("ec point has the wrong length for %s", j.Crv)
+	}
+	point := make([]byte, 0, 1+2*size)
+	point = append(append(append(point, 4), x...), y...)
+	pub, err := ecdsa.ParseUncompressedPublicKey(curve, point)
+	if err != nil {
 		return nil, "", fmt.Errorf("ec point not on curve")
 	}
 	// Canonical field order per rfc 7638

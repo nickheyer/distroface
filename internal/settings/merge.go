@@ -13,11 +13,35 @@ import (
 // Output only fields no tier may write
 var readOnlyPaths = []string{
 	"auth.oidc.client_secret_set",
+	"mail.password_set",
+	"mail.incoming.password_set",
+}
+
+// Mail paths a lower tier may store, throttle, network and inbox stay system
+var scopedMailPaths = []string{
+	"mail.enabled", "mail.smtp_host", "mail.smtp_port", "mail.security", "mail.username",
+	"mail.password", "mail.from_address", "mail.from_name", "mail.reply_to", "mail.skip_tls_verify",
+}
+
+// Workflow settings - repo or org scope
+var scopedActionsPaths = []string{
+	"git.actions.default_runs_on",
+	"git.actions.run_on_mirror",
+	"git.actions.artifact_retention_days",
+	"git.actions.log_retention_days",
+}
+
+func concat(lists ...[]string) []string {
+	var out []string
+	for _, l := range lists {
+		out = append(out, l...)
+	}
+	return out
 }
 
 // Paths each non system scope may store, prefixes cover subtrees
 var scopeAllowed = map[v1.SettingsScopeType][]string{
-	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG: {
+	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG: concat([]string{
 		"acme.email",
 		"acme.directory_url",
 		"artifacts.max_file_size_mb",
@@ -26,13 +50,74 @@ var scopeAllowed = map[v1.SettingsScopeType][]string{
 		"artifacts.retention",
 		"portals.isolated",
 		"auth.anonymous_access",
-	},
+		"git.lfs_enabled",
+		"git.private_by_default",
+		"git.default_branch",
+		"git.max_repo_size_mb",
+		"git.actions.enabled",
+	}, scopedMailPaths, scopedActionsPaths),
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: {
 		"acme.email",
 		"acme.directory_url",
 		"tls.mtls_mode",
 		"auth.anonymous_access",
 	},
+	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO: concat(scopedMailPaths, scopedActionsPaths),
+}
+
+// Reports whether a mail leaf path may only come from the system tier
+func systemOnlyMail(path string) bool {
+	return path == "mail.allow_private_networks" || path == "mail.max_per_minute" || strings.HasPrefix(path, "mail.incoming.")
+}
+
+// Relay and sender travel together below system, a tier owns both or neither
+func sealMail(eff *v1.Settings, chain []tierRow, prov map[string]v1.SettingsTier) {
+	base := &v1.MailSettings{}
+	if d := Defaults().GetMail(); d != nil {
+		base = proto.Clone(d).(*v1.MailSettings)
+	}
+	for _, t := range chain {
+		if t.tier == v1.SettingsTier_SETTINGS_TIER_SYSTEM && t.row.GetMail() != nil {
+			overlay(base.ProtoReflect(), t.row.GetMail().ProtoReflect(), "mail", t.tier, prov)
+		}
+	}
+	out := base
+	for _, t := range chain {
+		ms := t.row.GetMail()
+		if t.tier == v1.SettingsTier_SETTINGS_TIER_SYSTEM || ms == nil {
+			continue
+		}
+		for p, tier := range prov {
+			if tier == t.tier && strings.HasPrefix(p, "mail.") {
+				delete(prov, p)
+			}
+		}
+		if ms.Enabled != nil {
+			out.Enabled = ms.Enabled
+			prov["mail.enabled"] = t.tier
+		}
+		if ms.SmtpHost == nil {
+			continue
+		}
+		enabledTier, hadEnabled := prov["mail.enabled"]
+		for p := range prov {
+			if strings.HasPrefix(p, "mail.") && !systemOnlyMail(p) {
+				delete(prov, p)
+			}
+		}
+		if hadEnabled {
+			prov["mail.enabled"] = enabledTier
+		}
+		own := proto.Clone(ms).(*v1.MailSettings)
+		own.Enabled, own.AllowPrivateNetworks, own.MaxPerMinute, own.Incoming = out.Enabled, base.AllowPrivateNetworks, base.MaxPerMinute, base.Incoming
+		for _, p := range setLeafPaths(ms) {
+			if !systemOnlyMail("mail." + p) {
+				prov["mail."+p] = t.tier
+			}
+		}
+		out = own
+	}
+	eff.Mail = out
 }
 
 func pathCovered(path string, allowed []string) bool {
@@ -75,7 +160,7 @@ func overlay(dst, src protoreflect.Message, prefix string, tier v1.SettingsTier,
 // Visits every leaf path of the schema regardless of presence
 func walkLeaves(md protoreflect.MessageDescriptor, prefix string, fn func(path string)) {
 	fields := md.Fields()
-	for i := 0; i < fields.Len(); i++ {
+	for i := range fields.Len() {
 		fd := fields.Get(i)
 		path := string(fd.Name())
 		if prefix != "" {
@@ -180,6 +265,14 @@ func Redact(s *v1.Settings) {
 	if oidc := s.GetAuth().GetOidc(); oidc != nil {
 		oidc.ClientSecretSet = oidc.ClientSecret != nil && *oidc.ClientSecret != ""
 		oidc.ClientSecret = nil
+	}
+	if mail := s.GetMail(); mail != nil {
+		mail.PasswordSet = mail.Password != nil && *mail.Password != ""
+		mail.Password = nil
+		if in := mail.GetIncoming(); in != nil {
+			in.PasswordSet = in.Password != nil && *in.Password != ""
+			in.Password = nil
+		}
 	}
 }
 

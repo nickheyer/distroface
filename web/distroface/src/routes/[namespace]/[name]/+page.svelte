@@ -1,736 +1,581 @@
 <script lang="ts">
-	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { onMount, tick } from 'svelte';
-	import {
-		Package, ArrowDown, ArrowUp, ArrowUpDown, Eye, Lock, Pencil, Check, X,
-		Trash2, MoreHorizontal, EyeOff, ChevronRight,
-		Tags, Clock, Terminal, Star, HardDriveDownload, RefreshCw, Square
-	} from '@lucide/svelte';
-	import { rpcClient } from '$lib/api/rpc-client';
-	import { authStore } from '$lib/stores/auth.svelte';
-	import { configStore } from '$lib/stores/config.svelte';
-	import { portalStore } from '$lib/stores/portal.svelte';
-	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import { formatBytes, truncateDigest, relativeTime } from '$lib/utils';
-	import { Pager } from '$lib/pager.svelte';
-	import { toast } from 'svelte-sonner';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-
-	import {
-		DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger
-	} from '$lib/components/ui/dropdown-menu';
-	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
-	} from '$lib/components/ui/table';
-	import {
-		Sheet, SheetContent, SheetTitle, SheetDescription
-	} from '$lib/components/ui/sheet';
-	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
-	import CopyButton from '$lib/components/copy-button.svelte';
-	import FormPanel from '$lib/components/form-panel.svelte';
-	import FormSection from '$lib/components/form-section.svelte';
-	import MirrorBadge from '$lib/components/mirror-badge.svelte';
-	import MirrorConfigFields, {
-		emptyMirrorForm, mirrorFormFrom, mirrorInit
-	} from '$lib/components/mirror-config-fields.svelte';
-	import DescriptorPanel from '$lib/components/descriptor-panel.svelte';
-	import EmptyState from '$lib/components/empty-state.svelte';
-	import DataPagination from '$lib/components/data-pagination.svelte';
-	import WebhookManager from '$lib/components/webhook-manager.svelte';
-	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
-	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import type { Repository, Tag, Descriptor, HistoryEntry } from '$lib/proto/distroface/v1/types_pb';
-	import { RepositoryType, Visibility, WebhookScope } from '$lib/proto/distroface/v1/types_pb';
 	import { resolve } from '$app/paths';
+	import { safeHref } from '$lib/utils';
+	import {
+		Code,
+		GitBranch,
+		Tag,
+		BookOpen,
+		Plus,
+		Package,
+		Archive,
+		Users,
+		Link as LinkIcon,
+		Star,
+		GitFork,
+		Clock,
+		ChevronDown,
+		Upload,
+		FilePlus
+	} from '@lucide/svelte';
+	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '$lib/components/ui/badge';
+	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
+	import {
+		DropdownMenu,
+		DropdownMenuContent,
+		DropdownMenuItem,
+		DropdownMenuTrigger
+	} from '$lib/components/ui/dropdown-menu';
+	import PermissionGate from '$lib/components/permission-gate.svelte';
+	import CopyButton from '$lib/components/copy-button.svelte';
+	import CloneBox from '$lib/components/git/clone-box.svelte';
+	import RefPicker from '$lib/components/git/ref-picker.svelte';
+	import TreeTable from '$lib/components/git/tree-table.svelte';
+	import Markdown from '$lib/components/git/markdown.svelte';
+	import LatestCommitBar from '$lib/components/git/latest-commit-bar.svelte';
+	import ForkContributeBar from '$lib/components/git/fork-contribute-bar.svelte';
+	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
+	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
+	import { GitUnit, LinkedRepositoryKind } from '$lib/proto/distroface/v1/git_pb';
+	import type {
+		GitTreeEntry,
+		GitCommit,
+		GitBlob,
+		LinkedRepository,
+		GitLanguage,
+		GitContributor
+	} from '$lib/proto/distroface/v1/git_pb';
+	import type { Release } from '$lib/proto/distroface/v1/release_pb';
+	import { relativeTime, formatBytes } from '$lib/utils';
+	import { timestampDate } from '@bufbuild/protobuf/wkt';
 
-	const namespace = $derived(page.params.namespace);
-	const name = $derived(page.params.name);
+	const repo = $derived(gitRepoStore.repo!);
+	const namespace = $derived(repo.namespace);
+	const name = $derived(repo.name);
+	const ref = $derived(repo.defaultBranch);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !repo.isArchived);
+	const params = $derived({ namespace, name });
+	const refParams = $derived({ namespace, name, ref: ref || 'main', path: '' });
 
-	let repo = $state<Repository | undefined>(undefined);
-	let loading = $state(true);
-	let tags = $state<Tag[]>([]);
-	let tagsLoading = $state(true);
-	const tagsPager = new Pager(20);
-	let tagSort = $state('version desc');
+	let entries = $state<GitTreeEntry[]>([]);
+	let lastCommit = $state<GitCommit | undefined>();
+	let treeLoading = $state(true);
+	let readme = $state<GitBlob | undefined>();
+	let latestRelease = $state<Release | undefined>();
+	let linked = $state<LinkedRepository[]>([]);
+	let languages = $state<GitLanguage[]>([]);
+	let contributors = $state<GitContributor[]>([]);
+	let contributorTotal = $state(0);
 
-	let editingDescription = $state(false);
-	let descriptionDraft = $state('');
-	let savingDescription = $state(false);
+	let loadedFor = '';
 
-	let sheetOpen = $state(false);
-	let selectedTagName = $state('');
-
-	interface PanelEntry {
-		descriptor?: Descriptor;
-		loading: boolean;
-		label: string;
-		digest: string;
-		historyEntry?: HistoryEntry;
-	}
-	let panelStack = $state<PanelEntry[]>([]);
-	let panelScroll = $state<HTMLElement | null>(null);
-
-	let deleteRepoOpen = $state(false);
-	let deletingRepo = $state(false);
-	let starPending = $state(false);
-
-	// Mirror settings
-	let mirrorPanelOpen = $state(false);
-	let mirrorForm = $state(emptyMirrorForm());
-	let savingMirror = $state(false);
-	let syncingMirror = $state(false);
-	let stoppingMirror = $state(false);
-	const repoIsMirror = $derived(repo?.type === RepositoryType.MIRROR);
-	const mirrorSyncActive = $derived(
-		!!repo && (repo.mirrorSyncing || mirrorSyncStore.syncing('image', repo.id))
-	);
-
-	async function syncMirrorNow() {
-		if (syncingMirror) return;
-		syncingMirror = true;
+	async function loadAll() {
+		treeLoading = true;
+		const ns = namespace;
+		const n = name;
+		const opts = silentCallOptions;
 		try {
-			await rpcClient.repository.syncRepository({ namespace, name });
-			toast.success('Sync started');
-		} catch {
-			// Error interceptor already toasted
+			const [tree, rd] = await Promise.all([
+				rpcClient.gitFiles
+					.getTree({ namespace: ns, name: n, ref: '', path: '', withLastCommit: true }, opts)
+					.catch(() => undefined),
+				rpcClient.gitFiles
+					.getReadme({ namespace: ns, name: n, ref: '', path: '' }, opts)
+					.catch(() => undefined)
+			]);
+			entries = tree?.entries ?? [];
+			lastCommit = tree?.lastCommit;
+			readme = rd?.blob;
 		} finally {
-			syncingMirror = false;
+			treeLoading = false;
 		}
+		void Promise.all([
+			gitRepoStore.unitEnabled(GitUnit.RELEASES)
+				? rpcClient.release
+						.getLatestRelease({ namespace: ns, name: n }, opts)
+						.then((r) => (latestRelease = r.release))
+						.catch(() => (latestRelease = undefined))
+				: Promise.resolve(),
+			gitRepoStore.unitEnabled(GitUnit.PACKAGES)
+				? rpcClient.git
+						.listLinkedRepositories({ namespace: ns, name: n }, opts)
+						.then((r) => (linked = r.repositories))
+						.catch(() => (linked = []))
+				: Promise.resolve(),
+			rpcClient.git
+				.getRepositoryLanguages({ namespace: ns, name: n }, backgroundCallOptions)
+				.then((r) => (languages = r.languages))
+				.catch(() => (languages = [])),
+			rpcClient.git
+				.listContributors(
+					{ namespace: ns, name: n, page: { pageSize: 12, pageToken: '', orderBy: '' } },
+					backgroundCallOptions
+				)
+				.then((r) => {
+					contributors = r.contributors;
+					contributorTotal = Number(r.page?.totalCount ?? 0n) || r.contributors.length;
+				})
+				.catch(() => (contributors = []))
+		]);
 	}
 
-	async function stopMirrorSync() {
-		if (stoppingMirror) return;
-		stoppingMirror = true;
-		try {
-			await rpcClient.repository.stopRepositorySync({ namespace, name });
-			toast.success('Sync stopped');
-		} catch {
-			// Error interceptor already toasted
-		} finally {
-			stoppingMirror = false;
-		}
-	}
-
-	// Sync finish events refresh the page live
-	let syncSeqSeen = 0;
 	$effect(() => {
-		const seq = mirrorSyncStore.finishedSeq;
-		const ev = mirrorSyncStore.lastFinished;
-		if (seq === syncSeqSeen) return;
-		syncSeqSeen = seq;
-		if (ev?.kind === 'image' && repo && ev.repoId === repo.id) {
-			loadRepo();
-			loadTags();
-		}
-	});
-
-	function openMirrorSettings() {
-		if (!repo) return;
-		mirrorForm = mirrorFormFrom(repo.mirror);
-		mirrorPanelOpen = true;
-	}
-
-	async function saveMirrorSettings() {
-		if (!mirrorForm.upstream.trim()) return;
-		savingMirror = true;
-		try {
-			const resp = await rpcClient.repository.updateRepository({
-				namespace,
-				name,
-				mirror: mirrorInit(mirrorForm)
-			});
-			repo = resp.repository ?? repo;
-			toast.success('Mirror settings updated');
-			mirrorPanelOpen = false;
-		} catch {
-			// Error interceptor already toasted
-		} finally {
-			savingMirror = false;
-		}
-	}
-
-	const registryHost = $derived(
-		portalStore.host(configStore.publicHostname)
-	);
-
-	const namespaceHref = $derived(repo?.isOrgNamespace ? `orgs/${namespace}` : `${namespace}`);
-	const isNamespaceMember = $derived(authStore.user?.username === namespace);
-
-	const canUpdateRepo = $derived(
-		authStore.user !== null &&
-			(isNamespaceMember && authStore.hasPermission('repositories', 'update', `${namespace}/${name}`) ||
-				authStore.hasPermission('repositories', 'manage', `${namespace}/${name}`))
-	);
-
-	const canDeleteRepo = $derived(
-		authStore.user !== null &&
-			(isNamespaceMember && authStore.hasPermission('repositories', 'delete', `${namespace}/${name}`) ||
-				authStore.hasPermission('repositories', 'manage', `${namespace}/${name}`))
-	);
-
-	const canManage = $derived(canUpdateRepo || canDeleteRepo);
-	const pullCommand = $derived(
-		`${registryHost}/${portalStore.imageRef(namespace ?? '', name ?? '')}`
-	);
-	let pullTag = $state<string|null>(null);
-	const isPrivate = $derived(repo?.visibility === Visibility.PRIVATE);
-	const initials = $derived((namespace ?? '').slice(0, 2).toUpperCase());
-
-	async function loadRepo() {
-		loading = true;
-		try {
-			const resp = await rpcClient.repository.getRepository({ namespace, name });
-			repo = resp.repository;
-		} catch {
-			// error interceptor
-		} finally {
-			loading = false;
-		}
-	}
-
-	async function loadTags() {
-		tagsLoading = true;
-		try {
-			const resp = await rpcClient.repository.listTags({
-				page: tagsPager.request(undefined, tagSort),
-				namespace, name
-			});
-			tags = resp.tags;
-			tagsPager.apply(resp.page);
-		} catch {
-			tags = [];
-		} finally {
-			tagsLoading = false;
-		}
-	}
-
-	function toggleTagSort(col: string) {
-		tagSort = tagSort === `${col} desc` ? `${col} asc` : `${col} desc`;
-		tagsPager.reset();
-		loadTags();
-	}
-
-	// Latest or newest version names the pull command
-	async function loadPullTag() {
-		try {
-			const resp = await rpcClient.repository.listTags({
-				page: { pageSize: 1, orderBy: 'version desc' },
-				namespace, name
-			});
-			pullTag = resp.tags[0]?.name ?? null;
-		} catch {
-			pullTag = null;
-		}
-	}
-
-	async function openTagDetail(tagName: string) {
-		sheetOpen = true;
-		selectedTagName = tagName;
-		panelStack = [{ loading: true, label: tagName, digest: '' }];
-		try {
-			const resp = await rpcClient.repository.resolveTag({ namespace, name, tag: tagName });
-			if (resp.descriptor) {
-				panelStack = [{ descriptor: resp.descriptor, loading: false, label: tagName, digest: resp.descriptor.digest }];
-			}
-		} catch {
-			sheetOpen = false;
-			panelStack = [];
-		}
-	}
-
-	function expandToPanel(panelIndex: number, child: Descriptor) {
-		if (panelStack[panelIndex + 1]?.digest === child.digest) {
-			panelStack = panelStack.slice(0, panelIndex + 1);
+		const key = `${repo.id}:${repo.defaultBranch}:${repo.isEmpty}`;
+		if (key === loadedFor) return;
+		loadedFor = key;
+		if (repo.isEmpty) {
+			entries = [];
+			lastCommit = undefined;
+			readme = undefined;
+			treeLoading = false;
 			return;
 		}
-
-		// Correlate layer children to their parent manifest's build history
-		const parentDesc = panelStack[panelIndex].descriptor;
-		let historyEntry: HistoryEntry | undefined;
-		if (parentDesc?.imageConfig?.history.length) {
-			let layerIdx = -1;
-			for (let i = 1; i < parentDesc.children.length; i++) {
-				if (parentDesc.children[i].digest === child.digest) {
-					layerIdx = i - 1;
-					break;
-				}
-			}
-			if (layerIdx >= 0) {
-				let count = 0;
-				for (const h of parentDesc.imageConfig.history) {
-					if (!h.emptyLayer) {
-						if (count === layerIdx) { historyEntry = h; break; }
-						count++;
-					}
-				}
-			}
-		}
-
-		const label = truncateDigest(child.digest, 12);
-		panelStack = [...panelStack.slice(0, panelIndex + 1), { descriptor: child, loading: false, label, digest: child.digest, historyEntry }];
-		tick().then(() => panelScroll?.scrollTo({ left: panelScroll.scrollWidth, behavior: 'smooth' }));
-	}
-
-	function startEditDescription() {
-		descriptionDraft = repo?.description ?? '';
-		editingDescription = true;
-	}
-
-	async function saveDescription() {
-		savingDescription = true;
-		try {
-			const resp = await rpcClient.repository.updateRepository({
-				namespace, name, description: descriptionDraft
-			});
-			repo = resp.repository;
-			editingDescription = false;
-			toast.success('Description updated');
-		} catch {
-			// error interceptor
-		} finally {
-			savingDescription = false;
-		}
-	}
-
-	async function toggleVisibility() {
-		if (!repo) return;
-		const newVisibility = repo.visibility === Visibility.PRIVATE ? Visibility.PUBLIC : Visibility.PRIVATE;
-		try {
-			const resp = await rpcClient.repository.updateRepository({ namespace, name, visibility: newVisibility });
-			repo = resp.repository;
-			toast.success(`Repository is now ${newVisibility === Visibility.PRIVATE ? 'private' : 'public'}`);
-		} catch {
-			// error interceptor
-		}
-	}
-
-	async function toggleStar() {
-		if (!repo || starPending) return;
-		starPending = true;
-		try {
-			if (repo.isStarred) {
-				const resp = await rpcClient.repository.unstarRepository({ namespace, name });
-				repo.isStarred = false;
-				repo.starCount = resp.starCount;
-			} else {
-				const resp = await rpcClient.repository.starRepository({ namespace, name });
-				repo.isStarred = true;
-				repo.starCount = resp.starCount;
-			}
-		} catch {
-			// error interceptor
-		} finally {
-			starPending = false;
-		}
-	}
-
-	async function confirmDeleteRepo() {
-		deletingRepo = true;
-		try {
-			await rpcClient.repository.deleteRepository({ namespace, name });
-			toast.success('Repository deleted');
-			goto(resolve(`/${namespaceHref}`));
-		} catch {
-			// error interceptor
-		} finally {
-			deletingRepo = false;
-		}
-	}
-
-	onMount(() => {
-		mirrorSyncStore.ensure();
-		loadRepo();
-		loadTags();
-		loadPullTag();
+		loadAll();
 	});
+
+	function onRef(next: string) {
+		goto(
+			resolve('/[namespace]/[name]/tree/[ref]/[...path]', { namespace, name, ref: next, path: '' })
+		);
+	}
+
+	const encodedRef = $derived(encodeURIComponent(ref));
+	const readmeText = $derived(readme ? new TextDecoder().decode(readme.content) : '');
+	const readmeDir = $derived(
+		readme?.path.includes('/') ? readme.path.slice(0, readme.path.lastIndexOf('/')) : ''
+	);
+	const readmeBase = $derived(
+		`/${namespace}/${name}/blob/${encodedRef}/${readmeDir ? `${readmeDir}/` : ''}`
+	);
+	const readmeRaw = $derived(
+		`/${namespace}/${name}/-/raw/${encodedRef}/${readmeDir ? `${readmeDir}/` : ''}`
+	);
+
+	const httpUrl = $derived(repo.httpCloneUrl);
+	const stars = $derived(Number(repo.starCount));
+
+	function linkedHref(l: LinkedRepository): string {
+		return l.kind === LinkedRepositoryKind.IMAGE
+			? resolve('/images/[namespace]/[...name]', { namespace: l.namespace, name: l.name })
+			: resolve('/artifacts/[namespace]/[repo]', { namespace: l.namespace, repo: l.name });
+	}
+
+	function topicHref(topic: string): string {
+		return `${resolve('/git')}?${new URLSearchParams({ topic })}`;
+	}
+
+	function contributorInitials(c: GitContributor): string {
+		const n = c.username || c.displayName || c.email || '?';
+		return n
+			.split(/[\s-]+/)
+			.map((w) => w[0])
+			.join('')
+			.toUpperCase()
+			.slice(0, 2);
+	}
 </script>
 
-<div class="space-y-6">
-	{#if loading}
-		<div class="space-y-3">
-			<Skeleton class="h-5 w-48" />
-			<div class="flex items-start gap-4">
-				<Skeleton class="h-14 w-14 rounded-xl" />
-				<div class="space-y-2 flex-1">
-					<Skeleton class="h-7 w-64" />
-					<Skeleton class="h-4 w-96" />
+{#if repo.isEmpty}
+	<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+		<div class="min-w-0 space-y-4">
+			<div class="box">
+				<div class="box-header">
+					<span>Quick setup</span>
+					<Popover>
+						<PopoverTrigger>
+							{#snippet child({ props })}
+								<Button {...props} size="sm"><Code />Clone<ChevronDown class="opacity-70" /></Button
+								>
+							{/snippet}
+						</PopoverTrigger>
+						<PopoverContent class="w-[min(24rem,calc(100vw-2rem))]" align="end">
+							<CloneBox {repo} />
+						</PopoverContent>
+					</Popover>
 				</div>
-			</div>
-		</div>
-	{:else if repo}
-		<!-- Breadcrumb -->
-		<nav class="flex items-center gap-1.5 text-sm text-muted-foreground">
-			<a href={resolve('/')} class="hover:text-foreground transition-colors">Images</a>
-			<span class="text-muted-foreground/30">/</span>
-			<a href={resolve(`/${namespaceHref}`)} class="hover:text-foreground transition-colors">{namespace}</a>
-			<span class="text-muted-foreground/30">/</span>
-			<span class="text-foreground font-medium">{name}</span>
-		</nav>
 
-		<!-- Header card -->
-		<div class="rounded-xl border border-border/60 bg-card overflow-hidden">
-			<div class="p-5">
-				<div class="flex items-start gap-4">
-					<!-- Avatar -->
-					<div class="h-14 w-14 rounded-xl bg-linear-to-br from-primary/15 to-primary/5 flex items-center justify-center shrink-0 border border-primary/10">
-						<span class="text-base font-bold text-primary/70 uppercase tracking-wide">{initials}</span>
-					</div>
+				<div class="space-y-5 p-4">
+					<p class="text-sm text-muted-foreground">
+						This repository is empty. Push something to get started.
+					</p>
 
-					<!-- Info -->
-					<div class="flex-1 min-w-0 space-y-1">
-						<div class="flex items-center gap-3">
-							<h1 class="text-xl font-bold tracking-tight">
-								<span class="text-muted-foreground font-normal">{namespace}/</span>{name}
-							</h1>
-							<Badge
-								variant="outline"
-								class="text-[10px] shrink-0 gap-0.5 py-0 h-4.5 {isPrivate
-									? 'border-amber-500/30 text-amber-600 dark:text-amber-400'
-									: 'border-primary/20 text-primary/60 dark:text-primary/70'}"
-							>
-								{#if isPrivate}
-									<Lock class="h-2.5 w-2.5" />Private
-								{:else}
-									<Eye class="h-2.5 w-2.5" />Public
-								{/if}
-							</Badge>
-							{#if repoIsMirror}
-								<MirrorBadge
-									label="Mirror"
-									error={repo.mirrorLastError}
-									title={repo.mirror?.upstream ?? ''}
-									syncing={repo.mirrorSyncing || mirrorSyncStore.syncing('image', repo.id)}
+					<div class="space-y-2">
+						<h3 class="text-sm font-semibold">Push an existing repository</h3>
+						<div class="relative">
+							<pre
+								class="code-inline overflow-x-auto pr-10 whitespace-pre">git remote add origin {httpUrl}
+git push -u origin {ref || 'main'}</pre>
+							<div class="absolute top-1.5 right-1.5">
+								<CopyButton
+									text={`git remote add origin ${httpUrl}\ngit push -u origin ${ref || 'main'}`}
+									label="Commands copied"
 								/>
-							{/if}
-						</div>
-
-						<!-- Description -->
-						<div>
-							{#if editingDescription}
-								<div class="flex gap-2 max-w-lg">
-									<Input bind:value={descriptionDraft} placeholder="Add a description..." class="flex-1 h-8 text-sm" />
-									<Button size="sm" class="h-8 px-2.5" onclick={saveDescription} disabled={savingDescription}>
-										<Check class="h-3.5 w-3.5" />
-									</Button>
-									<Button size="sm" variant="ghost" class="h-8 px-2.5" onclick={() => (editingDescription = false)}>
-										<X class="h-3.5 w-3.5" />
-									</Button>
-								</div>
-							{:else}
-								<div class="flex items-center gap-1">
-									<p class="text-[13px] {repo.description ? 'text-muted-foreground' : 'text-muted-foreground/50 italic'}">
-										{repo.description || 'No description'}
-									</p>
-									<PermissionGate allowed={canUpdateRepo}>
-										<Button variant="ghost" size="icon" class="h-6 w-6" onclick={startEditDescription}>
-											<Pencil class="h-3 w-3 text-muted-foreground/50" />
-										</Button>
-									</PermissionGate>
-								</div>
-							{/if}
-						</div>
-
-						<!-- Stats row -->
-						<div class="flex items-center gap-4 text-[12px] text-muted-foreground/60 pt-0.5">
-							{#if repo.tagCount > 0}
-								<span class="flex items-center gap-1">
-									<Tags class="h-3 w-3" />{repo.tagCount} tag{repo.tagCount !== 1 ? 's' : ''}
-								</span>
-							{/if}
-							{#if Number(repo.sizeBytes) > 0}
-								<span class="tabular-nums">{formatBytes(Number(repo.sizeBytes))}</span>
-							{/if}
-							{#if repo.pullCount > 0n}
-								<span class="flex items-center gap-1 tabular-nums">
-									<ArrowDown class="h-3 w-3" />{repo.pullCount.toLocaleString()} pull{repo.pullCount !== 1n ? 's' : ''}
-								</span>
-							{/if}
-							{#if repo.pushCount > 0n}
-								<span class="flex items-center gap-1 tabular-nums">
-									<ArrowUp class="h-3 w-3" />{repo.pushCount.toLocaleString()} push{repo.pushCount !== 1n ? 'es' : ''}
-								</span>
-							{/if}
-							{#if repo.lastPushedAt}
-								<span class="flex items-center gap-1">
-									<Clock class="h-3 w-3" />Updated {relativeTime(timestampDate(repo.lastPushedAt))}
-								</span>
-							{/if}
+							</div>
 						</div>
 					</div>
 
-					<!-- Actions -->
-					{#if authStore.isAuthenticated}
-						<Button variant="outline" size="sm" class="h-8 shrink-0 gap-1.5" onclick={toggleStar} disabled={starPending}>
-							<Star class="h-3.5 w-3.5 {repo.isStarred ? 'fill-amber-400 text-amber-400' : ''}" />
-							{repo.isStarred ? 'Starred' : 'Star'}
-							{#if repo.starCount > 0n}
-								<span class="tabular-nums text-muted-foreground">{repo.starCount.toLocaleString()}</span>
-							{/if}
-						</Button>
-					{:else if repo.starCount > 0n}
-						<span class="flex items-center gap-1 text-[12px] text-muted-foreground/60 tabular-nums shrink-0 mt-2">
-							<Star class="h-3 w-3" />{repo.starCount.toLocaleString()}
-						</span>
-					{/if}
-					<PermissionGate allowed={canManage}>
-						<DropdownMenu>
-							<DropdownMenuTrigger>
-								{#snippet child({ props })}
-									<Button {...props} variant="outline" size="icon" class="h-8 w-8 shrink-0">
-										<MoreHorizontal class="h-4 w-4" />
-									</Button>
-								{/snippet}
-							</DropdownMenuTrigger>
-							<DropdownMenuContent align="end">
-								<PermissionGate allowed={canUpdateRepo}>
-									<DropdownMenuItem onclick={toggleVisibility}>
-										{#if isPrivate}
-											<Eye class="h-4 w-4 mr-2" />Make Public
-										{:else}
-											<EyeOff class="h-4 w-4 mr-2" />Make Private
-										{/if}
-									</DropdownMenuItem>
-									{#if repoIsMirror}
-										<DropdownMenuItem onclick={openMirrorSettings}>
-											<HardDriveDownload class="h-4 w-4 mr-2" />Mirror Settings
-										</DropdownMenuItem>
-										{#if mirrorSyncActive}
-											<DropdownMenuItem onclick={stopMirrorSync} disabled={stoppingMirror}>
-												<Square class="h-4 w-4 mr-2" />Stop Sync
-											</DropdownMenuItem>
-										{:else}
-											<DropdownMenuItem onclick={syncMirrorNow} disabled={syncingMirror}>
-												<RefreshCw class="h-4 w-4 mr-2 {syncingMirror ? 'animate-spin' : ''}" />Sync Now
-											</DropdownMenuItem>
-										{/if}
-									{/if}
-								</PermissionGate>
-								<PermissionGate allowed={canDeleteRepo}>
-									<DropdownMenuSeparator />
-									<DropdownMenuItem class="text-destructive focus:text-destructive" onclick={() => (deleteRepoOpen = true)}>
-										<Trash2 class="h-4 w-4 mr-2" />Delete Repository
-									</DropdownMenuItem>
-								</PermissionGate>
-							</DropdownMenuContent>
-						</DropdownMenu>
+					<div class="space-y-2">
+						<h3 class="text-sm font-semibold">Start a new one on the command line</h3>
+						<div class="relative">
+							<pre class="code-inline overflow-x-auto pr-10 whitespace-pre">git init -b {ref ||
+									'main'}
+git add README.md
+git commit -m "first commit"
+git remote add origin {httpUrl}
+git push -u origin {ref || 'main'}</pre>
+							<div class="absolute top-1.5 right-1.5">
+								<CopyButton
+									text={`git init -b ${ref || 'main'}\ngit add README.md\ngit commit -m "first commit"\ngit remote add origin ${httpUrl}\ngit push -u origin ${ref || 'main'}`}
+									label="Commands copied"
+								/>
+							</div>
+						</div>
+					</div>
+
+					<PermissionGate allowed={canWrite}>
+						<div class="flex flex-wrap items-center gap-2 border-t pt-4">
+							<span class="text-sm text-muted-foreground">Or start in the browser</span>
+							<Button
+								variant="outline"
+								size="sm"
+								href={resolve('/[namespace]/[name]/new/[ref]/[...path]', refParams)}
+							>
+								<FilePlus />Create file
+							</Button>
+							<Button
+								variant="outline"
+								size="sm"
+								href={resolve('/[namespace]/[name]/upload/[ref]/[...path]', refParams)}
+							>
+								<Upload />Upload files
+							</Button>
+						</div>
 					</PermissionGate>
 				</div>
 			</div>
-
-			<!-- Pull command bar -->
-			{#if pullTag !== null}
-				<div class="border-t border-border/40 bg-muted/20 px-5 py-3 flex items-center gap-3">
-					<Terminal class="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
-					<code class="text-[13px] font-mono text-muted-foreground flex-1 min-w-0 truncate select-all">docker pull {pullCommand}:{pullTag}</code>
-					<CopyButton text="docker pull {pullCommand}:{pullTag}" label="Pull command copied!" />
-				</div>
-			{/if}
 		</div>
-
-		{#snippet tagSortHeader(label: string, col: string)}
-			<button type="button" class="inline-flex items-center gap-1 hover:text-foreground transition-colors" onclick={() => toggleTagSort(col)}>
-				{label}
-				{#if tagSort === `${col} desc`}
-					<ArrowDown class="h-3 w-3" />
-				{:else if tagSort === `${col} asc`}
-					<ArrowUp class="h-3 w-3" />
-				{:else}
-					<ArrowUpDown class="h-3 w-3 opacity-40" />
-				{/if}
-			</button>
-		{/snippet}
-
-		<!-- Tags section -->
-		<div class="space-y-4">
-			<div class="section-header">
-				<h2 class="section-title">Tags</h2>
-				{#if tagsPager.totalCount > 0}
-					<span class="text-[12px] text-muted-foreground/60 tabular-nums">{tagsPager.totalCount} tag{tagsPager.totalCount !== 1 ? 's' : ''}</span>
-				{/if}
-			</div>
-
-			{#if tagsLoading}
-				<div class="space-y-2">
-					{#each [0, 1, 2] as i (i)}
-						<Skeleton class="h-14 w-full rounded-xl" />
-					{/each}
-				</div>
-			{:else if tags.length === 0}
-				<EmptyState icon={Package} message="No tags yet" description="Push an image to create your first tag.">
-					{#snippet actions()}
-						<code class="code-inline text-xs">docker push {pullCommand}:latest</code>
-					{/snippet}
-				</EmptyState>
-			{:else}
-				<div class="data-table">
-					<Table class="table-fixed">
-						<TableHeader>
-							<TableRow>
-								<TableHead class="th">{@render tagSortHeader('Tag', 'version')}</TableHead>
-								<TableHead class="th w-56 hidden sm:table-cell">Digest</TableHead>
-								<TableHead class="th w-40 hidden md:table-cell">Platform</TableHead>
-								<TableHead class="th text-right w-24">
-									<div class="flex justify-end">{@render tagSortHeader('Size', 'size')}</div>
-								</TableHead>
-							</TableRow>
-						</TableHeader>
-						<TableBody>
-							{#each tags as tag (tag.name)}
-								<TableRow class="cursor-pointer group/row" onclick={() => openTagDetail(tag.name)}>
-									<TableCell class="py-3 px-3">
-										<div class="flex items-center gap-1 min-w-0">
-											<Badge variant="secondary" class="font-mono text-xs font-medium px-2 py-0.5 min-w-0 shrink">
-												<span class="truncate">{tag.name}</span>
-											</Badge>
-											<CopyButton text="docker pull {pullCommand}:{tag.name}" label="Pull command copied!" />
-										</div>
-									</TableCell>
-									<TableCell class="py-3 px-3 hidden sm:table-cell">
-										<span class="font-mono text-xs text-muted-foreground/70 block truncate">
-											{truncateDigest(tag.digest)}
-										</span>
-									</TableCell>
-									<TableCell class="py-3 px-3 hidden md:table-cell">
-										{#if tag.platforms.length > 0}
-											<div class="flex flex-wrap gap-1">
-												{#each tag.platforms as p, pi (pi)}
-													<Badge variant="outline" class="text-[10px] font-mono py-0 h-4.5 text-muted-foreground/70">
-														{p.os ?? ''}{#if p.os && p.architecture}/{/if}{p.architecture ?? ''}{#if p.variant}/{p.variant}{/if}
-													</Badge>
-												{/each}
-											</div>
-										{/if}
-									</TableCell>
-									<TableCell class="text-right text-[13px] py-3 px-3 tabular-nums text-muted-foreground">
-										{formatBytes(Number(tag.sizeBytes))}
-									</TableCell>
-								</TableRow>
-							{/each}
-						</TableBody>
-					</Table>
-					<DataPagination attached pager={tagsPager} onChange={loadTags} />
-				</div>
-			{/if}
-		</div>
-		<!-- Webhooks section (visible to repo managers) -->
-		{#if repo && canUpdateRepo}
-			<PermissionGate allowed={canUpdateRepo}>
-				<WebhookManager
-					scope={WebhookScope.REPOSITORY}
-					scopeId={repo.id}
-					createDescription="Receive HTTP POST notifications for repository events."
-				/>
-			</PermissionGate>
-		{/if}
-
-	{:else}
-		<div class="text-center py-16">
-			<div class="h-14 w-14 rounded-xl bg-muted/50 flex items-center justify-center mx-auto mb-4">
-				<Package class="h-7 w-7 text-muted-foreground/40" />
-			</div>
-			<h2 class="text-lg font-semibold">Repository not found</h2>
-			<p class="text-[13px] text-muted-foreground mt-1">
-				{namespace}/{name} does not exist or you don't have access.
-			</p>
-			<Button variant="outline" class="mt-4" onclick={() => goto(resolve('/'))}>Back to Images</Button>
-		</div>
-	{/if}
-</div>
-
-<!-- Tag Detail Sheet -->
-<Sheet bind:open={sheetOpen}>
-	<SheetContent
-		side="right"
-		class="w-full overflow-hidden p-0 flex flex-col"
-		style="max-width: min({panelStack.length * 32}rem, 85vw); transition: max-width 200ms ease-in-out;"
-	>
-		<div class="px-6 py-5 border-b border-border/40 bg-muted/20 shrink-0 space-y-3">
-			<div>
-				<SheetTitle class="text-lg font-semibold tracking-tight flex items-baseline gap-1.5 flex-wrap">
-					<span>
-						<span class="text-muted-foreground font-normal">{namespace}/{name}:</span><button
-							type="button"
-							class="transition-colors {panelStack.length > 1 ? 'cursor-pointer hover:text-muted-foreground' : 'cursor-default'}"
-							onclick={() => { if (panelStack.length > 1) panelStack = panelStack.slice(0, 1); }}>{panelStack[0]?.label ?? selectedTagName}
-						</button>
-					</span>
-					{#each panelStack as panel, i (panel.digest + i)}
-						{#if i > 0}
-							<ChevronRight class="h-3 w-3 shrink-0 text-muted-foreground/30 self-center" />
-							<button
-								type="button"
-								class="text-sm font-normal font-mono transition-colors
-									{i === panelStack.length - 1 ? 'text-foreground cursor-default' : 'text-muted-foreground cursor-pointer hover:text-foreground'}"
-								onclick={() => { if (i < panelStack.length - 1) panelStack = panelStack.slice(0, i + 1); }}
-							>{panel.label}</button>
-						{/if}
-					{/each}
-				</SheetTitle>
-				<SheetDescription class="text-[13px] text-muted-foreground mt-1">Image manifest and layer details</SheetDescription>
-			</div>
-
-			<div class="rounded-lg bg-muted/30 border border-border/40 px-3.5 py-2.5 flex items-center gap-2.5">
-				<Terminal class="h-3.5 w-3.5 text-muted-foreground/50 shrink-0" />
-				<code class="text-[13px] font-mono text-muted-foreground flex-1 min-w-0 truncate select-all">docker pull {pullCommand}:{selectedTagName}</code>
-				<CopyButton text="docker pull {pullCommand}:{selectedTagName}" label="Pull command copied!" />
-			</div>
-
-		</div>
-
-		<div bind:this={panelScroll} class="flex-1 flex overflow-x-auto overflow-y-hidden min-h-0">
-			{#each panelStack as panel, i (panel.digest + i)}
-				<div class="{panelStack.length === 1 ? 'flex-1' : 'w-lg shrink-0'} border-r border-border/30 overflow-y-auto last:border-r-0">
-					<DescriptorPanel
-						descriptor={panel.descriptor}
-						loading={panel.loading}
-						selectedDigest={panelStack[i + 1]?.digest}
-						onSelectChild={(child: Descriptor) => expandToPanel(i, child)}
-						historyEntry={panel.historyEntry}
-					/>
-				</div>
-			{/each}
-		</div>
-	</SheetContent>
-</Sheet>
-
-<!-- Mirror settings panel -->
-<FormPanel
-	open={mirrorPanelOpen}
-	onOpenChange={(v) => (mirrorPanelOpen = v)}
-	title="Mirror Settings"
-	description="Upstream source for {namespace}/{name}."
-	icon={HardDriveDownload}
->
-	<div class="space-y-6">
-		<FormSection title="Mirror Source">
-			<MirrorConfigFields
-				form={mirrorForm}
-				kind="oci"
-				tokenSet={repo?.mirror?.authTokenSet ?? false}
-				lastSync={repo?.mirrorLastSync}
-				lastError={repo?.mirrorLastError ?? ''}
-				nextAttempt={repo?.mirrorNextAttempt}
-				idPrefix="image-mirror"
-			/>
-		</FormSection>
+		<aside class="min-w-0">
+			{@render about()}
+		</aside>
 	</div>
+{:else}
+	<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
+		<div class="min-w-0 lg:hidden">
+			{@render about()}
+		</div>
 
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (mirrorPanelOpen = false)}>Cancel</Button>
-		<Button onclick={saveMirrorSettings} disabled={savingMirror || !mirrorForm.upstream.trim()}>
-			{savingMirror ? 'Validating...' : 'Save'}
-		</Button>
-	{/snippet}
-</FormPanel>
+		<div class="min-w-0 space-y-4">
+			<div class="flex flex-wrap items-center gap-2">
+				<RefPicker
+					{namespace}
+					{name}
+					current={ref}
+					defaultBranch={repo.defaultBranch}
+					onSelect={onRef}
+				/>
+				<a
+					href={resolve('/[namespace]/[name]/branches', params)}
+					class="inline-flex items-center gap-1 px-1 text-sm text-muted-foreground hover:text-foreground"
+				>
+					<GitBranch class="size-3.5" />
+					<span class="font-medium text-foreground">{repo.branchCount}</span>
+					branch{repo.branchCount !== 1 ? 'es' : ''}
+				</a>
+				<a
+					href={resolve('/[namespace]/[name]/tags', params)}
+					class="inline-flex items-center gap-1 px-1 text-sm text-muted-foreground hover:text-foreground"
+				>
+					<Tag class="size-3.5" />
+					<span class="font-medium text-foreground">{repo.tagCount}</span> tag{repo.tagCount !== 1
+						? 's'
+						: ''}
+				</a>
+				<div class="ml-auto flex items-center gap-2">
+					<PermissionGate allowed={canWrite}>
+						<DropdownMenu>
+							<DropdownMenuTrigger>
+								{#snippet child({ props })}
+									<Button {...props} variant="outline"
+										><Plus />Add file<ChevronDown class="opacity-70" /></Button
+									>
+								{/snippet}
+							</DropdownMenuTrigger>
+							<DropdownMenuContent align="end">
+								<DropdownMenuItem
+									onclick={() =>
+										goto(resolve('/[namespace]/[name]/new/[ref]/[...path]', refParams))}
+								>
+									<FilePlus />Create new file
+								</DropdownMenuItem>
+								<DropdownMenuItem
+									onclick={() =>
+										goto(resolve('/[namespace]/[name]/upload/[ref]/[...path]', refParams))}
+								>
+									<Upload />Upload files
+								</DropdownMenuItem>
+							</DropdownMenuContent>
+						</DropdownMenu>
+					</PermissionGate>
+					<Popover>
+						<PopoverTrigger>
+							{#snippet child({ props })}
+								<Button {...props}><Code />Code<ChevronDown class="opacity-70" /></Button>
+							{/snippet}
+						</PopoverTrigger>
+						<PopoverContent class="w-[min(24rem,calc(100vw-2rem))]" align="end">
+							<CloneBox {repo} {ref} />
+						</PopoverContent>
+					</Popover>
+				</div>
+			</div>
 
-<!-- Delete Repo -->
-<ConfirmDialog bind:open={deleteRepoOpen} title="Delete Repository" confirmLabel="Delete" onConfirm={confirmDeleteRepo} loading={deletingRepo} icon={Trash2}>
-	{#snippet description()}
-		This permanently deletes <strong>{namespace}/{name}</strong> and all its tags and images.
-	{/snippet}
-</ConfirmDialog>
+			{#if repo.forkOf}
+				<ForkContributeBar {repo} branch={ref} />
+			{/if}
+			<div class="box">
+				<LatestCommitBar commit={lastCommit} {namespace} {name} {ref} loading={treeLoading} />
+				<TreeTable {entries} {namespace} {name} {ref} loading={treeLoading} />
+			</div>
 
+			{#if readme}
+				<div class="box" id="readme">
+					<div class="box-header">
+						<a
+							href={resolve('/[namespace]/[name]/blob/[ref]/[...path]', {
+								namespace,
+								name,
+								ref,
+								path: readme.path
+							})}
+							class="flex min-w-0 items-center gap-2 hover:text-primary"
+						>
+							<BookOpen class="size-4 text-muted-foreground" />
+							<span class="truncate">{readme.name}</span>
+						</a>
+					</div>
+					<div class="overflow-x-auto px-4 py-4 sm:px-6 sm:py-5">
+						<Markdown source={readmeText} baseHref={readmeBase} rawBase={readmeRaw} />
+					</div>
+				</div>
+			{/if}
+		</div>
+
+		<aside class="grid min-w-0 gap-6 sm:grid-cols-2 lg:grid-cols-1 lg:content-start">
+			<div class="hidden lg:block">
+				{@render about()}
+			</div>
+
+			{#if gitRepoStore.unitEnabled(GitUnit.RELEASES)}
+				<section class="min-w-0 space-y-2">
+					<div class="flex items-center justify-between">
+						<h3 class="text-sm font-semibold">Releases</h3>
+						{#if repo.releaseCount > 0}
+							<a
+								href={resolve('/[namespace]/[name]/releases', params)}
+								class="text-xs text-muted-foreground hover:text-primary"
+								>{repo.releaseCount} total</a
+							>
+						{/if}
+					</div>
+					{#if latestRelease}
+						<a
+							href={resolve('/[namespace]/[name]/releases/[tag]', {
+								namespace,
+								name,
+								tag: latestRelease.tag
+							})}
+							class="card-interactive block px-3 py-2.5"
+						>
+							<div class="flex min-w-0 items-center gap-2">
+								<Tag class="size-3.5 shrink-0 text-muted-foreground" />
+								<span class="truncate text-sm font-medium"
+									>{latestRelease.name || latestRelease.tag}</span
+								>
+								<Badge variant="success" class="ml-auto shrink-0">Latest</Badge>
+							</div>
+							{#if latestRelease.publishedAt}
+								<p class="mt-1 text-xs text-muted-foreground">
+									{relativeTime(timestampDate(latestRelease.publishedAt))}
+								</p>
+							{/if}
+						</a>
+					{:else}
+						<p class="text-sm text-muted-foreground">
+							No releases published.
+							<PermissionGate allowed={gitRepoStore.canWrite(GitUnit.RELEASES)}>
+								<a href={resolve('/[namespace]/[name]/releases/new', params)} class="link"
+									>Create one</a
+								>
+							</PermissionGate>
+						</p>
+					{/if}
+				</section>
+			{/if}
+
+			{#if gitRepoStore.unitEnabled(GitUnit.PACKAGES)}
+				<section class="min-w-0 space-y-2">
+					<div class="flex items-center justify-between">
+						<h3 class="text-sm font-semibold">Packages</h3>
+						<a
+							href={resolve('/[namespace]/[name]/packages', params)}
+							class="text-xs text-muted-foreground hover:text-primary">Manage</a
+						>
+					</div>
+					{#if linked.length > 0}
+						<ul class="space-y-1">
+							{#each linked as l (l.kind + l.fullName)}
+								<li>
+									<!-- eslint-disable svelte/no-navigation-without-resolve -->
+									<a
+										href={linkedHref(l)}
+										class="card-interactive flex min-w-0 items-center gap-2 px-3 py-2 text-sm"
+									>
+										{#if l.kind === LinkedRepositoryKind.IMAGE}
+											<Package class="size-3.5 shrink-0 text-muted-foreground" />
+										{:else}
+											<Archive class="size-3.5 shrink-0 text-muted-foreground" />
+										{/if}
+										<span class="truncate">{l.fullName}</span>
+										{#if l.latest}
+											<span
+												class="ml-auto max-w-24 shrink-0 truncate font-mono text-2xs text-muted-foreground"
+												>{l.latest}</span
+											>
+										{/if}
+									</a>
+									<!-- eslint-enable svelte/no-navigation-without-resolve -->
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="text-sm text-muted-foreground">No linked packages.</p>
+					{/if}
+				</section>
+			{/if}
+
+			{#if languages.length > 0}
+				<section class="min-w-0 space-y-2">
+					<h3 class="text-sm font-semibold">Languages</h3>
+					<div class="flex h-2 overflow-hidden rounded-full bg-muted">
+						{#each languages as lang (lang.name)}
+							<div
+								style="width: {lang.percent}%; background-color: {lang.color || 'var(--primary)'}"
+								title="{lang.name} {lang.percent.toFixed(1)}%"
+							></div>
+						{/each}
+					</div>
+					<ul class="flex flex-wrap gap-x-4 gap-y-1">
+						{#each languages.slice(0, 8) as lang (lang.name)}
+							<li class="flex items-center gap-1.5 text-xs">
+								<span
+									class="size-2 rounded-full"
+									style="background-color: {lang.color || 'var(--primary)'}"
+								></span>
+								<span class="font-medium">{lang.name}</span>
+								<span class="text-muted-foreground tabular-nums">{lang.percent.toFixed(1)}%</span>
+							</li>
+						{/each}
+					</ul>
+				</section>
+			{/if}
+
+			{#if contributors.length > 0}
+				<section class="min-w-0 space-y-2">
+					<div class="flex items-center justify-between">
+						<h3 class="flex items-center gap-1.5 text-sm font-semibold">
+							<Users class="size-3.5 text-muted-foreground" />Contributors
+						</h3>
+						<a
+							href={resolve('/[namespace]/[name]/activity', params)}
+							class="text-xs text-muted-foreground tabular-nums hover:text-primary"
+							>{contributorTotal || contributors.length}</a
+						>
+					</div>
+					<div class="flex flex-wrap gap-1.5">
+						{#each contributors as c (c.email + c.username)}
+							{#if c.username}
+								<a
+									href={resolve('/[namespace]', { namespace: c.username })}
+									class="rounded-full transition-opacity hover:opacity-80"
+									title="{c.username}, {c.commits} commit{c.commits !== 1 ? 's' : ''}"
+								>
+									<Avatar class="size-7">
+										<AvatarFallback>{contributorInitials(c)}</AvatarFallback>
+									</Avatar>
+								</a>
+							{:else}
+								<Avatar
+									class="size-7"
+									title="{c.displayName || c.email}, {c.commits} commit{c.commits !== 1 ? 's' : ''}"
+								>
+									<AvatarFallback>{contributorInitials(c)}</AvatarFallback>
+								</Avatar>
+							{/if}
+						{/each}
+					</div>
+				</section>
+			{/if}
+		</aside>
+	</div>
+{/if}
+
+{#snippet about()}
+	<section class="min-w-0 space-y-3">
+		<h3 class="text-sm font-semibold">About</h3>
+		{#if repo.description}
+			<p class="text-sm wrap-break-word text-muted-foreground">{repo.description}</p>
+		{:else}
+			<p class="text-sm text-muted-foreground italic">No description</p>
+		{/if}
+		{#if safeHref(repo.website)}
+			<!-- eslint-disable svelte/no-navigation-without-resolve -->
+			<a
+				href={safeHref(repo.website)}
+				target="_blank"
+				rel="noopener noreferrer"
+				class="link flex min-w-0 items-center gap-1.5 text-xs"
+			>
+				<LinkIcon class="size-3.5 shrink-0" /><span class="truncate"
+					>{repo.website.replace(/^https?:\/\//, '')}</span
+				>
+			</a>
+			<!-- eslint-enable svelte/no-navigation-without-resolve -->
+		{/if}
+		{#if repo.topics.length > 0}
+			<div class="flex flex-wrap gap-1.5">
+				{#each repo.topics as topic (topic)}
+					<Badge href={topicHref(topic)}>{topic}</Badge>
+				{/each}
+			</div>
+		{/if}
+		<ul
+			class="flex flex-wrap gap-x-4 gap-y-1.5 text-xs text-muted-foreground lg:flex-col lg:gap-y-1.5"
+		>
+			<li class="flex items-center gap-2">
+				<Star class="size-3.5" /><span class="tabular-nums">{stars.toLocaleString()}</span>
+				star{stars !== 1 ? 's' : ''}
+			</li>
+			<li class="flex items-center gap-2">
+				<GitFork class="size-3.5" /><span class="tabular-nums">{repo.forkCount}</span>
+				fork{repo.forkCount !== 1 ? 's' : ''}
+			</li>
+			{#if Number(repo.sizeBytes) > 0}
+				<li class="flex items-center gap-2">
+					<Archive class="size-3.5" />{formatBytes(
+						Number(repo.sizeBytes)
+					)}{#if Number(repo.lfsSizeBytes) > 0}<span
+							>+ {formatBytes(Number(repo.lfsSizeBytes))} LFS</span
+						>{/if}
+				</li>
+			{/if}
+			{#if repo.lastPushedAt}
+				<li class="flex items-center gap-2">
+					<Clock class="size-3.5" />Pushed {relativeTime(timestampDate(repo.lastPushedAt))}
+				</li>
+			{/if}
+		</ul>
+	</section>
+{/snippet}

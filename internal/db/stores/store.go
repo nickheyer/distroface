@@ -74,6 +74,29 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) Migrate() error {
+	root := s.db
+	defer func() { s.db = root }()
+	return root.Connection(func(conn *gorm.DB) error {
+		s.db = conn.Session(&gorm.Session{NewDB: true})
+		if err := s.migrateSchema(); err != nil {
+			return err
+		}
+		return s.migrateData()
+	})
+}
+
+func (s *Store) migrateSchema() error {
+	if err := s.db.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
+		return fmt.Errorf("failed to disable foreign keys for migration: %w", err)
+	}
+	err := s.migrateTables() // drop and copy
+	if on := s.db.Exec("PRAGMA foreign_keys = ON").Error; on != nil {
+		return fmt.Errorf("failed to re-enable foreign keys after migration: %w", on)
+	}
+	return err
+}
+
+func (s *Store) migrateTables() error {
 	// Rename old webhook secret column keeping stored values
 	if s.db.Migrator().HasTable("webhooks") &&
 		s.db.Migrator().HasColumn(&db.Webhook{}, "secret_hash") &&
@@ -148,6 +171,62 @@ func (s *Store) Migrate() error {
 		&db.ACMEAccount{},
 		&db.TLSCertificate{},
 		&db.AuditEvent{},
+		&db.GitRepository{},
+		&db.GitRedirect{},
+		&db.GitTransfer{},
+		&db.GitTopic{},
+		&db.GitStar{},
+		&db.GitWatch{},
+		&db.GitCollaborator{},
+		&db.OrgTeam{},
+		&db.OrgTeamMember{},
+		&db.OrgTeamRepo{},
+		&db.SSHKey{},
+		&db.GPGKey{},
+		&db.GitBranchProtection{},
+		&db.GitTagProtection{},
+		&db.GitCommitStatus{},
+		&db.LFSObject{},
+		&db.GitLFSLink{},
+		&db.LFSLock{},
+		&db.GitRelease{},
+		&db.GitReleaseImage{},
+		&db.GitPushMirror{},
+		&db.GitImport{},
+		&db.GitIssue{},
+		&db.GitPullRequest{},
+		&db.GitLabel{},
+		&db.GitIssueLabel{},
+		&db.GitMilestone{},
+		&db.GitIssueAssignee{},
+		&db.GitComment{},
+		&db.GitReaction{},
+		&db.GitIssueDependency{},
+		&db.GitTrackedTime{},
+		&db.GitIssueSubscription{},
+		&db.GitReviewRequest{},
+		&db.GitReview{},
+		&db.GitReviewComment{},
+		&db.GitProject{},
+		&db.GitProjectColumn{},
+		&db.GitProjectIssue{},
+		&db.GitNotification{},
+		&db.UserNotificationPrefs{},
+		&db.MailMessage{},
+		&db.MailInboundToken{},
+		&db.PasswordReset{},
+		&db.EmailVerification{},
+		&db.ActionsRunner{},
+		&db.ActionsRunnerToken{},
+		&db.ActionsWorkflowState{},
+		&db.ActionsRun{},
+		&db.ActionsJob{},
+		&db.ActionsJobLog{},
+		&db.ActionsSecret{},
+		&db.ActionsVariable{},
+		&db.ActionsArtifact{},
+		&db.ActionsRunImage{},
+		&db.ActionsCache{},
 	); err != nil {
 		return fmt.Errorf("failed to auto-migrate: %w", err)
 	}
@@ -157,6 +236,10 @@ func (s *Store) Migrate() error {
 	s.db.Exec("DROP INDEX IF EXISTS idx_users_email")
 	s.db.Exec("DROP INDEX IF EXISTS uni_users_username")
 	s.db.Exec("DROP INDEX IF EXISTS uni_users_email")
+	return nil
+}
+
+func (s *Store) migrateData() error {
 
 	if err := s.backfillArtifactPropsHash(); err != nil {
 		return fmt.Errorf("failed to backfill artifact props hash: %w", err)

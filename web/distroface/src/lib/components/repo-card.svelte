@@ -22,89 +22,80 @@
 	const lastPushed = $derived(
 		repo.lastPushedAt ? relativeTime(timestampDate(repo.lastPushedAt)) : null
 	);
-	const initials = $derived(repo.namespace.slice(0, 2).toUpperCase());
 	const hasStats = $derived(
-		repo.tagCount > 0 || Number(repo.sizeBytes) > 0 || repo.pullCount > 0n || repo.starCount > 0n || lastPushed
+		repo.tagCount > 0 ||
+			Number(repo.sizeBytes) > 0 ||
+			repo.pullCount > 0n ||
+			repo.starCount > 0n ||
+			lastPushed
 	);
 </script>
 
-<a href={resolve('/[namespace]/[name]', { namespace: repo.namespace, name: repo.name })} class="block group">
-	<div class="rounded-xl border border-border/60 bg-card px-4 py-3.5 transition-all hover:border-primary/20 hover:shadow-[0_2px_12px_-4px] hover:shadow-primary/8">
-		<div class="flex items-start gap-3.5">
-			<div class="h-10 w-10 rounded-lg bg-linear-to-br from-primary/12 to-primary/4 flex items-center justify-center shrink-0 border border-primary/8 mt-0.5">
-				<span class="text-xs font-bold text-primary/70 uppercase tracking-wide">{initials}</span>
-			</div>
-
-			<div class="flex-1 min-w-0">
-				<div class="flex items-center gap-2 flex-wrap">
-					<div class="flex items-baseline min-w-0">
-						<span class="text-[13px] text-muted-foreground">{repo.namespace}</span>
-						<span class="text-muted-foreground/30 mx-0.5">/</span>
-						<span class="font-semibold text-sm group-hover:text-primary transition-colors">{repo.name}</span>
-					</div>
-					<Badge
-						variant="outline"
-						class="text-[10px] shrink-0 gap-0.5 py-0 h-4.5 {isPrivate
-							? 'border-amber-500/30 text-amber-600 dark:text-amber-400'
-							: 'border-primary/20 dark:text-primary/70'}"
-					>
-						{#if isPrivate}
-							<Lock class="h-2.5 w-2.5" />Private
-						{:else}
-							<Eye class="h-2.5 w-2.5" />Public
-						{/if}
-					</Badge>
-					{#if isOwner}
-						<Badge variant="secondary" class="text-[10px] shrink-0 py-0 h-4.5">Owner</Badge>
-					{/if}
-					{#if repo.type === RepositoryType.MIRROR}
-						<MirrorBadge
-							label="Mirror"
-							error={repo.mirrorLastError}
-							title={repo.mirror?.upstream ?? ''}
-							syncing={repo.mirrorSyncing || mirrorSyncStore.syncing('image', repo.id)}
-						/>
-					{/if}
-				</div>
-
-				{#if repo.description}
-					<p class="text-[13px] text-muted-foreground/80 truncate mt-1">{repo.description}</p>
-				{/if}
-
-				{#if hasStats}
-					<div class="flex items-center gap-3.5 mt-2 text-[12px] text-muted-foreground/60">
-						{#if repo.tagCount > 0}
-							<span class="flex items-center gap-1">
-								<Tags class="h-3 w-3" />
-								{repo.tagCount} tag{repo.tagCount !== 1 ? 's' : ''}
-							</span>
-						{/if}
-						{#if Number(repo.sizeBytes) > 0}
-							<span class="flex items-center gap-1">
-								<HardDrive class="h-3 w-3" />
-								{formatBytes(Number(repo.sizeBytes))}
-							</span>
-						{/if}
-						{#if repo.pullCount > 0n}
-							<span class="flex items-center gap-1 tabular-nums">
-								<ArrowDown class="h-3 w-3" />
-								{repo.pullCount.toLocaleString()} pull{repo.pullCount !== 1n ? 's' : ''}
-							</span>
-						{/if}
-						{#if repo.starCount > 0n}
-							<span class="flex items-center gap-1 tabular-nums">
-								<Star class="h-3 w-3 {repo.isStarred ? 'fill-amber-400 text-amber-400' : ''}" />
-								{repo.starCount.toLocaleString()} star{repo.starCount !== 1n ? 's' : ''}
-							</span>
-						{/if}
-						{#if lastPushed}
-							<span class="items-center gap-1 hidden sm:flex">
-								<Clock class="h-3 w-3" />{lastPushed}
-							</span>
-						{/if}
-					</div>
-				{/if}
-			</div>
-		</div>
+<a
+	href={resolve('/images/[namespace]/[...name]', { namespace: repo.namespace, name: repo.name })}
+	class="group block px-4 py-3 transition-colors hover:bg-muted/30"
+>
+	<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+		<span class="flex min-w-0 items-baseline text-sm font-semibold">
+			<span class="truncate font-normal text-muted-foreground">{repo.namespace}</span>
+			<span class="mx-0.5 text-muted-foreground/50">/</span>
+			<span class="truncate underline-offset-2 group-hover:text-primary group-hover:underline"
+				>{repo.name}</span
+			>
+		</span>
+		<Badge variant="outline">
+			{#if isPrivate}
+				<Lock />Private
+			{:else}
+				<Eye />Public
+			{/if}
+		</Badge>
+		{#if isOwner}
+			<Badge variant="secondary">Owner</Badge>
+		{/if}
+		{#if repo.type === RepositoryType.MIRROR}
+			<MirrorBadge
+				label="Mirror"
+				error={repo.mirrorLastError}
+				title={repo.mirror?.upstream ?? ''}
+				syncing={repo.mirrorSyncing || mirrorSyncStore.syncing('image', repo.id)}
+			/>
+		{/if}
 	</div>
+	{#if repo.description}
+		<p class="mt-0.5 line-clamp-1 text-sm text-muted-foreground">{repo.description}</p>
+	{/if}
+	{#if hasStats}
+		<div class="mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs text-muted-foreground">
+			{#if repo.tagCount > 0}
+				<span class="flex items-center gap-1 tabular-nums">
+					<Tags class="size-3.5" />{repo.tagCount} tag{repo.tagCount !== 1 ? 's' : ''}
+				</span>
+			{/if}
+			{#if Number(repo.sizeBytes) > 0}
+				<span class="flex items-center gap-1"
+					><HardDrive class="size-3.5" />{formatBytes(Number(repo.sizeBytes))}</span
+				>
+			{/if}
+			{#if repo.pullCount > 0n}
+				<span class="flex items-center gap-1 tabular-nums">
+					<ArrowDown class="size-3.5" />{repo.pullCount.toLocaleString()} pull{repo.pullCount !== 1n
+						? 's'
+						: ''}
+				</span>
+			{/if}
+			{#if repo.starCount > 0n}
+				<span class="flex items-center gap-1 tabular-nums">
+					<Star
+						class="size-3.5 {repo.isStarred ? 'fill-warning text-warning' : ''}"
+					/>{repo.starCount.toLocaleString()}
+				</span>
+			{/if}
+			{#if lastPushed}
+				<span class="hidden items-center gap-1 sm:flex"
+					><Clock class="size-3.5" />Pushed {lastPushed}</span
+				>
+			{/if}
+		</div>
+	{/if}
 </a>

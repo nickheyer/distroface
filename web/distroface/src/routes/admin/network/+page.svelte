@@ -8,20 +8,34 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
 	import * as RadioGroup from '$lib/components/ui/radio-group';
-	import FormCard from '$lib/components/form-card.svelte';
+	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
+	import FormSection from '$lib/components/form-section.svelte';
 	import CertMaterialRow from '$lib/components/cert-material-row.svelte';
 	import CertUploadPanel from '$lib/components/cert-upload-panel.svelte';
 	import { Loader2 } from '@lucide/svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { Act, errText } from '$lib/act.svelte';
-	import { certBadgeClass, certDate, certHealth, certSourceLabels, certStateBadge } from '$lib/cert-utils';
-	import { isLocked, patchSettings, systemScope, type SettingsPatch } from '$lib/settings-utils';
-	import { MTLSMode, TLSMode, type FieldProvenance, type Settings } from '$lib/proto/distroface/v1/settings_pb';
 	import {
-		CertSource, TLSScope,
-		type GetCertStatusResponse, type GetTLSMaterialResponse
+		certDate,
+		certHealth,
+		certSourceLabels,
+		certStateBadge,
+		certHealthVariant
+	} from '$lib/cert-utils';
+	import { isLocked, patchSettings, systemScope, type SettingsPatch } from '$lib/settings-utils';
+	import {
+		MTLSMode,
+		TLSMode,
+		type FieldProvenance,
+		type Settings
+	} from '$lib/proto/distroface/v1/settings_pb';
+	import {
+		CertSource,
+		TLSScope,
+		type GetCertStatusResponse,
+		type GetTLSMaterialResponse
 	} from '$lib/proto/distroface/v1/certificate_pb';
 
 	let eff = $state<Settings | null>(null);
@@ -53,16 +67,35 @@
 
 	const sourceOptions = [CertSource.CONFIG, CertSource.MANUAL, CertSource.APP_CA, CertSource.ACME];
 	const modeOptions: { value: TLSMode; label: string; help: string }[] = [
-		{ value: TLSMode.TLS_MODE_DUAL, label: 'TLS and cleartext', help: 'Handshakes serve TLS, plain HTTP still answers' },
-		{ value: TLSMode.TLS_MODE_HTTPS_ONLY, label: 'HTTPS only', help: 'Cleartext requests redirect to HTTPS' },
-		{ value: TLSMode.TLS_MODE_CLEARTEXT, label: 'Cleartext only', help: 'Never terminate TLS in app' }
+		{
+			value: TLSMode.TLS_MODE_DUAL,
+			label: 'TLS and cleartext',
+			help: 'Handshakes serve TLS, plain HTTP still answers'
+		},
+		{
+			value: TLSMode.TLS_MODE_HTTPS_ONLY,
+			label: 'HTTPS only',
+			help: 'Cleartext requests redirect to HTTPS'
+		},
+		{
+			value: TLSMode.TLS_MODE_CLEARTEXT,
+			label: 'Cleartext only',
+			help: 'Never terminate TLS in app'
+		}
 	];
 	const mtlsOptions: { value: MTLSMode; label: string; help: string }[] = [
 		{ value: MTLSMode.MTLS_MODE_OFF, label: 'Off', help: 'No client certificate requested' },
-		{ value: MTLSMode.MTLS_MODE_OPTIONAL, label: 'Optional', help: 'Verified when presented, identity recorded' },
-		{ value: MTLSMode.MTLS_MODE_REQUIRED, label: 'Required', help: 'Handshake fails without a trusted client cert' }
+		{
+			value: MTLSMode.MTLS_MODE_OPTIONAL,
+			label: 'Optional',
+			help: 'Verified when presented, identity recorded'
+		},
+		{
+			value: MTLSMode.MTLS_MODE_REQUIRED,
+			label: 'Required',
+			help: 'Handshake fails without a trusted client cert'
+		}
 	];
-
 	const primaryHostname = $derived(eff?.server?.publicHostname ?? '');
 	const primaryHealth = $derived(certHealth(certStatus?.acmeCert));
 	const primaryBadge = $derived(certStateBadge(certStatus?.state));
@@ -100,7 +133,10 @@
 		loading = true;
 		loadError = '';
 		try {
-			const resp = await rpcClient.settings.getEffectiveSettings({ scope: systemScope }, silentCallOptions);
+			const resp = await rpcClient.settings.getEffectiveSettings(
+				{ scope: systemScope },
+				silentCallOptions
+			);
 			eff = resp.settings ?? null;
 			prov = resp.provenance;
 			if (eff) seedForms(eff);
@@ -179,241 +215,265 @@
 
 	function removeAppCert() {
 		appCertAct.run(async () => {
-			await rpcClient.certificate.deleteTLSCertificate({ scope: TLSScope.TLS_SCOPE_APP }, silentCallOptions);
+			await rpcClient.certificate.deleteTLSCertificate(
+				{ scope: TLSScope.TLS_SCOPE_APP },
+				silentCallOptions
+			);
 			await load();
 		});
 	}
 
 	onMount(() => {
-		if (!authStore.canManageSettings) { goto(resolve('/admin')); return; }
+		if (!authStore.canManageSettings) {
+			goto(resolve('/admin'));
+			return;
+		}
 		load();
 	});
 </script>
 
 {#if loading}
 	<div class="space-y-6">
-		<Skeleton class="h-52 w-full rounded-xl" />
-		<Skeleton class="h-32 w-full rounded-xl" />
-		<Skeleton class="h-40 w-full rounded-xl" />
+		<Skeleton class="h-52 w-full rounded-lg" />
+		<Skeleton class="h-32 w-full rounded-lg" />
+		<Skeleton class="h-40 w-full rounded-lg" />
 	</div>
 {:else if loadError}
-	<div class="rounded-xl border border-destructive/40 bg-destructive/5 px-6 py-10 text-center space-y-3">
+	<div class="flex flex-col items-center rounded-lg border bg-card px-6 py-10 text-center">
 		<p class="text-sm text-destructive">{loadError}</p>
-		<Button variant="outline" size="sm" onclick={load}>Retry</Button>
+		<Button variant="outline" size="sm" class="mt-3" onclick={load}>Retry</Button>
 	</div>
 {:else if eff}
-	<div class="space-y-6">
-		<!-- Server certificate -->
-		<FormCard title="Server Certificate" description="What the primary hostname serves">
-			<div class="space-y-3">
-				<div class="flex items-center justify-between gap-4 rounded-lg border border-border/60 px-4 py-3.5">
-					<div class="flex items-center gap-2 min-w-0 flex-wrap">
-						<code class="text-xs bg-muted px-2 py-1 rounded font-mono">{primaryHostname || '-'}</code>
-						{#if certStatus?.problems?.length}
-							<span class="text-xs text-destructive">{certStatus.problems[0]}</span>
-						{/if}
-					</div>
-					{#if primaryHealth.issued}
-						<Badge variant="outline" class="text-xs shrink-0 {certBadgeClass(primaryHealth.tone)}" title={certDate(certStatus?.acmeCert)}>
-							{primaryHealth.label}
-						</Badge>
-					{:else if primaryBadge}
-						<Badge variant="outline" class="text-xs shrink-0 {primaryBadge.cls}">{primaryBadge.label}</Badge>
+	<FormPage
+		level="section"
+		title="Network security"
+		description="TLS for the primary hostname and the client certificate policy. Changes apply immediately."
+	>
+		<FormSection title="Server certificate" description="What the primary hostname serves.">
+			<div class="flex items-center justify-between gap-4 rounded-lg border px-4 py-3">
+				<div class="flex min-w-0 flex-wrap items-center gap-2">
+					<code class="code-inline">{primaryHostname || '-'}</code>
+					{#if certStatus?.problems?.length}
+						<span class="text-xs text-destructive">{certStatus.problems[0]}</span>
 					{/if}
 				</div>
-
-				<FormField
-					label="Listener mode"
-					help={lockHint('tls.mode', 'Applies live to the primary hostname')}
-					tag={modeAct.tag}
-					error={modeAct.error}
-				>
-					<RadioGroup.Root
-						value={String(tlsMode)}
-						onValueChange={(v) => setTlsMode(Number(v) as TLSMode)}
-						disabled={modeAct.busy || locked('tls.mode')}
-						class="gap-0 divide-y divide-border/40"
+				{#if primaryHealth.issued}
+					<Badge
+						variant={certHealthVariant(primaryHealth.tone)}
+						class="shrink-0"
+						title={certDate(certStatus?.acmeCert)}
 					>
-						{#each modeOptions as option (option.value)}
-							<div class="py-2.5 first:pt-1 last:pb-1">
-								<label class="flex items-center gap-2.5 cursor-pointer" for="mode-{option.value}">
-									<RadioGroup.Item value={String(option.value)} id="mode-{option.value}" />
-									<span class="text-sm">{option.label}</span>
-									<span class="text-xs text-muted-foreground">{option.help}</span>
-								</label>
-							</div>
-						{/each}
-					</RadioGroup.Root>
-				</FormField>
-
-				<FormField
-					label="Certificate source"
-					help={lockHint('tls.primary_source', '')}
-					tag={primaryAct.tag}
-					error={primaryAct.error}
-				>
-					<RadioGroup.Root
-						value={String(primarySource)}
-						onValueChange={(v) => setPrimarySource(Number(v) as CertSource)}
-						disabled={primaryAct.busy || locked('tls.primary_source')}
-						class="gap-0 divide-y divide-border/40"
-					>
-						{#each sourceOptions as option (option)}
-							<div class="py-2.5 first:pt-1 last:pb-1">
-								<label class="flex items-center gap-2.5 cursor-pointer" for="src-{option}">
-									<RadioGroup.Item value={String(option)} id="src-{option}" />
-									<span class="text-sm">{certSourceLabels[option]}</span>
-								</label>
-								{#if primarySource === option}
-									<div class="mt-2 ml-7">
-										{#if option === CertSource.MANUAL}
-											<CertMaterialRow
-												title="Server certificate"
-												empty="PEM pair covering {primaryHostname || 'the primary hostname'}"
-												material={material?.appCert}
-												busy={appCertAct.busy}
-												error={appCertAct.error}
-												onUpload={() => (uploadOpen = true)}
-												onRemove={removeAppCert}
-											/>
-										{:else if option === CertSource.APP_CA}
-											{#if material?.appCa}
-												<p class="text-[13px] text-muted-foreground">
-													Serves leaves minted from the instance CA, clients must trust its chain.
-												</p>
-											{:else}
-												<p class="text-[13px] text-amber-600 dark:text-amber-400">
-													No instance CA yet, generate one on the
-													<a href={resolve('/admin/pki')} class="underline hover:text-foreground">Certificate Authority</a> page.
-												</p>
-											{/if}
-										{:else if option === CertSource.ACME}
-											{#if !acmeEnabled}
-												<div class="flex items-center gap-3">
-													<p class="text-[13px] text-amber-600 dark:text-amber-400">ACME is off</p>
-													<Button
-														variant="outline"
-														size="sm"
-														class="h-7"
-														disabled={acmeSwitchAct.busy || locked('acme.enabled')}
-														onclick={() => setAcmeEnabled(true)}
-													>
-														{#if acmeSwitchAct.busy}
-															<Loader2 class="h-3.5 w-3.5 animate-spin" />
-														{:else}
-															Turn on ACME
-														{/if}
-													</Button>
-												</div>
-											{:else}
-												<div class="flex items-center gap-3">
-													<Button
-														variant="outline"
-														size="sm"
-														class="h-7"
-														disabled={issueAppAct.busy}
-														onclick={issueApp}
-													>
-														{#if issueAppAct.busy}
-															<Loader2 class="h-3.5 w-3.5 animate-spin" />
-														{:else}
-															{primaryHealth.issued ? 'Renew certificate' : 'Issue certificate'}
-														{/if}
-													</Button>
-													{#if issueAppAct.error}
-														<p class="text-[13px] text-destructive">{issueAppAct.error}</p>
-													{:else if issueAppAct.saved}
-														<p class="text-[13px] text-primary">Issued</p>
-													{:else if !primaryHealth.issued}
-														<p class="text-[13px] text-muted-foreground">Also issues on the first handshake</p>
-													{/if}
-												</div>
-											{/if}
-										{/if}
-									</div>
-								{/if}
-							</div>
-						{/each}
-					</RadioGroup.Root>
-				</FormField>
-			</div>
-		</FormCard>
-
-		<!-- ACME client -->
-		<FormCard title="ACME Client" description="Automatic certificates from an external CA">
-			<div class="space-y-3">
-				<FormField
-					label="Automatic issuance"
-					horizontal
-					help={lockHint('acme.enabled', acmeSwitchHelp)}
-					tag={acmeSwitchAct.tag}
-					error={acmeSwitchAct.error}
-				>
-					<Switch
-						checked={acmeEnabled}
-						disabled={acmeSwitchAct.busy || locked('acme.enabled')}
-						onCheckedChange={setAcmeEnabled}
-					/>
-				</FormField>
-				{#if acmeEnabled}
-					<div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-						<FormField
-							label="Account email"
-							id="acme-email"
-							help={lockHint('acme.email', 'Receives expiry notices from the CA')}
-							tag={acmeEmailAct.tag}
-							error={acmeEmailAct.error}
-						>
-							<Input
-								id="acme-email"
-								bind:value={acmeEmail}
-								placeholder="admin@example.com"
-								disabled={acmeEmailAct.busy || locked('acme.email')}
-								onblur={commitAcmeEmail}
-								onkeydown={(e) => { if (e.key === 'Enter') commitAcmeEmail(); }}
-							/>
-						</FormField>
-						<FormField
-							label="Directory URL"
-							id="acme-dir"
-							help={lockHint('acme.directory_url', 'Empty uses Lets Encrypt production')}
-							tag={acmeDirAct.tag}
-							error={acmeDirAct.error}
-						>
-							<Input
-								id="acme-dir"
-								bind:value={acmeDirectory}
-								class="font-mono text-xs"
-								placeholder="https://acme-v02.api.letsencrypt.org/directory"
-								disabled={acmeDirAct.busy || locked('acme.directory_url')}
-								onblur={commitAcmeDirectory}
-								onkeydown={(e) => { if (e.key === 'Enter') commitAcmeDirectory(); }}
-							/>
-						</FormField>
-						<FormField
-							label="Challenge port"
-							id="acme-port"
-							help={lockHint('acme.challenge_port', 'Cleartext http-01 listener, empty disables')}
-							tag={acmePortAct.tag}
-							error={acmePortAct.error}
-						>
-							<Input
-								id="acme-port"
-								bind:value={challengePort}
-								class="font-mono text-xs w-28"
-								placeholder="80"
-								disabled={acmePortAct.busy || locked('acme.challenge_port')}
-								onblur={commitChallengePort}
-								onkeydown={(e) => { if (e.key === 'Enter') commitChallengePort(); }}
-							/>
-						</FormField>
-					</div>
+						{primaryHealth.label}
+					</Badge>
+				{:else if primaryBadge}
+					<Badge variant={primaryBadge.variant} class="shrink-0">{primaryBadge.label}</Badge>
 				{/if}
 			</div>
-		</FormCard>
 
-		<!-- Mutual TLS -->
-		<FormCard title="Mutual TLS" description="Require client certificates issued by this instance">
+			<FormField
+				label="Listener mode"
+				help={lockHint('tls.mode', 'Applies live to the primary hostname')}
+				tag={modeAct.tag}
+				error={modeAct.error}
+			>
+				<RadioGroup.Root
+					value={String(tlsMode)}
+					onValueChange={(v) => setTlsMode(Number(v) as TLSMode)}
+					disabled={modeAct.busy || locked('tls.mode')}
+					class="gap-0 divide-y"
+				>
+					{#each modeOptions as option (option.value)}
+						<div class="py-2.5 first:pt-1 last:pb-1">
+							<label class="flex cursor-pointer items-center gap-2.5" for="mode-{option.value}">
+								<RadioGroup.Item value={String(option.value)} id="mode-{option.value}" />
+								<span class="text-sm">{option.label}</span>
+								<span class="text-xs text-muted-foreground">{option.help}</span>
+							</label>
+						</div>
+					{/each}
+				</RadioGroup.Root>
+			</FormField>
+
+			<FormField
+				label="Certificate source"
+				help={lockHint('tls.primary_source', '')}
+				tag={primaryAct.tag}
+				error={primaryAct.error}
+			>
+				<RadioGroup.Root
+					value={String(primarySource)}
+					onValueChange={(v) => setPrimarySource(Number(v) as CertSource)}
+					disabled={primaryAct.busy || locked('tls.primary_source')}
+					class="gap-0 divide-y"
+				>
+					{#each sourceOptions as option (option)}
+						<div class="py-2.5 first:pt-1 last:pb-1">
+							<label class="flex cursor-pointer items-center gap-2.5" for="src-{option}">
+								<RadioGroup.Item value={String(option)} id="src-{option}" />
+								<span class="text-sm">{certSourceLabels[option]}</span>
+							</label>
+							{#if primarySource === option}
+								<div class="mt-2 ml-7 space-y-3">
+									{#if option === CertSource.MANUAL}
+										<CertMaterialRow
+											title="Server certificate"
+											empty="PEM pair covering {primaryHostname || 'the primary hostname'}"
+											material={material?.appCert}
+											busy={appCertAct.busy}
+											error={appCertAct.error}
+											onUpload={() => (uploadOpen = true)}
+											onRemove={removeAppCert}
+										/>
+										<CertUploadPanel
+											bind:open={uploadOpen}
+											title="Upload server certificate"
+											onSubmit={submitUpload}
+										/>
+									{:else if option === CertSource.APP_CA}
+										{#if material?.appCa}
+											<p class="text-sm text-muted-foreground">
+												Serves leaves minted from the instance CA, clients must trust its chain.
+											</p>
+										{:else}
+											<p class="text-sm text-warning">
+												No instance CA yet, generate one on the
+												<a href={resolve('/admin/pki')} class="link">Certificate authority</a> page.
+											</p>
+										{/if}
+									{:else if option === CertSource.ACME}
+										{#if !acmeEnabled}
+											<div class="flex items-center gap-3">
+												<p class="text-sm text-warning">ACME is off</p>
+												<Button
+													variant="outline"
+													size="sm"
+													disabled={acmeSwitchAct.busy || locked('acme.enabled')}
+													onclick={() => setAcmeEnabled(true)}
+												>
+													{#if acmeSwitchAct.busy}
+														<Loader2 class="animate-spin" />
+													{:else}
+														Turn on ACME
+													{/if}
+												</Button>
+											</div>
+										{:else}
+											<div class="flex items-center gap-3">
+												<Button
+													variant="outline"
+													size="sm"
+													disabled={issueAppAct.busy}
+													onclick={issueApp}
+												>
+													{#if issueAppAct.busy}
+														<Loader2 class="animate-spin" />
+													{:else}
+														{primaryHealth.issued ? 'Renew certificate' : 'Issue certificate'}
+													{/if}
+												</Button>
+												{#if issueAppAct.error}
+													<p class="text-sm text-destructive">{issueAppAct.error}</p>
+												{:else if issueAppAct.saved}
+													<p class="text-sm text-success">Issued</p>
+												{:else if !primaryHealth.issued}
+													<p class="text-sm text-muted-foreground">
+														Also issues on the first handshake
+													</p>
+												{/if}
+											</div>
+										{/if}
+									{/if}
+								</div>
+							{/if}
+						</div>
+					{/each}
+				</RadioGroup.Root>
+			</FormField>
+		</FormSection>
+
+		<FormSection title="ACME client" description="Automatic certificates from an external CA.">
+			<FormField
+				label="Automatic issuance"
+				layout="toggle"
+				help={lockHint('acme.enabled', acmeSwitchHelp)}
+				tag={acmeSwitchAct.tag}
+				error={acmeSwitchAct.error}
+			>
+				<Switch
+					checked={acmeEnabled}
+					disabled={acmeSwitchAct.busy || locked('acme.enabled')}
+					onCheckedChange={setAcmeEnabled}
+				/>
+			</FormField>
+			{#if acmeEnabled}
+				<div class="form-subfields">
+					<FormField
+						label="Account email"
+						id="acme-email"
+						span="half"
+						help={lockHint('acme.email', 'Receives expiry notices from the CA')}
+						tag={acmeEmailAct.tag}
+						error={acmeEmailAct.error}
+					>
+						<Input
+							id="acme-email"
+							bind:value={acmeEmail}
+							placeholder="admin@example.com"
+							disabled={acmeEmailAct.busy || locked('acme.email')}
+							onblur={commitAcmeEmail}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') commitAcmeEmail();
+							}}
+						/>
+					</FormField>
+					<FormField
+						label="Directory URL"
+						id="acme-dir"
+						span="half"
+						help={lockHint('acme.directory_url', 'Empty uses Lets Encrypt production')}
+						tag={acmeDirAct.tag}
+						error={acmeDirAct.error}
+					>
+						<Input
+							id="acme-dir"
+							bind:value={acmeDirectory}
+							class="font-mono"
+							placeholder="https://acme-v02.api.letsencrypt.org/directory"
+							disabled={acmeDirAct.busy || locked('acme.directory_url')}
+							onblur={commitAcmeDirectory}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') commitAcmeDirectory();
+							}}
+						/>
+					</FormField>
+					<FormField
+						label="Challenge port"
+						id="acme-port"
+						layout="inline"
+						help={lockHint('acme.challenge_port', 'Cleartext http-01 listener, empty disables')}
+						tag={acmePortAct.tag}
+						error={acmePortAct.error}
+					>
+						<Input
+							id="acme-port"
+							bind:value={challengePort}
+							class="w-28 font-mono"
+							placeholder="80"
+							disabled={acmePortAct.busy || locked('acme.challenge_port')}
+							onblur={commitChallengePort}
+							onkeydown={(e) => {
+								if (e.key === 'Enter') commitChallengePort();
+							}}
+						/>
+					</FormField>
+				</div>
+			{/if}
+		</FormSection>
+
+		<FormSection
+			title="Mutual TLS"
+			description="Require client certificates issued by this instance."
+		>
 			<FormField
 				label="Client certificate policy"
 				help={lockHint('tls.mtls_mode', 'Applies to the primary hostname, portals can override')}
@@ -424,11 +484,11 @@
 					value={String(mtlsMode)}
 					onValueChange={(v) => setMtlsMode(Number(v) as MTLSMode)}
 					disabled={mtlsAct.busy || locked('tls.mtls_mode')}
-					class="gap-0 divide-y divide-border/40"
+					class="gap-0 divide-y"
 				>
 					{#each mtlsOptions as option (option.value)}
 						<div class="py-2.5 first:pt-1 last:pb-1">
-							<label class="flex items-center gap-2.5 cursor-pointer" for="mtls-{option.value}">
+							<label class="flex cursor-pointer items-center gap-2.5" for="mtls-{option.value}">
 								<RadioGroup.Item value={String(option.value)} id="mtls-{option.value}" />
 								<span class="text-sm">{option.label}</span>
 								<span class="text-xs text-muted-foreground">{option.help}</span>
@@ -437,19 +497,18 @@
 					{/each}
 				</RadioGroup.Root>
 				{#if mtlsMode !== MTLSMode.MTLS_MODE_OFF && !material?.appCa}
-					<p class="text-[13px] text-amber-600 dark:text-amber-400">
+					<p class="text-sm text-warning">
 						Generate the instance CA on the
-						<a href={resolve('/admin/pki')} class="underline hover:text-foreground">Certificate Authority</a>
+						<a href={resolve('/admin/pki')} class="link">Certificate authority</a>
 						page so client certificates can be verified.
 					</p>
 				{:else if mtlsMode === MTLSMode.MTLS_MODE_REQUIRED}
-					<p class="text-[13px] text-muted-foreground">
-						Clients need a certificate issued by this instance's CA — sign one from a CSR or an organization CA.
+					<p class="text-sm text-muted-foreground">
+						Clients need a certificate issued by this instance's CA, sign one from a CSR or an
+						organization CA.
 					</p>
 				{/if}
 			</FormField>
-		</FormCard>
-	</div>
+		</FormSection>
+	</FormPage>
 {/if}
-
-<CertUploadPanel bind:open={uploadOpen} title="Upload Server Certificate" onSubmit={submitUpload} />

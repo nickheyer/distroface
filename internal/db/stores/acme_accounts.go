@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 
 	"github.com/nickheyer/distroface/internal/db"
 	"gorm.io/gorm"
@@ -11,7 +12,7 @@ import (
 func (s *Store) GetACMEAccount(ctx context.Context, id string) (*db.ACMEAccount, error) {
 	var acct db.ACMEAccount
 	err := s.db.WithContext(ctx).First(&acct, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {

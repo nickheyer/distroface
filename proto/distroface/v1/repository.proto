@@ -33,6 +33,21 @@ service RepositoryService {
   rpc UnstarRepository(UnstarRepositoryRequest) returns (UnstarRepositoryResponse) {}
   // ListStarredRepositories returns the current user's starred repositories.
   rpc ListStarredRepositories(ListStarredRepositoriesRequest) returns (ListStarredRepositoriesResponse) {}
+  // MoveRepository renames a repository or transfers it to another namespace.
+  rpc MoveRepository(MoveRepositoryRequest) returns (MoveRepositoryResponse) {}
+}
+
+// MoveRepositoryRequest renames or transfers a repository, empty fields keep the current value.
+message MoveRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+  string new_namespace = 3;
+  string new_name = 4;
+}
+
+// MoveRepositoryResponse contains the repository at its new address.
+message MoveRepositoryResponse {
+  Repository repository = 1;
 }
 
 // CreateRepositoryRequest describes a repository to create.

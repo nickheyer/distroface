@@ -171,7 +171,7 @@ func (c *Client) listArtifactRepos(ctx context.Context, namespace string) ([]Art
 // ── Artifacts ────────────────────────────────────────────────────────────
 
 // Rpc bookends the transfer, bytes stream over http
-func (c *Client) uploadArtifact(ctx context.Context, ref RepoRef, filePath, version, artifactPath string, properties map[string]string) error {
+func (c *Client) uploadArtifact(ctx context.Context, ref RepoRef, filePath, version, artifactPath string, properties map[string]string) (*v1.Artifact, error) {
 	rpc := c.Artifacts()
 
 	initResp, err := rpc.InitiateArtifactUpload(ctx, &v1.InitiateArtifactUploadRequest{
@@ -179,26 +179,26 @@ func (c *Client) uploadArtifact(ctx context.Context, ref RepoRef, filePath, vers
 		Namespace: ref.Namespace,
 	})
 	if err != nil {
-		return rpcErr(err)
+		return nil, rpcErr(err)
 	}
 	uploadURL := initResp.GetUploadUrl()
 	if uploadURL == "" {
-		return fmt.Errorf("server did not return an upload location")
+		return nil, fmt.Errorf("server did not return an upload location")
 	}
 
 	file, err := os.Open(filePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer file.Close()
 
 	resp, err := c.doData(ctx, http.MethodPatch, uploadURL, file)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	resp.Body.Close()
 
-	_, err = rpc.CompleteArtifactUpload(ctx, &v1.CompleteArtifactUploadRequest{
+	done, err := rpc.CompleteArtifactUpload(ctx, &v1.CompleteArtifactUploadRequest{
 		RepoName:   ref.Name,
 		Namespace:  ref.Namespace,
 		UploadId:   initResp.GetUploadId(),
@@ -207,9 +207,9 @@ func (c *Client) uploadArtifact(ctx context.Context, ref RepoRef, filePath, vers
 		Properties: properties,
 	})
 	if err != nil {
-		return rpcErr(err)
+		return nil, rpcErr(err)
 	}
-	return nil
+	return done.GetArtifact(), nil
 }
 
 // Archive streaming has no rpc, the v1 query route is the data plane
@@ -234,7 +234,9 @@ func (c *Client) downloadArtifacts(ctx context.Context, ref RepoRef, q url.Value
 	if _, err := io.Copy(tempFile, resp.Body); err != nil {
 		return err
 	}
-	tempFile.Close()
+	if err := tempFile.Close(); err != nil {
+		return err
+	}
 
 	if err := os.MkdirAll(outputPath, 0755); err != nil {
 		return err

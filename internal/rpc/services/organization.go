@@ -10,6 +10,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -18,6 +19,7 @@ import (
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	"github.com/nickheyer/distroface/pkg/utils"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -28,11 +30,12 @@ type OrganizationService struct {
 	registry *registry.RegistryAccess
 	enforcer *rbac.Enforcer
 	res      *settings.Resolver
+	git      *gitrepo.Manager
 	log      *logger.Logger
 }
 
-func NewOrganizationService(store *stores.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, res *settings.Resolver, log *logger.Logger) *OrganizationService {
-	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, res: res, log: log}
+func NewOrganizationService(store *stores.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, res *settings.Resolver, git *gitrepo.Manager, log *logger.Logger) *OrganizationService {
+	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, res: res, log: log, git: git}
 }
 
 func (s *OrganizationService) CreateOrganization(ctx context.Context, req *v1.CreateOrganizationRequest) (*v1.CreateOrganizationResponse, error) {
@@ -46,8 +49,8 @@ func (s *OrganizationService) CreateOrganization(ctx context.Context, req *v1.Cr
 		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	if !usernameRegex.MatchString(msg.Name) {
-		return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid organization name")
+	if !utils.NamespaceAllowed(msg.Name) {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "organization name is invalid or reserved")
 	}
 
 	// Org name must not collide with existing usernames
@@ -86,9 +89,12 @@ func (s *OrganizationService) CreateOrganization(ctx context.Context, req *v1.Cr
 	if err := s.store.AddOrgMember(ctx, member); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	if _, err := s.store.EnsureDefaultTeam(ctx, org.ID); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
 
 	return &v1.CreateOrganizationResponse{
-		Organization: orgToProto(org, 1, storage.OrgRoleOwner),
+		Organization: s.withTeamsCount(ctx, orgToProto(org, 1, storage.OrgRoleOwner)),
 	}, nil
 }
 
@@ -121,7 +127,7 @@ func (s *OrganizationService) GetOrganization(ctx context.Context, req *v1.GetOr
 	memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
 
 	return &v1.GetOrganizationResponse{
-		Organization: orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID)),
+		Organization: s.withTeamsCount(ctx, orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID))),
 	}, nil
 }
 
@@ -135,7 +141,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *v1.Lis
 		resp := &v1.ListOrganizationsResponse{Page: &v1.PageInfo{}}
 		if org != nil {
 			memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
-			resp.Organizations = []*v1.Organization{orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID))}
+			resp.Organizations = []*v1.Organization{s.withTeamsCount(ctx, orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID)))}
 			resp.Page.TotalCount = 1
 		}
 		return resp, nil
@@ -166,7 +172,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *v1.Lis
 	protoOrgs := make([]*v1.Organization, len(orgs))
 	for i, o := range orgs {
 		memberCount, _ := s.store.GetOrgMemberCount(ctx, o.ID)
-		protoOrgs[i] = orgToProto(o, int32(memberCount), roles[o.ID])
+		protoOrgs[i] = s.withTeamsCount(ctx, orgToProto(o, int32(memberCount), roles[o.ID]))
 	}
 
 	return &v1.ListOrganizationsResponse{
@@ -244,6 +250,16 @@ func (s *OrganizationService) DeleteOrganization(ctx context.Context, req *v1.De
 		member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if member == nil || member.Role != storage.OrgRoleOwner {
 			return nil, connect.NewError(connect.CodePermissionDenied, "")
+		}
+	}
+
+	// Git repositories and their linked packages go through the git manager
+	if s.git != nil {
+		repos, _ := s.store.ListGitRepositoriesByNamespace(ctx, org.Name)
+		for _, repo := range repos {
+			if err := s.git.Delete(ctx, user, repo, true); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+			}
 		}
 	}
 
@@ -537,6 +553,14 @@ func orgToProto(o *storage.Organization, memberCount int32, currentRole string) 
 		proto.CurrentUserRole = stringToOrgRole(currentRole)
 	}
 	return proto
+}
+
+// Fills the team count of an organization
+func (s *OrganizationService) withTeamsCount(ctx context.Context, p *v1.Organization) *v1.Organization {
+	if n, err := s.store.CountOrgTeams(ctx, p.Id); err == nil {
+		p.TeamsCount = int32(n)
+	}
+	return p
 }
 
 // Caller's membership role in an org, empty when anonymous or not a member

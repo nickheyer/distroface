@@ -32,6 +32,12 @@ export class OrgContext {
 		);
 	}
 
+	// Mirrors backend CanCreateInNamespace, members may hold it through a team
+	get canCreateRepos(): boolean {
+		if (this.canAdmin) return true;
+		return this.org?.currentUserRole === OrgRole.MEMBER || authStore.hasPermission('git', 'manage');
+	}
+
 	async load(name: string) {
 		this.name = name;
 		this.loading = true;

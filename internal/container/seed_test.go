@@ -26,8 +26,9 @@ func TestSeedPoliciesRunsOnce(t *testing.T) {
 	if err := seedPolicies(ctx, store, enforcer, log); err != nil {
 		t.Fatalf("seedPolicies: %v", err)
 	}
-	if got := len(enforcer.GetPermissionsForRole("anonymous")); got != 4 {
-		t.Fatalf("first seed gave anonymous %d grants, want 4", got)
+	// Images read and pull plus git read and pull
+	if got := len(enforcer.GetPermissionsForRole("anonymous")); got != 6 {
+		t.Fatalf("first seed gave anonymous %d grants, want 6", got)
 	}
 
 	// Admin strips the anonymous role, restarts must not restore it

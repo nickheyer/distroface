@@ -58,6 +58,158 @@ type RepositoryPayload struct {
 	FullName  string `json:"full_name"`
 }
 
+// ── Git payloads ─────────────────────────────────────────────────────────
+
+// Who triggered a git webhook
+type Sender struct {
+	Username    string `json:"username"`
+	DisplayName string `json:"display_name,omitempty"`
+}
+
+// Repository section of every git webhook
+type GitRepoPayload struct {
+	Namespace     string `json:"namespace"`
+	Name          string `json:"name"`
+	FullName      string `json:"full_name"`
+	CloneURL      string `json:"clone_url"`
+	SSHURL        string `json:"ssh_url,omitempty"`
+	HTMLURL       string `json:"html_url"`
+	Private       bool   `json:"private"`
+	DefaultBranch string `json:"default_branch"`
+}
+
+// Name and email of a commit party
+type Person struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// One commit in a push payload
+type CommitPayload struct {
+	SHA       string `json:"sha"`
+	Message   string `json:"message"`
+	URL       string `json:"url"`
+	Author    Person `json:"author"`
+	Committer Person `json:"committer"`
+	Timestamp string `json:"timestamp"`
+}
+
+// Push details
+type PushPayload struct {
+	Ref        string          `json:"ref"`
+	Before     string          `json:"before"`
+	After      string          `json:"after"`
+	Forced     bool            `json:"forced"`
+	Pusher     string          `json:"pusher"`
+	Commits    []CommitPayload `json:"commits"`
+	Truncated  bool            `json:"truncated"`
+	CompareURL string          `json:"compare_url"`
+}
+
+// Branch or tag details
+type RefPayload struct {
+	Ref  string `json:"ref"`
+	Name string `json:"name"`
+	SHA  string `json:"sha"`
+}
+
+// Wiki change details
+type WikiPayload struct {
+	Action string `json:"action"`
+	Ref    string `json:"ref"`
+	Before string `json:"before"`
+	After  string `json:"after"`
+	Page   string `json:"page,omitempty"`
+}
+
+// Issue details shared by issue and pull request payloads
+type IssuePayload struct {
+	Number    int64    `json:"number"`
+	Title     string   `json:"title"`
+	Body      string   `json:"body"`
+	State     string   `json:"state"`
+	Labels    []string `json:"labels"`
+	Assignees []string `json:"assignees"`
+	Milestone string   `json:"milestone,omitempty"`
+	Author    string   `json:"author"`
+	URL       string   `json:"url"`
+	IsPull    bool     `json:"is_pull"`
+}
+
+// Comment details
+type CommentPayload struct {
+	ID     string `json:"id"`
+	Body   string `json:"body"`
+	Author string `json:"author"`
+	Path   string `json:"path,omitempty"`
+	Line   int    `json:"line,omitempty"`
+}
+
+// Pull request details
+type PullRequestPayload struct {
+	Number      int64  `json:"number"`
+	Title       string `json:"title"`
+	Base        string `json:"base"`
+	Head        string `json:"head"`
+	HeadRepo    string `json:"head_repo"`
+	HeadSHA     string `json:"head_sha"`
+	Draft       bool   `json:"draft"`
+	Merged      bool   `json:"merged"`
+	MergeCommit string `json:"merge_commit,omitempty"`
+	URL         string `json:"url"`
+	Author      string `json:"author"`
+}
+
+// Review details
+type ReviewPayload struct {
+	ID       string `json:"id"`
+	State    string `json:"state"`
+	Body     string `json:"body"`
+	Reviewer string `json:"reviewer"`
+}
+
+// Release details
+type ReleasePayload struct {
+	Tag        string   `json:"tag"`
+	Name       string   `json:"name"`
+	Body       string   `json:"body"`
+	Draft      bool     `json:"draft"`
+	Prerelease bool     `json:"prerelease"`
+	Assets     []string `json:"assets"`
+	Images     []string `json:"images"`
+	URL        string   `json:"url"`
+}
+
+// Workflow run details
+type WorkflowRunPayload struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Number     int64  `json:"number"`
+	Event      string `json:"event"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	URL        string `json:"url"`
+}
+
+// GitPayload is the body of every git webhook
+type GitPayload struct {
+	Event       string              `json:"event"`
+	Action      string              `json:"action,omitempty"`
+	Timestamp   string              `json:"timestamp"`
+	Repository  GitRepoPayload      `json:"repository"`
+	Sender      Sender              `json:"sender"`
+	Push        *PushPayload        `json:"push,omitempty"`
+	Ref         *RefPayload         `json:"ref,omitempty"`
+	Wiki        *WikiPayload        `json:"wiki,omitempty"`
+	Issue       *IssuePayload       `json:"issue,omitempty"`
+	Comment     *CommentPayload     `json:"comment,omitempty"`
+	PullRequest *PullRequestPayload `json:"pull_request,omitempty"`
+	Review      *ReviewPayload      `json:"review,omitempty"`
+	Release     *ReleasePayload     `json:"release,omitempty"`
+	Forkee      *GitRepoPayload     `json:"forkee,omitempty"`
+	WorkflowRun *WorkflowRunPayload `json:"workflow_run,omitempty"`
+}
+
 // Dispatcher handles async webhook delivery with retries.
 type Dispatcher struct {
 	store  *stores.Store
@@ -127,6 +279,38 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event, namespace, name string
 	}
 }
 
+// DispatchGit finds webhooks for a git repository and delivers the payload asynchronously.
+func (d *Dispatcher) DispatchGit(ctx context.Context, event, gitRepoID, namespace string, payload GitPayload) {
+	webhooks, err := d.store.GetActiveWebhooksForGitRepo(ctx, gitRepoID, namespace)
+	if err != nil {
+		d.log.Error("webhook: failed to get webhooks for git repo %s: %v", gitRepoID, err)
+		return
+	}
+	if len(webhooks) == 0 {
+		return
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		d.log.Error("webhook: failed to marshal git payload: %v", err)
+		return
+	}
+	for _, wh := range webhooks {
+		if !webhookMatchesEvent(wh, event) {
+			continue
+		}
+		whBody := body
+		if wh.PayloadTemplate != "" {
+			rendered, err := RenderTemplate(wh.PayloadTemplate, payload)
+			if err != nil {
+				d.log.Error("webhook: template render failed for %s, using default payload: %v", wh.URL, err)
+			} else {
+				whBody = rendered
+			}
+		}
+		go d.deliverWithRetry(wh, whBody, event)
+	}
+}
+
 // Redeliver re-sends a past delivery's payload.
 func (d *Dispatcher) Redeliver(ctx context.Context, deliveryID string) (*db.WebhookDelivery, error) {
 	delivery, err := d.store.GetWebhookDelivery(ctx, deliveryID)
@@ -150,7 +334,7 @@ func (d *Dispatcher) Redeliver(ctx context.Context, deliveryID string) (*db.Webh
 }
 
 func (d *Dispatcher) deliverWithRetry(wh *db.Webhook, body []byte, event string) {
-	for attempt := 0; attempt < maxRetries; attempt++ {
+	for attempt := range maxRetries {
 		if attempt > 0 {
 			time.Sleep(retryDelay(attempt))
 		}

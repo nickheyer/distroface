@@ -36,7 +36,46 @@ service AuthService {
   rpc BulkDeleteInvites(BulkDeleteInvitesRequest) returns (BulkDeleteInvitesResponse) {}
   // ValidateInvite checks if an invite code is valid (public).
   rpc ValidateInvite(ValidateInviteRequest) returns (ValidateInviteResponse) {}
+  // RequestPasswordReset mails a reset link, always answers success (public).
+  rpc RequestPasswordReset(RequestPasswordResetRequest) returns (RequestPasswordResetResponse) {}
+  // ResetPassword sets a new password from a mailed token (public).
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse) {}
+  // RequestEmailVerification mails a verification link to the current user.
+  rpc RequestEmailVerification(RequestEmailVerificationRequest) returns (RequestEmailVerificationResponse) {}
+  // VerifyEmail confirms an address from a mailed token (public).
+  rpc VerifyEmail(VerifyEmailRequest) returns (VerifyEmailResponse) {}
 }
+
+// RequestPasswordResetRequest names the account by username or email.
+message RequestPasswordResetRequest {
+  string identifier = 1;
+}
+
+// RequestPasswordResetResponse is empty whether or not the account exists.
+message RequestPasswordResetResponse {}
+
+// ResetPasswordRequest carries the mailed token and the new password.
+message ResetPasswordRequest {
+  string token = 1;
+  string new_password = 2;
+}
+
+// ResetPasswordResponse is empty on success.
+message ResetPasswordResponse {}
+
+// RequestEmailVerificationRequest is empty, the user comes from the session.
+message RequestEmailVerificationRequest {}
+
+// RequestEmailVerificationResponse is empty on success.
+message RequestEmailVerificationResponse {}
+
+// VerifyEmailRequest carries the mailed token.
+message VerifyEmailRequest {
+  string token = 1;
+}
+
+// VerifyEmailResponse is empty on success.
+message VerifyEmailResponse {}
 
 // RegisterRequest contains the fields needed to create a new account.
 message RegisterRequest {
@@ -101,6 +140,8 @@ message GetAuthStatusResponse {
   bool registration_enabled = 3;
   bool anonymous_access = 4;
   bool first_user_setup = 5;
+  // Password reset links can be mailed
+  bool password_reset_enabled = 6;
 }
 
 // GetOIDCLoginURLRequest is empty.
@@ -118,6 +159,8 @@ message CreateInviteRequest {
   optional string pin = 3;
   optional int32 max_uses = 4;
   optional int32 expires_in_hours = 5;
+  // Addresses that receive the invite link by mail
+  repeated string emails = 6;
 }
 
 // CreateInviteResponse returns the created invite with its code.

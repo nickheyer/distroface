@@ -8,14 +8,37 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 )
 
+// Answers whether the linked source repository grants an action on a package
+type LinkedAccess interface {
+	LinkedRepoAllows(ctx context.Context, user *AuthenticatedUser, gitRepoID string, action string) bool
+}
+
 // Image repo access rules for token endpoint and rpc
 type RepoAccess struct {
 	store    *stores.Store
 	enforcer *rbac.Enforcer
+	linked   LinkedAccess
 }
 
 func NewRepoAccess(store *stores.Store, enforcer *rbac.Enforcer) *RepoAccess {
 	return &RepoAccess{store: store, enforcer: enforcer}
+}
+
+// Installs the source repository access hook, set once at startup
+func (a *RepoAccess) SetLinkedAccess(l LinkedAccess) {
+	a.linked = l
+}
+
+// Full name of the linked source repo, empty when standalone
+func (a *RepoAccess) sourceName(ctx context.Context, repo *storage.Repository) string {
+	if repo.GitRepoID == nil {
+		return ""
+	}
+	g, err := a.store.GetGitRepositoryByID(ctx, *repo.GitRepoID)
+	if err != nil || g == nil {
+		return ""
+	}
+	return g.Namespace + "/" + g.Name
 }
 
 // Namespace owner or org member
@@ -35,7 +58,18 @@ func (a *RepoAccess) HasRepoAccess(ctx context.Context, user *AuthenticatedUser,
 	if user == nil || repo == nil {
 		return false
 	}
+	if user.IsScoped() {
+		if !ScopeAllows(user, action, repo.Namespace+"/"+repo.Name, repo.Namespace, a.sourceName(ctx, repo)) {
+			return false
+		}
+		if user.IsDeployKey() {
+			return repo.GitRepoID != nil && a.linked != nil && a.linked.LinkedRepoAllows(ctx, user, *repo.GitRepoID, action)
+		}
+	}
 	if !user.IsAnonymous() && repo.OwnerID != "" && repo.OwnerID == user.ID {
+		return true
+	}
+	if repo.GitRepoID != nil && a.linked != nil && a.linked.LinkedRepoAllows(ctx, user, *repo.GitRepoID, action) {
 		return true
 	}
 	if isMember, role := a.related(ctx, user, repo.Namespace); isMember {
@@ -60,6 +94,9 @@ func (a *RepoAccess) Can(ctx context.Context, user *AuthenticatedUser, repo *sto
 	if repo.IsPrivate {
 		return a.HasRepoAccess(ctx, user, repo, action)
 	}
+	if user.IsScoped() && !ScopeAllows(user, action, repo.Namespace+"/"+repo.Name, repo.Namespace, a.sourceName(ctx, repo)) {
+		return false
+	}
 	if a.enforcer.HasPermission(user.Roles, rbac.ResourceRepositories, action) {
 		return true
 	}
@@ -67,7 +104,13 @@ func (a *RepoAccess) Can(ctx context.Context, user *AuthenticatedUser, repo *sto
 	return isMember
 }
 
-// Public repos or any read relationship
+// Public repos or any read relationship, scoped credentials only their object
 func (a *RepoAccess) CanSee(ctx context.Context, user *AuthenticatedUser, repo *storage.Repository) bool {
-	return repo != nil && (!repo.IsPrivate || a.HasRepoAccess(ctx, user, repo, rbac.ActionRead))
+	if repo == nil {
+		return false
+	}
+	if user != nil && user.IsScoped() && !ScopeAllows(user, rbac.ActionRead, repo.Namespace+"/"+repo.Name, repo.Namespace, a.sourceName(ctx, repo)) {
+		return false
+	}
+	return !repo.IsPrivate || a.HasRepoAccess(ctx, user, repo, rbac.ActionRead)
 }

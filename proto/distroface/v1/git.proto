@@ -1,0 +1,1764 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// GitService manages git repositories, their settings, links, stars, and collaborators.
+// Clone, fetch, and push themselves are plain git over https and ssh.
+service GitService {
+  // CreateGitRepository creates an empty, initialized, mirrored, or forked repository.
+  rpc CreateGitRepository(CreateGitRepositoryRequest) returns (CreateGitRepositoryResponse) {}
+  // GetGitRepository returns one repository with the caller's access per unit.
+  rpc GetGitRepository(GetGitRepositoryRequest) returns (GetGitRepositoryResponse) {}
+  // ListGitRepositories returns repositories visible to the caller.
+  rpc ListGitRepositories(ListGitRepositoriesRequest) returns (ListGitRepositoriesResponse) {}
+  // SearchGitRepositories searches name, description, and topics across visible repositories.
+  rpc SearchGitRepositories(SearchGitRepositoriesRequest) returns (SearchGitRepositoriesResponse) {}
+  // UpdateGitRepository changes metadata, units, merge settings, and mirror configuration.
+  rpc UpdateGitRepository(UpdateGitRepositoryRequest) returns (UpdateGitRepositoryResponse) {}
+  // DeleteGitRepository removes the repository and optionally its linked packages.
+  rpc DeleteGitRepository(DeleteGitRepositoryRequest) returns (DeleteGitRepositoryResponse) {}
+  // MoveGitRepository renames or transfers a repository, linked packages follow.
+  rpc MoveGitRepository(MoveGitRepositoryRequest) returns (MoveGitRepositoryResponse) {}
+  // AcceptTransfer completes a pending transfer into the caller's namespace.
+  rpc AcceptTransfer(AcceptTransferRequest) returns (AcceptTransferResponse) {}
+  // RejectTransfer cancels a pending transfer.
+  rpc RejectTransfer(RejectTransferRequest) returns (RejectTransferResponse) {}
+  // ArchiveGitRepository makes a repository read only.
+  rpc ArchiveGitRepository(ArchiveGitRepositoryRequest) returns (ArchiveGitRepositoryResponse) {}
+  // UnarchiveGitRepository restores writes.
+  rpc UnarchiveGitRepository(UnarchiveGitRepositoryRequest) returns (UnarchiveGitRepositoryResponse) {}
+  // ForkGitRepository copies a repository into another namespace.
+  rpc ForkGitRepository(ForkGitRepositoryRequest) returns (ForkGitRepositoryResponse) {}
+  // SyncFork fast forwards the fork's default branch from its parent.
+  rpc SyncFork(SyncForkRequest) returns (SyncForkResponse) {}
+  // ListForks returns the forks of a repository.
+  rpc ListForks(ListForksRequest) returns (ListForksResponse) {}
+  // UseTemplate creates a repository from a template repository.
+  rpc UseTemplate(UseTemplateRequest) returns (UseTemplateResponse) {}
+  // SetTopics replaces the topic list.
+  rpc SetTopics(SetTopicsRequest) returns (SetTopicsResponse) {}
+  // StarGitRepository stars a repository for the current user.
+  rpc StarGitRepository(StarGitRepositoryRequest) returns (StarGitRepositoryResponse) {}
+  // UnstarGitRepository removes the current user's star.
+  rpc UnstarGitRepository(UnstarGitRepositoryRequest) returns (UnstarGitRepositoryResponse) {}
+  // ListStarredGitRepositories returns the current user's starred repositories.
+  rpc ListStarredGitRepositories(ListStarredGitRepositoriesRequest) returns (ListStarredGitRepositoriesResponse) {}
+  // WatchGitRepository sets the caller's watch mode.
+  rpc WatchGitRepository(WatchGitRepositoryRequest) returns (WatchGitRepositoryResponse) {}
+  // SyncGitRepository starts an immediate mirror sync in the background.
+  rpc SyncGitRepository(SyncGitRepositoryRequest) returns (SyncGitRepositoryResponse) {}
+  // StopGitRepositorySync cancels a running mirror sync or import
+  rpc StopGitRepositorySync(StopGitRepositorySyncRequest) returns (StopGitRepositorySyncResponse) {}
+  // DismissGitImport stops a running import and forgets its record
+  rpc DismissGitImport(DismissGitImportRequest) returns (DismissGitImportResponse) {}
+  // GenerateMirrorKey creates the ssh key pair used for ssh upstreams.
+  rpc GenerateMirrorKey(GenerateMirrorKeyRequest) returns (GenerateMirrorKeyResponse) {}
+  // ListPushMirrors returns the push mirrors of a repository.
+  rpc ListPushMirrors(ListPushMirrorsRequest) returns (ListPushMirrorsResponse) {}
+  // CreatePushMirror adds a remote the repository pushes to.
+  rpc CreatePushMirror(CreatePushMirrorRequest) returns (CreatePushMirrorResponse) {}
+  // UpdatePushMirror changes a push mirror.
+  rpc UpdatePushMirror(UpdatePushMirrorRequest) returns (UpdatePushMirrorResponse) {}
+  // DeletePushMirror removes a push mirror.
+  rpc DeletePushMirror(DeletePushMirrorRequest) returns (DeletePushMirrorResponse) {}
+  // SyncPushMirror pushes to one mirror now.
+  rpc SyncPushMirror(SyncPushMirrorRequest) returns (SyncPushMirrorResponse) {}
+  // ListLinkedRepositories returns the image and artifact repositories linked to a repository.
+  rpc ListLinkedRepositories(ListLinkedRepositoriesRequest) returns (ListLinkedRepositoriesResponse) {}
+  // LinkRepository links an image or artifact repository in the same namespace.
+  rpc LinkRepository(LinkRepositoryRequest) returns (LinkRepositoryResponse) {}
+  // UnlinkRepository removes a package link.
+  rpc UnlinkRepository(UnlinkRepositoryRequest) returns (UnlinkRepositoryResponse) {}
+  // ListCollaborators returns per repository collaborators.
+  rpc ListCollaborators(ListCollaboratorsRequest) returns (ListCollaboratorsResponse) {}
+  // AddCollaborator invites a user with a permission level.
+  rpc AddCollaborator(AddCollaboratorRequest) returns (AddCollaboratorResponse) {}
+  // UpdateCollaborator changes a collaborator's permission.
+  rpc UpdateCollaborator(UpdateCollaboratorRequest) returns (UpdateCollaboratorResponse) {}
+  // RemoveCollaborator removes a collaborator.
+  rpc RemoveCollaborator(RemoveCollaboratorRequest) returns (RemoveCollaboratorResponse) {}
+  // AcceptCollaboration accepts a pending collaborator invitation.
+  rpc AcceptCollaboration(AcceptCollaborationRequest) returns (AcceptCollaborationResponse) {}
+  // GetRepositoryActivity returns weekly commit counts for the last year.
+  rpc GetRepositoryActivity(GetRepositoryActivityRequest) returns (GetRepositoryActivityResponse) {}
+  // GetRepositoryLanguages returns bytes per detected language on the default branch.
+  rpc GetRepositoryLanguages(GetRepositoryLanguagesRequest) returns (GetRepositoryLanguagesResponse) {}
+  // ListContributors aggregates commits by author.
+  rpc ListContributors(ListContributorsRequest) returns (ListContributorsResponse) {}
+  // RunMaintenance repacks and prunes one repository now.
+  rpc RunMaintenance(RunMaintenanceRequest) returns (RunMaintenanceResponse) {}
+  // ListTransfers returns pending transfers addressed to the caller.
+  rpc ListTransfers(ListTransfersRequest) returns (ListTransfersResponse) {}
+}
+
+// GitRefService manages branches, tags, and their protection rules.
+service GitRefService {
+  // ListBranches returns branches with their tip commit and distance from the default branch.
+  rpc ListBranches(ListBranchesRequest) returns (ListBranchesResponse) {}
+  // GetBranch returns one branch.
+  rpc GetBranch(GetBranchRequest) returns (GetBranchResponse) {}
+  // CreateBranch creates a branch from a ref or sha.
+  rpc CreateBranch(CreateBranchRequest) returns (CreateBranchResponse) {}
+  // DeleteBranch deletes a branch.
+  rpc DeleteBranch(DeleteBranchRequest) returns (DeleteBranchResponse) {}
+  // RenameBranch renames a branch, retargeting pull requests and the default branch.
+  rpc RenameBranch(RenameBranchRequest) returns (RenameBranchResponse) {}
+  // ListGitTags returns tags in natural version order, newest first.
+  rpc ListGitTags(ListGitTagsRequest) returns (ListGitTagsResponse) {}
+  // GetTag returns one tag.
+  rpc GetTag(GetTagRequest) returns (GetTagResponse) {}
+  // CreateTag creates a lightweight or annotated tag.
+  rpc CreateTag(CreateTagRequest) returns (CreateTagResponse) {}
+  // DeleteTag deletes a tag.
+  rpc DeleteTag(DeleteTagRequest) returns (DeleteTagResponse) {}
+  // SetBranchProtection creates or replaces a protection rule.
+  rpc SetBranchProtection(SetBranchProtectionRequest) returns (SetBranchProtectionResponse) {}
+  // ListBranchProtections returns the protection rules of a repository.
+  rpc ListBranchProtections(ListBranchProtectionsRequest) returns (ListBranchProtectionsResponse) {}
+  // DeleteBranchProtection removes a protection rule.
+  rpc DeleteBranchProtection(DeleteBranchProtectionRequest) returns (DeleteBranchProtectionResponse) {}
+  // SetTagProtection creates or replaces a tag protection rule.
+  rpc SetTagProtection(SetTagProtectionRequest) returns (SetTagProtectionResponse) {}
+  // ListTagProtections returns the tag protection rules of a repository.
+  rpc ListTagProtections(ListTagProtectionsRequest) returns (ListTagProtectionsResponse) {}
+  // DeleteTagProtection removes a tag protection rule.
+  rpc DeleteTagProtection(DeleteTagProtectionRequest) returns (DeleteTagProtectionResponse) {}
+}
+
+// GitFileService reads trees, blobs, commits, diffs, and blame, and writes files from the web.
+service GitFileService {
+  // GetTree lists one directory of a tree.
+  rpc GetTree(GetTreeRequest) returns (GetTreeResponse) {}
+  // GetBlob returns one file with content inline up to one megabyte.
+  rpc GetBlob(GetBlobRequest) returns (GetBlobResponse) {}
+  // GetReadme finds and returns the readme for a directory.
+  rpc GetReadme(GetReadmeRequest) returns (GetReadmeResponse) {}
+  // ListCommits pages the history of a ref, optionally filtered by path or author.
+  rpc ListCommits(ListCommitsRequest) returns (ListCommitsResponse) {}
+  // GetCommit returns one commit with stats, verification, and statuses.
+  rpc GetCommit(GetCommitRequest) returns (GetCommitResponse) {}
+  // GetCommitDiff pages the files one commit changed against a parent, hunks excluded.
+  rpc GetCommitDiff(GetCommitDiffRequest) returns (GetCommitDiffResponse) {}
+  // CompareRefs returns the shas, merge base, distance, and change totals between two refs.
+  rpc CompareRefs(CompareRefsRequest) returns (CompareRefsResponse) {}
+  // ListCompareCommits pages the commits head adds on top of base, oldest first.
+  rpc ListCompareCommits(ListCompareCommitsRequest) returns (ListCompareCommitsResponse) {}
+  // GetCompareDiff pages the files changed between two refs, hunks excluded.
+  rpc GetCompareDiff(GetCompareDiffRequest) returns (GetCompareDiffResponse) {}
+  // GetDiffFile returns the hunks of one file between two refs.
+  rpc GetDiffFile(GetDiffFileRequest) returns (GetDiffFileResponse) {}
+  // Blame attributes each line of a file to a commit.
+  rpc Blame(BlameRequest) returns (BlameResponse) {}
+  // SearchCode greps one ref of a repository.
+  rpc SearchCode(SearchCodeRequest) returns (SearchCodeResponse) {}
+  // UpdateFiles commits a batch of file operations to a branch.
+  rpc UpdateFiles(UpdateFilesRequest) returns (UpdateFilesResponse) {}
+  // RevertCommit commits the inverse of a commit onto a branch.
+  rpc RevertCommit(RevertCommitRequest) returns (RevertCommitResponse) {}
+  // CherryPickCommit applies a commit onto a branch.
+  rpc CherryPickCommit(CherryPickCommitRequest) returns (CherryPickCommitResponse) {}
+  // GetArchiveURL returns the download url for a ref archive.
+  rpc GetArchiveURL(GetArchiveURLRequest) returns (GetArchiveURLResponse) {}
+  // GetTemplates returns issue and pull request templates and codeowners presence.
+  rpc GetTemplates(GetTemplatesRequest) returns (GetTemplatesResponse) {}
+  // CreateCommitStatus records an external check result on a commit.
+  rpc CreateCommitStatus(CreateCommitStatusRequest) returns (CreateCommitStatusResponse) {}
+  // ListCommitStatuses returns every status recorded on a commit.
+  rpc ListCommitStatuses(ListCommitStatusesRequest) returns (ListCommitStatusesResponse) {}
+  // GetCombinedStatus folds the latest status per context into one state.
+  rpc GetCombinedStatus(GetCombinedStatusRequest) returns (GetCombinedStatusResponse) {}
+}
+
+// Repository units a team or collaborator level applies to
+enum GitUnit {
+  GIT_UNIT_UNSPECIFIED = 0;
+  GIT_UNIT_CODE = 1;
+  GIT_UNIT_ISSUES = 2;
+  GIT_UNIT_PULLS = 3;
+  GIT_UNIT_RELEASES = 4;
+  GIT_UNIT_WIKI = 5;
+  GIT_UNIT_PROJECTS = 6;
+  GIT_UNIT_PACKAGES = 7;
+  GIT_UNIT_ACTIONS = 8;
+}
+
+// Access level on a unit or on the repository as a whole
+enum GitAccessLevel {
+  GIT_ACCESS_LEVEL_UNSPECIFIED = 0;
+  GIT_ACCESS_LEVEL_NONE = 1;
+  GIT_ACCESS_LEVEL_READ = 2;
+  GIT_ACCESS_LEVEL_WRITE = 3;
+  GIT_ACCESS_LEVEL_ADMIN = 4;
+  GIT_ACCESS_LEVEL_OWNER = 5;
+}
+
+// How a pull request lands on its base branch
+enum GitMergeMethod {
+  GIT_MERGE_METHOD_UNSPECIFIED = 0;
+  GIT_MERGE_METHOD_MERGE = 1;
+  GIT_MERGE_METHOD_SQUASH = 2;
+  GIT_MERGE_METHOD_REBASE = 3;
+  GIT_MERGE_METHOD_REBASE_MERGE = 4;
+  GIT_MERGE_METHOD_FAST_FORWARD = 5;
+}
+
+// Which events of a repository reach the caller's notifications
+enum WatchMode {
+  WATCH_MODE_UNSPECIFIED = 0;
+  WATCH_MODE_PARTICIPATING = 1;
+  WATCH_MODE_ALL = 2;
+  WATCH_MODE_IGNORE = 3;
+}
+
+// Outcome of checking a commit or tag signature
+enum GitVerificationState {
+  GIT_VERIFICATION_STATE_UNSPECIFIED = 0;
+  GIT_VERIFICATION_STATE_UNSIGNED = 1;
+  GIT_VERIFICATION_STATE_VERIFIED = 2;
+  GIT_VERIFICATION_STATE_UNVERIFIED = 3;
+  GIT_VERIFICATION_STATE_INSTANCE = 4;
+}
+
+// Result of one external or workflow check on a commit
+enum CommitStatusState {
+  COMMIT_STATUS_STATE_UNSPECIFIED = 0;
+  COMMIT_STATUS_STATE_PENDING = 1;
+  COMMIT_STATUS_STATE_SUCCESS = 2;
+  COMMIT_STATUS_STATE_FAILURE = 3;
+  COMMIT_STATUS_STATE_ERROR = 4;
+}
+
+// Kind of change a diff file records
+enum DiffStatus {
+  DIFF_STATUS_UNSPECIFIED = 0;
+  DIFF_STATUS_ADDED = 1;
+  DIFF_STATUS_MODIFIED = 2;
+  DIFF_STATUS_DELETED = 3;
+  DIFF_STATUS_RENAMED = 4;
+  DIFF_STATUS_COPIED = 5;
+  DIFF_STATUS_TYPE_CHANGED = 6;
+}
+
+// Kind of one diff line
+enum DiffLineKind {
+  DIFF_LINE_KIND_UNSPECIFIED = 0;
+  DIFF_LINE_KIND_CONTEXT = 1;
+  DIFF_LINE_KIND_ADD = 2;
+  DIFF_LINE_KIND_DELETE = 3;
+}
+
+// Kind of a linked package
+enum LinkedRepositoryKind {
+  LINKED_REPOSITORY_KIND_UNSPECIFIED = 0;
+  LINKED_REPOSITORY_KIND_IMAGE = 1;
+  LINKED_REPOSITORY_KIND_ARTIFACT = 2;
+}
+
+// Enabled features and external replacements
+message GitRepoUnits {
+  bool issues = 1;
+  bool pulls = 2;
+  bool releases = 3;
+  bool wiki = 4;
+  bool projects = 5;
+  bool packages = 6;
+  bool actions = 7;
+  // Replaces the built in tracker when set
+  string external_issues_url = 8;
+  // Replaces the built in wiki when set
+  string external_wiki_url = 9;
+  // Blocked issues cannot close until their blockers close
+  bool block_on_dependencies = 10;
+  // Manual time entries and time to resolution on issues, off by default
+  bool time_tracking = 11;
+}
+
+// Allowed merge methods and defaults
+message GitMergeSettings {
+  bool allow_merge = 1;
+  bool allow_squash = 2;
+  bool allow_rebase = 3;
+  bool allow_rebase_merge = 4;
+  bool allow_fast_forward = 5;
+  GitMergeMethod default_method = 6;
+  bool delete_branch_on_merge = 7;
+  bool allow_forks = 8;
+}
+
+// Level the caller holds on one unit
+message GitUnitLevel {
+  GitUnit unit = 1;
+  GitAccessLevel level = 2;
+}
+
+// Caller's effective access to a repository
+message GitViewerAccess {
+  repeated GitUnitLevel units = 1;
+  // Settings, collaborators, keys, protections, webhooks
+  bool can_admin = 2;
+  // Delete, transfer, archive
+  bool is_owner = 3;
+}
+
+// GitRepository is a hosted git repository.
+message GitRepository {
+  string id = 1;
+  string namespace = 2;
+  string name = 3;
+  string full_name = 4;
+  string description = 5;
+  string website = 6;
+  Visibility visibility = 7;
+  string owner_id = 8;
+  bool is_org_namespace = 9;
+  string default_branch = 10;
+  // sha1 or sha256
+  string object_format = 11;
+  GitRepoType type = 12;
+  bool is_archived = 13;
+  // Full name of the parent when this is a fork
+  string fork_of = 14;
+  // Full name of the template this was created from
+  string template_of = 15;
+  GitRepoUnits units = 16;
+  bool lfs_enabled = 17;
+  GitMergeSettings merge = 18;
+  int64 size_bytes = 19;
+  int64 lfs_size_bytes = 20;
+  int32 branch_count = 21;
+  int32 tag_count = 22;
+  int64 pull_count = 23;
+  int64 push_count = 24;
+  google.protobuf.Timestamp last_pushed_at = 25;
+  // Computed from the public hostname or the portal host
+  string http_clone_url = 26;
+  // Empty when ssh is disabled
+  string ssh_clone_url = 27;
+  // Present only on mirror repositories, token redacted
+  MirrorConfig mirror = 28;
+  google.protobuf.Timestamp mirror_last_sync = 29;
+  string mirror_last_error = 30;
+  google.protobuf.Timestamp mirror_next_attempt = 31;
+  bool mirror_syncing = 32;
+  // Public half of the generated ssh mirror key, empty when none
+  string mirror_ssh_public_key = 33;
+  int64 star_count = 34;
+  bool is_starred = 35;
+  WatchMode watch_mode = 36;
+  repeated string topics = 37;
+  int64 open_issue_count = 38;
+  int64 open_pull_count = 39;
+  int32 release_count = 40;
+  int32 fork_count = 41;
+  // True when the repository has no commits yet
+  bool is_empty = 42;
+  GitViewerAccess viewer = 43;
+  google.protobuf.Timestamp created_at = 44;
+  google.protobuf.Timestamp updated_at = 45;
+  // Set while an import runs, failed, or left notes
+  GitImportStatus import_status = 46;
+}
+
+// GitImportSource is an upstream copied once into a repository
+message GitImportSource {
+  // Clone url, or owner/repo for GitHub, GitLab, and Gitea
+  string upstream = 1;
+  // Basic auth pair for private https upstreams
+  string username = 2;
+  optional string auth_token = 3;
+  // Issues, pulls, labels, milestones, and releases from known forges
+  bool metadata = 4;
+  bool wiki = 5;
+  bool lfs = 6;
+}
+
+// GitImportStatus describes a one time import of a repository
+message GitImportStatus {
+  string upstream = 1;
+  // fetch, wiki, lfs, labels, milestones, issues, pulls, releases, done
+  string phase = 2;
+  bool running = 3;
+  string error = 4;
+  // What the import skipped or could not reach upstream
+  repeated string notes = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// Author or committer identity on a commit
+message GitSignature {
+  string name = 1;
+  string email = 2;
+  google.protobuf.Timestamp at = 3;
+  // Username of the matching local account, empty when none
+  string username = 4;
+}
+
+// Signature verification outcome
+message GitVerification {
+  GitVerificationState state = 1;
+  // Human readable reason for an unverified result
+  string reason = 2;
+  // Username that owns the signing key when verified
+  string signer = 3;
+  string key_id = 4;
+}
+
+// GitCommit is one commit object.
+message GitCommit {
+  string sha = 1;
+  repeated string parents = 2;
+  GitSignature author = 3;
+  GitSignature committer = 4;
+  string message = 5;
+  string tree_sha = 6;
+  GitVerification verification = 7;
+  int32 additions = 8;
+  int32 deletions = 9;
+  int32 changed_files = 10;
+  // Combined state of the latest statuses, unspecified when none
+  CommitStatusState status = 11;
+}
+
+// GitBranch is one branch with its tip.
+message GitBranch {
+  string name = 1;
+  string sha = 2;
+  GitCommit commit = 3;
+  bool is_default = 4;
+  bool is_protected = 5;
+  int32 ahead = 6;
+  int32 behind = 7;
+}
+
+// GitTag is one tag, annotated or lightweight.
+message GitTag {
+  string name = 1;
+  // Commit the tag points at after peeling
+  string sha = 2;
+  // Tag object sha for annotated tags, empty for lightweight
+  string tag_sha = 3;
+  GitSignature tagger = 4;
+  string message = 5;
+  GitCommit commit = 6;
+  bool has_release = 7;
+  GitVerification verification = 8;
+}
+
+// GitTreeEntry is one row of a directory listing.
+message GitTreeEntry {
+  string name = 1;
+  string path = 2;
+  // Octal file mode such as 100644
+  string mode = 3;
+  // blob, tree, commit for submodules
+  string type = 4;
+  int64 size = 5;
+  string sha = 6;
+  // Present only when the request asked for it
+  GitCommit last_commit = 7;
+  bool is_submodule = 8;
+  bool is_lfs = 9;
+}
+
+// Pointer metadata for a file stored in lfs
+message GitLFSPointer {
+  string oid = 1;
+  int64 size = 2;
+  // Object bytes exist on this server
+  bool present = 3;
+  string download_url = 4;
+}
+
+// GitBlob is one file.
+message GitBlob {
+  string sha = 1;
+  string path = 2;
+  string name = 3;
+  string mode = 4;
+  int64 size = 5;
+  bool is_binary = 6;
+  // Content omitted because the file exceeds the inline cap
+  bool truncated = 7;
+  bytes content = 8;
+  string content_type = 9;
+  bool is_lfs = 10;
+  GitLFSPointer lfs = 11;
+  string raw_url = 12;
+  // Go enry language name, empty when unknown
+  string language = 13;
+}
+
+// One line of a diff hunk
+message DiffLine {
+  DiffLineKind kind = 1;
+  int32 old_number = 2;
+  int32 new_number = 3;
+  string text = 4;
+}
+
+// One hunk of a file diff
+message DiffHunk {
+  int32 old_start = 1;
+  int32 old_lines = 2;
+  int32 new_start = 3;
+  int32 new_lines = 4;
+  string header = 5;
+  repeated DiffLine lines = 6;
+}
+
+// One file of a structured diff
+message DiffFile {
+  string old_path = 1;
+  string new_path = 2;
+  DiffStatus status = 3;
+  string old_mode = 4;
+  string new_mode = 5;
+  bool is_binary = 6;
+  bool is_submodule = 7;
+  bool is_lfs = 8;
+  int32 additions = 9;
+  int32 deletions = 10;
+  // Changed lines exceed the per file cap so hunks are never returned
+  bool truncated = 11;
+  // Present only on single file reads
+  repeated DiffHunk hunks = 12;
+  string old_sha = 13;
+  string new_sha = 14;
+  // Lines in the new blob, zero when unknown
+  int32 new_line_count = 15;
+}
+
+// One page of a structured diff between two trees, totals cover every matching file
+message GitDiff {
+  repeated DiffFile files = 1;
+  int32 total_files = 2;
+  int32 additions = 3;
+  int32 deletions = 4;
+  // Stats and hunks were withheld past the file cap, totals cover only the counted files
+  bool truncated = 5;
+}
+
+// Run of consecutive lines attributed to one commit
+message GitBlameRange {
+  int32 start_line = 1;
+  int32 end_line = 2;
+  GitCommit commit = 3;
+  repeated string lines = 4;
+}
+
+// One matching line of a code search
+message GitGrepMatch {
+  string path = 1;
+  int32 line_number = 2;
+  string line = 3;
+}
+
+// GitBranchProtection is one rule over a branch name glob.
+message GitBranchProtection {
+  string id = 1;
+  string pattern = 2;
+  int32 priority = 3;
+  bool block_force_push = 4;
+  bool block_deletion = 5;
+  bool require_pull_request = 6;
+  int32 required_approvals = 7;
+  bool dismiss_stale_approvals = 8;
+  bool require_code_owner_review = 9;
+  bool require_status_checks = 10;
+  repeated string status_check_contexts = 11;
+  bool require_signed_commits = 12;
+  bool require_linear_history = 13;
+  bool require_up_to_date = 14;
+  // User and team ids, empty allows every writer
+  repeated string allowed_pushers = 15;
+  repeated string allowed_mergers = 16;
+  repeated string bypass_ids = 17;
+}
+
+// GitTagProtection is one rule over a tag name glob.
+message GitTagProtection {
+  string id = 1;
+  string pattern = 2;
+  bool block_deletion = 3;
+  repeated string allowed_pushers = 4;
+}
+
+// GitCollaborator is a user granted a repository level.
+message GitCollaborator {
+  string user_id = 1;
+  string username = 2;
+  string display_name = 3;
+  GitAccessLevel permission = 4;
+  bool accepted = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// One image or artifact repository linked to a source repository
+message LinkedRepository {
+  LinkedRepositoryKind kind = 1;
+  string namespace = 2;
+  string name = 3;
+  string full_name = 4;
+  // Latest tag or version, empty when none
+  string latest = 5;
+  int64 pull_count = 6;
+  bool is_private = 7;
+  // Linked by the naming rule rather than by hand
+  bool linked_by_name = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+// Commit totals for one week
+message GitActivityWeek {
+  google.protobuf.Timestamp week = 1;
+  int32 commits = 2;
+  int32 additions = 3;
+  int32 deletions = 4;
+}
+
+// Bytes of one detected language
+message GitLanguage {
+  string name = 1;
+  int64 bytes = 2;
+  float percent = 3;
+  string color = 4;
+}
+
+// Aggregated commits for one author
+message GitContributor {
+  string username = 1;
+  string display_name = 2;
+  string email = 3;
+  int32 commits = 4;
+  int32 additions = 5;
+  int32 deletions = 6;
+}
+
+// One issue template from the repository tree
+message GitIssueTemplate {
+  string filename = 1;
+  string name = 2;
+  string about = 3;
+  string title = 4;
+  string body = 5;
+  repeated string labels = 6;
+  repeated string assignees = 7;
+  // Body is a yaml form definition
+  bool is_form = 8;
+}
+
+// Commit status recorded by a check
+message GitCommitStatus {
+  string id = 1;
+  string sha = 2;
+  string context = 3;
+  CommitStatusState state = 4;
+  string target_url = 5;
+  string description = 6;
+  string creator = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+// Push mirror configuration and state
+message GitPushMirror {
+  string id = 1;
+  string remote_url = 2;
+  bool has_token = 3;
+  bool use_ssh_key = 4;
+  int32 interval_minutes = 5;
+  bool sync_on_push = 6;
+  google.protobuf.Timestamp last_sync = 7;
+  string last_error = 8;
+  bool syncing = 9;
+}
+
+// Pending transfer of a repository to a user
+message GitTransfer {
+  string id = 1;
+  string repo_id = 2;
+  string full_name = 3;
+  string to_namespace = 4;
+  string requested_by = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// CreateGitRepositoryRequest describes a repository to create.
+message CreateGitRepositoryRequest {
+  // Empty defaults to the caller
+  string namespace = 1;
+  string name = 2;
+  string description = 3;
+  Visibility visibility = 4;
+  // Empty takes the effective default branch setting
+  string default_branch = 5;
+  // sha1 or sha256, empty means sha1
+  string object_format = 6;
+  // Unspecified defaults to standard
+  GitRepoType type = 7;
+  // Required for mirror type
+  MirrorConfig mirror = 8;
+  // Create an initial commit with a readme
+  bool auto_init = 9;
+  // Gitignore template name, requires auto_init
+  string gitignore_template = 10;
+  // License identifier such as MIT, requires auto_init
+  string license = 11;
+  // Also create a linked release mirror package for mirror type
+  bool mirror_releases = 12;
+  // Also create linked image mirrors for mirror type
+  repeated string mirror_images = 13;
+  // Deprecated, imports use import_source and never create mirrors
+  bool import_metadata = 14 [deprecated = true];
+  string website = 15;
+  repeated string topics = 16;
+  // One time upstream copy, standard type, exclusive with mirror
+  GitImportSource import_source = 17;
+}
+
+// CreateGitRepositoryResponse contains the created repository.
+message CreateGitRepositoryResponse {
+  GitRepository repository = 1;
+}
+
+// GetGitRepositoryRequest identifies a repository.
+message GetGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// GetGitRepositoryResponse contains the repository.
+message GetGitRepositoryResponse {
+  GitRepository repository = 1;
+}
+
+// ListGitRepositoriesRequest filters and pages repositories.
+message ListGitRepositoriesRequest {
+  // page.query filters on name, namespace, description. page.order_by accepts name, updated_at, stars, created_at
+  PageRequest page = 1;
+  string namespace = 2;
+  GitRepoType type = 3;
+  string topic = 4;
+  // Include archived repositories
+  bool include_archived = 5;
+  // Only forks or only non forks when set
+  optional bool forks = 6;
+}
+
+// ListGitRepositoriesResponse contains a page of repositories.
+message ListGitRepositoriesResponse {
+  repeated GitRepository repositories = 1;
+  PageInfo page = 2;
+}
+
+// SearchGitRepositoriesRequest searches visible repositories.
+message SearchGitRepositoriesRequest {
+  PageRequest page = 1;
+}
+
+// SearchGitRepositoriesResponse contains matching repositories.
+message SearchGitRepositoriesResponse {
+  repeated GitRepository repositories = 1;
+  PageInfo page = 2;
+}
+
+// UpdateGitRepositoryRequest changes the set fields.
+message UpdateGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+  optional string description = 3;
+  optional string website = 4;
+  optional Visibility visibility = 5;
+  optional string default_branch = 6;
+  GitRepoUnits units = 7;
+  GitMergeSettings merge = 8;
+  optional bool lfs_enabled = 9;
+  // Replaces mirror settings when present, absent token keeps the stored one
+  MirrorConfig mirror = 10;
+  optional bool is_template = 11;
+}
+
+// UpdateGitRepositoryResponse contains the updated repository.
+message UpdateGitRepositoryResponse {
+  GitRepository repository = 1;
+}
+
+// DeleteGitRepositoryRequest identifies a repository to delete.
+message DeleteGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+  // Also delete linked image and artifact repositories
+  bool delete_linked = 3;
+}
+
+// DeleteGitRepositoryResponse is empty on success.
+message DeleteGitRepositoryResponse {}
+
+// MoveGitRepositoryRequest renames or transfers, empty fields keep the current value.
+message MoveGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+  string new_namespace = 3;
+  string new_name = 4;
+}
+
+// MoveGitRepositoryResponse contains the repository, or the pending transfer.
+message MoveGitRepositoryResponse {
+  GitRepository repository = 1;
+  GitTransfer transfer = 2;
+}
+
+// AcceptTransferRequest identifies a pending transfer.
+message AcceptTransferRequest {
+  string id = 1;
+}
+
+// AcceptTransferResponse contains the moved repository.
+message AcceptTransferResponse {
+  GitRepository repository = 1;
+}
+
+// RejectTransferRequest identifies a pending transfer.
+message RejectTransferRequest {
+  string id = 1;
+}
+
+// RejectTransferResponse is empty on success.
+message RejectTransferResponse {}
+
+// ListTransfersRequest is empty, transfers addressed to the caller are listed.
+message ListTransfersRequest {
+  PageRequest page = 1;
+}
+
+// ListTransfersResponse contains pending transfers.
+message ListTransfersResponse {
+  repeated GitTransfer transfers = 1;
+  PageInfo page = 2;
+}
+
+// ArchiveGitRepositoryRequest identifies a repository.
+message ArchiveGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// ArchiveGitRepositoryResponse contains the repository.
+message ArchiveGitRepositoryResponse {
+  GitRepository repository = 1;
+}
+
+// UnarchiveGitRepositoryRequest identifies a repository.
+message UnarchiveGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// UnarchiveGitRepositoryResponse contains the repository.
+message UnarchiveGitRepositoryResponse {
+  GitRepository repository = 1;
+}
+
+// ForkGitRepositoryRequest copies a repository into a namespace.
+message ForkGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+  // Empty defaults to the caller
+  string target_namespace = 3;
+  // Empty keeps the name
+  string target_name = 4;
+}
+
+// ForkGitRepositoryResponse contains the fork.
+message ForkGitRepositoryResponse {
+  GitRepository repository = 1;
+}
+
+// SyncForkRequest identifies a fork.
+message SyncForkRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// SyncForkResponse reports what happened.
+message SyncForkResponse {
+  // Fast forwarded by this many commits
+  int32 commits = 1;
+  // A pull request was opened instead because fast forward was impossible
+  int64 pull_request_number = 2;
+}
+
+// ListForksRequest pages the forks of a repository.
+message ListForksRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// ListForksResponse contains a page of forks.
+message ListForksResponse {
+  repeated GitRepository repositories = 1;
+  PageInfo page = 2;
+}
+
+// UseTemplateRequest creates a repository from a template.
+message UseTemplateRequest {
+  string template_namespace = 1;
+  string template_name = 2;
+  string namespace = 3;
+  string name = 4;
+  string description = 5;
+  Visibility visibility = 6;
+  bool include_labels = 7;
+}
+
+// UseTemplateResponse contains the new repository.
+message UseTemplateResponse {
+  GitRepository repository = 1;
+}
+
+// SetTopicsRequest replaces the topic list.
+message SetTopicsRequest {
+  string namespace = 1;
+  string name = 2;
+  repeated string topics = 3;
+}
+
+// SetTopicsResponse contains the stored topics.
+message SetTopicsResponse {
+  repeated string topics = 1;
+}
+
+// StarGitRepositoryRequest identifies a repository.
+message StarGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// StarGitRepositoryResponse contains the new star count.
+message StarGitRepositoryResponse {
+  int64 star_count = 1;
+}
+
+// UnstarGitRepositoryRequest identifies a repository.
+message UnstarGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// UnstarGitRepositoryResponse contains the new star count.
+message UnstarGitRepositoryResponse {
+  int64 star_count = 1;
+}
+
+// ListStarredGitRepositoriesRequest pages the caller's stars.
+message ListStarredGitRepositoriesRequest {
+  PageRequest page = 1;
+  // Another user's public stars when set
+  string username = 2;
+}
+
+// ListStarredGitRepositoriesResponse contains starred repositories.
+message ListStarredGitRepositoriesResponse {
+  repeated GitRepository repositories = 1;
+  PageInfo page = 2;
+}
+
+// WatchGitRepositoryRequest sets the caller's watch mode.
+message WatchGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+  WatchMode mode = 3;
+}
+
+// WatchGitRepositoryResponse contains the stored mode.
+message WatchGitRepositoryResponse {
+  WatchMode mode = 1;
+}
+
+// SyncGitRepositoryRequest identifies a mirror.
+message SyncGitRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// SyncGitRepositoryResponse is empty, poll the repository for status.
+message SyncGitRepositoryResponse {}
+
+// StopGitRepositorySyncRequest identifies a mirror.
+message StopGitRepositorySyncRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// StopGitRepositorySyncResponse is empty.
+message StopGitRepositorySyncResponse {}
+
+// DismissGitImportRequest identifies a repository with an import record
+message DismissGitImportRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// DismissGitImportResponse is empty
+message DismissGitImportResponse {}
+
+// GenerateMirrorKeyRequest identifies a repository.
+message GenerateMirrorKeyRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// GenerateMirrorKeyResponse contains the public key to install upstream.
+message GenerateMirrorKeyResponse {
+  string public_key = 1;
+}
+
+// ListPushMirrorsRequest identifies a repository.
+message ListPushMirrorsRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// ListPushMirrorsResponse contains the push mirrors.
+message ListPushMirrorsResponse {
+  repeated GitPushMirror mirrors = 1;
+}
+
+// CreatePushMirrorRequest adds a push mirror.
+message CreatePushMirrorRequest {
+  string namespace = 1;
+  string name = 2;
+  string remote_url = 3;
+  // Basic auth token or password for https remotes
+  string auth_token = 4;
+  string username = 5;
+  // Use the repository's generated ssh key
+  bool use_ssh_key = 6;
+  int32 interval_minutes = 7;
+  bool sync_on_push = 8;
+}
+
+// CreatePushMirrorResponse contains the mirror.
+message CreatePushMirrorResponse {
+  GitPushMirror mirror = 1;
+}
+
+// UpdatePushMirrorRequest changes the set fields.
+message UpdatePushMirrorRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+  optional string remote_url = 4;
+  optional string auth_token = 5;
+  optional string username = 6;
+  optional bool use_ssh_key = 7;
+  optional int32 interval_minutes = 8;
+  optional bool sync_on_push = 9;
+}
+
+// UpdatePushMirrorResponse contains the mirror.
+message UpdatePushMirrorResponse {
+  GitPushMirror mirror = 1;
+}
+
+// DeletePushMirrorRequest identifies a push mirror.
+message DeletePushMirrorRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// DeletePushMirrorResponse is empty on success.
+message DeletePushMirrorResponse {}
+
+// SyncPushMirrorRequest identifies a push mirror.
+message SyncPushMirrorRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// SyncPushMirrorResponse is empty, poll the mirror for status.
+message SyncPushMirrorResponse {}
+
+// ListLinkedRepositoriesRequest identifies a repository.
+message ListLinkedRepositoriesRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// ListLinkedRepositoriesResponse contains linked packages.
+message ListLinkedRepositoriesResponse {
+  repeated LinkedRepository repositories = 1;
+}
+
+// LinkRepositoryRequest links a package in the same namespace.
+message LinkRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+  LinkedRepositoryKind kind = 3;
+  // Package name within the same namespace
+  string package_name = 4;
+}
+
+// LinkRepositoryResponse contains the linked package.
+message LinkRepositoryResponse {
+  LinkedRepository repository = 1;
+}
+
+// UnlinkRepositoryRequest removes a package link.
+message UnlinkRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+  LinkedRepositoryKind kind = 3;
+  string package_name = 4;
+}
+
+// UnlinkRepositoryResponse is empty on success.
+message UnlinkRepositoryResponse {}
+
+// ListCollaboratorsRequest identifies a repository.
+message ListCollaboratorsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// ListCollaboratorsResponse contains collaborators.
+message ListCollaboratorsResponse {
+  repeated GitCollaborator collaborators = 1;
+  PageInfo page = 2;
+}
+
+// AddCollaboratorRequest invites a user.
+message AddCollaboratorRequest {
+  string namespace = 1;
+  string name = 2;
+  string username = 3;
+  // read, write, or admin
+  GitAccessLevel permission = 4;
+}
+
+// AddCollaboratorResponse contains the collaborator.
+message AddCollaboratorResponse {
+  GitCollaborator collaborator = 1;
+}
+
+// UpdateCollaboratorRequest changes a permission.
+message UpdateCollaboratorRequest {
+  string namespace = 1;
+  string name = 2;
+  string username = 3;
+  GitAccessLevel permission = 4;
+}
+
+// UpdateCollaboratorResponse contains the collaborator.
+message UpdateCollaboratorResponse {
+  GitCollaborator collaborator = 1;
+}
+
+// RemoveCollaboratorRequest removes a collaborator.
+message RemoveCollaboratorRequest {
+  string namespace = 1;
+  string name = 2;
+  string username = 3;
+}
+
+// RemoveCollaboratorResponse is empty on success.
+message RemoveCollaboratorResponse {}
+
+// AcceptCollaborationRequest accepts an invitation to a repository.
+message AcceptCollaborationRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// AcceptCollaborationResponse is empty on success.
+message AcceptCollaborationResponse {}
+
+// GetRepositoryActivityRequest identifies a repository.
+message GetRepositoryActivityRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// GetRepositoryActivityResponse contains weekly totals, oldest first.
+message GetRepositoryActivityResponse {
+  repeated GitActivityWeek weeks = 1;
+}
+
+// GetRepositoryLanguagesRequest identifies a repository.
+message GetRepositoryLanguagesRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// GetRepositoryLanguagesResponse contains languages by bytes, largest first.
+message GetRepositoryLanguagesResponse {
+  repeated GitLanguage languages = 1;
+}
+
+// ListContributorsRequest identifies a repository.
+message ListContributorsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// ListContributorsResponse contains contributors, most commits first.
+message ListContributorsResponse {
+  repeated GitContributor contributors = 1;
+  PageInfo page = 2;
+}
+
+// RunMaintenanceRequest identifies a repository.
+message RunMaintenanceRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// RunMaintenanceResponse reports the size after maintenance.
+message RunMaintenanceResponse {
+  int64 size_bytes = 1;
+}
+
+// ListBranchesRequest pages branches.
+message ListBranchesRequest {
+  // page.query filters on name. page.order_by accepts name, updated
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// ListBranchesResponse contains a page of branches.
+message ListBranchesResponse {
+  repeated GitBranch branches = 1;
+  PageInfo page = 2;
+}
+
+// GetBranchRequest identifies a branch.
+message GetBranchRequest {
+  string namespace = 1;
+  string name = 2;
+  string branch = 3;
+}
+
+// GetBranchResponse contains the branch.
+message GetBranchResponse {
+  GitBranch branch = 1;
+}
+
+// CreateBranchRequest creates a branch from a ref or sha.
+message CreateBranchRequest {
+  string namespace = 1;
+  string name = 2;
+  string branch = 3;
+  // Branch, tag, or sha, empty uses the default branch
+  string from = 4;
+}
+
+// CreateBranchResponse contains the branch.
+message CreateBranchResponse {
+  GitBranch branch = 1;
+}
+
+// DeleteBranchRequest identifies a branch.
+message DeleteBranchRequest {
+  string namespace = 1;
+  string name = 2;
+  string branch = 3;
+}
+
+// DeleteBranchResponse is empty on success.
+message DeleteBranchResponse {}
+
+// RenameBranchRequest renames a branch.
+message RenameBranchRequest {
+  string namespace = 1;
+  string name = 2;
+  string branch = 3;
+  string new_name = 4;
+}
+
+// RenameBranchResponse contains the branch.
+message RenameBranchResponse {
+  GitBranch branch = 1;
+}
+
+// ListGitTagsRequest pages tags.
+message ListGitTagsRequest {
+  // page.query filters on name
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// ListGitTagsResponse contains a page of tags.
+message ListGitTagsResponse {
+  repeated GitTag tags = 1;
+  PageInfo page = 2;
+}
+
+// GetTagRequest identifies a tag.
+message GetTagRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+}
+
+// GetTagResponse contains the tag.
+message GetTagResponse {
+  GitTag tag = 1;
+}
+
+// CreateTagRequest creates a tag.
+message CreateTagRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+  // Branch, tag, or sha, empty uses the default branch
+  string target = 4;
+  // Non empty creates an annotated tag
+  string message = 5;
+}
+
+// CreateTagResponse contains the tag.
+message CreateTagResponse {
+  GitTag tag = 1;
+}
+
+// DeleteTagRequest identifies a tag.
+message DeleteTagRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+}
+
+// DeleteTagResponse is empty on success.
+message DeleteTagResponse {}
+
+// SetBranchProtectionRequest creates or replaces a rule.
+message SetBranchProtectionRequest {
+  string namespace = 1;
+  string name = 2;
+  GitBranchProtection protection = 3;
+}
+
+// SetBranchProtectionResponse contains the stored rule.
+message SetBranchProtectionResponse {
+  GitBranchProtection protection = 1;
+}
+
+// ListBranchProtectionsRequest identifies a repository.
+message ListBranchProtectionsRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// ListBranchProtectionsResponse contains rules by priority.
+message ListBranchProtectionsResponse {
+  repeated GitBranchProtection protections = 1;
+}
+
+// DeleteBranchProtectionRequest identifies a rule.
+message DeleteBranchProtectionRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// DeleteBranchProtectionResponse is empty on success.
+message DeleteBranchProtectionResponse {}
+
+// SetTagProtectionRequest creates or replaces a tag rule.
+message SetTagProtectionRequest {
+  string namespace = 1;
+  string name = 2;
+  GitTagProtection protection = 3;
+}
+
+// SetTagProtectionResponse contains the stored rule.
+message SetTagProtectionResponse {
+  GitTagProtection protection = 1;
+}
+
+// ListTagProtectionsRequest identifies a repository.
+message ListTagProtectionsRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// ListTagProtectionsResponse contains tag rules.
+message ListTagProtectionsResponse {
+  repeated GitTagProtection protections = 1;
+}
+
+// DeleteTagProtectionRequest identifies a tag rule.
+message DeleteTagProtectionRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// DeleteTagProtectionResponse is empty on success.
+message DeleteTagProtectionResponse {}
+
+// GetTreeRequest lists a directory.
+message GetTreeRequest {
+  string namespace = 1;
+  string name = 2;
+  // Branch, tag, or sha, empty uses the default branch
+  string ref = 3;
+  // Directory path, empty for the root
+  string path = 4;
+  // Walk the whole subtree
+  bool recursive = 5;
+  // Resolve the last commit touching each entry
+  bool with_last_commit = 6;
+}
+
+// GetTreeResponse contains the listing.
+message GetTreeResponse {
+  // Resolved commit the listing was read from
+  string sha = 1;
+  string path = 2;
+  repeated GitTreeEntry entries = 3;
+  // Last commit touching the directory itself
+  GitCommit last_commit = 4;
+  // Listing stopped at the entry cap
+  bool truncated = 5;
+}
+
+// GetBlobRequest reads a file.
+message GetBlobRequest {
+  string namespace = 1;
+  string name = 2;
+  string ref = 3;
+  string path = 4;
+}
+
+// GetBlobResponse contains the file.
+message GetBlobResponse {
+  string sha = 1;
+  GitBlob blob = 2;
+  GitCommit last_commit = 3;
+}
+
+// GetReadmeRequest finds a readme.
+message GetReadmeRequest {
+  string namespace = 1;
+  string name = 2;
+  string ref = 3;
+  string path = 4;
+}
+
+// GetReadmeResponse contains the readme or nothing.
+message GetReadmeResponse {
+  GitBlob blob = 1;
+}
+
+// ListCommitsRequest pages history.
+message ListCommitsRequest {
+  // page.page_token carries the cursor sha, total_count is not computed
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string ref = 4;
+  // Only commits touching this path
+  string path = 5;
+  // Author name or email substring
+  string author = 6;
+  google.protobuf.Timestamp since = 7;
+  google.protobuf.Timestamp until = 8;
+}
+
+// ListCommitsResponse contains a page of commits.
+message ListCommitsResponse {
+  repeated GitCommit commits = 1;
+  PageInfo page = 2;
+}
+
+// GetCommitRequest identifies a commit.
+message GetCommitRequest {
+  string namespace = 1;
+  string name = 2;
+  string sha = 3;
+}
+
+// GetCommitResponse contains the commit and its statuses.
+message GetCommitResponse {
+  GitCommit commit = 1;
+  repeated GitCommitStatus statuses = 2;
+  // Branches whose tip is this commit
+  repeated string branches = 3;
+  // Tags pointing at this commit
+  repeated string tags = 4;
+}
+
+// GetCommitDiffRequest pages the files of one commit.
+message GetCommitDiffRequest {
+  // page.query.text keeps only paths containing it
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string sha = 4;
+  // Zero based parent index for merge commits
+  int32 parent = 5;
+}
+
+// GetCommitDiffResponse contains a page of changed files.
+message GetCommitDiffResponse {
+  GitDiff diff = 1;
+  PageInfo page = 2;
+  // Parent the files were diffed against, empty for a root commit
+  string base_sha = 3;
+}
+
+// CompareRefsRequest compares two refs, head may prefix the ref with another repository.
+message CompareRefsRequest {
+  string namespace = 1;
+  string name = 2;
+  string base = 3;
+  string head = 4;
+}
+
+// CompareRefsResponse contains the resolved shas and change totals.
+message CompareRefsResponse {
+  string base_sha = 1;
+  string head_sha = 2;
+  string merge_base_sha = 3;
+  // Commits head adds on top of base
+  int32 ahead = 4;
+  int32 behind = 5;
+  int32 changed_files = 6;
+  int32 additions = 7;
+  int32 deletions = 8;
+}
+
+// ListCompareCommitsRequest pages the commits between two refs.
+message ListCompareCommitsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string base = 4;
+  string head = 5;
+}
+
+// ListCompareCommitsResponse contains commits oldest first.
+message ListCompareCommitsResponse {
+  repeated GitCommit commits = 1;
+  PageInfo page = 2;
+}
+
+// GetCompareDiffRequest pages the files changed between two refs.
+message GetCompareDiffRequest {
+  // page.query.text keeps only paths containing it
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string base = 4;
+  string head = 5;
+}
+
+// GetCompareDiffResponse contains a page of changed files.
+message GetCompareDiffResponse {
+  GitDiff diff = 1;
+  PageInfo page = 2;
+  // Tree the files were diffed from, the merge base when one exists
+  string base_sha = 3;
+  string head_sha = 4;
+}
+
+// GetDiffFileRequest reads the hunks of one file, base empty diffs head against its first parent.
+message GetDiffFileRequest {
+  string namespace = 1;
+  string name = 2;
+  string base = 3;
+  string head = 4;
+  string path = 5;
+}
+
+// GetDiffFileResponse contains the file diff.
+message GetDiffFileResponse {
+  DiffFile file = 1;
+}
+
+// BlameRequest attributes a file.
+message BlameRequest {
+  string namespace = 1;
+  string name = 2;
+  string ref = 3;
+  string path = 4;
+}
+
+// BlameResponse contains runs of lines by commit.
+message BlameResponse {
+  string sha = 1;
+  repeated GitBlameRange ranges = 2;
+}
+
+// SearchCodeRequest greps one ref.
+message SearchCodeRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string ref = 4;
+  // Regular expression
+  string pattern = 5;
+  // Path glob such as src/**/*.go
+  string path_glob = 6;
+  bool case_insensitive = 7;
+}
+
+// SearchCodeResponse contains matching lines.
+message SearchCodeResponse {
+  string sha = 1;
+  repeated GitGrepMatch matches = 2;
+  PageInfo page = 3;
+}
+
+// What to do with one path in an UpdateFiles commit
+enum FileOperationKind {
+  FILE_OPERATION_KIND_UNSPECIFIED = 0;
+  FILE_OPERATION_KIND_CREATE = 1;
+  FILE_OPERATION_KIND_UPDATE = 2;
+  FILE_OPERATION_KIND_DELETE = 3;
+  FILE_OPERATION_KIND_RENAME = 4;
+}
+
+// One file operation
+message FileOperation {
+  FileOperationKind kind = 1;
+  string path = 2;
+  // Source path for rename
+  string from_path = 3;
+  bytes content = 4;
+  // Executable bit for create and update
+  bool executable = 5;
+}
+
+// UpdateFilesRequest commits a batch of operations.
+message UpdateFilesRequest {
+  string namespace = 1;
+  string name = 2;
+  string branch = 3;
+  // Commit to this new branch instead, created from branch
+  string new_branch = 4;
+  string message = 5;
+  repeated FileOperation operations = 6;
+  // Refused when the branch moved past this sha
+  string expected_head_sha = 7;
+}
+
+// UpdateFilesResponse contains the new commit.
+message UpdateFilesResponse {
+  GitCommit commit = 1;
+  string branch = 2;
+}
+
+// RevertCommitRequest reverts a commit onto a branch.
+message RevertCommitRequest {
+  string namespace = 1;
+  string name = 2;
+  string sha = 3;
+  string branch = 4;
+  string new_branch = 5;
+}
+
+// RevertCommitResponse contains the new commit.
+message RevertCommitResponse {
+  GitCommit commit = 1;
+  string branch = 2;
+}
+
+// CherryPickCommitRequest applies a commit onto a branch.
+message CherryPickCommitRequest {
+  string namespace = 1;
+  string name = 2;
+  string sha = 3;
+  string branch = 4;
+  string new_branch = 5;
+}
+
+// CherryPickCommitResponse contains the new commit.
+message CherryPickCommitResponse {
+  GitCommit commit = 1;
+  string branch = 2;
+}
+
+// GetArchiveURLRequest names a ref and format.
+message GetArchiveURLRequest {
+  string namespace = 1;
+  string name = 2;
+  string ref = 3;
+  // zip or tar.gz
+  string format = 4;
+}
+
+// GetArchiveURLResponse contains the url.
+message GetArchiveURLResponse {
+  string url = 1;
+}
+
+// GetTemplatesRequest identifies a repository.
+message GetTemplatesRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// GetTemplatesResponse contains templates from the default branch.
+message GetTemplatesResponse {
+  repeated GitIssueTemplate issue_templates = 1;
+  string pull_request_template = 2;
+  bool has_codeowners = 3;
+}
+
+// CreateCommitStatusRequest records a check result.
+message CreateCommitStatusRequest {
+  string namespace = 1;
+  string name = 2;
+  string sha = 3;
+  string context = 4;
+  CommitStatusState state = 5;
+  string target_url = 6;
+  string description = 7;
+}
+
+// CreateCommitStatusResponse contains the status.
+message CreateCommitStatusResponse {
+  GitCommitStatus status = 1;
+}
+
+// ListCommitStatusesRequest identifies a commit.
+message ListCommitStatusesRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string sha = 4;
+}
+
+// ListCommitStatusesResponse contains statuses newest first.
+message ListCommitStatusesResponse {
+  repeated GitCommitStatus statuses = 1;
+  PageInfo page = 2;
+}
+
+// GetCombinedStatusRequest identifies a commit.
+message GetCombinedStatusRequest {
+  string namespace = 1;
+  string name = 2;
+  string sha = 3;
+}
+
+// GetCombinedStatusResponse folds the latest status per context.
+message GetCombinedStatusResponse {
+  CommitStatusState state = 1;
+  repeated GitCommitStatus statuses = 2;
+}

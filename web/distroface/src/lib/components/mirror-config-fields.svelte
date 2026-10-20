@@ -1,7 +1,7 @@
 <script lang="ts" module>
 	import type { MirrorConfig } from '$lib/proto/distroface/v1/types_pb';
 
-	export type MirrorKind = 'github' | 'gitlab' | 'gitea' | 'oci';
+	export type MirrorKind = 'github' | 'gitlab' | 'gitea' | 'oci' | 'git';
 
 	export type MirrorForm = {
 		upstream: string;
@@ -66,6 +66,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Button } from '$lib/components/ui/button';
+	import { Alert, AlertTitle, AlertDescription } from '$lib/components/ui/alert';
 	import FormField from '$lib/components/form-field.svelte';
 	import PasswordInput from '$lib/components/password-input.svelte';
 	import UnitInput from '$lib/components/unit-input.svelte';
@@ -82,7 +83,8 @@
 		lastSync,
 		lastError = '',
 		nextAttempt,
-		idPrefix = 'mirror'
+		idPrefix = 'mirror',
+		part = 'all'
 	}: {
 		form: MirrorForm;
 		kind: MirrorKind;
@@ -91,6 +93,7 @@
 		lastError?: string;
 		nextAttempt?: Timestamp;
 		idPrefix?: string;
+		part?: 'source' | 'sync' | 'all';
 	} = $props();
 
 	const cooldownActive = $derived(
@@ -142,13 +145,24 @@
 				depthUnit: 'tags',
 				depthHelp: 'Number of tags to keep, 0 for all',
 				syncTarget: 'the upstream'
+			},
+			git: {
+				upstreamLabel: 'Upstream repository',
+				upstreamPlaceholder: 'https://github.com/nickheyer/distroface.git',
+				upstreamHelp: 'https or ssh clone URL, owner/repo works for GitHub, GitLab, and Gitea',
+				tokenHelp: 'Sent as basic auth for private https upstreams',
+				patternLabel: 'Ref filter',
+				patternHelp: 'Glob over branch and tag names, empty mirrors all',
+				depthUnit: 'refs',
+				depthHelp: 'Ignored for git mirrors',
+				syncTarget: 'the upstream'
 			}
 		}[kind]
 	);
 
 	let limits = $state<MirrorLimits | null>(null);
 	onMount(async () => {
-		limits = await fetchMirrorLimits();
+		if (part !== 'source') limits = await fetchMirrorLimits();
 	});
 
 	const minInterval = $derived(limits?.minIntervalMinutes ?? 0);
@@ -170,137 +184,166 @@
 	);
 </script>
 
-<div class="space-y-3">
-	{#if lastSync || lastError || cooldownActive}
-		<div class="rounded-lg border border-border/50 bg-muted/20 px-3 py-2.5 text-[13px] space-y-1">
-			<div class="flex items-center gap-1.5">
+<div class="form-fields">
+	{#if part !== 'sync'}
+		{#if lastSync || lastError || cooldownActive}
+			<Alert variant={lastError ? 'destructive' : cooldownActive ? 'warning' : 'success'}>
 				{#if lastError}
-					<AlertTriangle class="h-3.5 w-3.5 text-destructive shrink-0" />
-					<span class="font-medium text-destructive">Last sync failed</span>
+					<AlertTriangle />
 				{:else}
-					<CheckCircle class="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-					<span class="font-medium">Last sync succeeded</span>
+					<CheckCircle />
 				{/if}
-				{#if lastSync}
-					<span class="text-muted-foreground ml-auto">{relativeTime(timestampDate(lastSync))}</span>
+				<AlertTitle class="flex items-center justify-between gap-2">
+					<span>{lastError ? 'Last sync failed' : 'Last sync succeeded'}</span>
+					{#if lastSync}
+						<span class="font-normal text-muted-foreground"
+							>{relativeTime(timestampDate(lastSync))}</span
+						>
+					{/if}
+				</AlertTitle>
+				{#if lastError || (cooldownActive && nextAttempt)}
+					<AlertDescription>
+						{#if lastError}
+							<p class="break-words">{lastError}</p>
+						{/if}
+						{#if cooldownActive && nextAttempt}
+							<p class="flex items-center gap-1.5">
+								<Hourglass class="size-3.5 shrink-0" />
+								Backing off, next attempt after {timestampDate(nextAttempt).toLocaleString()}
+							</p>
+						{/if}
+					</AlertDescription>
 				{/if}
-			</div>
-			{#if lastError}
-				<p class="text-xs text-muted-foreground wrap-break-word">{lastError}</p>
-			{/if}
-			{#if cooldownActive && nextAttempt}
-				<div class="flex items-center gap-1.5 text-amber-600 dark:text-amber-400">
-					<Hourglass class="h-3.5 w-3.5 shrink-0" />
-					<span class="text-xs">Backing off, next attempt after {timestampDate(nextAttempt).toLocaleString()}</span>
-				</div>
-			{/if}
-		</div>
-	{/if}
+			</Alert>
+		{/if}
 
-	<FormField label={copy.upstreamLabel} id="{idPrefix}-upstream" required help={copy.upstreamHelp}>
-		<Input
+		<FormField
+			label={copy.upstreamLabel}
 			id="{idPrefix}-upstream"
-			name="{idPrefix}-upstream"
-			bind:value={form.upstream}
-			placeholder={copy.upstreamPlaceholder}
-			autocomplete="off"
-			data-1p-ignore
-			data-lpignore="true"
-			data-bwignore
-		/>
-	</FormField>
-
-	{#if kind === 'oci'}
-		<FormField label="Username" id="{idPrefix}-username">
+			required
+			help={copy.upstreamHelp}
+		>
 			<Input
-				id="{idPrefix}-username"
-				name="{idPrefix}-username"
-				bind:value={form.username}
-				placeholder="username"
+				id="{idPrefix}-upstream"
+				name="{idPrefix}-upstream"
+				bind:value={form.upstream}
+				placeholder={copy.upstreamPlaceholder}
 				autocomplete="off"
 				data-1p-ignore
 				data-lpignore="true"
 				data-bwignore
 			/>
 		</FormField>
-	{/if}
 
-	<FormField
-		label="Access token"
-		id="{idPrefix}-token"
-		help={form.clearToken
-			? 'Stored token clears on save'
-			: tokenSet
-				? 'Blank keeps the stored token'
-				: copy.tokenHelp}
-	>
-		<div class="flex items-center gap-2">
-			<div class="flex-1 min-w-0">
-				<PasswordInput
-					id="{idPrefix}-token"
-					name="{idPrefix}-token"
-					bind:value={form.authToken}
-					placeholder={form.clearToken ? 'Token will be cleared' : tokenSet ? '••••••••  (stored)' : 'Token'}
-					autocomplete="new-password"
-					disabled={form.clearToken}
+		{#if kind === 'oci' || kind === 'git'}
+			<FormField label="Username" id="{idPrefix}-username" span="half">
+				<Input
+					id="{idPrefix}-username"
+					name="{idPrefix}-username"
+					bind:value={form.username}
+					placeholder="username"
+					autocomplete="off"
 					data-1p-ignore
 					data-lpignore="true"
 					data-bwignore
 				/>
-			</div>
-			{#if tokenSet}
-				{#if form.clearToken}
-					<Button variant="outline" size="sm" class="h-9 shrink-0" onclick={() => (form.clearToken = false)}>
-						<Undo2 class="h-3.5 w-3.5 mr-1.5" />Keep token
-					</Button>
-				{:else}
-					<Button
-						variant="outline" size="sm" class="h-9 shrink-0"
-						onclick={() => { form.clearToken = true; form.authToken = ''; }}
-					>
-						Clear token
-					</Button>
+			</FormField>
+		{/if}
+
+		<FormField
+			label="Access token"
+			id="{idPrefix}-token"
+			help={form.clearToken
+				? 'Stored token clears on save'
+				: tokenSet
+					? 'Blank keeps the stored token'
+					: copy.tokenHelp}
+		>
+			<div class="flex items-center gap-2">
+				<div class="min-w-0 flex-1">
+					<PasswordInput
+						id="{idPrefix}-token"
+						name="{idPrefix}-token"
+						bind:value={form.authToken}
+						placeholder={form.clearToken
+							? 'Token will be cleared'
+							: tokenSet
+								? '••••••••  (stored)'
+								: 'Token'}
+						autocomplete="new-password"
+						disabled={form.clearToken}
+						data-1p-ignore
+						data-lpignore="true"
+						data-bwignore
+					/>
+				</div>
+				{#if tokenSet}
+					{#if form.clearToken}
+						<Button variant="outline" class="shrink-0" onclick={() => (form.clearToken = false)}>
+							<Undo2 />Keep token
+						</Button>
+					{:else}
+						<Button
+							variant="outline"
+							class="shrink-0"
+							onclick={() => {
+								form.clearToken = true;
+								form.authToken = '';
+							}}
+						>
+							Clear token
+						</Button>
+					{/if}
 				{/if}
-			{/if}
-		</div>
-	</FormField>
-
-	<FormField label={copy.patternLabel} id="{idPrefix}-pattern" help={copy.patternHelp}>
-		<Input id="{idPrefix}-pattern" bind:value={form.pattern} placeholder="*" class="font-mono text-sm" />
-	</FormField>
-
-	{#if kind !== 'oci'}
-		<FormField label="Include prereleases" horizontal>
-			<Switch bind:checked={form.includePrereleases} />
+			</div>
 		</FormField>
 	{/if}
 
-	<div class="grid grid-cols-2 gap-3">
-		<FormField label="Sync depth" id="{idPrefix}-depth" help={depthHelp}>
-			<UnitInput
-				id="{idPrefix}-depth"
-				min={0}
-				max={depthCap > 0 ? depthCap : undefined}
-				unit={copy.depthUnit}
-				bind:value={form.syncDepth}
-			/>
+	{#if part !== 'source'}
+		<FormField
+			label={copy.patternLabel}
+			id="{idPrefix}-pattern"
+			help={copy.patternHelp}
+			span="half"
+		>
+			<Input id="{idPrefix}-pattern" bind:value={form.pattern} placeholder="*" class="font-mono" />
 		</FormField>
+
+		{#if kind !== 'oci' && kind !== 'git'}
+			<FormField label="Include prereleases" layout="toggle">
+				<Switch bind:checked={form.includePrereleases} />
+			</FormField>
+		{/if}
+
+		{#if kind !== 'git'}
+			<FormField label="Sync depth" id="{idPrefix}-depth" help={depthHelp} span="third">
+				<UnitInput
+					id="{idPrefix}-depth"
+					min={0}
+					max={depthCap > 0 ? depthCap : undefined}
+					unit={copy.depthUnit}
+					bind:value={form.syncDepth}
+				/>
+			</FormField>
+		{/if}
 		<FormField
 			label="Sync interval"
 			id="{idPrefix}-interval"
 			help="Mirror sync frequency with {copy.syncTarget}"
 			error={intervalError}
+			span="third"
 		>
 			<UnitInput
 				id="{idPrefix}-interval"
 				min={minInterval > 0 ? minInterval : 0}
 				unit="min"
 				bind:value={form.syncIntervalMinutes}
+				aria-invalid={!!intervalError}
 			/>
 		</FormField>
-	</div>
 
-	<FormField label="Paused" horizontal help="Skips scheduled syncs">
-		<Switch bind:checked={form.paused} />
-	</FormField>
+		<FormField label="Paused" layout="toggle" help="Skips scheduled syncs">
+			<Switch bind:checked={form.paused} />
+		</FormField>
+	{/if}
 </div>

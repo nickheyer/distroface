@@ -65,7 +65,7 @@ func (e *Engine) clientCAPool(ctx context.Context, portal *TLSPortal) (*x509.Cer
 }
 
 // Per connection config so each sni host applies its own client policy
-func (e *Engine) configForClient(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+func (e *Engine) configForClient(hello *tls.ClientHelloInfo) *tls.Config {
 	ctx := context.Background()
 	if c := hello.Context(); c != nil {
 		ctx = c
@@ -75,21 +75,21 @@ func (e *Engine) configForClient(hello *tls.ClientHelloInfo) (*tls.Config, error
 
 	var portal *TLSPortal
 	if host != "" && e.portals != nil {
-		if p, ok := e.portals.ResolveForTLS(host, port); ok && !(p.CatchAll && host == e.primaryHost(ctx)) {
+		if p, ok := e.portals.ResolveForTLS(host, port); ok && (!p.CatchAll || host != e.primaryHost(ctx)) {
 			portal = &p
 		}
 	}
 
 	mode := e.mtlsModeForHost(ctx, portal)
 	if mode == v1.MTLSMode_MTLS_MODE_UNSPECIFIED || mode == v1.MTLSMode_MTLS_MODE_OFF {
-		return nil, nil
+		return nil
 	}
 
 	// A missing trust ca downgrades to off rather than bricking the host
 	pool, err := e.clientCAPool(ctx, portal)
 	if err != nil {
 		e.log.Warn("mtls disabled for %q: %v", host, err)
-		return nil, nil
+		return nil
 	}
 	base := e.TLSConfig()
 	base.ClientCAs = pool
@@ -97,7 +97,7 @@ func (e *Engine) configForClient(hello *tls.ClientHelloInfo) (*tls.Config, error
 	if mode == v1.MTLSMode_MTLS_MODE_REQUIRED {
 		base.ClientAuth = tls.RequireAndVerifyClientCert
 	}
-	return base, nil
+	return base
 }
 
 // Local listener port from the client hello connection

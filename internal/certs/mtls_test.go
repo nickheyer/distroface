@@ -84,17 +84,14 @@ func TestConfigForClientModes(t *testing.T) {
 	hello := &tls.ClientHelloInfo{ServerName: "registry.example.com"}
 
 	// Off yields no per connection config
-	cfg, err := e.configForClient(hello)
-	if err != nil || cfg != nil {
-		t.Fatalf("expected nil config when off, got %v %v", cfg, err)
+	cfg := e.configForClient(hello)
+	if cfg != nil {
+		t.Fatalf("expected nil config when off, got %v", cfg)
 	}
 
 	// Required demands and verifies a client cert
 	seedSystem(t, res, &v1.Settings{Tls: &v1.TLSSettings{MtlsMode: v1.MTLSMode_MTLS_MODE_REQUIRED.Enum()}}, "tls.mtls_mode")
-	cfg, err = e.configForClient(hello)
-	if err != nil {
-		t.Fatal(err)
-	}
+	cfg = e.configForClient(hello)
 	if cfg == nil || cfg.ClientAuth != tls.RequireAndVerifyClientCert {
 		t.Fatalf("expected required client auth, got %+v", cfg)
 	}
@@ -104,7 +101,7 @@ func TestConfigForClientModes(t *testing.T) {
 
 	// Optional verifies only when presented
 	seedSystem(t, res, &v1.Settings{Tls: &v1.TLSSettings{MtlsMode: v1.MTLSMode_MTLS_MODE_OPTIONAL.Enum()}}, "tls.mtls_mode")
-	cfg, _ = e.configForClient(hello)
+	cfg = e.configForClient(hello)
 	if cfg == nil || cfg.ClientAuth != tls.VerifyClientCertIfGiven {
 		t.Fatalf("expected optional client auth, got %+v", cfg)
 	}
@@ -116,9 +113,9 @@ func TestConfigForClientNoCADowngrades(t *testing.T) {
 	e := newTestEngine(t, store, res, "", "")
 	// Required but no app ca must not brick the host
 	seedSystem(t, res, &v1.Settings{Tls: &v1.TLSSettings{MtlsMode: v1.MTLSMode_MTLS_MODE_REQUIRED.Enum()}}, "tls.mtls_mode")
-	cfg, err := e.configForClient(&tls.ClientHelloInfo{ServerName: "registry.example.com"})
-	if err != nil || cfg != nil {
-		t.Fatalf("expected downgrade to nil without a ca, got %v %v", cfg, err)
+	cfg := e.configForClient(&tls.ClientHelloInfo{ServerName: "registry.example.com"})
+	if cfg != nil {
+		t.Fatalf("expected downgrade to nil without a ca, got %v", cfg)
 	}
 }
 

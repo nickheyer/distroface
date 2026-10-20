@@ -8,9 +8,6 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
-	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
-	} from '$lib/components/ui/table';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
@@ -62,8 +59,12 @@
 			});
 			portals = resp.portals;
 			pager.apply(resp.page);
-		} catch { portals = []; }
-		finally { loading = false; loaded = true; }
+		} catch {
+			portals = [];
+		} finally {
+			loading = false;
+			loaded = true;
+		}
 	}
 
 	function accessBadges(portal: RegistryPortal): string[] {
@@ -88,8 +89,11 @@
 			const resp = await rpcClient.portal.updatePortal({ orgId, id: portal.id, enabled });
 			const updated = resp.portal;
 			if (updated) portals = portals.map((p) => (p.id === updated.id ? updated : p));
-		} catch { load(); }
-		finally { toggling = null; }
+		} catch {
+			load();
+		} finally {
+			toggling = null;
+		}
 	}
 
 	function openEdit(portal: RegistryPortal) {
@@ -111,8 +115,11 @@
 			if (portals.length === 0 && pager.prev()) {
 				await load();
 			}
-		} catch { /* error interceptor */ }
-		finally { deleting = false; }
+		} catch {
+			/* error interceptor */
+		} finally {
+			deleting = false;
+		}
 	}
 
 	function filterChanged() {
@@ -125,22 +132,34 @@
 
 <div class="space-y-4">
 	<div class="section-header">
-		<div class="min-w-0 space-y-1">
+		<div class="min-w-0">
 			<h2 class="section-title">Portals</h2>
+			<p class="section-subtitle">Dedicated addresses that serve only this organization.</p>
 		</div>
-		<Button size="sm" class="shrink-0" onclick={() => goto(resolve('/orgs/[name]/portals/new', { name: orgName }))}>
-			<Plus class="h-4 w-4 mr-1.5" />New Portal
+		<Button
+			class="shrink-0"
+			onclick={() => goto(resolve('/orgs/[name]/portals/new', { name: orgName }))}
+		>
+			<Plus />
+			New portal
 		</Button>
 	</div>
 
 	<div class="max-w-md">
-		<QueryFilterBar {filter} placeholder="Search portals..." onchange={filterChanged} />
+		<QueryFilterBar {filter} placeholder="Search portals" onchange={filterChanged} />
 	</div>
 
 	{#if !loaded}
-		<div class="space-y-2">
+		<div class="box divide-y">
 			{#each { length: 2 }, i (i)}
-				<Skeleton class="h-14 w-full rounded-xl" />
+				<div class="flex items-center gap-3 px-4 py-3">
+					<div class="flex-1 space-y-2">
+						<Skeleton class="h-4 w-40" />
+						<Skeleton class="h-3.5 w-64" />
+						<Skeleton class="h-3 w-48" />
+					</div>
+					<Skeleton class="h-5 w-9 rounded-full" />
+				</div>
 			{/each}
 		</div>
 	{:else if portals.length === 0}
@@ -155,107 +174,124 @@
 				{#if !filter.active}
 					<Button
 						variant="outline"
-						size="sm"
 						onclick={() => goto(resolve('/orgs/[name]/portals/new', { name: orgName }))}
 					>
-						<Plus class="h-3.5 w-3.5 mr-1.5" />New Portal
+						<Plus />
+						New portal
 					</Button>
 				{/if}
 			{/snippet}
 		</EmptyState>
 	{:else}
-		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
-			<Table>
-				<TableHeader>
-					<TableRow class="bg-muted/30 hover:bg-muted/30">
-						<TableHead class="th">Portal</TableHead>
-						<TableHead class="th">Address</TableHead>
-						<TableHead class="th hidden lg:table-cell">Access</TableHead>
-						<TableHead class="th">Status</TableHead>
-						<TableHead class="th w-24"></TableHead>
-					</TableRow>
-				</TableHeader>
-				<TableBody>
-					{#each portals as portal (portal.id)}
-						{@const stateBadge = certStateBadge(portal.certState)}
-						<TableRow>
-							<TableCell class="py-3 px-3">
-								<p class="font-medium">{portal.name}</p>
-								{#if portal.createdAt}
-									<p class="text-xs text-muted-foreground mt-0.5">
-										Created {relativeTime(timestampDate(portal.createdAt))}
-									</p>
-								{/if}
-							</TableCell>
-							<TableCell class="py-3 px-3">
-								<div class="flex items-center gap-1 min-w-0">
-									<span class="font-mono text-[13px] truncate {portal.enabled ? '' : 'text-muted-foreground'}">
-										{effectiveAddress(portal.hostname, portal.port)}
-									</span>
-									<CopyButton text={effectiveAddress(portal.hostname, portal.port)} label="Address copied" />
-									{#if stateBadge}
-										<Badge variant="outline" class="text-xs shrink-0 {stateBadge.cls}" title={portal.certDetail}>{stateBadge.label}</Badge>
-									{/if}
-								</div>
-								{#if portal.hostname === ''}
-									<p class="text-xs text-muted-foreground/70 mt-0.5">Any hostname on port {portal.port}</p>
-								{:else if portal.port === 0}
-									<p class="text-xs text-muted-foreground/70 mt-0.5">App port{mainPort ? ` (${mainPort})` : ''}</p>
-								{/if}
-								{#if portal.certState === CertState.ERROR || portal.certState === CertState.PENDING}
-									<p class="text-xs mt-0.5 {portal.certState === CertState.ERROR ? 'text-red-600 dark:text-red-400' : 'text-amber-600 dark:text-amber-400'}">
-										{portal.certDetail}
-									</p>
-								{/if}
-							</TableCell>
-							<TableCell class="py-3 px-3 hidden lg:table-cell">
-								<div class="flex flex-wrap gap-1">
-									{#each accessBadges(portal) as badge (badge)}
-										<Badge variant="outline" class="text-xs font-normal">{badge}</Badge>
-									{:else}
-										<span class="text-xs text-muted-foreground/70">Open push and pull</span>
-									{/each}
-								</div>
-							</TableCell>
-							<TableCell class="py-3 px-3">
-								<div class="flex items-center gap-2">
-									<Switch
-										checked={portal.enabled}
-										disabled={toggling === portal.id}
-										onCheckedChange={(checked) => setRunning(portal, checked)}
-										aria-label="{portal.enabled ? 'Stop' : 'Start'} portal {portal.name}"
-									/>
-									<span class="text-xs text-muted-foreground hidden sm:inline">
-										{portal.enabled ? 'Running' : 'Stopped'}
-									</span>
-								</div>
-							</TableCell>
-							<TableCell class="text-right py-3 px-3">
-								<Button variant="ghost" size="icon" class="h-7 w-7" onclick={() => openEdit(portal)}>
-									<Pencil class="h-3 w-3" />
-								</Button>
-								<Button
-									variant="ghost"
-									size="icon"
-									class="h-7 w-7 text-destructive"
-									onclick={() => confirmDelete(portal)}
-								>
-									<Trash2 class="h-3 w-3" />
-								</Button>
-							</TableCell>
-						</TableRow>
-					{/each}
-				</TableBody>
-			</Table>
-			<DataPagination attached {pager} onChange={load} />
+		<div class="box divide-y transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
+			{#each portals as portal (portal.id)}
+				{@const stateBadge = certStateBadge(portal.certState)}
+				{@const address = effectiveAddress(portal.hostname, portal.port)}
+				<div class="flex items-start gap-3 px-4 py-3">
+					<div class="min-w-0 flex-1">
+						<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+							<span
+								class="truncate text-sm font-semibold {portal.enabled
+									? ''
+									: 'text-muted-foreground'}"
+							>
+								{portal.name}
+							</span>
+							{#if stateBadge}
+								<Badge variant={stateBadge.variant} title={portal.certDetail}>
+									{stateBadge.label}
+								</Badge>
+							{/if}
+							{#if !portal.enabled}
+								<Badge variant="outline">Stopped</Badge>
+							{/if}
+						</div>
+						<div class="mt-0.5 flex min-w-0 items-center gap-1">
+							<span
+								class="truncate font-mono text-sm {portal.enabled ? '' : 'text-muted-foreground'}"
+								>{address}</span
+							>
+							<CopyButton text={address} label="Address copied" />
+						</div>
+						{#if portal.hostname === ''}
+							<p class="text-xs text-muted-foreground">Any hostname on port {portal.port}</p>
+						{:else if portal.port === 0}
+							<p class="text-xs text-muted-foreground">
+								App port{mainPort ? ` (${mainPort})` : ''}
+							</p>
+						{/if}
+						{#if portal.certState === CertState.ERROR || portal.certState === CertState.PENDING}
+							<p
+								class="text-xs {portal.certState === CertState.ERROR
+									? 'text-destructive'
+									: 'text-warning'}"
+							>
+								{portal.certDetail}
+							</p>
+						{/if}
+						<div
+							class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"
+						>
+							<div class="flex flex-wrap gap-1">
+								{#each accessBadges(portal) as badge (badge)}
+									<Badge variant="outline">{badge}</Badge>
+								{:else}
+									<span>Open push and pull</span>
+								{/each}
+							</div>
+							{#if portal.createdAt}
+								<span>Created {relativeTime(timestampDate(portal.createdAt))}</span>
+							{/if}
+						</div>
+					</div>
+					<div class="flex shrink-0 items-center gap-2">
+						<div class="flex items-center gap-2">
+							<Switch
+								checked={portal.enabled}
+								disabled={toggling === portal.id}
+								onCheckedChange={(checked) => setRunning(portal, checked)}
+								aria-label="{portal.enabled ? 'Stop' : 'Start'} portal {portal.name}"
+							/>
+							<span class="hidden text-xs text-muted-foreground sm:inline">
+								{portal.enabled ? 'Running' : 'Stopped'}
+							</span>
+						</div>
+						<Button
+							variant="ghost-muted"
+							size="icon-sm"
+							onclick={() => openEdit(portal)}
+							aria-label="Edit portal"
+						>
+							<Pencil />
+						</Button>
+						<Button
+							variant="ghost"
+							size="icon-sm"
+							class="text-destructive hover:text-destructive"
+							onclick={() => confirmDelete(portal)}
+							aria-label="Delete portal"
+						>
+							<Trash2 />
+						</Button>
+					</div>
+				</div>
+			{/each}
 		</div>
+		<DataPagination {pager} onChange={load} />
 	{/if}
 </div>
 
-<ConfirmDialog bind:open={deleteOpen} title="Delete Portal" confirmLabel="Delete" onConfirm={doDelete} loading={deleting} icon={Trash2}>
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete portal"
+	confirmLabel="Delete"
+	onConfirm={doDelete}
+	loading={deleting}
+	icon={Trash2}
+>
 	{#snippet description()}
 		Delete <strong>{deleteTarget?.name}</strong> at
-		<strong>{deleteTarget ? effectiveAddress(deleteTarget.hostname, deleteTarget.port) : ''}</strong>?
-		Clients using this address will stop working immediately.
+		<strong>{deleteTarget ? effectiveAddress(deleteTarget.hostname, deleteTarget.port) : ''}</strong
+		>? Clients using this address will stop working immediately.
 	{/snippet}
 </ConfirmDialog>

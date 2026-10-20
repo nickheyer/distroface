@@ -8,7 +8,13 @@ import (
 	"github.com/spf13/viper"
 )
 
+// Build version shared with commands that report it
+var cliVersion = "dev"
+
 func NewRootCmd(version string) *cobra.Command {
+	if version != "" {
+		cliVersion = version
+	}
 	rootCmd := &cobra.Command{
 		Use:           "dfcli",
 		Short:         "DistroFace CLI",
@@ -16,7 +22,7 @@ func NewRootCmd(version string) *cobra.Command {
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			return initClient()
+			return initClient(cmd.Flags().Changed("server"))
 		},
 	}
 
@@ -40,6 +46,16 @@ func NewRootCmd(version string) *cobra.Command {
 		newTrustCmd(),
 		newImageCmd(),
 		newArtifactCmd(),
+		newGitCmd(),
+		newRepoCmd(),
+		newReleaseCmd(),
+		newIssueCmd(),
+		newPRCmd(),
+		newOrgCmd(),
+		newKeyCmd(),
+		newGPGCmd(),
+		newTokenCmd(),
+		newRunnerCmd(),
 		newVersionCmd(version),
 	)
 	return rootCmd

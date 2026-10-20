@@ -2,6 +2,8 @@ package stores
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,7 +23,7 @@ func (s *Store) GetRepository(ctx context.Context, namespace, name string) (*db.
 	var repo db.Repository
 	err := s.db.WithContext(ctx).First(&repo, "namespace = ? AND name = ?", namespace, name).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -50,23 +52,49 @@ var ReposQuery = pages.Spec{
 }
 
 // If userID is empty (anonymous), only public repos are returned.
-func (s *Store) ListRepositories(ctx context.Context, namespace string, q pages.Query, userID string, canManage bool, grantedRepos []string, limit, offset int) ([]*db.Repository, int64, error) {
+type RepoListOptions struct {
+	Namespace      string      // Optional exact namespace filter
+	ViewerID       string      // Owner whose private repos are visible
+	IncludePrivate bool        // True bypasses visibility filtering
+	GrantedRepos   []string    // RBAC granted repos as namespace/name
+	OnlyRepo       string      // Credential scope, same name or linked source
+	OnlyNamespace  string      // Credential scope, exact namespace
+	Query          pages.Query // Structured filter against ReposQuery
+	Limit          int
+	Offset         int
+}
+
+// Confines package listings to a credential scope, empty values pass
+func packageScope(onlyRepo, onlyNamespace string) func(*gorm.DB) *gorm.DB {
+	return func(q *gorm.DB) *gorm.DB {
+		if onlyRepo != "" {
+			namespace, name, _ := strings.Cut(onlyRepo, "/")
+			q = q.Where("(namespace || '/' || name) = ? OR git_repo_id IN (SELECT id FROM git_repositories WHERE namespace = ? AND name = ?)", onlyRepo, namespace, name)
+		}
+		if onlyNamespace != "" {
+			q = q.Where("namespace = ?", onlyNamespace)
+		}
+		return q
+	}
+}
+
+func (s *Store) ListRepositories(ctx context.Context, opts RepoListOptions) ([]*db.Repository, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Repository{})
 
-	if namespace != "" {
-		tx = tx.Where("namespace = ?", namespace)
+	if opts.Namespace != "" {
+		tx = tx.Where("namespace = ?", opts.Namespace)
 	}
-	tx = tx.Scopes(ReposQuery.Scope(q))
+	tx = tx.Scopes(ReposQuery.Scope(opts.Query), packageScope(opts.OnlyRepo, opts.OnlyNamespace))
 
-	if !canManage {
-		if userID != "" {
+	if !opts.IncludePrivate {
+		if opts.ViewerID != "" {
 			// Authenticated user: public + owned + org membership + RBAC grants
 			conditions := "is_private = ? OR owner_id = ? OR namespace IN (SELECT o.name FROM organizations o JOIN org_members om ON o.id = om.org_id WHERE om.user_id = ?)"
-			args := []any{false, userID, userID}
+			args := []any{false, opts.ViewerID, opts.ViewerID}
 
-			if len(grantedRepos) > 0 {
+			if len(opts.GrantedRepos) > 0 {
 				conditions += " OR (namespace || '/' || name) IN ?"
-				args = append(args, grantedRepos)
+				args = append(args, opts.GrantedRepos)
 			}
 
 			tx = tx.Where(conditions, args...)
@@ -82,7 +110,7 @@ func (s *Store) ListRepositories(ctx context.Context, namespace string, q pages.
 	}
 
 	var repos []*db.Repository
-	err := tx.Order("updated_at DESC").Limit(limit).Offset(offset).Find(&repos).Error
+	err := tx.Order("updated_at DESC").Limit(opts.Limit).Offset(opts.Offset).Find(&repos).Error
 	return repos, total, err
 }
 
@@ -204,4 +232,39 @@ func (s *Store) ListStarredRepositories(ctx context.Context, userID string, limi
 	var repos []*db.Repository
 	err := tx.Order("stars.created_at DESC").Limit(limit).Offset(offset).Find(&repos).Error
 	return repos, total, err
+}
+
+// ── Source repository links and moves ────────────────────────────────────
+
+func (s *Store) GetRepositoryByID(ctx context.Context, id string) (*db.Repository, error) {
+	var repo db.Repository
+	err := s.db.WithContext(ctx).First(&repo, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &repo, err
+}
+
+func (s *Store) SetRepositoryGitRepo(ctx context.Context, id string, gitRepoID *string) error {
+	return s.db.WithContext(ctx).Model(&db.Repository{}).Where("id = ?", id).Update("git_repo_id", gitRepoID).Error
+}
+
+func (s *Store) ListRepositoriesByGitRepo(ctx context.Context, gitRepoID string) ([]*db.Repository, error) {
+	var repos []*db.Repository
+	err := s.db.WithContext(ctx).Where("git_repo_id = ?", gitRepoID).Order("name ASC").Find(&repos).Error
+	return repos, err
+}
+
+// Image repos named ns/name or ns/name/anything that carry no link yet
+func (s *Store) ListUnlinkedRepositoriesForGit(ctx context.Context, namespace, name string) ([]*db.Repository, error) {
+	var repos []*db.Repository
+	err := s.db.WithContext(ctx).Where("namespace = ? AND git_repo_id IS NULL AND (name = ? OR name LIKE ? ESCAPE '\\')", namespace, name, pages.LikePrefix(name+"/")).Find(&repos).Error
+	return repos, err
+}
+
+// Moves a repository row to a new address
+func (s *Store) MoveRepository(ctx context.Context, id, newNamespace, newName, ownerID string, isOrg bool) error {
+	return s.db.WithContext(ctx).Model(&db.Repository{}).Where("id = ?", id).Updates(map[string]any{
+		"namespace": newNamespace, "name": newName, "owner_id": ownerID, "is_org_namespace": isOrg,
+	}).Error
 }

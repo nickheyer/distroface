@@ -14,18 +14,52 @@ import (
 type Access struct {
 	store    *stores.Store
 	enforcer *rbac.Enforcer
+	linked   auth.LinkedAccess
 }
 
 func NewAccess(store *stores.Store, enforcer *rbac.Enforcer) *Access {
 	return &Access{store: store, enforcer: enforcer}
 }
 
-// Owner, manage permission, org membership, or scoped grant
+// Installs the source repository access hook, set once at startup
+func (a *Access) SetLinkedAccess(l auth.LinkedAccess) {
+	a.linked = l
+}
+
+// Moves scoped grants when a repository is renamed
+func (a *Access) RenameObject(resource, oldObject, newObject string) error {
+	return a.enforcer.RenameObject(resource, oldObject, newObject)
+}
+
+// Full name of the linked source repo, empty when standalone
+func (a *Access) sourceName(ctx context.Context, repo *db.ArtifactRepository) string {
+	if repo.GitRepoID == nil {
+		return ""
+	}
+	g, err := a.store.GetGitRepositoryByID(ctx, *repo.GitRepoID)
+	if err != nil || g == nil {
+		return ""
+	}
+	return g.Namespace + "/" + g.Name
+}
+
+// Owner, manage permission, org membership, source repo, or scoped grant
 func (a *Access) HasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser, repo *db.ArtifactRepository, action string) bool {
 	if user == nil {
 		return false
 	}
+	if user.IsScoped() {
+		if !auth.ScopeAllows(user, action, repo.Namespace+"/"+repo.Name, repo.Namespace, a.sourceName(ctx, repo)) {
+			return false
+		}
+		if user.IsDeployKey() {
+			return repo.GitRepoID != nil && a.linked != nil && a.linked.LinkedRepoAllows(ctx, user, *repo.GitRepoID, action)
+		}
+	}
 	if repo.OwnerID != "" && repo.OwnerID == user.ID {
+		return true
+	}
+	if repo.GitRepoID != nil && a.linked != nil && a.linked.LinkedRepoAllows(ctx, user, *repo.GitRepoID, action) {
 		return true
 	}
 	if a.enforcer.HasPermission(user.Roles, rbac.ResourceArtifacts, rbac.ActionManage) {
@@ -47,6 +81,9 @@ func (a *Access) HasRepoAccess(ctx context.Context, user *auth.AuthenticatedUser
 
 // Public repos or any read grant
 func (a *Access) CanSee(ctx context.Context, user *auth.AuthenticatedUser, repo *db.ArtifactRepository) bool {
+	if user != nil && user.IsScoped() && !auth.ScopeAllows(user, rbac.ActionRead, repo.Namespace+"/"+repo.Name, repo.Namespace, a.sourceName(ctx, repo)) {
+		return false
+	}
 	return !repo.IsPrivate || a.HasRepoAccess(ctx, user, repo, rbac.ActionRead)
 }
 
@@ -80,6 +117,7 @@ func (a *Access) ListOptions(user *auth.AuthenticatedUser, namespace string) sto
 		if !opts.IncludePrivate {
 			opts.GrantedRepos = a.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceArtifacts, rbac.ActionRead)
 		}
+		opts.OnlyRepo, opts.OnlyNamespace = user.ListingScope()
 	}
 	return opts
 }

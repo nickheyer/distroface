@@ -8,35 +8,52 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
+		Table,
+		TableBody,
+		TableCell,
+		TableHead,
+		TableHeader,
+		TableRow
 	} from '$lib/components/ui/table';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import { QueryFilter } from '$lib/query.svelte';
-	import WebhookFormPanel from '$lib/components/webhook-form-panel.svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import type { Webhook as WebhookType, WebhookDelivery } from '$lib/proto/distroface/v1/types_pb';
-	import { WebhookEvent, WebhookScope } from '$lib/proto/distroface/v1/types_pb';
+	import { WebhookScope } from '$lib/proto/distroface/v1/types_pb';
 	import {
-		Webhook, Plus, Pencil, Trash2, RotateCw, CircleCheck, CircleX, ChevronDown
+		Webhook,
+		Plus,
+		Pencil,
+		Trash2,
+		RotateCw,
+		CircleCheck,
+		CircleX,
+		ChevronDown
 	} from '@lucide/svelte';
-	import isURL from 'validator/lib/isURL';
 
 	let {
 		scope,
 		scopeId,
+		newHref,
+		editHref,
+    hideHeaderText = false,
+    hideCreateButton = false,
 		emptyDescription = 'Add a webhook to get notified of push, pull, and delete events.',
 		createDescription = 'Receive HTTP POST notifications for events.'
 	}: {
 		scope: WebhookScope;
 		scopeId: string;
+		newHref: string;
+		editHref: (id: string) => string;
+    hideHeaderText?: boolean;
+    hideCreateButton?: boolean;
 		emptyDescription?: string;
 		createDescription?: string;
 	} = $props();
 
-	// ── List state ──────────────────────────────────────────────────────
 	let webhooks = $state<WebhookType[]>([]);
 	let loading = $state(false);
 	let loaded = $state(false);
@@ -47,116 +64,33 @@
 		{ key: 'created_by', label: 'Created By' }
 	]);
 
-	// ── Create state ────────────────────────────────────────────────────
-	let createOpen = $state(false);
-	let newUrl = $state('');
-	let newSecret = $state('');
-	let newActive = $state(true);
-	let newEvents = $state<WebhookEvent[]>([WebhookEvent.PUSH]);
-	let newPayloadTemplate = $state('');
-	let creating = $state(false);
-
-	// ── Edit state ──────────────────────────────────────────────────────
-	let editOpen = $state(false);
-	let editTarget = $state<WebhookType | null>(null);
-	let editUrl = $state('');
-	let editSecret = $state('');
-	let editActive = $state(true);
-	let editEvents = $state<WebhookEvent[]>([]);
-	let editPayloadTemplate = $state('');
-	let saving = $state(false);
-
-	// ── Delete state ────────────────────────────────────────────────────
 	let deleteOpen = $state(false);
 	let deleteTarget = $state<WebhookType | null>(null);
 	let deleting = $state(false);
 
-	// ── Delivery state ──────────────────────────────────────────────────
 	let expandedId = $state<string | null>(null);
 	let deliveries = $state<WebhookDelivery[]>([]);
 	let deliveriesLoading = $state(false);
 	let redelivering = $state<string | null>(null);
 
-
-	const isValidUrl = (v: string) => isURL(v, { protocols: ['http', 'https'], require_protocol: true, require_tld: false });
-
-	// ── Handlers ────────────────────────────────────────────────────────
 	async function load() {
 		loading = true;
 		try {
 			const listReq: Record<string, unknown> = {
 				page: pager.request(filter.request())
 			};
-			if (scope === WebhookScope.REPOSITORY) listReq.repoId = scopeId;
-			else listReq.orgId = scopeId;
+			if (scope === WebhookScope.ORGANIZATION) listReq.orgId = scopeId;
+			else listReq.repoId = scopeId;
 
 			const resp = await rpcClient.webhook.listWebhooks(listReq);
 			webhooks = resp.webhooks;
 			pager.apply(resp.page);
-		} catch { webhooks = []; }
-		finally { loading = false; loaded = true; }
-	}
-
-	function openCreate() {
-		newUrl = '';
-		newSecret = '';
-		newActive = true;
-		newEvents = [WebhookEvent.PUSH];
-		newPayloadTemplate = '';
-		createOpen = true;
-	}
-
-	async function submitCreate() {
-		creating = true;
-		try {
-			const createReq: Record<string, unknown> = {
-				scope,
-				url: newUrl,
-				secret: newSecret,
-				events: newEvents,
-				active: newActive,
-				contentType: 'application/json',
-				payloadTemplate: newPayloadTemplate
-			};
-			if (scope === WebhookScope.REPOSITORY) createReq.repoId = scopeId;
-			else createReq.orgId = scopeId;
-
-			await rpcClient.webhook.createWebhook(createReq);
-			createOpen = false;
-			toast.success('Webhook created');
-			load();
-		} catch { /* error interceptor */ }
-		finally { creating = false; }
-	}
-
-	function openEdit(wh: WebhookType) {
-		editTarget = wh;
-		editUrl = wh.url;
-		editSecret = '';
-		editActive = wh.active;
-		editEvents = [...wh.events];
-		editPayloadTemplate = wh.payloadTemplate;
-		editOpen = true;
-	}
-
-	async function submitEdit() {
-		if (!editTarget) return;
-		saving = true;
-		try {
-			await rpcClient.webhook.updateWebhook({
-				id: editTarget.id,
-				url: editUrl,
-				secret: editSecret || undefined,
-				events: editEvents,
-				active: editActive,
-				contentType: 'application/json',
-				payloadTemplate: editPayloadTemplate
-			});
-			editOpen = false;
-			toast.success('Webhook updated');
-			load();
-		} catch { /* error interceptor */ }
-		finally { saving = false; }
+		} catch {
+			webhooks = [];
+		} finally {
+			loading = false;
+			loaded = true;
+		}
 	}
 
 	function confirmDelete(wh: WebhookType) {
@@ -173,19 +107,31 @@
 			toast.success('Webhook deleted');
 			if (expandedId === deleteTarget.id) expandedId = null;
 			load();
-		} catch { /* error interceptor */ }
-		finally { deleting = false; }
+		} catch {
+			/* error interceptor */
+		} finally {
+			deleting = false;
+		}
 	}
 
 	async function toggleExpand(whId: string) {
-		if (expandedId === whId) { expandedId = null; return; }
+		if (expandedId === whId) {
+			expandedId = null;
+			return;
+		}
 		expandedId = whId;
 		deliveriesLoading = true;
 		try {
-			const resp = await rpcClient.webhook.listWebhookDeliveries({ page: { pageSize: 10 }, webhookId: whId });
+			const resp = await rpcClient.webhook.listWebhookDeliveries({
+				page: { pageSize: 10 },
+				webhookId: whId
+			});
 			deliveries = resp.deliveries;
-		} catch { deliveries = []; }
-		finally { deliveriesLoading = false; }
+		} catch {
+			deliveries = [];
+		} finally {
+			deliveriesLoading = false;
+		}
 	}
 
 	async function redeliver(deliveryId: string) {
@@ -194,11 +140,17 @@
 			await rpcClient.webhook.redeliverWebhook({ deliveryId });
 			toast.success('Redelivery triggered');
 			if (expandedId) {
-				const resp = await rpcClient.webhook.listWebhookDeliveries({ page: { pageSize: 10 }, webhookId: expandedId });
+				const resp = await rpcClient.webhook.listWebhookDeliveries({
+					page: { pageSize: 10 },
+					webhookId: expandedId
+				});
 				deliveries = resp.deliveries;
 			}
-		} catch { /* error interceptor */ }
-		finally { redelivering = null; }
+		} catch {
+			/* error interceptor */
+		} finally {
+			redelivering = null;
+		}
 	}
 
 	function filterChanged() {
@@ -206,39 +158,55 @@
 		load();
 	}
 
-	onMount(() => { load(); });
+	onMount(() => {
+		load();
+	});
 </script>
 
 <div class="space-y-4">
 	<div class="section-header">
-		<div>
-			<h2 class="section-title">Webhooks</h2>
-		</div>
-		<Button size="sm" onclick={openCreate}>
-			<Plus class="h-4 w-4 mr-1.5" />Add Webhook
-		</Button>
+    {#if !hideHeaderText}
+      <div class="min-w-0">
+        <h2 class="section-title">Webhooks</h2>
+        <p class="section-subtitle">{createDescription}</p>
+      </div>
+    {/if}
+    {#if !hideCreateButton}
+      <Button class="shrink-0" href={newHref}>
+        <Plus />
+        Add webhook
+      </Button>
+    {/if}
 	</div>
 
 	<div class="max-w-md">
-		<QueryFilterBar {filter} placeholder="Search webhooks..." onchange={filterChanged} />
+		<QueryFilterBar {filter} placeholder="Search webhooks" onchange={filterChanged} />
 	</div>
 
 	{#if !loaded}
-		<div class="space-y-2">
+		<div class="box divide-y">
 			{#each { length: 2 }, i (i)}
-				<Skeleton class="h-14 w-full rounded-xl" />
+				<div class="flex items-center gap-3 px-4 py-3">
+					<Skeleton class="size-3.5" />
+					<Skeleton class="h-4 flex-1" />
+					<Skeleton class="h-5 w-16" />
+					<Skeleton class="h-5 w-14" />
+				</div>
 			{/each}
 		</div>
 	{:else if webhooks.length === 0}
 		<EmptyState
 			icon={Webhook}
-			message={filter.active ? 'No matching webhooks' : 'No webhooks'}
+			message={filter.active ? 'No matching webhooks' : 'No webhooks yet'}
 			description={filter.active ? 'No results match the current filter' : emptyDescription}
 		>
 			{#snippet actions()}
-				<Button variant="outline" size="sm" onclick={openCreate}>
-					<Plus class="h-3.5 w-3.5 mr-1.5" />Add Webhook
-				</Button>
+				{#if !filter.active}
+					<Button variant="outline" href={newHref}>
+						<Plus />
+						Add webhook
+					</Button>
+				{/if}
 			{/snippet}
 		</EmptyState>
 	{:else}
@@ -246,43 +214,58 @@
 			<Table class="table-fixed">
 				<TableHeader>
 					<TableRow>
-						<TableHead class="th w-10"></TableHead>
-						<TableHead class="th">URL</TableHead>
-						<TableHead class="th w-40">Events</TableHead>
-						<TableHead class="th w-20 text-center">Status</TableHead>
-						<TableHead class="th w-24 text-right">Actions</TableHead>
+						<TableHead class="w-10"></TableHead>
+						<TableHead>URL</TableHead>
+						<TableHead class="w-40">Events</TableHead>
+						<TableHead class="w-20 text-center">Status</TableHead>
+						<TableHead class="w-24 text-right">Actions</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
 					{#each webhooks as wh (wh.id)}
-						<TableRow class="cursor-pointer group/row" onclick={() => toggleExpand(wh.id)}>
-							<TableCell class="py-3 px-3">
-								<ChevronDown class="h-3.5 w-3.5 text-muted-foreground/50 transition-transform {expandedId === wh.id ? 'rotate-180' : ''}" />
+						<TableRow class="cursor-pointer" onclick={() => toggleExpand(wh.id)}>
+							<TableCell>
+								<ChevronDown
+									class="size-3.5 text-muted-foreground transition-transform {expandedId === wh.id
+										? 'rotate-180'
+										: ''}"
+								/>
 							</TableCell>
-							<TableCell class="py-3 px-3">
-								<span class="font-mono text-xs text-muted-foreground truncate block">{wh.url}</span>
+							<TableCell>
+								<span class="block truncate font-mono text-sm">{wh.url}</span>
 							</TableCell>
-							<TableCell class="py-3 px-3">
+							<TableCell>
 								<div class="flex flex-wrap gap-1">
 									{#each wh.events as ev (ev)}
-										<Badge variant="outline" class="text-[10px] py-0 h-4.5">{webhookEventLabels[ev] ?? 'unknown'}</Badge>
+										<Badge variant="outline">{webhookEventLabels[ev] ?? 'unknown'}</Badge>
 									{/each}
 								</div>
 							</TableCell>
-							<TableCell class="py-3 px-3 text-center">
+							<TableCell class="text-center">
 								{#if wh.active}
-									<Badge variant="secondary" class="text-[10px] py-0 h-4.5 text-success">Active</Badge>
+									<Badge variant="success">Active</Badge>
 								{:else}
-									<Badge variant="secondary" class="text-[10px] py-0 h-4.5 text-muted-foreground">Inactive</Badge>
+									<Badge variant="secondary">Inactive</Badge>
 								{/if}
 							</TableCell>
-							<TableCell class="py-3 px-3 text-right" onclick={(e: MouseEvent) => e.stopPropagation()}>
+							<TableCell class="text-right" onclick={(e: MouseEvent) => e.stopPropagation()}>
 								<div class="flex items-center justify-end gap-1">
-									<Button variant="ghost" size="icon" class="h-7 w-7" onclick={() => openEdit(wh)}>
-										<Pencil class="h-3 w-3" />
+									<Button
+										variant="ghost-muted"
+										size="icon-sm"
+										href={editHref(wh.id)}
+										aria-label="Edit webhook"
+									>
+										<Pencil />
 									</Button>
-									<Button variant="ghost" size="icon" class="h-7 w-7 text-destructive" onclick={() => confirmDelete(wh)}>
-										<Trash2 class="h-3 w-3" />
+									<Button
+										variant="ghost-muted"
+										size="icon-sm"
+										class="hover:text-destructive"
+										onclick={() => confirmDelete(wh)}
+										aria-label="Delete webhook"
+									>
+										<Trash2 />
 									</Button>
 								</div>
 							</TableCell>
@@ -291,36 +274,52 @@
 						{#if expandedId === wh.id}
 							<TableRow>
 								<TableCell colspan={5} class="p-0">
-									<div class="bg-muted/20 border-t border-border/40 px-5 py-4">
-										<h4 class="text-xs font-medium text-muted-foreground mb-3">Recent Deliveries</h4>
+									<div class="bg-muted/40 px-5 py-4">
+										<p class="eyebrow mb-3">Recent deliveries</p>
 										{#if deliveriesLoading}
-											<div class="space-y-2">
-												<Skeleton class="h-8 w-full" />
-												<Skeleton class="h-8 w-full" />
+											<div class="box divide-y">
+												{#each { length: 2 }, i (i)}
+													<div class="flex items-center gap-3 px-3 py-2">
+														<Skeleton class="size-3.5" />
+														<Skeleton class="h-4 w-full" />
+													</div>
+												{/each}
 											</div>
 										{:else if deliveries.length === 0}
-											<p class="text-xs text-muted-foreground/60 py-2">No deliveries yet</p>
+											<p class="py-2 text-xs text-muted-foreground">No deliveries yet</p>
 										{:else}
-											<div class="space-y-1.5">
+											<div class="box divide-y">
 												{#each deliveries as d (d.id)}
-													<div class="flex items-center gap-3 text-xs rounded-lg bg-background border border-border/40 px-3 py-2">
+													<div class="flex items-center gap-3 px-3 py-2 text-xs">
 														{#if d.success}
-															<CircleCheck class="h-3.5 w-3.5 text-success shrink-0" />
+															<CircleCheck class="size-3.5 shrink-0 text-success" />
 														{:else}
-															<CircleX class="h-3.5 w-3.5 text-destructive shrink-0" />
+															<CircleX class="size-3.5 shrink-0 text-destructive" />
 														{/if}
-														<Badge variant="outline" class="text-[10px] py-0 h-4.5 font-mono">{webhookEventLabels[d.event] ?? 'unknown'}</Badge>
-														<span class="font-mono text-muted-foreground">{d.statusCode || '---'}</span>
-														<span class="text-muted-foreground/50">{d.durationMs}ms</span>
+														<Badge variant="outline" class="font-mono"
+															>{webhookEventLabels[d.event] ?? 'unknown'}</Badge
+														>
+														<span class="font-mono text-muted-foreground"
+															>{d.statusCode || '---'}</span
+														>
+														<span class="text-muted-foreground tabular-nums">{d.durationMs}ms</span>
 														{#if d.deliveredAt}
-															<span class="text-muted-foreground/50 ml-auto">{relativeTime(timestampDate(d.deliveredAt))}</span>
+															<span class="ml-auto text-muted-foreground">
+																{relativeTime(timestampDate(d.deliveredAt))}
+															</span>
 														{/if}
 														<Button
-															variant="ghost" size="icon" class="h-6 w-6 shrink-0"
+															variant="ghost-muted"
+															size="icon-xs"
+															class="shrink-0"
 															disabled={redelivering === d.id}
-															onclick={(e: MouseEvent) => { e.stopPropagation(); redeliver(d.id); }}
+															onclick={(e: MouseEvent) => {
+																e.stopPropagation();
+																redeliver(d.id);
+															}}
+															aria-label="Redeliver"
 														>
-															<RotateCw class="h-3 w-3 {redelivering === d.id ? 'animate-spin' : ''}" />
+															<RotateCw class={redelivering === d.id ? 'animate-spin' : ''} />
 														</Button>
 													</div>
 												{/each}
@@ -338,50 +337,15 @@
 	{/if}
 </div>
 
-<!-- Create Webhook Panel -->
-<WebhookFormPanel
-	bind:open={createOpen}
-	title="Add Webhook"
-	description={createDescription}
-	formMode="create"
-	bind:url={newUrl}
-	bind:secret={newSecret}
-	bind:events={newEvents}
-	bind:payloadTemplate={newPayloadTemplate}
-	bind:active={newActive}
+<ConfirmDialog
+	bind:open={deleteOpen}
+	title="Delete webhook"
+	confirmLabel="Delete"
+	onConfirm={doDelete}
+	loading={deleting}
+	icon={Trash2}
 >
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (createOpen = false)}>Cancel</Button>
-		<Button onclick={submitCreate} disabled={creating || !isValidUrl(newUrl) || newEvents.length === 0}>
-			{creating ? 'Creating...' : 'Create Webhook'}
-		</Button>
-	{/snippet}
-</WebhookFormPanel>
-
-<!-- Edit Webhook Panel -->
-<WebhookFormPanel
-	bind:open={editOpen}
-	title="Edit Webhook"
-	description="Update webhook configuration."
-	formMode="edit"
-	idPrefix="wh-edit"
-	bind:url={editUrl}
-	bind:secret={editSecret}
-	bind:events={editEvents}
-	bind:payloadTemplate={editPayloadTemplate}
-	bind:active={editActive}
->
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (editOpen = false)}>Cancel</Button>
-		<Button onclick={submitEdit} disabled={saving || !isValidUrl(editUrl) || editEvents.length === 0}>
-			{saving ? 'Saving...' : 'Save Changes'}
-		</Button>
-	{/snippet}
-</WebhookFormPanel>
-
-<!-- Delete Webhook -->
-<ConfirmDialog bind:open={deleteOpen} title="Delete Webhook" confirmLabel="Delete" onConfirm={doDelete} loading={deleting} icon={Trash2}>
 	{#snippet description()}
-		Are you sure you want to delete this webhook? All delivery history will be lost. This action cannot be undone.
+		This permanently deletes <strong>{deleteTarget?.url}</strong> and its delivery history.
 	{/snippet}
 </ConfirmDialog>

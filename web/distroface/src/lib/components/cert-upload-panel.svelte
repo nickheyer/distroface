@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
+	import { Loader2 } from '@lucide/svelte';
 	import PemInput from '$lib/components/pem-input.svelte';
-	import FormPanel from '$lib/components/form-panel.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import { errText } from '$lib/act.svelte';
 
@@ -44,23 +44,56 @@
 	}
 </script>
 
-<FormPanel bind:open {title} {description}>
-	<div class="space-y-4">
-		<FormField label="Certificate (PEM)" id="upload-cert-pem" required help="Full chain leaf first, paste or upload">
-			<PemInput id="upload-cert-pem" bind:value={certPem} rows={6} placeholder="-----BEGIN CERTIFICATE-----" disabled={busy} />
-		</FormField>
-		<FormField label="Private key (PEM)" id="upload-key-pem" required help="Paste or upload, stored server side">
-			<PemInput id="upload-key-pem" bind:value={keyPem} rows={6} placeholder="-----BEGIN PRIVATE KEY-----" secret disabled={busy} />
-		</FormField>
-		{#if error}
-			<p class="text-[13px] text-destructive">{error}</p>
-		{/if}
+{#if open}
+	<div class="box p-4">
+		<div class="space-y-4">
+			<div>
+				<p class="text-sm font-semibold">{title}</p>
+				{#if description}
+					<p class="mt-0.5 text-xs text-muted-foreground">{description}</p>
+				{/if}
+			</div>
+			<div class="grid gap-4 md:grid-cols-2">
+				<FormField
+					label="Certificate (PEM)"
+					id="upload-cert-pem"
+					required
+					help="Full chain leaf first, paste or upload"
+				>
+					<PemInput
+						id="upload-cert-pem"
+						bind:value={certPem}
+						rows={6}
+						placeholder="-----BEGIN CERTIFICATE-----"
+						disabled={busy}
+					/>
+				</FormField>
+				<FormField
+					label="Private key (PEM)"
+					id="upload-key-pem"
+					required
+					help="Paste or upload, stored server side"
+				>
+					<PemInput
+						id="upload-key-pem"
+						bind:value={keyPem}
+						rows={6}
+						placeholder="-----BEGIN PRIVATE KEY-----"
+						secret
+						disabled={busy}
+					/>
+				</FormField>
+			</div>
+			{#if error}
+				<p class="text-xs text-destructive" role="alert">{error}</p>
+			{/if}
+			<div class="flex items-center justify-end gap-2 border-t pt-4">
+				<Button variant="outline" onclick={() => (open = false)} disabled={busy}>Cancel</Button>
+				<Button onclick={submit} disabled={busy || !certPem.trim() || !keyPem.trim()}>
+					{#if busy}<Loader2 class="animate-spin" />{/if}
+					{busy ? 'Uploading' : 'Upload'}
+				</Button>
+			</div>
+		</div>
 	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (open = false)}>Cancel</Button>
-		<Button onclick={submit} disabled={busy || !certPem.trim() || !keyPem.trim()}>
-			{busy ? 'Uploading...' : 'Upload'}
-		</Button>
-	{/snippet}
-</FormPanel>
+{/if}
