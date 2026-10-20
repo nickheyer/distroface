@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path"
 	pathpkg "path"
 	"strings"
 	"time"
@@ -83,7 +82,7 @@ func loadWorkflowFiles(ctx context.Context, r *gitrepo.Repo, commit plumbing.Has
 			if !e.Mode.IsFile() || !IsWorkflowFile(e.Name) {
 				continue
 			}
-			p := path.Join(dir, e.Name)
+			p := pathpkg.Join(dir, e.Name)
 			wf := &WorkflowFile{Path: p}
 			blob, err := r.Blob(commit, p, workflowFileCap)
 			if err != nil {

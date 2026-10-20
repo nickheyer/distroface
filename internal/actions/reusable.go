@@ -239,7 +239,7 @@ func callPermissions(caller, called *Permissions) *Permissions {
 
 // Job key at the start of a key remainder, before any suffix or slash
 func leadingJobKey(s string) string {
-	for i := 0; i < len(s); i++ {
+	for i := range s {
 		c := s[i]
 		if c == '_' || c == '-' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') {
 			continue
