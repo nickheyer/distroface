@@ -32,6 +32,8 @@ message GetStorageUsageResponse {
   int64 artifact_bytes = 2;
   repeated StorageUsageEntry registry_namespaces = 3; // Five largest
   repeated StorageUsageEntry artifact_repos = 4; // Five largest
+  google.protobuf.Timestamp computed_at = 5;
+  bool pending = 6;
 }
 
 // RunGCRequest configures a garbage collection run.
@@ -55,12 +57,14 @@ message GCRun {
   bool dry_run = 3;
   // remove_untagged indicates untagged manifests were eligible for deletion.
   bool remove_untagged = 4;
-  // blobs_deleted is the number of blobs removed from disk.
+  // blobs_deleted is the number of blobs removed from disk, or eligible on a dry run.
   int64 blobs_deleted = 5;
-  // bytes_freed is the disk space reclaimed in bytes.
+  // bytes_freed is the disk space reclaimed in bytes, or reclaimable on a dry run.
   int64 bytes_freed = 6;
   // error is the failure message, empty on success.
   string error = 7;
+  // ran_on names the instance that swept, empty without a shared cache.
+  string ran_on = 8;
 }
 
 // GetGCStatusRequest is an empty request.
@@ -76,4 +80,10 @@ message GetGCStatusResponse {
   bool scheduled = 3;
   // interval_hours is the configured schedule interval.
   int32 interval_hours = 4;
+  // running_on names the instance sweeping right now, empty without a shared cache.
+  string running_on = 5;
+  // cache describes the shared cache backend, memory when none is configured.
+  string cache = 6;
+  // cache_error says why the shared cache is unreachable, empty while healthy.
+  string cache_error = 7;
 }

@@ -47,6 +47,15 @@ Can set config via:
 | `--artifact-repos` | `SEED_ARTIFACT_REPOS` | `60` | Artifact repository count |
 | `--artifacts` | `SEED_ARTIFACTS` | `1500` | Uploaded artifact count |
 | `--portals` | `SEED_PORTALS` | `20` | Registry portal count |
+| `--git-repos` | `SEED_GIT_REPOS` | `60` | Git repository count |
+| `--commits-per-repo` | `SEED_COMMITS_PER_REPO` | `5` | Commits pushed per git repository |
+| `--teams` | `SEED_TEAMS` | `30` | Organization team count |
+| `--labels-per-repo` | `SEED_LABELS_PER_REPO` | `4` | Labels created per git repository |
+| `--milestones-per-repo` | `SEED_MILESTONES_PER_REPO` | `2` | Milestones created per git repository |
+| `--issues` | `SEED_ISSUES` | `300` | Issue count |
+| `--pull-requests` | `SEED_PULL_REQUESTS` | `100` | Pull request count |
+| `--releases` | `SEED_RELEASES` | `60` | Release count |
+| `--git-stars` | `SEED_GIT_STARS` | `200` | Git repository star count |
 | `--layer-size` | `SEED_LAYER_SIZE` | `2048` | Image layer size in bytes |
 | `--artifact-size` | `SEED_ARTIFACT_SIZE` | `2048` | Artifact payload size in bytes |
 | `--webhook-url` | `SEED_WEBHOOK_URL` | `http://127.0.0.1:9/seed-hook` | Webhook target URL |
@@ -72,6 +81,14 @@ Run in dependency order later phases sample from the pools built by earlier ones
 | `artifact-repos` | `ArtifactService/CreateArtifactRepository` | orgs | Split between admin and org namespaces |
 | `artifacts` | initiate → chunk PATCH → complete | artifact-repos | Random payloads, versioned, with properties |
 | `portals` | `PortalService/CreatePortal` | orgs | Cycles app port + port pool, one catch-all per pool port, hostnames stack on every port |
+| `git-repos` | `GitService/CreateGitRepository` + go-git push over http | orgs, users | Cycles admin, org, and seeded user namespaces, every third auto inits, pushes commits, two branches, one annotated tag as the namespace owner |
+| `teams` | `OrganizationService/CreateTeam` + `AddTeamMember` + `AddTeamRepo` | orgs, git-repos | Up to three org members per team, one org git repo unless the team includes all repos |
+| `labels` | `IssueService/CreateLabel` | git-repos | Fixed palette per repo, slash names are exclusive scopes |
+| `milestones` | `IssueService/CreateMilestone` | git-repos | Monthly due dates |
+| `issues` | `IssueService/CreateIssue` + `CreateComment` + `UpdateIssue` | git-repos, labels, milestones | Random labels and milestone, every third gets a comment, every fourth is closed |
+| `pull-requests` | go-git topic branch push + `PullRequestService/CreatePullRequest` + `MergePullRequest` | git-repos | Every fourth is merged, cycling merge, squash, rebase, rebase merge |
+| `releases` | `ReleaseService/CreateRelease` + `PublishRelease` | git-repos | First pass uses the pushed tag, later passes cut tags via `GitRefService/CreateTag`, half are published |
+| `git-stars` | `GitService/StarGitRepository` | users, git-repos | As seeded users against public repos |
 
 ## Seeding targets
 
@@ -92,4 +109,6 @@ go run ./scripts/seeder --password secret --phases images --image-repos 500 --ta
 SEED_PASSWORD=secret SEED_USERS=2000 SEED_ARTIFACTS=10000 go run ./scripts/seeder
 ```
 
-Multi-user phases (`stars`, `tokens`) log in as users created in the same run, so they need the `users` phase enabled alongside them.
+Multi-user phases (`stars`, `tokens`, `git-stars`) log in as users created in the same run, so they need the `users` phase enabled alongside them.
+
+Git pushes go through the smart http transport at `<base-url>/<ns>/<name>.git` with go-git as the client, authenticating with basic auth as the namespace owner (the seeded user's password for user namespaces, the admin password elsewhere). Each worker clones or inits into its own temp dir and removes it afterwards.

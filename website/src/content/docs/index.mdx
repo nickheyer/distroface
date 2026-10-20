@@ -1,0 +1,52 @@
+---
+title: DistroFace
+description: Blob distribution and storage. Container registry, artifacts, git hosting, actions and agents in one binary.
+template: splash
+editUrl: false
+hero:
+  tagline: Blob distribution and storage. A container registry, artifact store, git forge, CI runner and agent host in one static binary.
+  image:
+    light: ../../assets/hero-light.png
+    dark: ../../assets/hero-dark.png
+    alt: DistroFace
+  actions:
+    - text: Get started
+      link: /distroface/getting-started/installation/
+      icon: right-arrow
+    - text: GitHub
+      link: https://github.com/nickheyer/distroface
+      icon: github
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components'
+
+## Quickstart
+
+```bash
+docker run -p 8080:8080 -v distroface:/app/data nickheyer/distroface:latest
+```
+
+```bash
+docker login localhost:8080
+docker tag alpine localhost:8080/myteam/alpine
+docker push localhost:8080/myteam/alpine
+```
+
+```bash
+git clone http://localhost:8080/myteam/app
+git clone git@localhost:myteam/app.git
+```
+
+## Sections
+
+<CardGrid>
+  <LinkCard title="Getting started" description="Install, configure, pick a database and cache." href="/distroface/getting-started/installation/" />
+  <LinkCard title="Administration" description="Users, roles, OIDC, organizations, TLS, ACME, mail and audit." href="/distroface/administration/settings/" />
+  <LinkCard title="Registry" description="The OCI registry, storage, manifest rules and garbage collection." href="/distroface/registry/overview/" />
+  <LinkCard title="Artifacts" description="Versioned file repositories, search, retention and the v1 API." href="/distroface/artifacts/repositories/" />
+  <LinkCard title="Git" description="Repositories, cloning, LFS, branches, issues, pull requests, releases and wiki." href="/distroface/git/repositories/" />
+  <LinkCard title="Actions" description="GitHub compatible workflows, runners, secrets, artifacts and cache." href="/distroface/actions/overview/" />
+  <LinkCard title="Agents" description="Model driven reviewers, coders and triage bots on your repositories." href="/distroface/agents/overview/" />
+  <LinkCard title="API and CLI" description="The ConnectRPC services and the dfcli client." href="/distroface/api/overview/" />
+</CardGrid>

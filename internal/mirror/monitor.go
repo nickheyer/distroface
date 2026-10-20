@@ -7,13 +7,17 @@ import (
 	"fmt"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/go-git/go-git/v6/plumbing/transport"
+
 	"github.com/nickheyer/distroface/internal/artifacts"
+	"github.com/nickheyer/distroface/internal/auth"
+	"github.com/nickheyer/distroface/internal/cache"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -47,20 +51,27 @@ func (e *CooldownError) Error() string {
 
 // Monitor polls mirror repos and pulls new upstream content
 type Monitor struct {
-	store     *stores.Store
-	res       *settings.Resolver
-	artifacts *artifacts.Manager
-	oci       *ociSyncer
-	log       *logger.Logger
-	client    *http.Client
+	store        *stores.Store
+	res          *settings.Resolver
+	artifacts    *artifacts.Manager
+	oci          *ociSyncer
+	git          *gitrepo.Manager
+	sealer       *auth.Sealer
+	legacySealer *auth.Sealer
+	log          *logger.Logger
+	client       *http.Client
+	dial         transport.DialContextFunc
 
 	baseCtx     context.Context
+	shared      *cache.Client
 	mu          sync.Mutex
 	running     bool
 	inflight    map[string]bool
+	leases      map[string]syncLease
 	cancels     map[string]context.CancelFunc
 	stopped     map[string]bool
 	activeSyncs map[string]Event
+	pushTimers  map[string]*time.Timer
 	events      *hub
 }
 
@@ -69,6 +80,7 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		return res.System(context.Background()).GetMirror().GetAllowPrivateNetworks()
 	}
 	pace := newPacer()
+	dial := safeDialer(allowPrivate).DialContext
 	client := &http.Client{
 		Transport: &pacedTransport{inner: safeTransport(allowPrivate), pace: pace},
 		Timeout:   0,
@@ -94,11 +106,14 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		oci:         oci,
 		log:         log,
 		client:      client,
+		dial:        dial,
 		baseCtx:     context.Background(),
 		inflight:    make(map[string]bool),
+		leases:      make(map[string]syncLease),
 		cancels:     make(map[string]context.CancelFunc),
 		stopped:     make(map[string]bool),
 		activeSyncs: make(map[string]Event),
+		pushTimers:  make(map[string]*time.Timer),
 		events:      newHub(),
 	}
 }
@@ -137,21 +152,57 @@ func (m *Monitor) Schedule(ctx context.Context) {
 	}()
 }
 
-// Claims a repo for one sync, false when already claimed
+// Keeps one instance on a repository while its sync runs
+const syncLeaseTTL = 2 * time.Minute
+
+type syncLease struct {
+	lock *cache.Lock
+	stop func()
+}
+
+// Keeps syncs from overlapping across instances
+func (m *Monitor) SetShared(c *cache.Client) {
+	m.shared = c
+}
+
+// Claims a repo for one sync, false when claimed here or on a peer.
+// A dead redis claims locally, a duplicate sync beats a stalled mirror
 func (m *Monitor) try(key string) bool {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.inflight[key] {
+		m.mu.Unlock()
 		return false
 	}
 	m.inflight[key] = true
+	m.mu.Unlock()
+
+	lock, ok, err := m.shared.TryLock(m.baseCtx, "mirror:"+key, syncLeaseTTL)
+	if err != nil {
+		m.log.Warn("mirror %s lease: %v", key, err)
+	} else if !ok {
+		m.mu.Lock()
+		delete(m.inflight, key)
+		m.mu.Unlock()
+		return false
+	}
+	if lock != nil {
+		m.mu.Lock()
+		m.leases[key] = syncLease{lock: lock, stop: lock.KeepAlive(m.baseCtx)}
+		m.mu.Unlock()
+	}
 	return true
 }
 
 func (m *Monitor) done(key string) {
 	m.mu.Lock()
 	delete(m.inflight, key)
+	lease, held := m.leases[key]
+	delete(m.leases, key)
 	m.mu.Unlock()
+	if held {
+		lease.stop()
+		_ = lease.lock.Unlock(m.baseCtx)
+	}
 }
 
 // Exposes the cancel so a stop request can reach it
@@ -230,6 +281,7 @@ func (m *Monitor) due(ctx context.Context, cfg *v1.MirrorConfig, lastSync *time.
 }
 
 func (m *Monitor) sweep(ctx context.Context) {
+	m.adoptReleasePackages(ctx)
 	lim := m.refreshLimits(ctx)
 	var jobs []func()
 	var wg sync.WaitGroup
@@ -239,7 +291,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 		m.log.Error("mirror sweep artifact repo list: %v", err)
 	}
 	for _, repo := range repos {
-		cfg, err := ParseConfig(repo.MirrorConfig)
+		cfg, err := m.Config(repo.MirrorConfig)
 		if err != nil {
 			m.log.Error("mirror config for artifact repo %s/%s: %v", repo.Namespace, repo.Name, err)
 			continue
@@ -247,7 +299,6 @@ func (m *Monitor) sweep(ctx context.Context) {
 		if !m.due(ctx, cfg, repo.MirrorLastSync, ParseState(repo.MirrorState)) {
 			continue
 		}
-		repo, cfg := repo, cfg
 		jobs = append(jobs, func() {
 			key := fmt.Sprintf("artifact:%d", repo.ID)
 			if !m.try(key) {
@@ -264,7 +315,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 			m.log.Error("mirror sweep image repo list: %v", err)
 		}
 		for _, repo := range imageRepos {
-			cfg, err := ParseConfig(repo.MirrorConfig)
+			cfg, err := m.Config(repo.MirrorConfig)
 			if err != nil {
 				m.log.Error("mirror config for image repo %s/%s: %v", repo.Namespace, repo.Name, err)
 				continue
@@ -272,7 +323,6 @@ func (m *Monitor) sweep(ctx context.Context) {
 			if !m.due(ctx, cfg, repo.MirrorLastSync, ParseState(repo.MirrorState)) {
 				continue
 			}
-			repo, cfg := repo, cfg
 			jobs = append(jobs, func() {
 				key := "image:" + repo.ID
 				if !m.try(key) {
@@ -282,6 +332,10 @@ func (m *Monitor) sweep(ctx context.Context) {
 				m.execImageSync(ctx, repo, cfg)
 			})
 		}
+	}
+
+	if m.git != nil {
+		jobs = append(jobs, m.gitJobs(ctx)...)
 	}
 
 	sem := make(chan struct{}, lim.Workers)
@@ -298,7 +352,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 
 // SyncArtifactRepoNow starts an immediate background sync
 func (m *Monitor) SyncArtifactRepoNow(repo *db.ArtifactRepository) error {
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}
@@ -328,7 +382,7 @@ func (m *Monitor) SyncImageRepoNow(repo *db.Repository) error {
 	if m.oci == nil || repo.Type != v1.RepositoryType_REPOSITORY_TYPE_MIRROR {
 		return fmt.Errorf("%w: repository is not a mirror", ErrInvalid)
 	}
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}
@@ -412,6 +466,14 @@ func (m *Monitor) execImageSync(ctx context.Context, repo *db.Repository, cfg *v
 		m.log.Info("mirror sync for image repo %s/%s stopped by user", repo.Namespace, repo.Name)
 	} else if syncErr != nil {
 		m.log.Error("mirror sync for image repo %s/%s: %v", repo.Namespace, repo.Name, syncErr)
+	}
+	// One shot copies settle into plain repositories
+	if state.ImportOnce && syncErr == nil {
+		if err := m.store.FinishRepositoryImport(statusCtx(ctx), repo.ID); err != nil {
+			m.log.Error("import finish for image repo %s: %v", repo.ID, err)
+		}
+		m.endSync(key, ev, nil)
+		return
 	}
 	if err := m.store.SetRepositoryMirrorStatus(statusCtx(ctx), repo.ID, time.Now().UTC(), msg, state.Encode()); err != nil {
 		m.log.Error("mirror status update for image repo %s: %v", repo.ID, err)
@@ -558,71 +620,34 @@ func describeEmptySync(listed, kept, attachments, badTags, badNames, unmatched i
 	}
 }
 
-// Streams one upstream asset into the blob store as an artifact
-func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, cfg *v1.MirrorConfig, version string, a asset) error {
-	var lastErr error
-	for _, src := range a.sources {
-		err := m.downloadAsset(ctx, repo, cfg, version, a, src)
-		if err == nil {
-			return nil
-		}
-		if _, limited := RetryAfter(err); limited {
-			return err
-		}
-		lastErr = err
-		// Auth shaped failures fall through to the next source
-		var ue *upstreamError
-		if errors.As(err, &ue) {
-			switch ue.status {
-			case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-				continue
-			}
-		}
-		return err
+// Properties stamped on mirrored package files
+func mirrorAssetProps(repo *db.ArtifactRepository, cfg *v1.MirrorConfig) map[string]string {
+	return map[string]string{
+		"mirror.source":   sourceLabel(repo.Type),
+		"mirror.upstream": cfg.GetUpstream(),
 	}
-	if lastErr == nil {
-		return fmt.Errorf("no download source for %s", a.name)
-	}
-	return lastErr
 }
 
-func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository, cfg *v1.MirrorConfig, version string, a asset, src assetSource) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.url, nil)
+// Streams one upstream asset into the blob store as an artifact
+func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, cfg *v1.MirrorConfig, version string, a asset) error {
+	body, src, err := m.openAsset(ctx, a)
 	if err != nil {
 		return err
 	}
-	for k, v := range src.headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if err := classifyResponse(resp, src.url); err != nil {
-		return err
-	}
-	// Sign in walls answer anonymous downloads with a 200 html page
-	if p := resp.Request.URL.Path; strings.HasSuffix(p, "/user/login") || strings.HasSuffix(p, "/users/sign_in") {
-		return fmt.Errorf("%s redirected to the sign in page, the upstream did not accept the token for downloads", src.url)
-	}
+	defer body.Close()
 
 	blobs := m.artifacts.Blobs()
 	uploadID, err := blobs.InitiateUpload()
 	if err != nil {
 		return err
 	}
-	if _, err := blobs.AppendChunk(uploadID, resp.Body); err != nil {
-		blobs.CancelUpload(uploadID)
+	if _, err := blobs.AppendChunk(uploadID, body); err != nil {
+		_ = blobs.CancelUpload(uploadID)
 		return err
 	}
 
-	meta, _ := json.Marshal(map[string]string{"mirror_url": src.url})
-	props := map[string]string{
-		"mirror.source":   sourceLabel(repo.Type),
-		"mirror.upstream": cfg.GetUpstream(),
-	}
-	_, err = m.artifacts.CompleteUpload(ctx, repo, uploadID, version, a.name, string(meta), props)
+	meta, _ := json.Marshal(map[string]string{"mirror_url": src})
+	_, err = m.artifacts.CompleteUpload(ctx, repo, uploadID, version, a.name, string(meta), mirrorAssetProps(repo, cfg))
 	return err
 }
 

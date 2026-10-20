@@ -3,6 +3,15 @@
 	import { Label } from '$lib/components/ui/label';
 	import { cn } from '$lib/utils';
 
+	type Span = 'full' | 'half' | 'third' | 'two-thirds';
+	type Layout = 'stack' | 'toggle' | 'inline';
+	const spanClass: Record<Span, string> = {
+		full: '',
+		half: 'span-half',
+		third: 'span-third',
+		'two-thirds': 'span-two-thirds'
+	};
+
 	let {
 		label,
 		id,
@@ -10,8 +19,9 @@
 		error,
 		tag,
 		required = false,
-		horizontal = false,
-		bordered = true,
+		layout = 'stack',
+		span = 'full',
+		newRow = false,
 		class: className,
 		children
 	}: {
@@ -21,54 +31,52 @@
 		error?: string;
 		tag?: string;
 		required?: boolean;
-		horizontal?: boolean;
-		bordered?: boolean;
+		layout?: Layout;
+		span?: Span;
+		newRow?: boolean;
 		class?: string;
 		children: Snippet;
 	} = $props();
 </script>
 
-{#snippet labelRow()}
-	<div class="flex items-center gap-2">
-		<Label for={id} class="text-sm font-medium leading-none">
-			{label}{#if required}<span class="text-destructive ml-0.5">*</span>{/if}
-		</Label>
-		{#if tag}
-			<span class="rounded-full border border-primary/30 bg-primary/5 px-1.5 py-px text-[10px] font-medium text-primary">
-				{tag}
-			</span>
-		{/if}
-	</div>
+{#snippet text()}
+	<span
+		>{label}{#if required}<span class="ml-0.5 text-destructive" aria-hidden="true">*</span
+			>{/if}</span
+	>
+	{#if tag}
+		<span class="form-tag">{tag}</span>
+	{/if}
 {/snippet}
 
-{#if horizontal}
-	<div
-		class={cn(
-			'flex items-center justify-between gap-6',
-			bordered ? 'rounded-lg border border-border/60 px-4 py-3.5' : 'py-3',
-			className
-		)}
-	>
-		<div class="space-y-0.5 min-w-0">
-			{@render labelRow()}
-			{#if error}
-				<p class="text-[13px] text-destructive leading-snug">{error}</p>
-			{:else if help}
-				<p class="text-[13px] text-muted-foreground leading-snug">{help}</p>
-			{/if}
-		</div>
-		<div class="shrink-0">
+{#snippet caption()}
+	{#if error}
+		<span class="form-caption text-destructive" role="alert">{error}</span>
+	{:else if help}
+		<span class="form-caption">{help}</span>
+	{/if}
+{/snippet}
+
+{#if layout === 'toggle'}
+	<label for={id} class={cn('form-toggle', spanClass[span], newRow && 'span-break', className)}>
+		<span class="form-toggle-control">
 			{@render children()}
+		</span>
+		<span class="form-toggle-text">{@render text()}</span>
+		{@render caption()}
+	</label>
+{:else if layout === 'inline'}
+	<div class={cn('form-inline', spanClass[span], newRow && 'span-break', className)}>
+		<Label for={id} class="form-inline-label gap-2">{@render text()}</Label>
+		<div class="form-inline-control">
+			{@render children()}
+			{@render caption()}
 		</div>
 	</div>
 {:else}
-	<div class={cn(bordered ? 'rounded-lg border border-border/60 p-4 space-y-2' : 'space-y-1.5', className)}>
-		{@render labelRow()}
+	<div class={cn('min-w-0 space-y-1.5', spanClass[span], newRow && 'span-break', className)}>
+		<Label for={id} class="gap-2">{@render text()}</Label>
 		{@render children()}
-		{#if error}
-			<p class="text-[13px] text-destructive">{error}</p>
-		{:else if help}
-			<p class="text-[13px] text-muted-foreground leading-snug">{help}</p>
-		{/if}
+		{@render caption()}
 	</div>
 {/if}

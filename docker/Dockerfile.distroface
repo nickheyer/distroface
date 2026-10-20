@@ -28,8 +28,6 @@ FROM golang:1.26-alpine AS backend-builder
 ARG APP_VERSION
 ENV APP_VERSION=${APP_VERSION}
 
-RUN apk add --no-cache gcc musl-dev sqlite-dev
-
 WORKDIR /app
 
 COPY go.mod go.sum ./
@@ -41,7 +39,7 @@ COPY --from=frontend-builder /app/web/distroface/build ./web/distroface/build
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 go build -o distroface ./cmd/distroface
+    CGO_ENABLED=0 go build -o distroface ./cmd/distroface
 
 FROM alpine:latest
 
@@ -49,7 +47,7 @@ ARG APP_VERSION
 ENV APP_VERSION=${APP_VERSION}
 ENV DISTROFACE_DATA_DIR=/app/data
 
-RUN apk --no-cache add ca-certificates sqlite-libs
+RUN apk --no-cache add ca-certificates
 
 RUN addgroup -g 1000 -S distroface && \
     adduser -u 1000 -S -G distroface -h /app -H -s /sbin/nologin distroface
@@ -66,7 +64,7 @@ RUN apk add --no-cache --virtual .setcap libcap && \
 
 USER 1000:1000
 
-EXPOSE 8080
+EXPOSE 8080 22
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD wget -qO /dev/null --post-data='{}' --header='Content-Type: application/json' \

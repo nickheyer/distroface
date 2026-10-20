@@ -54,3 +54,21 @@ export async function patchSettings(
 		provenance: resp.effective?.provenance ?? []
 	};
 }
+
+// Org repos inherit the org tier, user repos the instance
+export async function repoParentScope(
+	namespace: string,
+	isOrg: boolean
+): Promise<{ scope: ScopeInit; orgId: string }> {
+	if (!isOrg) return { scope: systemScope, orgId: '' };
+	try {
+		const resp = await rpcClient.organization.getOrganization(
+			{ name: namespace },
+			silentCallOptions
+		);
+		const orgId = resp.organization?.id ?? '';
+		return { scope: orgId ? orgScope(orgId) : systemScope, orgId };
+	} catch {
+		return { scope: systemScope, orgId: '' };
+	}
+}

@@ -40,6 +40,10 @@ func (m *memStore) GetPortalOrgID(_ context.Context, portalID string) (string, e
 	return m.portalOrg[portalID], nil
 }
 
+func (m *memStore) GetGitRepoOrgID(_ context.Context, _ string) (string, error) {
+	return "", nil
+}
+
 func provFor(list []*v1.FieldProvenance, path string) v1.SettingsTier {
 	for _, p := range list {
 		if p.Path == path {
@@ -217,5 +221,70 @@ func TestSeedSystemOnce(t *testing.T) {
 	eff, _, _ = r2.Effective(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
 	if eff.GetServer().GetPublicHostname() != "reg.example.com" {
 		t.Fatal("seed overwrote existing row")
+	}
+}
+
+func TestEffectiveCachedCopiesStayApart(t *testing.T) {
+	r := NewResolver(newMemStore(), nil)
+	ctx := t.Context()
+	sys := v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM
+
+	first, _, err := r.Effective(ctx, sys, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A caller editing its copy must not poison later readers
+	first.Acme = &v1.ACMESettings{Email: proto.String("edited@x.com")}
+	second := r.System(ctx)
+	if second.GetAcme().GetEmail() == "edited@x.com" {
+		t.Fatal("cached settings leaked a caller's edit")
+	}
+	if _, ok := r.effective[scopeKey{sys, ""}]; !ok {
+		t.Fatal("system scope should be cached after a read")
+	}
+
+	patch := &v1.Settings{Acme: &v1.ACMESettings{Email: proto.String("sys@x.com")}}
+	if _, err := r.Update(ctx, sys, "", patch, []string{"acme.email"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.System(ctx).GetAcme().GetEmail(); got != "sys@x.com" {
+		t.Fatalf("write must drop the cache, got %q", got)
+	}
+}
+
+// Local writes announce themselves, remote refreshes rerun dependents without echoing
+func TestBroadcastAndRefresh(t *testing.T) {
+	store := newMemStore()
+	r := NewResolver(store, nil)
+	ctx := context.Background()
+	announced, notified := 0, 0
+	r.SetBroadcaster(func() { announced++ })
+	r.Subscribe(func() { notified++ })
+
+	if _, err := r.Update(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "", &v1.Settings{
+		Auth: &v1.AuthSettings{AnonymousAccess: proto.Bool(true)},
+	}, []string{"auth.anonymous_access"}); err != nil {
+		t.Fatal(err)
+	}
+	if announced != 1 || notified != 1 {
+		t.Fatalf("after update announced=%d notified=%d", announced, notified)
+	}
+
+	// Another instance flips the row underneath us
+	peer := NewResolver(store, nil)
+	if _, err := peer.Update(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "", &v1.Settings{
+		Auth: &v1.AuthSettings{AnonymousAccess: proto.Bool(false)},
+	}, []string{"auth.anonymous_access"}); err != nil {
+		t.Fatal(err)
+	}
+	if !r.System(ctx).GetAuth().GetAnonymousAccess() {
+		t.Fatal("stale cache expected before refresh")
+	}
+	r.Refresh()
+	if r.System(ctx).GetAuth().GetAnonymousAccess() {
+		t.Error("refresh kept the stale row")
+	}
+	if announced != 1 || notified != 2 {
+		t.Errorf("after refresh announced=%d notified=%d", announced, notified)
 	}
 }

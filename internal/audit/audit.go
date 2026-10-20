@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/cache"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/settings"
@@ -32,10 +33,19 @@ type Recorder struct {
 	store *stores.Store
 	res   *settings.Resolver
 	log   *logger.Logger
+	// Keeps retention pruning to one instance at a time
+	shared *cache.Client
 }
 
 func NewRecorder(store *stores.Store, res *settings.Resolver, log *logger.Logger) *Recorder {
 	return &Recorder{store: store, res: res, log: log}
+}
+
+// Installs the shared cache, set once at startup
+func (r *Recorder) SetShared(c *cache.Client) {
+	if r != nil {
+		r.shared = c
+	}
 }
 
 // Write failures only log, callers never see them
@@ -68,6 +78,13 @@ func (r *Recorder) ScheduleRetention(ctx context.Context) {
 		if days <= 0 {
 			return
 		}
+		lock, ok, err := r.shared.TryLock(ctx, "audit-retention", 10*time.Minute)
+		if err != nil {
+			r.log.Warn("audit retention lease: %v", err)
+		} else if !ok {
+			return
+		}
+		defer func() { _ = lock.Unlock(ctx) }()
 		// Store timestamps are utc, keep comparisons in the same zone
 		cutoff := time.Now().UTC().AddDate(0, 0, -days)
 		if n, err := r.store.DeleteAuditEventsBefore(ctx, cutoff); err != nil {

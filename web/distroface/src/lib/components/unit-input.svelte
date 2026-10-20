@@ -22,12 +22,12 @@
 		{id}
 		type="number"
 		bind:value
-		style="padding-right: {unit.length + 3}ch"
-		class="tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+		style="padding-right: {unit.length + 2.5}ch"
+		class="[appearance:textfield] tabular-nums [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
 		{...restProps}
 	/>
 	<span
-		class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[13px] text-muted-foreground select-none"
+		class="pointer-events-none absolute inset-y-0 right-2.5 flex items-center text-xs text-muted-foreground select-none"
 	>
 		{unit}
 	</span>

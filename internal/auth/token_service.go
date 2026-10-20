@@ -5,13 +5,16 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/distribution/distribution/v3/registry/auth/token"
@@ -31,6 +34,62 @@ type TokenService struct {
 	issuer     string
 	service    string
 	res        *settings.Resolver
+	subjects   subjectCache
+}
+
+// Verified subjects by token hash, so a session's requests verify once
+type subjectCache struct {
+	mu        sync.Mutex
+	entries   map[[32]byte]cachedSubject
+	lastSweep time.Time
+}
+
+type cachedSubject struct {
+	subject string
+	expires time.Time
+}
+
+// Entries kept before verification stops caching new tokens
+const subjectCacheMax = 10000
+
+// Tokens without an expiry stay this long
+const subjectCacheDefaultTTL = time.Minute
+
+func (c *subjectCache) get(key [32]byte, now time.Time) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok {
+		return "", false
+	}
+	if !now.Before(entry.expires) {
+		delete(c.entries, key)
+		return "", false
+	}
+	return entry.subject, true
+}
+
+func (c *subjectCache) put(key [32]byte, subject string, expires, now time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = map[[32]byte]cachedSubject{}
+	}
+	if len(c.entries) >= subjectCacheMax {
+		// A full sweep per request would stall every caller at capacity
+		if now.Sub(c.lastSweep) >= cacheSweepEvery {
+			c.lastSweep = now
+			for k, entry := range c.entries {
+				if !now.Before(entry.expires) {
+					delete(c.entries, k)
+				}
+			}
+		}
+		if len(c.entries) >= subjectCacheMax {
+			return
+		}
+	}
+	c.entries[key] = cachedSubject{subject: subject, expires: expires}
 }
 
 // ResourceActions matches the Distribution v3 token claim format.
@@ -73,7 +132,7 @@ func NewTokenService(dataDir, issuer, service string, res *settings.Resolver) (*
 		return nil, err
 	}
 
-	ts.keyID = token.GetRFC7638Thumbprint(ts.privateKey.Public())
+	ts.keyID = token.GetJWKThumbprint(ts.privateKey.Public())
 
 	return ts, nil
 }
@@ -90,13 +149,18 @@ func (ts *TokenService) expiry() time.Duration {
 
 // SignToken creates a signed JWT for the given subject and access claims.
 func (ts *TokenService) SignToken(subject string, access []*ResourceActions) (string, error) {
+	return ts.SignTokenAudience(ts.service, ts.expiry(), subject, access)
+}
+
+// Signs a token for another audience such as the git lfs service
+func (ts *TokenService) SignTokenAudience(audience string, ttl time.Duration, subject string, access []*ResourceActions) (string, error) {
 	now := time.Now().UTC()
 
 	claims := ClaimSet{
 		Issuer:     ts.issuer,
 		Subject:    subject,
-		Audience:   josejwt.Audience{ts.service},
-		Expiration: josejwt.NewNumericDate(now.Add(ts.expiry())),
+		Audience:   josejwt.Audience{audience},
+		Expiration: josejwt.NewNumericDate(now.Add(ttl)),
 		NotBefore:  josejwt.NewNumericDate(now.Add(-10 * time.Second)),
 		IssuedAt:   josejwt.NewNumericDate(now),
 		JWTID:      uuid.New().String(),
@@ -128,8 +192,14 @@ func (ts *TokenService) certChain() [][]byte {
 	return [][]byte{ts.cert.Raw}
 }
 
-// Checks token signature gives subject for limit keys
+// Subject of a token this service signed, verified once per token.
+// Forged and expired tokens are refused and never cached
 func (ts *TokenService) VerifyTokenSubject(raw string) (string, error) {
+	now := time.Now()
+	key := sha256.Sum256([]byte(raw))
+	if subject, ok := ts.subjects.get(key, now); ok {
+		return subject, nil
+	}
 	tok, err := josejwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
 	if err != nil {
 		return "", err
@@ -138,7 +208,51 @@ func (ts *TokenService) VerifyTokenSubject(raw string) (string, error) {
 	if err := tok.Claims(ts.privateKey.Public(), &claims); err != nil {
 		return "", err
 	}
+	expires := now.Add(subjectCacheDefaultTTL)
+	if claims.Expiration != nil {
+		expires = claims.Expiration.Time()
+		if !expires.After(now) {
+			return "", errors.New("token expired")
+		}
+	}
+	if claims.NotBefore != nil && claims.NotBefore.Time().After(now) {
+		return "", errors.New("token not yet valid")
+	}
+	ts.subjects.put(key, claims.Subject, expires, now)
 	return claims.Subject, nil
+}
+
+// Job id behind a registry token, false for other subjects or bad signatures
+func (ts *TokenService) JobFromToken(raw string) (string, bool) {
+	subject, err := ts.VerifyTokenSubject(raw)
+	if err != nil {
+		return "", false
+	}
+	jobID, _, ok := ParseJobSubject(subject)
+	return jobID, ok
+}
+
+// Verifies a token for one audience and returns its subject and access
+func (ts *TokenService) VerifyAccess(raw, audience string) (string, []*ResourceActions, error) {
+	tok, err := josejwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
+	if err != nil {
+		return "", nil, err
+	}
+	var claims ClaimSet
+	if err := tok.Claims(ts.privateKey.Public(), &claims); err != nil {
+		return "", nil, err
+	}
+	if !claims.Audience.Contains(audience) {
+		return "", nil, fmt.Errorf("token audience mismatch")
+	}
+	now := time.Now()
+	if claims.Expiration != nil && claims.Expiration.Time().Before(now) {
+		return "", nil, fmt.Errorf("token expired")
+	}
+	if claims.NotBefore != nil && claims.NotBefore.Time().After(now) {
+		return "", nil, fmt.Errorf("token not yet valid")
+	}
+	return claims.Subject, claims.Access, nil
 }
 
 func (ts *TokenService) loadOrGenerate(keyPath, certPath string) error {

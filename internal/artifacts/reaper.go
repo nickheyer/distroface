@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/cache"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/pkg/logger"
 )
@@ -14,6 +15,12 @@ var ErrReaperRunning = errors.New("artifact reaper is already running")
 
 // Repos scanned per page during a sweep
 const reaperPageSize = 200
+
+// One retention sweep per cluster at a time
+const (
+	reaperLock  = "artifact-reaper"
+	reaperLease = 2 * time.Minute
+)
 
 // ReapRun is one completed retention sweep
 type ReapRun struct {
@@ -34,10 +41,16 @@ type Reaper struct {
 	running bool
 	last    *ReapRun
 	lastRun time.Time
+	shared  *cache.Client
 }
 
 func NewReaper(mgr *Manager, store *stores.Store, log *logger.Logger) *Reaper {
 	return &Reaper{mgr: mgr, store: store, log: log}
+}
+
+// Coordinates sweeps across instances
+func (r *Reaper) SetShared(c *cache.Client) {
+	r.shared = c
 }
 
 // Start begins a background sweep rejecting overlap
@@ -50,7 +63,25 @@ func (r *Reaper) Start() error {
 	r.running = true
 	r.mu.Unlock()
 
-	go r.sweep()
+	ctx := context.Background()
+	lock, ok, err := r.shared.TryLock(ctx, reaperLock, reaperLease)
+	if err != nil {
+		r.log.Warn("Artifact reaper lease: %v", err)
+	} else if !ok {
+		r.mu.Lock()
+		r.running = false
+		r.mu.Unlock()
+		return ErrReaperRunning
+	}
+
+	go func() {
+		stop := lock.KeepAlive(ctx)
+		defer func() {
+			stop()
+			_ = lock.Unlock(ctx)
+		}()
+		r.sweep()
+	}()
 	return nil
 }
 
@@ -72,13 +103,7 @@ func (r *Reaper) Schedule(ctx context.Context) {
 				if interval <= 0 {
 					interval = 24 * time.Hour
 				}
-				r.mu.Lock()
-				due := time.Since(r.lastRun) >= interval
-				if due {
-					r.lastRun = time.Now()
-				}
-				r.mu.Unlock()
-				if !due {
+				if !r.due(ctx, interval) {
 					continue
 				}
 				if err := r.Start(); err != nil {
@@ -87,6 +112,22 @@ func (r *Reaper) Schedule(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// Shared clock when a cache is on, the local one otherwise
+func (r *Reaper) due(ctx context.Context, interval time.Duration) bool {
+	if r.shared.Enabled() {
+		if due, err := r.shared.ClaimDue(ctx, reaperLock, interval); err == nil {
+			return due
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if time.Since(r.lastRun) < interval {
+		return false
+	}
+	r.lastRun = time.Now()
+	return true
 }
 
 func (r *Reaper) sweep() {

@@ -7,7 +7,9 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 
 	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -36,6 +38,61 @@ type Service struct {
 	res      *settings.Resolver
 	mainPort int
 	log      *logger.Logger
+
+	changeMu  sync.RWMutex
+	onChange  []func()
+	broadcast func()
+	// Reports whether a git ssh port is bindable, nil when git over ssh is not wired
+	sshProbe func(port int) (listening bool, err error)
+}
+
+// Installs the cross instance announcer run after local portal writes
+func (s *Service) SetBroadcaster(fn func()) {
+	s.changeMu.Lock()
+	s.broadcast = fn
+	s.changeMu.Unlock()
+}
+
+// ApplyRemote mirrors a portal write made on another instance
+func (s *Service) ApplyRemote(ctx context.Context) {
+	s.apply(ctx)
+}
+
+// Installs the git ssh port probe used before a portal ssh port is stored
+func (s *Service) SetSSHProbe(fn func(port int) (bool, error)) { s.sshProbe = fn }
+
+// A dedicated portal ssh port must be free, unique, and clear of every http port
+func (s *Service) validateSSHPort(ctx context.Context, port int, excludePortalID string) error {
+	if port == 0 {
+		return nil
+	}
+	if port < 1 || port > 65535 {
+		return connect.Errorf(connect.CodeInvalidArgument, "invalid ssh port")
+	}
+	if port == s.mainPort {
+		return connect.Errorf(connect.CodeInvalidArgument, "ssh port %d is the app's own port", port)
+	}
+	if port == int(s.res.System(ctx).GetGit().GetSshPort()) {
+		return connect.Errorf(connect.CodeInvalidArgument, "ssh port %d is the primary git ssh port", port)
+	}
+	portals, err := s.store.ListRegistryPortals(ctx)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	for _, p := range portals {
+		if p.Port == port {
+			return connect.Errorf(connect.CodeAlreadyExists, "port %d already serves a portal over http", port)
+		}
+		if p.ID != excludePortalID && p.SSHPort == port {
+			return connect.Errorf(connect.CodeAlreadyExists, "ssh port %d already belongs to another portal", port)
+		}
+	}
+	if s.sshProbe != nil {
+		if listening, err := s.sshProbe(port); err != nil && !listening {
+			return connect.Errorf(connect.CodeFailedPrecondition, "ssh port %d cannot be bound: %v", port, err)
+		}
+	}
+	return nil
 }
 
 func NewService(store *stores.Store, enforcer *rbac.Enforcer, proxies *Manager, engine *certs.Engine, res *settings.Resolver, mainPort int, log *logger.Logger) *Service {
@@ -172,7 +229,34 @@ func scrubProxyPortal(p *storage.RegistryPortal) {
 	p.AllowPush = false
 	p.RequireAuth = false
 	p.HidePrimaryLink = false
+	p.PublicHost = ""
 	p.Rules = "[]"
+}
+
+// Lowercased host with an optional port, empty stays empty
+func normalizePublicHost(raw string) (string, error) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return "", nil
+	}
+	host, port := raw, ""
+	if h, p, err := net.SplitHostPort(raw); err == nil {
+		host, port = h, p
+	}
+	if net.ParseIP(host) == nil && !hostnameRegex.MatchString(host) {
+		return "", connect.Errorf(connect.CodeInvalidArgument, "public host must be a hostname with an optional port")
+	}
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", connect.Errorf(connect.CodeInvalidArgument, "public host port must be between 1 and 65535")
+		}
+		return net.JoinHostPort(host, port), nil
+	}
+	if net.ParseIP(host) != nil && strings.Contains(host, ":") {
+		return "[" + host + "]", nil
+	}
+	return host, nil
 }
 
 // Portal sources exclude the app only config pair and instance root
@@ -273,6 +357,9 @@ func (s *Service) CreatePortal(ctx context.Context, req *v1.CreatePortalRequest)
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateSSHPort(ctx, int(msg.SshPort), ""); err != nil {
+		return nil, err
+	}
 	certSource, err := portalCertSource(msg.CertSource)
 	if err != nil {
 		return nil, err
@@ -296,6 +383,10 @@ func (s *Service) CreatePortal(ctx context.Context, req *v1.CreatePortalRequest)
 			return nil, err
 		}
 	}
+	publicHost, err := normalizePublicHost(msg.PublicHost)
+	if err != nil {
+		return nil, err
+	}
 
 	portal := &storage.RegistryPortal{
 		OrgID:              org.ID,
@@ -312,6 +403,8 @@ func (s *Service) CreatePortal(ctx context.Context, req *v1.CreatePortalRequest)
 		BackendURL:         backendURL,
 		BackendRewriteHost: msg.BackendRewriteHost,
 		BackendInsecure:    msg.BackendInsecure,
+		SSHPort:            int(msg.SshPort),
+		PublicHost:         publicHost,
 		Enabled:            true,
 	}
 	scrubProxyPortal(portal)
@@ -417,6 +510,12 @@ func (s *Service) UpdatePortal(ctx context.Context, req *v1.UpdatePortalRequest)
 	if msg.MapUnqualified != nil {
 		portal.MapUnqualified = *msg.MapUnqualified
 	}
+	if msg.SshPort != nil {
+		if err := s.validateSSHPort(ctx, int(*msg.SshPort), portal.ID); err != nil {
+			return nil, err
+		}
+		portal.SSHPort = int(*msg.SshPort)
+	}
 	if msg.SetRules {
 		rulesJSON, err := s.encodeRules(msg.Rules)
 		if err != nil {
@@ -432,6 +531,13 @@ func (s *Service) UpdatePortal(ctx context.Context, req *v1.UpdatePortalRequest)
 	}
 	if msg.HidePrimaryLink != nil {
 		portal.HidePrimaryLink = *msg.HidePrimaryLink
+	}
+	if msg.PublicHost != nil {
+		publicHost, err := normalizePublicHost(*msg.PublicHost)
+		if err != nil {
+			return nil, err
+		}
+		portal.PublicHost = publicHost
 	}
 	if msg.Tls != nil {
 		portal.TLS = *msg.Tls
@@ -549,11 +655,34 @@ func (s *Service) primaryScheme(ctx context.Context) string {
 	return "http"
 }
 
-// Probes/applies portal changes to the running proxies
+// Probes/applies portal changes to the running proxies, peers follow
 func (s *Service) reconcile(ctx context.Context) {
+	s.apply(ctx)
+	s.changeMu.RLock()
+	fn := s.broadcast
+	s.changeMu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
+func (s *Service) apply(ctx context.Context) {
 	if err := s.proxies.Reconcile(ctx); err != nil {
 		s.log.Error("portal proxy reconcile: %v", err)
 	}
+	s.changeMu.RLock()
+	hooks := append([]func(){}, s.onChange...)
+	s.changeMu.RUnlock()
+	for _, fn := range hooks {
+		fn()
+	}
+}
+
+// Registers a callback run after every portal write
+func (s *Service) OnChange(fn func()) {
+	s.changeMu.Lock()
+	s.onChange = append(s.onChange, fn)
+	s.changeMu.Unlock()
 }
 
 func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {
@@ -572,6 +701,8 @@ func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {
 		BackendUrl:         p.BackendURL,
 		BackendRewriteHost: p.BackendRewriteHost,
 		BackendInsecure:    p.BackendInsecure,
+		SshPort:            int32(p.SSHPort),
+		PublicHost:         p.PublicHost,
 		Enabled:            p.Enabled,
 		CreatedAt:          timestamppb.New(p.CreatedAt),
 		UpdatedAt:          timestamppb.New(p.UpdatedAt),

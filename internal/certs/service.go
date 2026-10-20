@@ -192,7 +192,7 @@ func (s *Service) UploadTLSCertificate(ctx context.Context, req *v1.UploadTLSCer
 	if target.Scope == v1.TLSScope_TLS_SCOPE_APP_CA {
 		s.reconcileRoot(ctx)
 	} else {
-		s.engine.Invalidate(ctx)
+		s.engine.Invalidate()
 	}
 
 	return &v1.UploadTLSCertificateResponse{
@@ -220,7 +220,7 @@ func (s *Service) DeleteTLSCertificate(ctx context.Context, req *v1.DeleteTLSCer
 	if target.Scope == v1.TLSScope_TLS_SCOPE_APP_CA {
 		_ = s.store.DeleteTLSCertificate(ctx, v1.TLSScope_TLS_SCOPE_ACME_CA, "", "")
 	}
-	s.engine.Invalidate(ctx)
+	s.engine.Invalidate()
 	s.log.Info("tls material removed: scope %v org %s portal %s", target.Scope, target.OrgID, target.PortalID)
 
 	return &v1.DeleteTLSCertificateResponse{}, nil
@@ -312,7 +312,7 @@ func (s *Service) GenerateOrgCA(ctx context.Context, req *v1.GenerateOrgCAReques
 	if err := s.store.SaveTLSCertificate(ctx, record); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
-	s.engine.Invalidate(ctx)
+	s.engine.Invalidate()
 	s.log.Info("org ca generated: %s (org %s)", cn, org.Name)
 
 	return &v1.GenerateOrgCAResponse{OrgCa: materialInfo(record, true)}, nil
@@ -388,7 +388,7 @@ func (s *Service) IssueOrgICA(ctx context.Context, req *v1.IssueOrgICARequest) (
 	if err := s.store.SaveTLSCertificate(ctx, record); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
-	s.engine.Invalidate(ctx)
+	s.engine.Invalidate()
 	s.log.Info("org ica issued from instance root: %s (org %s)", cn, org.Name)
 
 	return &v1.IssueOrgICAResponse{OrgCa: materialInfo(record, true)}, nil

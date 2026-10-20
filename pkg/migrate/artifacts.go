@@ -266,7 +266,7 @@ func importArtifacts(ctx context.Context, cfg *config.MigrateConfig, v2 *V2, blo
 	// under an artifact that still needs it.
 	for _, digest := range <-inserterDone {
 		if n, err := v2.Store.CountArtifactsByDigest(ctx, digest); err == nil && n == 0 {
-			blobs.DeleteBlob(digest)
+			_ = blobs.DeleteBlob(digest)
 		}
 	}
 	return results
@@ -300,12 +300,12 @@ func stageArtifact(ctx context.Context, v2 *V2, blobs *artifacts.BlobStore, v1s 
 	_, err = blobs.AppendChunk(uploadID, src)
 	src.Close()
 	if err != nil {
-		blobs.CancelUpload(uploadID)
+		_ = blobs.CancelUpload(uploadID)
 		return none, ArtFailed, err
 	}
 	digest, size, detectedMime, err := blobs.CompleteUpload(uploadID)
 	if err != nil {
-		blobs.CancelUpload(uploadID)
+		_ = blobs.CancelUpload(uploadID)
 		return none, ArtFailed, err
 	}
 	if size != a.Size {

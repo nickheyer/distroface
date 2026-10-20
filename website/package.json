@@ -1,0 +1,19 @@
+{
+  "name": "distroface-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sync": "node scripts/sync-docs.mjs",
+    "dev": "npm run sync && astro dev",
+    "build": "npm run sync && astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/starlight": "^0.42.9",
+    "astro": "^7.4.5",
+    "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "starlight-links-validator": "^0.27.0"
+  }
+}

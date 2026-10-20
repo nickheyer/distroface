@@ -50,32 +50,31 @@ type ACMEServer struct {
 	dial     func(network, addr string) (net.Conn, error)
 
 	mu      sync.Mutex
-	nonces  map[string]time.Time
-	orders  map[string]*acmeOrder
-	authzs  map[string]*acmeAuthz
 	counter uint64
+	local   *memoryACMEState
 }
 
+// Exported fields so the shared state can hold them as json
 type acmeAuthz struct {
-	id      string
-	domain  string
-	status  string // pending, valid, invalid
-	token   string
-	account string
-	orderID string
-	expires time.Time
-	problem string
+	ID      string    `json:"id"`
+	Domain  string    `json:"domain"`
+	Status  string    `json:"status"` // pending, processing, valid, invalid
+	Token   string    `json:"token"`
+	Account string    `json:"account"`
+	OrderID string    `json:"order_id"`
+	Expires time.Time `json:"expires"`
+	Problem string    `json:"problem,omitempty"`
 }
 
 type acmeOrder struct {
-	id          string
-	account     string
-	identifiers []string
-	authzIDs    []string
-	status      string // pending, ready, processing, valid, invalid
-	certPEM     string
-	expires     time.Time
-	problem     string
+	ID          string    `json:"id"`
+	Account     string    `json:"account"`
+	Identifiers []string  `json:"identifiers"`
+	AuthzIDs    []string  `json:"authz_ids"`
+	Status      string    `json:"status"` // pending, ready, processing, valid, invalid
+	CertPEM     string    `json:"cert_pem,omitempty"`
+	Expires     time.Time `json:"expires"`
+	Problem     string    `json:"problem,omitempty"`
 }
 
 func NewACMEServer(e *Engine) *ACMEServer {
@@ -84,10 +83,17 @@ func NewACMEServer(e *Engine) *ACMEServer {
 		httpPort: 80,
 		tlsPort:  443,
 		dial:     safeChallengeDial,
-		nonces:   map[string]time.Time{},
-		orders:   map[string]*acmeOrder{},
-		authzs:   map[string]*acmeAuthz{},
+		local:    newMemoryACMEState(),
 	}
+}
+
+// Protocol state lives in redis while a shared cache answers, so a client
+// may reach any instance, and in this process otherwise
+func (s *ACMEServer) state() acmeState {
+	if shared := s.e.sharedCache(); shared.Enabled() && shared.Err() == nil {
+		return sharedACMEState{c: shared}
+	}
+	return s.local
 }
 
 // Enabled reflects the live built in acme kill switch
@@ -134,7 +140,7 @@ func (s *ACMEServer) Handler() http.Handler {
 
 func (s *ACMEServer) handleDirectory(w http.ResponseWriter, r *http.Request) {
 	base := s.baseURL(r)
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
+	s.writeJSON(w, http.StatusOK, map[string]any{
 		"newNonce":   base + "/new-nonce",
 		"newAccount": base + "/new-account",
 		"newOrder":   base + "/new-order",
@@ -156,49 +162,18 @@ func (s *ACMEServer) newNonce() string {
 	b := make([]byte, 16)
 	_, _ = io.ReadFull(rand.Reader, b)
 	nonce := base64.RawURLEncoding.EncodeToString(b)
-	s.mu.Lock()
-	s.gcLocked()
-	s.nonces[nonce] = time.Now().Add(acmeNonceTTL)
-	s.mu.Unlock()
+	s.state().addNonce(context.Background(), nonce)
 	return nonce
 }
 
 func (s *ACMEServer) consumeNonce(nonce string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	exp, ok := s.nonces[nonce]
-	if !ok || time.Now().After(exp) {
-		delete(s.nonces, nonce)
-		return false
-	}
-	delete(s.nonces, nonce)
-	return true
+	return s.state().takeNonce(context.Background(), nonce)
 }
 
 func (s *ACMEServer) setNonce(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Replay-Nonce", s.newNonce())
 	w.Header().Set("Cache-Control", "no-store")
 	_ = r
-}
-
-// Drops expired nonces, orders, and authorizations
-func (s *ACMEServer) gcLocked() {
-	now := time.Now()
-	for k, exp := range s.nonces {
-		if now.After(exp) {
-			delete(s.nonces, k)
-		}
-	}
-	for k, o := range s.orders {
-		if now.After(o.expires) {
-			delete(s.orders, k)
-		}
-	}
-	for k, a := range s.authzs {
-		if now.After(a.expires) {
-			delete(s.authzs, k)
-		}
-	}
 }
 
 // ── Account ─────────────────────────────────────────────────────────────
@@ -230,7 +205,7 @@ func (s *ACMEServer) handleNewAccount(w http.ResponseWriter, r *http.Request) {
 	acctURL := s.baseURL(r) + "/acct/" + jws.thumbprint
 	if existing != nil {
 		w.Header().Set("Location", acctURL)
-		s.writeJSON(w, r, http.StatusOK, s.accountBody(existing))
+		s.writeJSON(w, http.StatusOK, s.accountBody(existing))
 		return
 	}
 	if payload.OnlyReturnExisting {
@@ -251,7 +226,7 @@ func (s *ACMEServer) handleNewAccount(w http.ResponseWriter, r *http.Request) {
 	}
 	s.e.log.Info("acme account registered %s", jws.thumbprint)
 	w.Header().Set("Location", acctURL)
-	s.writeJSON(w, r, http.StatusCreated, s.accountBody(acct))
+	s.writeJSON(w, http.StatusCreated, s.accountBody(acct))
 }
 
 func (s *ACMEServer) handleAccount(w http.ResponseWriter, r *http.Request) {
@@ -265,7 +240,7 @@ func (s *ACMEServer) handleAccount(w http.ResponseWriter, r *http.Request) {
 		s.problem(w, http.StatusBadRequest, "accountDoesNotExist", "unknown account")
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, s.accountBody(acct))
+	s.writeJSON(w, http.StatusOK, s.accountBody(acct))
 }
 
 func (s *ACMEServer) accountBody(a *storage.ACMEAccount) map[string]any {
@@ -305,11 +280,12 @@ func (s *ACMEServer) handleNewOrder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	st := s.state()
 	order := &acmeOrder{
-		id:      s.nextID("order"),
-		account: jws.accountID,
-		status:  "pending",
-		expires: time.Now().Add(acmeOrderTTL),
+		ID:      s.nextID("order"),
+		Account: jws.accountID,
+		Status:  "pending",
+		Expires: time.Now().Add(acmeOrderTTL),
 	}
 	for _, id := range payload.Identifiers {
 		if id.Type != "dns" {
@@ -317,26 +293,22 @@ func (s *ACMEServer) handleNewOrder(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		authz := &acmeAuthz{
-			id:      s.nextID("authz"),
-			domain:  strings.ToLower(id.Value),
-			status:  "pending",
-			token:   s.randToken(),
-			account: jws.accountID,
-			orderID: order.id,
-			expires: order.expires,
+			ID:      s.nextID("authz"),
+			Domain:  strings.ToLower(id.Value),
+			Status:  "pending",
+			Token:   s.randToken(),
+			Account: jws.accountID,
+			OrderID: order.ID,
+			Expires: order.Expires,
 		}
-		order.identifiers = append(order.identifiers, authz.domain)
-		order.authzIDs = append(order.authzIDs, authz.id)
-		s.mu.Lock()
-		s.authzs[authz.id] = authz
-		s.mu.Unlock()
+		order.Identifiers = append(order.Identifiers, authz.Domain)
+		order.AuthzIDs = append(order.AuthzIDs, authz.ID)
+		st.saveAuthz(r.Context(), authz)
 	}
-	s.mu.Lock()
-	s.orders[order.id] = order
-	s.mu.Unlock()
+	st.saveOrder(r.Context(), order)
 
-	w.Header().Set("Location", s.orderURL(r, order.id))
-	s.writeJSON(w, r, http.StatusCreated, s.orderBody(r, order))
+	w.Header().Set("Location", s.orderURL(r, order.ID))
+	s.writeJSON(w, http.StatusCreated, s.orderBody(r, order))
 }
 
 func (s *ACMEServer) orderURL(r *http.Request, id string) string {
@@ -345,26 +317,26 @@ func (s *ACMEServer) orderURL(r *http.Request, id string) string {
 
 func (s *ACMEServer) orderBody(r *http.Request, o *acmeOrder) map[string]any {
 	base := s.baseURL(r)
-	ids := make([]map[string]string, 0, len(o.identifiers))
-	for _, d := range o.identifiers {
+	ids := make([]map[string]string, 0, len(o.Identifiers))
+	for _, d := range o.Identifiers {
 		ids = append(ids, map[string]string{"type": "dns", "value": d})
 	}
-	authzURLs := make([]string, 0, len(o.authzIDs))
-	for _, a := range o.authzIDs {
+	authzURLs := make([]string, 0, len(o.AuthzIDs))
+	for _, a := range o.AuthzIDs {
 		authzURLs = append(authzURLs, base+"/authz/"+a)
 	}
 	body := map[string]any{
-		"status":         o.status,
-		"expires":        o.expires.UTC().Format(time.RFC3339),
+		"status":         o.Status,
+		"expires":        o.Expires.UTC().Format(time.RFC3339),
 		"identifiers":    ids,
 		"authorizations": authzURLs,
-		"finalize":       base + "/finalize/" + o.id,
+		"finalize":       base + "/finalize/" + o.ID,
 	}
-	if o.certPEM != "" {
-		body["certificate"] = base + "/cert/" + o.id
+	if o.CertPEM != "" {
+		body["certificate"] = base + "/cert/" + o.ID
 	}
-	if o.problem != "" {
-		body["error"] = s.problemDoc("rejectedIdentifier", o.problem)
+	if o.Problem != "" {
+		body["error"] = s.problemDoc("rejectedIdentifier", o.Problem)
 	}
 	return body
 }
@@ -378,31 +350,29 @@ func (s *ACMEServer) handleAuthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/acme/authz/")
-	s.mu.Lock()
-	authz := s.authzs[id]
-	s.mu.Unlock()
-	if authz == nil || authz.account != jws.accountID {
+	authz := s.state().authz(r.Context(), id)
+	if authz == nil || authz.Account != jws.accountID {
 		s.problem(w, http.StatusNotFound, "malformed", "unknown authorization")
 		return
 	}
-	s.writeJSON(w, r, http.StatusOK, s.authzBody(r, authz))
+	s.writeJSON(w, http.StatusOK, s.authzBody(r, authz))
 }
 
 func (s *ACMEServer) authzBody(r *http.Request, a *acmeAuthz) map[string]any {
 	base := s.baseURL(r)
-	chalURL := base + "/challenge/" + a.id
+	chalURL := base + "/challenge/" + a.ID
 	challenges := []map[string]any{
-		{"type": "http-01", "url": chalURL + "/http-01", "token": a.token, "status": a.status},
-		{"type": "tls-alpn-01", "url": chalURL + "/tls-alpn-01", "token": a.token, "status": a.status},
+		{"type": "http-01", "url": chalURL + "/http-01", "token": a.Token, "status": a.Status},
+		{"type": "tls-alpn-01", "url": chalURL + "/tls-alpn-01", "token": a.Token, "status": a.Status},
 	}
 	body := map[string]any{
-		"identifier": map[string]string{"type": "dns", "value": a.domain},
-		"status":     a.status,
-		"expires":    a.expires.UTC().Format(time.RFC3339),
+		"identifier": map[string]string{"type": "dns", "value": a.Domain},
+		"status":     a.Status,
+		"expires":    a.Expires.UTC().Format(time.RFC3339),
 		"challenges": challenges,
 	}
-	if a.problem != "" {
-		body["error"] = s.problemDoc("unauthorized", a.problem)
+	if a.Problem != "" {
+		body["error"] = s.problemDoc("unauthorized", a.Problem)
 	}
 	return body
 }
@@ -419,46 +389,38 @@ func (s *ACMEServer) handleChallenge(w http.ResponseWriter, r *http.Request) {
 		s.problem(w, http.StatusNotFound, "malformed", "unknown challenge")
 		return
 	}
-	s.mu.Lock()
-	authz := s.authzs[authzID]
-	s.mu.Unlock()
-	if authz == nil || authz.account != jws.accountID {
+	st := s.state()
+	authz := st.authz(r.Context(), authzID)
+	if authz == nil || authz.Account != jws.accountID {
 		s.problem(w, http.StatusNotFound, "malformed", "unknown challenge")
 		return
 	}
 
-	keyAuth := authz.token + "." + jws.thumbprint
+	keyAuth := authz.Token + "." + jws.thumbprint
 	// A POST-as-GET just reports status, a payload triggers validation
 	if len(jws.payload) > 0 && string(jws.payload) != "{}" {
 		s.problem(w, http.StatusBadRequest, "malformed", "unexpected challenge payload")
 		return
 	}
-	// Flip out of pending under the lock so repeated posts spawn one validator
-	s.mu.Lock()
-	launch := authz.status == "pending"
-	if launch {
-		authz.status = "processing"
-	}
-	s.mu.Unlock()
-	if launch {
-		go s.validate(context.Background(), authz.id, chalType, authz.domain, keyAuth)
+
+	// One validator per authorization however many posts arrive
+	if st.claimValidation(r.Context(), authz.ID) {
+		go s.validate(context.Background(), authz.ID, chalType, authz.Domain, keyAuth)
 	}
 
 	base := s.baseURL(r)
-	w.Header().Set("Link", fmt.Sprintf(`<%s/authz/%s>;rel="up"`, base, authz.id))
-	s.writeJSON(w, r, http.StatusOK, map[string]any{
+	w.Header().Set("Link", fmt.Sprintf(`<%s/authz/%s>;rel="up"`, base, authz.ID))
+	s.writeJSON(w, http.StatusOK, map[string]any{
 		"type":   chalType,
-		"url":    base + "/challenge/" + authz.id + "/" + chalType,
-		"token":  authz.token,
-		"status": s.authzStatus(authz.id),
+		"url":    base + "/challenge/" + authz.ID + "/" + chalType,
+		"token":  authz.Token,
+		"status": s.authzStatus(r.Context(), authz.ID),
 	})
 }
 
-func (s *ACMEServer) authzStatus(id string) string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if a := s.authzs[id]; a != nil {
-		return a.status
+func (s *ACMEServer) authzStatus(ctx context.Context, id string) string {
+	if a := s.state().authz(ctx, id); a != nil {
+		return a.Status
 	}
 	return "invalid"
 }
@@ -481,34 +443,38 @@ func (s *ACMEServer) validate(ctx context.Context, authzID, chalType, domain, ke
 		}
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	authz := s.authzs[authzID]
+	st := s.state()
+	authz := st.authz(ctx, authzID)
 	if authz == nil {
 		return
 	}
 	if err != nil {
-		authz.status = "invalid"
-		authz.problem = err.Error()
-		if o := s.orders[authz.orderID]; o != nil {
-			o.status = "invalid"
-			o.problem = err.Error()
+		authz.Status = "invalid"
+		authz.Problem = err.Error()
+		st.saveAuthz(ctx, authz)
+		if o := st.order(ctx, authz.OrderID); o != nil {
+			o.Status = "invalid"
+			o.Problem = err.Error()
+			st.saveOrder(ctx, o)
 		}
 		s.e.log.Warn("acme validation failed for %s: %v", domain, err)
 		return
 	}
-	authz.status = "valid"
+	authz.Status = "valid"
+	st.saveAuthz(ctx, authz)
 	s.e.log.Info("acme validation succeeded for %s", domain)
-	if o := s.orders[authz.orderID]; o != nil {
+	if o := st.order(ctx, authz.OrderID); o != nil {
 		allValid := true
-		for _, aid := range o.authzIDs {
-			if a := s.authzs[aid]; a == nil || a.status != "valid" {
+		for _, aid := range o.AuthzIDs {
+			if a := st.authz(ctx, aid); a == nil || a.Status != "valid" {
 				allValid = false
 				break
 			}
 		}
-		if allValid && o.status == "pending" {
-			o.status = "ready"
+		// Idempotent, two validators agreeing write the same thing
+		if allValid && o.Status == "pending" {
+			o.Status = "ready"
+			st.saveOrder(ctx, o)
 		}
 	}
 }
@@ -583,7 +549,7 @@ func (s *ACMEServer) validateTLSALPN01(domain, keyAuth string) error {
 		NextProtos:         []string{"acme-tls/1"},
 	})
 	defer tlsConn.Close()
-	tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = tlsConn.SetDeadline(time.Now().Add(10 * time.Second))
 	if err := tlsConn.Handshake(); err != nil {
 		return fmt.Errorf("tls-alpn-01 handshake: %w", err)
 	}
@@ -628,14 +594,13 @@ func (s *ACMEServer) handleFinalize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/acme/finalize/")
-	s.mu.Lock()
-	order := s.orders[id]
-	s.mu.Unlock()
-	if order == nil || order.account != jws.accountID {
+	st := s.state()
+	order := st.order(r.Context(), id)
+	if order == nil || order.Account != jws.accountID {
 		s.problem(w, http.StatusNotFound, "malformed", "unknown order")
 		return
 	}
-	if order.status != "ready" {
+	if order.Status != "ready" {
 		s.problem(w, http.StatusForbidden, "orderNotReady", "order is not ready to finalize")
 		return
 	}
@@ -657,27 +622,25 @@ func (s *ACMEServer) handleFinalize(w http.ResponseWriter, r *http.Request) {
 		s.problem(w, http.StatusBadRequest, "badCSR", "invalid csr")
 		return
 	}
-	if err := csrMatchesOrder(csr, order.identifiers); err != nil {
+	if err := csrMatchesOrder(csr, order.Identifiers); err != nil {
 		s.problem(w, http.StatusBadRequest, "badCSR", err.Error())
 		return
 	}
 
-	signed, err := s.e.SignACMELeaf(r.Context(), csr.PublicKey, order.identifiers, acmeLeafDays)
+	signed, err := s.e.SignACMELeaf(r.Context(), csr.PublicKey, order.Identifiers, acmeLeafDays)
 	if err != nil {
-		s.mu.Lock()
-		order.status = "invalid"
-		order.problem = err.Error()
-		s.mu.Unlock()
+		order.Status = "invalid"
+		order.Problem = err.Error()
+		st.saveOrder(r.Context(), order)
 		s.problem(w, http.StatusForbidden, "unauthorized", err.Error())
 		return
 	}
-	s.mu.Lock()
-	order.certPEM = signed.CertPEM
-	order.status = "valid"
-	s.mu.Unlock()
+	order.CertPEM = signed.CertPEM
+	order.Status = "valid"
+	st.saveOrder(r.Context(), order)
 
-	w.Header().Set("Location", s.orderURL(r, order.id))
-	s.writeJSON(w, r, http.StatusOK, s.orderBody(r, order))
+	w.Header().Set("Location", s.orderURL(r, order.ID))
+	s.writeJSON(w, http.StatusOK, s.orderBody(r, order))
 }
 
 // SANs of the csr must equal the order identifiers as a set
@@ -713,16 +676,14 @@ func (s *ACMEServer) handleCert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := strings.TrimPrefix(r.URL.Path, "/acme/cert/")
-	s.mu.Lock()
-	order := s.orders[id]
-	s.mu.Unlock()
-	if order == nil || order.account != jws.accountID || order.certPEM == "" {
+	order := s.state().order(r.Context(), id)
+	if order == nil || order.Account != jws.accountID || order.CertPEM == "" {
 		s.problem(w, http.StatusNotFound, "malformed", "unknown certificate")
 		return
 	}
 	w.Header().Set("Replay-Nonce", s.newNonce())
 	w.Header().Set("Content-Type", "application/pem-certificate-chain")
-	_, _ = io.WriteString(w, order.certPEM)
+	_, _ = io.WriteString(w, order.CertPEM)
 }
 
 // ── JWS verification ────────────────────────────────────────────────────
@@ -842,7 +803,7 @@ func accountIDFromKID(kid string) string {
 
 // ── Response helpers ────────────────────────────────────────────────────
 
-func (s *ACMEServer) writeJSON(w http.ResponseWriter, r *http.Request, status int, body any) {
+func (s *ACMEServer) writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Replay-Nonce", s.newNonce())
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -931,8 +892,14 @@ func ecJWK(j jwkFields) (*ecdsa.PublicKey, string, error) {
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid ec y")
 	}
-	pub := &ecdsa.PublicKey{Curve: curve, X: new(big.Int).SetBytes(x), Y: new(big.Int).SetBytes(y)}
-	if !curve.IsOnCurve(pub.X, pub.Y) {
+	size := (curve.Params().BitSize + 7) / 8
+	if len(x) != size || len(y) != size {
+		return nil, "", fmt.Errorf("ec point has the wrong length for %s", j.Crv)
+	}
+	point := make([]byte, 0, 1+2*size)
+	point = append(append(append(point, 4), x...), y...)
+	pub, err := ecdsa.ParseUncompressedPublicKey(curve, point)
+	if err != nil {
 		return nil, "", fmt.Errorf("ec point not on curve")
 	}
 	// Canonical field order per rfc 7638

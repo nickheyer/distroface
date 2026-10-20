@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
@@ -22,7 +23,7 @@ func (s *Store) GetWebhook(ctx context.Context, id string) (*db.Webhook, error) 
 	var webhook db.Webhook
 	err := s.db.WithContext(ctx).First(&webhook, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -145,10 +146,48 @@ func (s *Store) GetWebhookDelivery(ctx context.Context, id string) (*db.WebhookD
 	var delivery db.WebhookDelivery
 	err := s.db.WithContext(ctx).First(&delivery, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
 	}
 	return &delivery, nil
+}
+
+// ── Git repository webhooks ──────────────────────────────────────────────
+
+func (s *Store) ListWebhooksByGitRepo(ctx context.Context, gitRepoID string, q pages.Query, limit, offset int) ([]*db.Webhook, int64, error) {
+	tx := s.db.WithContext(ctx).Model(&db.Webhook{}).
+		Where("git_repo_id = ? AND scope = ?", gitRepoID, db.WebhookScopeGitRepository).
+		Scopes(WebhooksQuery.Scope(q))
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var webhooks []*db.Webhook
+	err := tx.Order("created_at DESC").Limit(limit).Offset(offset).Find(&webhooks).Error
+	return webhooks, total, err
+}
+
+// Active repo scoped and org scoped webhooks for a git repository
+func (s *Store) GetActiveWebhooksForGitRepo(ctx context.Context, gitRepoID, namespace string) ([]*db.Webhook, error) {
+	var webhooks []*db.Webhook
+	err := s.db.WithContext(ctx).Where("git_repo_id = ? AND scope = ? AND active = ?", gitRepoID, db.WebhookScopeGitRepository, true).Find(&webhooks).Error
+	if err != nil {
+		return nil, err
+	}
+	org, err := s.GetOrganization(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	if org != nil {
+		var orgWebhooks []*db.Webhook
+		if err := s.db.WithContext(ctx).Where("org_id = ? AND scope = ? AND active = ?", org.ID, db.WebhookScopeOrganization, true).Find(&orgWebhooks).Error; err != nil {
+			return nil, err
+		}
+		webhooks = append(webhooks, orgWebhooks...)
+	}
+	return webhooks, nil
 }

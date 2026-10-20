@@ -3,12 +3,12 @@ package auth
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -17,11 +17,7 @@ import (
 
 func newOIDCTestHandler(t *testing.T, issuer string) (*OIDCHandler, *stores.Store) {
 	t.Helper()
-	store, err := stores.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
+	store := storetest.New(t)
 	res := settings.NewResolver(store, &v1.Settings{
 		Auth: &v1.AuthSettings{
 			Oidc: &v1.OIDCSettings{

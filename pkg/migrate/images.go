@@ -119,7 +119,7 @@ func (r *Replayer) PushRepo(ctx context.Context, v1Name string) ([]TagResult, er
 			continue
 		}
 
-		manifest, err := r.ensureTree(ctx, repo, v1Name, res.Digest, ensured)
+		manifest, err := r.ensureTree(repo, v1Name, res.Digest, ensured)
 		if err != nil {
 			res.Status, res.Err = TagFailed, err
 			results = append(results, res)
@@ -140,7 +140,7 @@ func (r *Replayer) PushRepo(ctx context.Context, v1Name string) ([]TagResult, er
 // ensureTree uploads everything a manifest needs (blobs, child manifests for
 // indexes) and returns the manifest ready to Put. Children are Put by digest;
 // the caller Puts the root at its tag.
-func (r *Replayer) ensureTree(ctx context.Context, repo name.Repository, v1Name, digest string, ensured map[string]rawManifest) (rawManifest, error) {
+func (r *Replayer) ensureTree(repo name.Repository, v1Name, digest string, ensured map[string]rawManifest) (rawManifest, error) {
 	if m, ok := ensured[digest]; ok {
 		return m, nil
 	}
@@ -159,7 +159,7 @@ func (r *Replayer) ensureTree(ctx context.Context, repo name.Repository, v1Name,
 
 	if m.IsIndex() {
 		for _, child := range m.Manifests {
-			childManifest, err := r.ensureTree(ctx, repo, v1Name, child.Digest, ensured)
+			childManifest, err := r.ensureTree(repo, v1Name, child.Digest, ensured)
 			if err != nil {
 				return rawManifest{}, fmt.Errorf("index child %s: %w", child.Digest, err)
 			}
@@ -232,7 +232,8 @@ func CmdImages(ctx context.Context, cfg *config.MigrateConfig) error {
 	}
 
 	if cfg.DryRun {
-		return dryRunImages(cfg, v1s, repos, privacy)
+		dryRunImages(cfg, v1s, repos, privacy)
+		return nil
 	}
 	if cfg.User == "" || cfg.Pass == "" {
 		return fmt.Errorf("-v2-user and -v2-pass (or $V2_PASSWORD) are required; use an admin account or df_ token")
@@ -329,7 +330,7 @@ func replayRepos(ctx context.Context, cfg *config.MigrateConfig, replayer *Repla
 	return results
 }
 
-func dryRunImages(cfg *config.MigrateConfig, v1s *V1Storage, repos []string, privacy map[string]bool) error {
+func dryRunImages(cfg *config.MigrateConfig, v1s *V1Storage, repos []string, privacy map[string]bool) {
 	fmt.Printf("DRY RUN: %d repositories would be replayed to %s\n\n", len(repos), cfg.Registry)
 	broken := 0
 	for _, repo := range repos {
@@ -349,7 +350,6 @@ func dryRunImages(cfg *config.MigrateConfig, v1s *V1Storage, repos []string, pri
 	if broken > 0 {
 		fmt.Printf("\n%d tag(s) have problems and would fail to replay\n", broken)
 	}
-	return nil
 }
 
 func summarizeResults(results []TagResult) error {

@@ -9,6 +9,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -24,11 +25,12 @@ type WebhookService struct {
 	store      *stores.Store
 	enforcer   *rbac.Enforcer
 	dispatcher *webhook.Dispatcher
+	git        *gitrepo.Manager
 	log        *logger.Logger
 }
 
-func NewWebhookService(store *stores.Store, enforcer *rbac.Enforcer, dispatcher *webhook.Dispatcher, log *logger.Logger) *WebhookService {
-	return &WebhookService{store: store, enforcer: enforcer, dispatcher: dispatcher, log: log}
+func NewWebhookService(store *stores.Store, enforcer *rbac.Enforcer, dispatcher *webhook.Dispatcher, git *gitrepo.Manager, log *logger.Logger) *WebhookService {
+	return &WebhookService{store: store, enforcer: enforcer, dispatcher: dispatcher, log: log, git: git}
 }
 
 func (s *WebhookService) CreateWebhook(ctx context.Context, req *v1.CreateWebhookRequest) (*v1.CreateWebhookResponse, error) {
@@ -49,19 +51,33 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *v1.CreateWebhoo
 	}
 
 	scope := storage.WebhookScopeRepository
-	if msg.Scope == v1.WebhookScope_WEBHOOK_SCOPE_ORGANIZATION {
+	switch msg.Scope {
+	case v1.WebhookScope_WEBHOOK_SCOPE_ORGANIZATION:
 		scope = storage.WebhookScopeOrganization
+	case v1.WebhookScope_WEBHOOK_SCOPE_GIT_REPOSITORY:
+		scope = storage.WebhookScopeGitRepository
 	}
 
 	// Verify permission on the target repo/org
-	if scope == storage.WebhookScopeRepository {
+	var gitRepoID *string
+	switch scope {
+	case storage.WebhookScopeGitRepository:
+		if msg.RepoId == "" {
+			return nil, connect.Errorf(connect.CodeInvalidArgument, "repo_id is required for repository webhooks")
+		}
+		if err := s.checkGitRepoPermission(ctx, user, msg.RepoId, rbac.ActionUpdate); err != nil {
+			return nil, err
+		}
+		gitRepoID = &msg.RepoId
+		msg.RepoId = ""
+	case storage.WebhookScopeRepository:
 		if msg.RepoId == "" {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "repo_id is required for repository webhooks")
 		}
 		if err := s.checkRepoPermission(ctx, user, msg.RepoId, rbac.ActionUpdate); err != nil {
 			return nil, err
 		}
-	} else {
+	default:
 		if msg.OrgId == "" {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "org_id is required for organization webhooks")
 		}
@@ -96,6 +112,7 @@ func (s *WebhookService) CreateWebhook(ctx context.Context, req *v1.CreateWebhoo
 		Scope:           scope,
 		RepoID:          repoID,
 		OrgID:           orgID,
+		GitRepoID:       gitRepoID,
 		URL:             msg.Url,
 		Events:          string(eventsJSON),
 		Active:          msg.Active,
@@ -134,7 +151,12 @@ func (s *WebhookService) ListWebhooks(ctx context.Context, req *v1.ListWebhooksR
 	var total int64
 	var err error
 
-	if msg.RepoId != "" {
+	if msg.RepoId != "" && s.getGitRepoByID(ctx, msg.RepoId) != nil {
+		if err := s.checkGitRepoPermission(ctx, user, msg.RepoId, rbac.ActionRead); err != nil {
+			return nil, err
+		}
+		webhooks, total, err = s.store.ListWebhooksByGitRepo(ctx, msg.RepoId, q, limit, offset)
+	} else if msg.RepoId != "" {
 		if err := s.checkRepoPermission(ctx, user, msg.RepoId, rbac.ActionRead); err != nil {
 			return nil, err
 		}
@@ -406,10 +428,45 @@ func (s *WebhookService) checkOrgPermission(ctx context.Context, user *auth.Auth
 }
 
 func (s *WebhookService) checkWebhookPermission(ctx context.Context, user *auth.AuthenticatedUser, wh *storage.Webhook, action string) error {
-	if wh.Scope == storage.WebhookScopeRepository {
+	switch wh.Scope {
+	case storage.WebhookScopeRepository:
 		return s.checkRepoPermission(ctx, user, derefStr(wh.RepoID), action)
+	case storage.WebhookScopeGitRepository:
+		return s.checkGitRepoPermission(ctx, user, derefStr(wh.GitRepoID), action)
 	}
 	return s.checkOrgPermission(ctx, user, derefStr(wh.OrgID), action)
+}
+
+func (s *WebhookService) getGitRepoByID(ctx context.Context, id string) *storage.GitRepository {
+	if id == "" {
+		return nil
+	}
+	repo, err := s.store.GetGitRepositoryByID(ctx, id)
+	if err != nil {
+		return nil
+	}
+	return repo
+}
+
+// Git webhooks need the repository admin level, reads need visibility
+func (s *WebhookService) checkGitRepoPermission(ctx context.Context, user *auth.AuthenticatedUser, repoID, action string) error {
+	repo := s.getGitRepoByID(ctx, repoID)
+	if repo == nil || s.git == nil {
+		return connect.Errorf(connect.CodeNotFound, "repository not found")
+	}
+	levels := s.git.Access().Levels(ctx, user, repo)
+	if !s.git.Access().CanSee(ctx, user, repo) {
+		return connect.Errorf(connect.CodeNotFound, "repository not found")
+	}
+	if !levels.CanAdmin && !levels.IsOwner {
+		return connect.Errorf(connect.CodePermissionDenied, "repository admin required")
+	}
+	if action != rbac.ActionRead {
+		if err := portalAllowsGitWrite(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *WebhookService) getRepoByID(ctx context.Context, id string) *storage.Repository {
@@ -423,8 +480,11 @@ func (s *WebhookService) getRepoByID(ctx context.Context, id string) *storage.Re
 
 func (s *WebhookService) webhookToProto(ctx context.Context, wh *storage.Webhook) *v1.Webhook {
 	scope := v1.WebhookScope_WEBHOOK_SCOPE_REPOSITORY
-	if wh.Scope == storage.WebhookScopeOrganization {
+	switch wh.Scope {
+	case storage.WebhookScopeOrganization:
 		scope = v1.WebhookScope_WEBHOOK_SCOPE_ORGANIZATION
+	case storage.WebhookScopeGitRepository:
+		scope = v1.WebhookScope_WEBHOOK_SCOPE_GIT_REPOSITORY
 	}
 
 	var events []string
@@ -433,12 +493,19 @@ func (s *WebhookService) webhookToProto(ctx context.Context, wh *storage.Webhook
 	protoEvents := stringsToEvents(events)
 
 	scopeName := ""
-	if wh.Scope == storage.WebhookScopeRepository {
+	repoID := derefStr(wh.RepoID)
+	switch wh.Scope {
+	case storage.WebhookScopeGitRepository:
+		repoID = derefStr(wh.GitRepoID)
+		if repo := s.getGitRepoByID(ctx, repoID); repo != nil {
+			scopeName = repo.Namespace + "/" + repo.Name
+		}
+	case storage.WebhookScopeRepository:
 		repo := s.getRepoByID(ctx, derefStr(wh.RepoID))
 		if repo != nil {
 			scopeName = repo.Namespace + "/" + repo.Name
 		}
-	} else {
+	default:
 		org, _ := s.store.GetOrganizationByID(ctx, derefStr(wh.OrgID))
 		if org != nil {
 			scopeName = org.Name
@@ -448,7 +515,7 @@ func (s *WebhookService) webhookToProto(ctx context.Context, wh *storage.Webhook
 	return &v1.Webhook{
 		Id:              wh.ID,
 		Scope:           scope,
-		RepoId:          derefStr(wh.RepoID),
+		RepoId:          repoID,
 		OrgId:           derefStr(wh.OrgID),
 		Url:             wh.URL,
 		HasSecret:       wh.Secret != "",
@@ -477,6 +544,24 @@ func deliveryToProto(d *storage.WebhookDelivery) *v1.WebhookDelivery {
 	}
 }
 
+// Stored names of git webhook events, the enum suffix in lower case
+var gitWebhookEventNames = map[v1.WebhookEvent]string{
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_PUSH:                 "git_push",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_BRANCH:               "git_branch",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_TAG:                  "git_tag",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_ISSUE:                "git_issue",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_ISSUE_COMMENT:        "git_issue_comment",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_PULL_REQUEST:         "git_pull_request",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_PULL_REQUEST_REVIEW:  "git_pull_request_review",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_PULL_REQUEST_COMMENT: "git_pull_request_comment",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_RELEASE:              "git_release",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_WIKI:                 "git_wiki",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_FORK:                 "git_fork",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_REPOSITORY:           "git_repository",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_WORKFLOW_RUN:         "git_workflow_run",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_AGENT_SESSION:        "git_agent_session",
+}
+
 func eventsToStrings(events []v1.WebhookEvent) []string {
 	result := make([]string, 0, len(events))
 	for _, e := range events {
@@ -487,6 +572,10 @@ func eventsToStrings(events []v1.WebhookEvent) []string {
 			result = append(result, "pull")
 		case v1.WebhookEvent_WEBHOOK_EVENT_DELETE:
 			result = append(result, "delete")
+		default:
+			if name, ok := gitWebhookEventNames[e]; ok {
+				result = append(result, name)
+			}
 		}
 	}
 	return result
@@ -509,6 +598,11 @@ func stringToEvent(s string) v1.WebhookEvent {
 	case "delete":
 		return v1.WebhookEvent_WEBHOOK_EVENT_DELETE
 	default:
+		for ev, name := range gitWebhookEventNames {
+			if name == s {
+				return ev
+			}
+		}
 		return v1.WebhookEvent_WEBHOOK_EVENT_UNSPECIFIED
 	}
 }

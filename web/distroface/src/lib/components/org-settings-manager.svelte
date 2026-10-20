@@ -5,15 +5,18 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
-	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import UnitInput from '$lib/components/unit-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
-	import FormCard from '$lib/components/form-card.svelte';
-	import { Globe, Package, Save, Undo2 } from '@lucide/svelte';
+	import FormSection from '$lib/components/form-section.svelte';
+	import { Save, Undo, Loader } from '$lib/icons';
 	import { Act } from '$lib/act.svelte';
 	import { orgScope, patchSettings, systemScope, tierOf } from '$lib/settings-utils';
-	import { SettingsTier, type FieldProvenance, type Settings } from '$lib/proto/distroface/v1/settings_pb';
+	import {
+		SettingsTier,
+		type FieldProvenance,
+		type Settings
+	} from '$lib/proto/distroface/v1/settings_pb';
 
 	let { orgId }: { orgId: string } = $props();
 
@@ -53,11 +56,11 @@
 	const overrideCount = $derived(ALL_PATHS.filter(overridden).length);
 
 	let retentionEnabled = $state(false);
-	let maxVersions = $state(0);
-	let maxAgeDays = $state(0);
-	let maxTotalSizeMb = $state(0);
+	let maxVersions = $state<number | undefined>();
+	let maxAgeDays = $state<number | undefined>();
+	let maxTotalSizeMb = $state<number | undefined>();
 	let excludeLatest = $state(true);
-	let maxFileSizeMb = $state(0);
+	let maxFileSizeMb = $state<number | undefined>();
 	let privateByDefault = $state(false);
 	let portalsIsolated = $state(false);
 	let anonymousMode = $state<AnonymousMode>('inherit');
@@ -68,16 +71,42 @@
 	const anonymousLabel = $derived(
 		anonymousMode === 'inherit'
 			? `Inherit from instance (${instanceAnonymous ? 'allowed' : 'denied'})`
-			: anonymousMode === 'allow' ? 'Allow' : 'Deny'
+			: anonymousMode === 'allow'
+				? 'Allow'
+				: 'Deny'
 	);
+
+	const LIMIT_PATHS: SavePath[] = [
+		PATHS.maxVersions,
+		PATHS.maxAgeDays,
+		PATHS.maxTotalSize,
+		PATHS.maxFileSizeMb
+	];
+	const whole = (v: number | null | undefined) => Math.max(0, Math.round(Number(v) || 0));
+
+	// Only a limit the org set itself shows a value
+	function limit(path: string, v: number | bigint | undefined): number | undefined {
+		const n = Number(v ?? 0);
+		return n > 0 && overridden(path) ? n : undefined;
+	}
+
+	// Placeholder while a limit is off
+	// Inherited limit while this scope sets none
+	function fallback(v: number | bigint | undefined): number | undefined {
+		const n = Number(v ?? 0);
+		return n > 0 ? n : undefined;
+	}
 
 	function seed(eff: Settings) {
 		retentionEnabled = eff.artifacts?.retention?.enabled ?? false;
-		maxVersions = eff.artifacts?.retention?.maxVersions ?? 0;
-		maxAgeDays = eff.artifacts?.retention?.maxAgeDays ?? 0;
-		maxTotalSizeMb = Math.round(Number(eff.artifacts?.retention?.maxTotalSizeBytes ?? 0n) / (1024 * 1024));
+		maxVersions = limit(PATHS.maxVersions, eff.artifacts?.retention?.maxVersions);
+		maxAgeDays = limit(PATHS.maxAgeDays, eff.artifacts?.retention?.maxAgeDays);
+		maxTotalSizeMb = limit(
+			PATHS.maxTotalSize,
+			Math.round(Number(eff.artifacts?.retention?.maxTotalSizeBytes ?? 0n) / (1024 * 1024))
+		);
 		excludeLatest = eff.artifacts?.retention?.excludeLatest ?? true;
-		maxFileSizeMb = Number(eff.artifacts?.maxFileSizeMb ?? 0n);
+		maxFileSizeMb = limit(PATHS.maxFileSizeMb, eff.artifacts?.maxFileSizeMb);
 		privateByDefault = eff.artifacts?.privateByDefault ?? false;
 		portalsIsolated = eff.portals?.isolated ?? false;
 	}
@@ -146,18 +175,18 @@
 		}
 	}
 
-	// Values matching the instance tier clear back to inherit
+	// Values matching the instance tier clear back to inherit, limits switched off inherit
 	async function save() {
 		saving = true;
 		try {
 			const inh = inherited;
 			const form = {
 				[PATHS.retentionEnabled]: retentionEnabled,
-				[PATHS.maxVersions]: Math.max(0, Math.round(maxVersions)),
-				[PATHS.maxAgeDays]: Math.max(0, Math.round(maxAgeDays)),
-				[PATHS.maxTotalSize]: Math.max(0, Math.round(maxTotalSizeMb)) * 1024 * 1024,
+				[PATHS.maxVersions]: whole(maxVersions),
+				[PATHS.maxAgeDays]: whole(maxAgeDays),
+				[PATHS.maxTotalSize]: whole(maxTotalSizeMb) * 1024 * 1024,
 				[PATHS.excludeLatest]: excludeLatest,
-				[PATHS.maxFileSizeMb]: Math.max(0, Math.round(maxFileSizeMb)),
+				[PATHS.maxFileSizeMb]: whole(maxFileSizeMb),
 				[PATHS.privateByDefault]: privateByDefault
 			} as const;
 			const base = {
@@ -170,17 +199,29 @@
 				[PATHS.privateByDefault]: inh?.artifacts?.privateByDefault ?? false
 			} as const;
 
-			const keep = ALL_PATHS.filter((p) => form[p] !== base[p]);
+			const keep = ALL_PATHS.filter(
+				(p) => form[p] !== base[p] && !(LIMIT_PATHS.includes(p) && form[p] === 0)
+			);
 			const patch = {
 				artifacts: {
-					...(keep.includes(PATHS.maxFileSizeMb) ? { maxFileSizeMb: BigInt(form[PATHS.maxFileSizeMb]) } : {}),
-					...(keep.includes(PATHS.privateByDefault) ? { privateByDefault: form[PATHS.privateByDefault] } : {}),
+					...(keep.includes(PATHS.maxFileSizeMb)
+						? { maxFileSizeMb: BigInt(form[PATHS.maxFileSizeMb]) }
+						: {}),
+					...(keep.includes(PATHS.privateByDefault)
+						? { privateByDefault: form[PATHS.privateByDefault] }
+						: {}),
 					retention: {
-						...(keep.includes(PATHS.retentionEnabled) ? { enabled: form[PATHS.retentionEnabled] } : {}),
+						...(keep.includes(PATHS.retentionEnabled)
+							? { enabled: form[PATHS.retentionEnabled] }
+							: {}),
 						...(keep.includes(PATHS.maxVersions) ? { maxVersions: form[PATHS.maxVersions] } : {}),
 						...(keep.includes(PATHS.maxAgeDays) ? { maxAgeDays: form[PATHS.maxAgeDays] } : {}),
-						...(keep.includes(PATHS.maxTotalSize) ? { maxTotalSizeBytes: BigInt(form[PATHS.maxTotalSize]) } : {}),
-						...(keep.includes(PATHS.excludeLatest) ? { excludeLatest: form[PATHS.excludeLatest] } : {})
+						...(keep.includes(PATHS.maxTotalSize)
+							? { maxTotalSizeBytes: BigInt(form[PATHS.maxTotalSize]) }
+							: {}),
+						...(keep.includes(PATHS.excludeLatest)
+							? { excludeLatest: form[PATHS.excludeLatest] }
+							: {})
 					}
 				}
 			};
@@ -213,19 +254,17 @@
 </script>
 
 {#if loading}
-	<Skeleton class="h-72 w-full rounded-xl" />
+	<Skeleton class="h-72 w-full rounded-lg" />
 {:else}
-	<FormCard
+	<FormSection
 		title="Portals"
-		description="How this organization's portals expose content."
-		icon={Globe}
+		description="How this organization's portals expose content. Changes apply immediately."
 	>
 		<FormField
 			label="Isolate portals"
-			horizontal
+			layout="toggle"
 			tag={isolatedAct.tag ?? customTag(PATHS.portalsIsolated)}
 			error={isolatedAct.error}
-			help="Portals serve only this organization's content"
 		>
 			<Switch
 				checked={portalsIsolated}
@@ -236,12 +275,16 @@
 		<FormField
 			label="Anonymous access"
 			id="org-anonymous"
-			horizontal
+			layout="inline"
 			tag={anonymousAct.tag ?? customTag(PATHS.anonymousAccess)}
 			error={anonymousAct.error}
-			help="Default for this organization's portals, each portal may override. Signed out visitors get the anonymous role grants"
 		>
-			<Select.Root type="single" value={anonymousMode} onValueChange={applyAnonymous} disabled={anonymousAct.busy}>
+			<Select.Root
+				type="single"
+				value={anonymousMode}
+				onValueChange={applyAnonymous}
+				disabled={anonymousAct.busy}
+			>
 				<Select.Trigger id="org-anonymous" class="w-64">{anonymousLabel}</Select.Trigger>
 				<Select.Content>
 					{#each anonymousOptions as option (option.value)}
@@ -250,58 +293,114 @@
 				</Select.Content>
 			</Select.Root>
 		</FormField>
-	</FormCard>
+	</FormSection>
 
-	<FormCard
-		title="Artifacts"
-		description="Retention and upload limits for artifact repositories."
-		icon={Package}
+	<FormSection title="Artifact uploads" description="Defaults for new artifact repositories.">
+		<FormField label="Private by default" tag={customTag(PATHS.privateByDefault)} layout="toggle">
+			<Switch bind:checked={privateByDefault} />
+		</FormField>
+		<FormField
+			label="Max upload size"
+			id="art-max-file"
+			tag={customTag(PATHS.maxFileSizeMb)}
+			layout="inline"
+		>
+			<LimitInput
+				id="art-max-file"
+				label="upload size"
+				unit="MB"
+				bind:value={maxFileSizeMb}
+				fallback={fallback(inherited?.artifacts?.maxFileSizeMb)}
+				seed={512}
+			/>
+		</FormField>
+	</FormSection>
+
+	<FormSection
+		title="Artifact retention"
+		description="Prunes old artifacts automatically. Blank fields inherit the instance."
 	>
-		<div class="space-y-5">
-			<div class="space-y-3">
-				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Uploads</p>
-				<FormField label="Private by default" tag={customTag(PATHS.privateByDefault)} horizontal>
-					<Switch bind:checked={privateByDefault} />
+		<FormField label="Enable retention" tag={customTag(PATHS.retentionEnabled)} layout="toggle">
+			<Switch bind:checked={retentionEnabled} />
+		</FormField>
+		{#if retentionEnabled}
+			<div class="form-subfields">
+				<FormField
+					label="Max versions per path"
+					id="art-max-versions"
+					tag={customTag(PATHS.maxVersions)}
+					layout="inline"
+				>
+					<LimitInput
+						id="art-max-versions"
+						label="versions per path"
+						unit="versions"
+						bind:value={maxVersions}
+						fallback={fallback(inherited?.artifacts?.retention?.maxVersions)}
+						seed={10}
+					/>
 				</FormField>
-				<FormField label="Max upload size" id="art-max-file" tag={customTag(PATHS.maxFileSizeMb)} help="0 means unlimited">
-					<UnitInput id="art-max-file" unit="MB" bind:value={maxFileSizeMb} min={0} class="w-36" />
+				<FormField
+					label="Max age"
+					id="art-max-age"
+					tag={customTag(PATHS.maxAgeDays)}
+					layout="inline"
+				>
+					<LimitInput
+						id="art-max-age"
+						label="age"
+						unit="days"
+						bind:value={maxAgeDays}
+						fallback={fallback(inherited?.artifacts?.retention?.maxAgeDays)}
+						seed={90}
+					/>
+				</FormField>
+				<FormField
+					label="Max total size"
+					id="art-max-total"
+					tag={customTag(PATHS.maxTotalSize)}
+					layout="inline"
+					help="Per repository"
+				>
+					<LimitInput
+						id="art-max-total"
+						label="total size"
+						unit="MB"
+						bind:value={maxTotalSizeMb}
+						fallback={fallback(
+							Math.round(
+								Number(inherited?.artifacts?.retention?.maxTotalSizeBytes ?? 0n) / (1024 * 1024)
+							)
+						)}
+						seed={10240}
+					/>
+				</FormField>
+				<FormField label="Keep latest" tag={customTag(PATHS.excludeLatest)} layout="toggle">
+					<Switch bind:checked={excludeLatest} />
 				</FormField>
 			</div>
-
-			<div class="space-y-3 pt-4 border-t border-border/40">
-				<p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Retention</p>
-				<FormField label="Enable retention" tag={customTag(PATHS.retentionEnabled)} help="Prunes old artifacts automatically" horizontal>
-					<Switch bind:checked={retentionEnabled} />
-				</FormField>
-				{#if retentionEnabled}
-					<div class="space-y-3 pl-3 border-l-2 border-border/40">
-						<FormField label="Max versions per path" id="art-max-versions" tag={customTag(PATHS.maxVersions)} help="0 means unlimited">
-							<Input id="art-max-versions" type="number" bind:value={maxVersions} min={0} class="w-36" />
-						</FormField>
-						<FormField label="Max age" id="art-max-age" tag={customTag(PATHS.maxAgeDays)} help="0 disables age pruning">
-							<UnitInput id="art-max-age" unit="days" bind:value={maxAgeDays} min={0} class="w-36" />
-						</FormField>
-						<FormField label="Max total size" id="art-max-total" tag={customTag(PATHS.maxTotalSize)} help="Per repo, 0 means unlimited">
-							<UnitInput id="art-max-total" unit="MB" bind:value={maxTotalSizeMb} min={0} class="w-36" />
-						</FormField>
-						<FormField label="Keep latest" tag={customTag(PATHS.excludeLatest)} help="Always keep the newest (per path), regardless of retention." horizontal>
-							<Switch bind:checked={excludeLatest} />
-						</FormField>
-					</div>
-				{/if}
-			</div>
-		</div>
+		{/if}
 		{#snippet footer()}
+			<Button onclick={save} disabled={saving || resetting}>
+				{#if saving}
+					<Loader class="animate-spin" />
+					Saving
+				{:else}
+					<Save />
+					Save changes
+				{/if}
+			</Button>
 			{#if overrideCount > 0}
-				<Button variant="ghost" onclick={resetAll} disabled={resetting || saving} class="gap-2 mr-auto text-muted-foreground">
-					<Undo2 class="h-4 w-4" />
-					{resetting ? 'Resetting...' : 'Reset to defaults'}
+				<Button variant="ghost-muted" onclick={resetAll} disabled={resetting || saving}>
+					{#if resetting}
+						<Loader class="animate-spin" />
+						Resetting
+					{:else}
+						<Undo />
+						Reset to defaults
+					{/if}
 				</Button>
 			{/if}
-			<Button onclick={save} disabled={saving || resetting} class="gap-2">
-				<Save class="h-4 w-4" />
-				{saving ? 'Saving...' : 'Save Changes'}
-			</Button>
 		{/snippet}
-	</FormCard>
+	</FormSection>
 {/if}

@@ -60,6 +60,17 @@ export function relativeTime(date: Date | string): string {
 	return `${diffYear}y ago`;
 }
 
+// Only http and https links are rendered as hrefs, anything else stays plain text
+export function safeHref(raw: string | undefined | null): string | undefined {
+	if (!raw) return undefined;
+	try {
+		const u = new URL(raw);
+		return u.protocol === 'http:' || u.protocol === 'https:' ? raw : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function truncateDigest(digest: string, len = 16): string {
 	if (!digest) return '';
 	if (digest.startsWith('sha256:')) {
@@ -86,8 +97,45 @@ export function toggleInArray<T>(arr: T[], item: T): T[] {
 export const webhookEventLabels: Record<number, string> = {
 	[WebhookEvent.PUSH]: 'push',
 	[WebhookEvent.PULL]: 'pull',
-	[WebhookEvent.DELETE]: 'delete'
+	[WebhookEvent.DELETE]: 'delete',
+	[WebhookEvent.GIT_PUSH]: 'git push',
+	[WebhookEvent.GIT_BRANCH]: 'branch',
+	[WebhookEvent.GIT_TAG]: 'tag',
+	[WebhookEvent.GIT_ISSUE]: 'issue',
+	[WebhookEvent.GIT_ISSUE_COMMENT]: 'issue comment',
+	[WebhookEvent.GIT_PULL_REQUEST]: 'pull request',
+	[WebhookEvent.GIT_PULL_REQUEST_REVIEW]: 'review',
+	[WebhookEvent.GIT_PULL_REQUEST_COMMENT]: 'review comment',
+	[WebhookEvent.GIT_RELEASE]: 'release',
+	[WebhookEvent.GIT_WIKI]: 'wiki',
+	[WebhookEvent.GIT_FORK]: 'fork',
+	[WebhookEvent.GIT_REPOSITORY]: 'repository',
+	[WebhookEvent.GIT_WORKFLOW_RUN]: 'workflow run',
+	[WebhookEvent.GIT_AGENT_SESSION]: 'agent session'
 };
+
+// Git events a repository or organization webhook may subscribe to
+export const gitWebhookEvents: WebhookEvent[] = [
+	WebhookEvent.GIT_PUSH,
+	WebhookEvent.GIT_BRANCH,
+	WebhookEvent.GIT_TAG,
+	WebhookEvent.GIT_ISSUE,
+	WebhookEvent.GIT_ISSUE_COMMENT,
+	WebhookEvent.GIT_PULL_REQUEST,
+	WebhookEvent.GIT_PULL_REQUEST_REVIEW,
+	WebhookEvent.GIT_PULL_REQUEST_COMMENT,
+	WebhookEvent.GIT_RELEASE,
+	WebhookEvent.GIT_WIKI,
+	WebhookEvent.GIT_FORK,
+	WebhookEvent.GIT_REPOSITORY,
+	WebhookEvent.GIT_WORKFLOW_RUN,
+	WebhookEvent.GIT_AGENT_SESSION
+];
+
+// Issues read #12 and pull requests read !12
+export function issueRef(isPull: boolean, number: number | bigint | string): string {
+	return `${isPull ? '!' : '#'}${number}`;
+}
 
 export function orgRoleLabel(role: number): string {
 	switch (role) {

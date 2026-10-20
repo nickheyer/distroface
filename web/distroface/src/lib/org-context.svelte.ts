@@ -23,6 +23,12 @@ export class OrgContext {
 		);
 	}
 
+	// Any role at all, settings shows the leave card for these
+	get isMember(): boolean {
+		const role = this.org?.currentUserRole;
+		return role !== undefined && role !== OrgRole.UNSPECIFIED;
+	}
+
 	get canDelete(): boolean {
 		const id = this.org?.id ?? '';
 		return (
@@ -30,6 +36,12 @@ export class OrgContext {
 			authStore.hasPermission('organizations', 'delete', id) ||
 			authStore.hasPermission('organizations', 'manage', id)
 		);
+	}
+
+	// Mirrors backend CanCreateInNamespace, members may hold it through a team
+	get canCreateRepos(): boolean {
+		if (this.canAdmin) return true;
+		return this.org?.currentUserRole === OrgRole.MEMBER || authStore.hasPermission('git', 'manage');
 	}
 
 	async load(name: string) {

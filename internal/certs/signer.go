@@ -85,10 +85,10 @@ func (ca *caMaterial) signLeaf(pub any, commonName string, dnsNames []string, ip
 		return nil, err
 	}
 	var b strings.Builder
-	pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: der})
-	pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw})
+	_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: der})
+	_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw})
 	for _, extra := range ca.chain {
-		pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: extra})
+		_ = pem.Encode(&b, &pem.Block{Type: "CERTIFICATE", Bytes: extra})
 	}
 	return &SignedLeaf{Leaf: leaf, CertPEM: b.String()}, nil
 }

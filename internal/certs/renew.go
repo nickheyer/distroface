@@ -31,11 +31,22 @@ func (e *Engine) ScheduleRenewal(ctx context.Context) {
 	}()
 }
 
-// Reissues every acme served hostname nearing expiry
+// Reissues every acme served hostname nearing expiry, one instance at a time
 func (e *Engine) renewSweep(ctx context.Context) {
 	if !e.ACMEEnabled(ctx) {
 		return
 	}
+	lock, ok, err := e.sharedCache().TryLock(ctx, "cert-renewal", 10*time.Minute)
+	if err != nil {
+		e.log.Warn("renewal lease: %v", err)
+	} else if !ok {
+		return
+	}
+	stop := lock.KeepAlive(ctx)
+	defer func() {
+		stop()
+		_ = lock.Unlock(ctx)
+	}()
 	for _, host := range e.renewableHosts(ctx) {
 		info, err := e.CertificateInfo(ctx, host)
 		if err != nil {

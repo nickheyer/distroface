@@ -1,7 +1,4 @@
-# Distroface boot config.
-# Only process wiring lives here. Every tunable (auth, tls mode, acme,
-# artifacts, gc, rate limits, webhooks, security, hostname) is a runtime
-# setting managed in the app and stored in the database.
+# Distroface Configuration
 
 server:
   port: "8080"
@@ -9,24 +6,55 @@ server:
   read_timeout: 15
   write_timeout: 15
   idle_timeout: 60
-  # Peers whose X-Forwarded-For / X-Real-IP headers are trusted.
-  # Defaults to loopback plus private ranges, set [] to trust none.
-  # trusted_proxies: ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"]
+  # trusted_proxies: ["127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7"] # defaults to loopback and private
 
 storage:
   data_dir: "./data"
 
 database:
-  # path: "./data/distroface.db"    # Derived from storage.data_dir when unset
+  # driver: "sqlite" # or "postgres"
+  # path: "./data/distroface.db"
+  # dsn: "postgres://distroface:secret@db:5432/distroface?sslmode=disable"
   max_connections: 25
   max_idle_conns: 5
   conn_max_lifetime: 300
 
+# redis: # sessions, rate limits, registry blob, descriptors, git metadata, gc
+#   url: "redis://127.0.0.1:6379/0"      # single node, redis:// or rediss://, or addrs below
+#   # addrs: ["10.0.0.1:26379", "10.0.0.2:26379"]
+#   # master_name: ""                    # Sentinel master, several addrs without one mean a cluster
+#   # username: ""
+#   # password: ""
+#   # db: 0
+#   # tls: false
+#   # tls_ca_file: ""
+#   # tls_cert_file: ""
+#   # tls_key_file: ""
+#   # dial_timeout: 1s
+#   # read_timeout: 1s
+#   # write_timeout: 1s
+#   # max_retries: 1
+#   # pool_size: 0
+#   # min_idle_conns: 0
+#   # conn_max_idle_time: 30m
+
 registry:
   # storage_path: "./data/registry"   # Derived from storage.data_dir when unset
+  # blob_cache_size: 10000            # Layer descriptors kept in memory, ignored with a redis block
+  # manifest_urls_allow: ['^https://mcr\.microsoft\.com/']
+  # manifest_urls_deny: []
+  # index_platforms: all                # all, none or list
+  # index_platform_list: ["linux/amd64", "linux/arm64"]
+  # upload_purge_age: 168h             # Abandoned upload sessions removed past this age
+  # upload_purge_interval: 24h
+  # tag_lookup_concurrency: 0          # Parallel tag reads on manifest delete, zero means cpu count
+  # fsync: commit                      # always, commit or never, how much of each write waits for the disk
 
 artifacts:
   # storage_path: "./data/artifacts"  # Derived from storage.data_dir when unset
+
+git:
+  # storage_path: "./data/git"        # Derived from storage.data_dir when unset
 
 logging:
   enabled: true
@@ -44,6 +72,7 @@ logging:
 # Secret material only, generated and persisted when unset
 # auth:
 #   jwt_secret: ""
+#   sealing_key: ""   # Encrypts stored secrets at rest
 
 # Startup seeding, entries are created once and never updated
 # bootstrap:
@@ -59,10 +88,7 @@ logging:
 #         - username: "admin"
 #           role: "owner"           # owner, admin, or member (default)
 
-# Runtime settings seeded into the database on FIRST boot only.
-# Same schema as the SettingsService api (protojson field names, enum names
-# spelled out). After first boot the app manages these live, this block is
-# ignored. DISTROFACE_SETTINGS_JSON env replaces this block when set.
+# Seeded on FIRST boot only. DISTROFACE_SETTINGS_JSON replaces the whole block
 # settings:
 #   server:
 #     public_hostname: "registry.example.com"
@@ -77,11 +103,39 @@ logging:
 #   auth:
 #     local_enabled: true
 #     local_allow_registration: false
+#   git:
+#     enabled: true
+#     ssh_enabled: false                   # Off until an admin turns it on, the ui probes the port first
+#     ssh_port: 22                         # Listener port, needs root or cap_net_bind_service below 1024
+#     ssh_public_host: ""                  # host or host:port in clone urls, defaults to public_hostname
+#     lfs_enabled: true
+#     max_lfs_object_mb: 2048
+#     max_repo_size_mb: 0                  # Zero unlimited
+#     private_by_default: false
+#     default_branch: "main"
+#     release_on_tag: false                # Annotated tags create draft releases
+#     allow_forks: true
+#     max_concurrent_transfers: 32
+#     gc: { enabled: true, interval_hours: 168 }
+#     signing: { enabled: false }          # Instance key signs web commits and merges
+#     actions:
+#       enabled: false
+#       artifact_retention_days: 90
+#       log_retention_days: 90
+#       run_on_mirror: false
+#       default_runs_on: "ubuntu-latest"
+#   mail:
+#     enabled: false
+#     smtp_host: "smtp.example.com"
+#     smtp_port: 587
+#     security: "MAIL_SECURITY_STARTTLS"   # NONE, STARTTLS, or TLS
+#     username: ""
+#     password: ""
+#     from_address: "distroface@example.com"
+#     from_name: "DistroFace"
+#     allow_private_networks: true         # Relays are usually internal
 
-# Operator pinned settings. Always win over the database and the ui,
-# rendered as locked fields in the app. DISTROFACE_OVERRIDES_JSON env
-# replaces this block when set.
-# overrides:
+# overrides: # Pinned settings overrides, leaves also read DISTROFACE_OVERRIDES_<PATH>
 #   acme:
 #     directory_url: "https://step-ca.internal/acme/acme/directory"
 #   portals:

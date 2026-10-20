@@ -7,18 +7,15 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import AsyncSelect from '$lib/components/async-select.svelte';
-	import FormPanel from '$lib/components/form-panel.svelte';
+	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
-	import FormCard from '$lib/components/form-card.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import OrgSettingsManager from '$lib/components/org-settings-manager.svelte';
-	import { Pencil, Save, Trash2, ArrowRightLeft } from '@lucide/svelte';
+	import { Save, Trash, ArrowLeftRight, Loader, LogOut } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
-	import { orgRoleLabel } from '$lib/utils';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
 
 	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
@@ -28,19 +25,33 @@
 	let editDisplayName = $state('');
 	let editDescription = $state('');
 	let savingOrg = $state(false);
-
-	let transferOpen = $state(false);
-	let transferUserId = $state('');
-	let transferring = $state(false);
+	const transferHref = $derived(resolve('/orgs/[name]/settings/transfer', { name: orgName }));
 
 	let deleteOrgOpen = $state(false);
 	let deletingOrg = $state(false);
 
+	// Outsiders have nothing to change here
 	$effect(() => {
-		if (!ctx.loading && ctx.org && !ctx.canAdmin) {
+		if (!ctx.loading && ctx.org && !ctx.canAdmin && !ctx.isMember) {
 			goto(resolve('/orgs/[name]', { name: orgName }));
 		}
 	});
+
+	let leaveOpen = $state(false);
+	let leaving = $state(false);
+
+	async function confirmLeave() {
+		leaving = true;
+		try {
+			await rpcClient.organization.removeOrgMember({ orgId, userId: authStore.user?.id ?? '' });
+			toast.success(`You left ${orgName}`);
+			goto(resolve('/orgs'));
+		} catch {
+			// error interceptor
+		} finally {
+			leaving = false;
+		}
+	}
 
 	$effect(() => {
 		if (ctx.org) {
@@ -66,26 +77,6 @@
 		}
 	}
 
-	function openTransfer() {
-		transferUserId = '';
-		transferOpen = true;
-	}
-
-	async function confirmTransfer() {
-		if (!transferUserId) return;
-		transferring = true;
-		try {
-			await rpcClient.organization.transferOrgOwnership({ orgId, userId: transferUserId });
-			toast.success('Ownership transferred');
-			transferOpen = false;
-			await ctx.refresh();
-		} catch {
-			// error interceptor
-		} finally {
-			transferring = false;
-		}
-	}
-
 	async function confirmDeleteOrg() {
 		deletingOrg = true;
 		try {
@@ -101,113 +92,139 @@
 </script>
 
 {#if ctx.loading || !ctx.org}
-	<Skeleton class="h-72 w-full rounded-xl" />
+	<Skeleton class="h-72 w-full rounded-lg" />
 {:else if ctx.canAdmin}
-	<div class="space-y-4">
-		<h2 class="section-title">Organization Settings</h2>
-
-		<FormCard title="Details" description="Public name and description." icon={Pencil}>
-			<div class="space-y-3">
-				<FormField label="Display Name" id="edit-org-display">
-					<Input id="edit-org-display" bind:value={editDisplayName} placeholder="Display name" />
-				</FormField>
-				<FormField label="Description" id="edit-org-desc">
-					<Textarea id="edit-org-desc" bind:value={editDescription} placeholder="What does this organization do?" rows={3} />
-				</FormField>
-			</div>
+	<FormPage
+		level="section"
+		title="Organization settings"
+		description="Name, description, and ownership of {orgName}."
+	>
+		<FormSection title="Details" description="Public name and description.">
+			<FormField label="Display name" id="edit-org-display" span="half">
+				<Input id="edit-org-display" bind:value={editDisplayName} placeholder="Display name" />
+			</FormField>
+			<FormField label="Description" id="edit-org-desc">
+				<Textarea
+					id="edit-org-desc"
+					bind:value={editDescription}
+					placeholder="What does this organization do?"
+					rows={3}
+				/>
+			</FormField>
 			{#snippet footer()}
-				<Button onclick={saveOrg} disabled={savingOrg} class="gap-2">
-					<Save class="h-4 w-4" />
-					{savingOrg ? 'Saving...' : 'Save Changes'}
+				<Button onclick={saveOrg} disabled={savingOrg}>
+					{#if savingOrg}
+						<Loader class="animate-spin" />
+						Saving
+					{:else}
+						<Save />
+						Save changes
+					{/if}
 				</Button>
 			{/snippet}
-		</FormCard>
+		</FormSection>
 
 		<OrgSettingsManager {orgId} />
 
-		<div class="rounded-xl border border-destructive/40 overflow-hidden">
-			<div class="px-6 py-4 border-b border-destructive/30 bg-destructive/5">
-				<h3 class="text-sm font-semibold text-destructive">Danger Zone</h3>
-			</div>
-			<div class="divide-y divide-border/40">
-				<div class="flex items-center justify-between gap-4 px-6 py-4">
+		<FormSection
+			title="Danger zone"
+			description="Membership, ownership, and deletion of {orgName}."
+		>
+			<div class="box divide-y border-destructive/40">
+				{#if ctx.isMember}
+					<div class="flex items-center justify-between gap-4 px-4 py-3">
+						<div class="min-w-0">
+							<p class="text-sm font-medium">Leave this organization</p>
+							<p class="mt-0.5 text-sm text-muted-foreground">
+								You lose access to its private repositories. The last owner cannot leave.
+							</p>
+						</div>
+						<Button
+							variant="outline-destructive"
+							class="shrink-0"
+							onclick={() => (leaveOpen = true)}
+						>
+							<LogOut />
+							Leave
+						</Button>
+					</div>
+				{/if}
+				<div class="flex items-center justify-between gap-4 px-4 py-3">
 					<div class="min-w-0">
 						<p class="text-sm font-medium">Transfer ownership</p>
-						<p class="text-[13px] text-muted-foreground mt-0.5">
+						<p class="mt-0.5 text-sm text-muted-foreground">
 							Make another member the owner, you become admin.
 						</p>
 					</div>
-					<Button
-						variant="outline"
-						class="shrink-0 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
-						onclick={openTransfer}
-					>
-						<ArrowRightLeft class="h-4 w-4 mr-1.5" />
+					<Button variant="outline-destructive" class="shrink-0" href={transferHref}>
+						<ArrowLeftRight />
 						Transfer
 					</Button>
 				</div>
 				{#if ctx.canDelete}
-					<div class="flex items-center justify-between gap-4 px-6 py-4">
+					<div class="flex items-center justify-between gap-4 px-4 py-3">
 						<div class="min-w-0">
 							<p class="text-sm font-medium">Delete this organization</p>
-							<p class="text-[13px] text-muted-foreground mt-0.5">
+							<p class="mt-0.5 text-sm text-muted-foreground">
 								Deletes every repository under this namespace, permanently.
 							</p>
 						</div>
 						<Button
-							variant="outline"
-							class="shrink-0 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+							variant="outline-destructive"
+							class="shrink-0"
 							onclick={() => (deleteOrgOpen = true)}
 						>
-							<Trash2 class="h-4 w-4 mr-1.5" />
+							<Trash />
 							Delete
 						</Button>
 					</div>
 				{/if}
 			</div>
-		</div>
-	</div>
+		</FormSection>
+	</FormPage>
+{:else if ctx.isMember}
+	<FormPage level="section" title="Membership" description="Your place in {orgName}.">
+		<FormSection title="Danger zone" description="Leaving is immediate.">
+			<div class="box border-destructive/40">
+				<div class="flex items-center justify-between gap-4 px-4 py-3">
+					<div class="min-w-0">
+						<p class="text-sm font-medium">Leave this organization</p>
+						<p class="mt-0.5 text-sm text-muted-foreground">
+							You lose access to its private repositories and teams. An admin can add you back.
+							Memberships synced from an identity provider cannot be left here.
+						</p>
+					</div>
+					<Button variant="outline-destructive" class="shrink-0" onclick={() => (leaveOpen = true)}>
+						<LogOut />
+						Leave
+					</Button>
+				</div>
+			</div>
+		</FormSection>
+	</FormPage>
 {/if}
 
-<FormPanel
-	bind:open={transferOpen}
-	title="Transfer Ownership"
-	description="Make another member the owner, you become admin."
-	icon={ArrowRightLeft}
+<ConfirmDialog
+	bind:open={leaveOpen}
+	title="Leave organization"
+	confirmLabel="Leave"
+	onConfirm={confirmLeave}
+	loading={leaving}
+	icon={LogOut}
 >
-	<div class="space-y-6">
-		<FormSection title="New Owner">
-			<FormField label="Member" id="transfer-member" required help="Only current members can receive ownership">
-				<AsyncSelect
-					bind:selected={transferUserId}
-					placeholder="Select a member..."
-					searchPlaceholder="Search members..."
-					fetchPage={async (query, pageToken) => {
-						const resp = await rpcClient.organization.listOrgMembers({
-							page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 },
-							orgId
-						});
-						return {
-							items: resp.members
-								.filter((m) => m.userId !== authStore.user?.id)
-								.map((m) => ({ value: m.userId, label: `${m.username} (${orgRoleLabel(m.role)})` })),
-							nextPageToken: resp.page?.nextPageToken ?? ''
-						};
-					}}
-				/>
-			</FormField>
-		</FormSection>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (transferOpen = false)}>Cancel</Button>
-		<Button variant="destructive" onclick={confirmTransfer} disabled={transferring || !transferUserId}>
-			{transferring ? 'Transferring...' : 'Transfer Ownership'}
-		</Button>
+	{#snippet description()}
+		You will no longer be a member of <strong>{orgName}</strong>.
 	{/snippet}
-</FormPanel>
+</ConfirmDialog>
 
-<ConfirmDialog bind:open={deleteOrgOpen} title="Delete Organization" confirmLabel="Delete" onConfirm={confirmDeleteOrg} loading={deletingOrg} icon={Trash2}>
+<ConfirmDialog
+	bind:open={deleteOrgOpen}
+	title="Delete organization"
+	confirmLabel="Delete"
+	onConfirm={confirmDeleteOrg}
+	loading={deletingOrg}
+	icon={Trash}
+>
 	{#snippet description()}
 		Deletes <strong>{orgName}</strong> and every repository and artifact under it, permanently.
 	{/snippet}

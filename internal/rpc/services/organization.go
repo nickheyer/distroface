@@ -7,9 +7,11 @@ import (
 	"strings"
 
 	"connectrpc.com/connect/v2"
+	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
@@ -18,6 +20,7 @@ import (
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	"github.com/nickheyer/distroface/pkg/utils"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -28,11 +31,16 @@ type OrganizationService struct {
 	registry *registry.RegistryAccess
 	enforcer *rbac.Enforcer
 	res      *settings.Resolver
+	git      *gitrepo.Manager
+	activity *activity.Recorder
 	log      *logger.Logger
 }
 
-func NewOrganizationService(store *stores.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, res *settings.Resolver, log *logger.Logger) *OrganizationService {
-	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, res: res, log: log}
+// Installs the activity recorder, nil keeps the feed quiet
+func (s *OrganizationService) SetActivity(rec *activity.Recorder) { s.activity = rec }
+
+func NewOrganizationService(store *stores.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, res *settings.Resolver, git *gitrepo.Manager, log *logger.Logger) *OrganizationService {
+	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, res: res, log: log, git: git}
 }
 
 func (s *OrganizationService) CreateOrganization(ctx context.Context, req *v1.CreateOrganizationRequest) (*v1.CreateOrganizationResponse, error) {
@@ -46,8 +54,8 @@ func (s *OrganizationService) CreateOrganization(ctx context.Context, req *v1.Cr
 		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	if !usernameRegex.MatchString(msg.Name) {
-		return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid organization name")
+	if !utils.NamespaceAllowed(msg.Name) {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "organization name is invalid or reserved")
 	}
 
 	// Org name must not collide with existing usernames
@@ -86,9 +94,15 @@ func (s *OrganizationService) CreateOrganization(ctx context.Context, req *v1.Cr
 	if err := s.store.AddOrgMember(ctx, member); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	if _, err := s.store.EnsureDefaultTeam(ctx, org.ID); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	if s.activity != nil {
+		s.activity.Org(org, user, activity.KindOrgCreated)
+	}
 
 	return &v1.CreateOrganizationResponse{
-		Organization: orgToProto(org, 1, storage.OrgRoleOwner),
+		Organization: s.withTeamsCount(ctx, orgToProto(org, 1, storage.OrgRoleOwner)),
 	}, nil
 }
 
@@ -121,7 +135,7 @@ func (s *OrganizationService) GetOrganization(ctx context.Context, req *v1.GetOr
 	memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
 
 	return &v1.GetOrganizationResponse{
-		Organization: orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID)),
+		Organization: s.withTeamsCount(ctx, orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID))),
 	}, nil
 }
 
@@ -135,7 +149,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *v1.Lis
 		resp := &v1.ListOrganizationsResponse{Page: &v1.PageInfo{}}
 		if org != nil {
 			memberCount, _ := s.store.GetOrgMemberCount(ctx, org.ID)
-			resp.Organizations = []*v1.Organization{orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID))}
+			resp.Organizations = []*v1.Organization{s.withTeamsCount(ctx, orgToProto(org, int32(memberCount), s.currentRole(ctx, org.ID)))}
 			resp.Page.TotalCount = 1
 		}
 		return resp, nil
@@ -158,7 +172,19 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *v1.Lis
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
-	orgs, total, err := s.store.ListOrganizations(ctx, userID, canManage, q, limit, offset)
+	memberOf := ""
+	if req.Username != "" {
+		target, err := s.store.GetUserByUsername(ctx, req.Username)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		}
+		if target == nil {
+			return nil, connect.Errorf(connect.CodeNotFound, "user not found")
+		}
+		memberOf = target.ID
+	}
+
+	orgs, total, err := s.store.ListOrganizations(ctx, userID, canManage, memberOf, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -166,7 +192,7 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *v1.Lis
 	protoOrgs := make([]*v1.Organization, len(orgs))
 	for i, o := range orgs {
 		memberCount, _ := s.store.GetOrgMemberCount(ctx, o.ID)
-		protoOrgs[i] = orgToProto(o, int32(memberCount), roles[o.ID])
+		protoOrgs[i] = s.withTeamsCount(ctx, orgToProto(o, int32(memberCount), roles[o.ID]))
 	}
 
 	return &v1.ListOrganizationsResponse{
@@ -244,6 +270,16 @@ func (s *OrganizationService) DeleteOrganization(ctx context.Context, req *v1.De
 		member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if member == nil || member.Role != storage.OrgRoleOwner {
 			return nil, connect.NewError(connect.CodePermissionDenied, "")
+		}
+	}
+
+	// Git repositories and their linked packages go through the git manager
+	if s.git != nil {
+		repos, _ := s.store.ListGitRepositoriesByNamespace(ctx, org.Name)
+		for _, repo := range repos {
+			if err := s.git.Delete(ctx, user, repo, true); err != nil {
+				return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+			}
 		}
 	}
 
@@ -347,6 +383,9 @@ func (s *OrganizationService) AddOrgMember(ctx context.Context, req *v1.AddOrgMe
 	if err := s.store.AddOrgMember(ctx, member); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	if s.activity != nil {
+		s.activity.Org(org, &auth.AuthenticatedUser{ID: targetUser.ID, Username: targetUser.Username}, activity.KindJoined)
+	}
 
 	member.User = targetUser
 
@@ -370,8 +409,10 @@ func (s *OrganizationService) RemoveOrgMember(ctx context.Context, req *v1.Remov
 		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 
+	// Members may leave on their own, everyone else needs admin standing
+	leaving := req.UserId == user.ID
 	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
-	if !canManage {
+	if !canManage && !leaving {
 		requesterMember, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if requesterMember == nil || (requesterMember.Role != storage.OrgRoleOwner && requesterMember.Role != storage.OrgRoleAdmin) {
 			return nil, connect.NewError(connect.CodePermissionDenied, "")
@@ -386,6 +427,11 @@ func (s *OrganizationService) RemoveOrgMember(ctx context.Context, req *v1.Remov
 	member, _ := s.store.GetOrgMember(ctx, org.ID, targetUser.ID)
 	if member == nil {
 		return nil, connect.Errorf(connect.CodeNotFound, "user is not a member")
+	}
+
+	// Identity provider memberships return at the next sign in, leaving is pointless
+	if leaving && !canManage && member.Source != "local" && member.Source != "" {
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "this membership is managed by your identity provider")
 	}
 
 	// Last owner cannot be removed
@@ -539,6 +585,14 @@ func orgToProto(o *storage.Organization, memberCount int32, currentRole string) 
 	return proto
 }
 
+// Fills the team count of an organization
+func (s *OrganizationService) withTeamsCount(ctx context.Context, p *v1.Organization) *v1.Organization {
+	if n, err := s.store.CountOrgTeams(ctx, p.Id); err == nil {
+		p.TeamsCount = int32(n)
+	}
+	return p
+}
+
 // Caller's membership role in an org, empty when anonymous or not a member
 func (s *OrganizationService) currentRole(ctx context.Context, orgID string) string {
 	user := auth.UserFromContext(ctx)
@@ -560,6 +614,8 @@ func orgMemberToProto(m *storage.OrgMember) *v1.OrgMember {
 	}
 	if m.User != nil {
 		proto.Username = m.User.Username
+		proto.DisplayName = m.User.DisplayName
+		proto.AvatarUrl = m.User.AvatarURL
 	}
 	return proto
 }

@@ -5,8 +5,11 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import UnitInput from '$lib/components/unit-input.svelte';
+	import DurationInput, { isDurationUnit } from '$lib/components/duration-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
+	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
-	import FormCard from '$lib/components/form-card.svelte';
+	import FormSection from '$lib/components/form-section.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -18,30 +21,36 @@
 		key: string;
 		path: string;
 		label: string;
-		help: string;
+		help?: string;
 		unit: string;
+		interval?: boolean;
 		min: number;
 		max: number;
+		// Zero stored means off, shown as a switched off limit
+		unset?: boolean;
 	};
 
 	const scheduleFields: NumField[] = [
 		{
 			key: 'defaultIntervalMinutes',
+			interval: true,
 			path: 'mirror.default_interval_minutes',
 			label: 'Default sync interval',
 			help: 'When a repository sets no interval',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 10080
 		},
 		{
 			key: 'minIntervalMinutes',
+			interval: true,
 			path: 'mirror.min_interval_minutes',
 			label: 'Minimum sync interval',
-			help: 'Floor for repository intervals, 0 disables',
-			unit: 'min',
-			min: 0,
-			max: 1440
+			help: 'Floor for repository intervals',
+			unit: 'minutes',
+			min: 1,
+			max: 1440,
+			unset: true
 		}
 	];
 
@@ -69,7 +78,7 @@
 			path: 'mirror.sync_timeout_minutes',
 			label: 'Sync timeout',
 			help: 'Cancels a repository sync after this',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 720
 		},
@@ -77,17 +86,18 @@
 			key: 'maxSyncDepth',
 			path: 'mirror.max_sync_depth',
 			label: 'Max releases per sync',
-			help: 'Newest releases or tags per repository, 0 unlimited',
+			help: 'Newest releases or tags per repository',
 			unit: 'items',
-			min: 0,
-			max: 10000
+			min: 1,
+			max: 10000,
+			unset: true
 		},
 		{
 			key: 'rateLimitCooldownMinutes',
 			path: 'mirror.rate_limit_cooldown_minutes',
 			label: 'Rate limit cooldown',
 			help: 'Pause when rate limited without a deadline',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 1440
 		},
@@ -96,7 +106,7 @@
 			path: 'mirror.max_cooldown_minutes',
 			label: 'Cooldown ceiling',
 			help: 'Longest honored cooldown or failure backoff',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 10080
 		},
@@ -105,7 +115,7 @@
 			path: 'mirror.failure_backoff_minutes',
 			label: 'Failure backoff',
 			help: 'Doubles with each consecutive failure',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 1440
 		}
@@ -147,7 +157,10 @@
 		loading = true;
 		loadError = '';
 		try {
-			const resp = await rpcClient.settings.getEffectiveSettings({ scope: systemScope }, silentCallOptions);
+			const resp = await rpcClient.settings.getEffectiveSettings(
+				{ scope: systemScope },
+				silentCallOptions
+			);
 			eff = resp.settings ?? null;
 			prov = resp.provenance;
 			if (eff) seedForm(eff);
@@ -172,14 +185,18 @@
 	}
 
 	function commitNum(f: NumField) {
-		const v = Math.min(Math.max(Math.round(values[f.key] ?? 0), f.min), f.max);
+		const raw = values[f.key];
+		const v = f.unset && !raw ? 0 : Math.min(Math.max(Math.round(Number(raw) || 0), f.min), f.max);
 		values[f.key] = v;
 		if (v === mirrorNum(eff, f.key)) return;
 		apply(acts[f.key], { mirror: { [f.key]: v } }, [f.path]);
 	}
 
 	onMount(() => {
-		if (!authStore.hasPermission('settings', 'read')) { goto(resolve('/admin')); return; }
+		if (!authStore.hasPermission('settings', 'read')) {
+			goto(resolve('/admin'));
+			return;
+		}
 		load();
 	});
 </script>
@@ -188,80 +205,127 @@
 	<FormField
 		label={f.label}
 		id={f.key}
-		horizontal
-		bordered={false}
+		layout="inline"
 		help={lockHelp(f.path, f.help)}
 		tag={acts[f.key].tag}
 		error={acts[f.key].error}
 	>
-		<UnitInput
-			id={f.key}
-			unit={f.unit}
-			bind:value={values[f.key]}
-			min={f.min}
-			max={f.max}
-			class="w-32"
-			disabled={!canEdit || acts[f.key].busy || locked(f.path)}
-			onblur={() => commitNum(f)}
-			onkeydown={(e) => { if (e.key === 'Enter') commitNum(f); }}
-		/>
+		{#if f.unset}
+			<LimitInput
+				id={f.key}
+				label={f.label.toLowerCase()}
+				unit={f.unit}
+				interval={f.interval}
+				bind:value={values[f.key]}
+				min={f.min}
+				max={f.max}
+				disabled={!canEdit || acts[f.key].busy || locked(f.path)}
+				onToggle={(on) => {
+					if (!on) commitNum(f);
+				}}
+				onblur={() => commitNum(f)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') commitNum(f);
+				}}
+			/>
+		{:else if isDurationUnit(f.unit)}
+			<DurationInput
+				id={f.key}
+				unit={f.unit}
+				interval={f.interval}
+				bind:value={values[f.key]}
+				min={f.min}
+				max={f.max}
+				disabled={!canEdit || acts[f.key].busy || locked(f.path)}
+				onblur={() => commitNum(f)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') commitNum(f);
+				}}
+			/>
+		{:else}
+			<UnitInput
+				id={f.key}
+				unit={f.unit}
+				bind:value={values[f.key]}
+				min={f.min}
+				max={f.max}
+				class="w-32"
+				disabled={!canEdit || acts[f.key].busy || locked(f.path)}
+				onblur={() => commitNum(f)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') commitNum(f);
+				}}
+			/>
+		{/if}
 	</FormField>
 {/snippet}
 
 {#if loading}
 	<div class="space-y-6">
-		<Skeleton class="h-52 w-full rounded-xl" />
-		<Skeleton class="h-64 w-full rounded-xl" />
+		<Skeleton class="h-52 w-full rounded-lg" />
+		<Skeleton class="h-64 w-full rounded-lg" />
 	</div>
 {:else if loadError}
-	<div class="rounded-xl border border-destructive/40 bg-destructive/5 px-6 py-10 text-center space-y-3">
+	<div class="flex flex-col items-center rounded-lg border bg-card px-6 py-10 text-center">
 		<p class="text-sm text-destructive">{loadError}</p>
-		<Button variant="outline" size="sm" onclick={load}>Retry</Button>
+		<Button variant="outline" size="sm" class="mt-3" onclick={load}>Retry</Button>
 	</div>
 {:else if eff}
-	<div class="space-y-6">
-		<FormCard title="Mirroring" description="Scheduled pulls from registries and release hosts">
-			<div class="-my-3 divide-y divide-border/50">
-				<FormField
-					label="Enabled"
-					horizontal
-					bordered={false}
-					help={lockHelp('mirror.enabled', 'Pauses every scheduled and manual sync when off')}
-					tag={enabledAct.tag}
-					error={enabledAct.error}
-				>
-					<Switch
-						checked={enabled}
-						disabled={!canEdit || enabledAct.busy || locked('mirror.enabled')}
-						onCheckedChange={(v) => { enabled = v; apply(enabledAct, { mirror: { enabled: v } }, ['mirror.enabled']); }}
-					/>
-				</FormField>
-				{#each scheduleFields as f (f.key)}
-					{@render numRow(f)}
-				{/each}
-				<FormField
-					label="Allow private networks"
-					horizontal
-					bordered={false}
-					help={lockHelp('mirror.allow_private_networks')}
-					tag={privateAct.tag}
-					error={privateAct.error}
-				>
-					<Switch
-						checked={allowPrivate}
-						disabled={!canEdit || privateAct.busy || locked('mirror.allow_private_networks')}
-						onCheckedChange={(v) => { allowPrivate = v; apply(privateAct, { mirror: { allowPrivateNetworks: v } }, ['mirror.allow_private_networks']); }}
-					/>
-				</FormField>
-			</div>
-		</FormCard>
+	<FormPage
+		level="section"
+		title="Mirroring"
+		description="Scheduled pulls from registries and release hosts. Changes apply immediately."
+	>
+		<FormSection
+			title="Schedule"
+			description="When mirrors sync and which networks they may reach."
+		>
+			<FormField
+				label="Enabled"
+				layout="toggle"
+				help={lockHelp('mirror.enabled', 'Pauses every scheduled and manual sync when off')}
+				tag={enabledAct.tag}
+				error={enabledAct.error}
+			>
+				<Switch
+					checked={enabled}
+					disabled={!canEdit || enabledAct.busy || locked('mirror.enabled')}
+					onCheckedChange={(v) => {
+						enabled = v;
+						apply(enabledAct, { mirror: { enabled: v } }, ['mirror.enabled']);
+					}}
+				/>
+			</FormField>
+			{#each scheduleFields as f (f.key)}
+				{@render numRow(f)}
+			{/each}
+			<FormField
+				label="Allow private networks"
+				layout="toggle"
+				help={lockHelp('mirror.allow_private_networks')}
+				tag={privateAct.tag}
+				error={privateAct.error}
+			>
+				<Switch
+					checked={allowPrivate}
+					disabled={!canEdit || privateAct.busy || locked('mirror.allow_private_networks')}
+					onCheckedChange={(v) => {
+						allowPrivate = v;
+						apply(privateAct, { mirror: { allowPrivateNetworks: v } }, [
+							'mirror.allow_private_networks'
+						]);
+					}}
+				/>
+			</FormField>
+		</FormSection>
 
-		<FormCard title="Sync Clamps" description="Instance-wide limits protecting shared upstream quotas">
-			<div class="-my-3 divide-y divide-border/50">
-				{#each clampFields as f (f.key)}
-					{@render numRow(f)}
-				{/each}
-			</div>
-		</FormCard>
-	</div>
+		<FormSection
+			title="Sync clamps"
+			description="Instance-wide limits protecting shared upstream quotas."
+		>
+			{#each clampFields as f (f.key)}
+				{@render numRow(f)}
+			{/each}
+		</FormSection>
+	</FormPage>
 {/if}

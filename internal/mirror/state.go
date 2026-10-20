@@ -15,6 +15,8 @@ type SyncState struct {
 	CooldownUntil time.Time `json:"cooldown_until,omitzero"`
 	// Cooldown came from an upstream rate limit answer
 	RateLimited bool `json:"rate_limited,omitempty"`
+	// One successful sync, then the upstream is dropped
+	ImportOnce bool `json:"import_once,omitempty"`
 }
 
 func ParseState(raw string) SyncState {

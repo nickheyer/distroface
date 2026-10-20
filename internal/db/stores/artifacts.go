@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,7 +32,7 @@ func PropsFingerprint(properties map[string]string) string {
 	sort.Strings(keys)
 	h := sha256.New()
 	for _, k := range keys {
-		fmt.Fprintf(h, "%d:%s%d:%s;", len(k), k, len(properties[k]), properties[k])
+		h.Write(fmt.Appendf(nil, "%d:%s%d:%s;", len(k), k, len(properties[k]), properties[k]))
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -45,7 +46,7 @@ func (s *Store) CreateArtifactRepository(ctx context.Context, repo *db.ArtifactR
 func (s *Store) GetArtifactRepository(ctx context.Context, namespace, name string) (*db.ArtifactRepository, error) {
 	var repo db.ArtifactRepository
 	err := s.db.WithContext(ctx).First(&repo, "namespace = ? AND name = ?", namespace, name).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -59,7 +60,10 @@ type ArtifactRepoListOptions struct {
 	ViewerID       string      // Owner whose private repos are visible
 	IncludePrivate bool        // True bypasses visibility filtering
 	GrantedRepos   []string    // RBAC granted repos as namespace/name
+	OnlyRepo       string      // Credential scope, same name or linked source
+	OnlyNamespace  string      // Credential scope, exact namespace
 	Query          pages.Query // Structured filter against ArtifactReposQuery
+	StarredBy      string      // Only repos this user starred, newest star first
 	Limit          int         // Zero means no limit
 	Offset         int
 }
@@ -78,6 +82,10 @@ func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoL
 	q := s.db.WithContext(ctx).Model(&db.ArtifactRepository{})
 	if opts.Namespace != "" {
 		q = q.Where("namespace = ?", opts.Namespace)
+	}
+	q = q.Scopes(packageScope(opts.OnlyRepo, opts.OnlyNamespace))
+	if opts.StarredBy != "" {
+		q = q.Joins("JOIN stars ON stars.target_id = CAST(artifact_repositories.id AS TEXT) AND stars.kind = ? AND stars.user_id = ?", db.StarKindArtifact, opts.StarredBy)
 	}
 	if !opts.IncludePrivate {
 		if opts.ViewerID != "" {
@@ -105,8 +113,12 @@ func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoL
 		q = q.Limit(opts.Limit).Offset(opts.Offset)
 	}
 
+	order := "artifact_repositories.name ASC"
+	if opts.StarredBy != "" {
+		order = "stars.created_at DESC"
+	}
 	var repos []*db.ArtifactRepository
-	if err := q.Order("name ASC").Find(&repos).Error; err != nil {
+	if err := q.Order(order).Find(&repos).Error; err != nil {
 		return nil, 0, err
 	}
 	return repos, total, nil
@@ -140,6 +152,7 @@ func (s *Store) DeleteArtifactRepository(ctx context.Context, id int64) ([]strin
 	if err := s.db.WithContext(ctx).Delete(&db.ArtifactRepository{}, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
+	_ = s.DeleteStarsFor(ctx, db.StarKindArtifact, strconv.FormatInt(id, 10))
 	return digests, nil
 }
 
@@ -155,7 +168,11 @@ func (s *Store) GetArtifactRepoStats(ctx context.Context, repoIDs []int64) (map[
 	if len(repoIDs) == 0 {
 		return stats, nil
 	}
-	var rows []ArtifactRepoStats
+	var rows []struct {
+		RepoID int64
+		Count  int64
+		Size   int64
+	}
 	err := s.db.WithContext(ctx).Model(&db.Artifact{}).
 		Select("repo_id AS repo_id, COUNT(*) AS count, COALESCE(SUM(size),0) AS size").
 		Where("repo_id IN ?", repoIDs).
@@ -165,7 +182,7 @@ func (s *Store) GetArtifactRepoStats(ctx context.Context, repoIDs []int64) (map[
 		return nil, err
 	}
 	for _, r := range rows {
-		stats[r.RepoID] = r
+		stats[r.RepoID] = ArtifactRepoStats{RepoID: r.RepoID, Count: r.Count, Size: r.Size}
 	}
 	return stats, nil
 }
@@ -187,7 +204,7 @@ func (s *Store) CreateArtifact(ctx context.Context, artifact *db.Artifact, prope
 			if err := tx.Delete(&db.Artifact{}, "id = ?", existing.ID).Error; err != nil {
 				return err
 			}
-		} else if findErr != gorm.ErrRecordNotFound {
+		} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
 			return findErr
 		}
 
@@ -218,7 +235,7 @@ func createPropertiesTx(tx *gorm.DB, artifactID string, properties map[string]st
 func (s *Store) GetArtifact(ctx context.Context, id string) (*db.Artifact, error) {
 	var artifact db.Artifact
 	err := s.db.WithContext(ctx).First(&artifact, "id = ?", id).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -230,12 +247,27 @@ func (s *Store) GetArtifact(ctx context.Context, id string) (*db.Artifact, error
 	return &artifact, nil
 }
 
+// Rows for the given ids, missing ids are skipped
+func (s *Store) GetArtifactsByIDs(ctx context.Context, ids []string) ([]*db.Artifact, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var artifacts []*db.Artifact
+	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&artifacts).Error; err != nil {
+		return nil, err
+	}
+	if err := s.loadArtifactProperties(ctx, artifacts); err != nil {
+		return nil, err
+	}
+	return artifacts, nil
+}
+
 // Newest match, property variants can share version and path
 func (s *Store) GetArtifactByPathVersion(ctx context.Context, repoID int64, version, path string) (*db.Artifact, error) {
 	var artifact db.Artifact
 	err := s.db.WithContext(ctx).Order("created_at DESC, id DESC").
 		First(&artifact, "repo_id = ? AND version = ? AND path = ?", repoID, version, path).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -252,7 +284,7 @@ func (s *Store) GetArtifactByIdentity(ctx context.Context, repoID int64, version
 	var artifact db.Artifact
 	err := s.db.WithContext(ctx).First(&artifact, "repo_id = ? AND version = ? AND path = ? AND props_hash = ?",
 		repoID, version, path, PropsFingerprint(properties)).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -354,7 +386,7 @@ func (s *Store) ListArtifactsByVersions(ctx context.Context, repoID int64, versi
 		return nil, nil
 	}
 	var artifacts []*db.Artifact
-	err := s.db.WithContext(ctx).
+	err := s.db.WithContext(ctx).Model(&db.Artifact{}).
 		Where("repo_id = ? AND version IN ?", repoID, versions).
 		Order("created_at DESC").
 		Find(&artifacts).Error
@@ -570,4 +602,65 @@ func (s *Store) loadArtifactProperties(ctx context.Context, artifacts []*db.Arti
 		}
 	}
 	return nil
+}
+
+// ── Source repository links and moves ────────────────────────────────────
+
+func (s *Store) GetArtifactRepositoryByID(ctx context.Context, id int64) (*db.ArtifactRepository, error) {
+	var repo db.ArtifactRepository
+	err := s.db.WithContext(ctx).First(&repo, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &repo, err
+}
+
+func (s *Store) SetArtifactRepositoryGitRepo(ctx context.Context, id int64, gitRepoID *string) error {
+	return s.db.WithContext(ctx).Model(&db.ArtifactRepository{}).Where("id = ?", id).Update("git_repo_id", gitRepoID).Error
+}
+
+func (s *Store) ListArtifactRepositoriesByGitRepo(ctx context.Context, gitRepoID string) ([]*db.ArtifactRepository, error) {
+	var repos []*db.ArtifactRepository
+	err := s.db.WithContext(ctx).Where("git_repo_id = ?", gitRepoID).Order("name ASC").Find(&repos).Error
+	return repos, err
+}
+
+// Moves an artifact repository row to a new address
+func (s *Store) MoveArtifactRepository(ctx context.Context, id int64, newNamespace, newName, ownerID string) error {
+	return s.db.WithContext(ctx).Model(&db.ArtifactRepository{}).Where("id = ?", id).Updates(map[string]any{
+		"namespace": newNamespace, "name": newName, "owner_id": ownerID,
+	}).Error
+}
+
+// Newest version string per artifact repo
+func (s *Store) LatestArtifactVersions(ctx context.Context, repoIDs []int64) (map[int64]string, error) {
+	out := map[int64]string{}
+	if len(repoIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		RepoID  int64
+		Version string
+	}
+	err := s.db.WithContext(ctx).Raw(`SELECT repo_id, version FROM artifacts a WHERE repo_id IN ? AND kind = '' AND created_at = (SELECT MAX(created_at) FROM artifacts b WHERE b.repo_id = a.repo_id AND b.kind = '')`, repoIDs).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.RepoID] = r.Version
+	}
+	return out, nil
+}
+
+// Distinct versions of a repo, for release badges
+func (s *Store) ArtifactVersionsSet(ctx context.Context, repoID int64) (map[string]bool, error) {
+	var versions []string
+	if err := s.db.WithContext(ctx).Model(&db.Artifact{}).Where("repo_id = ?", repoID).Distinct().Pluck("version", &versions).Error; err != nil {
+		return nil, err
+	}
+	out := make(map[string]bool, len(versions))
+	for _, v := range versions {
+		out[v] = true
+	}
+	return out, nil
 }

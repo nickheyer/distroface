@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"path"
@@ -21,6 +23,8 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
+	"github.com/nickheyer/distroface/pkg/utils"
+	"gorm.io/gorm"
 )
 
 // Drop in v1 rest facade for old dfcli and ci
@@ -51,6 +55,11 @@ func NewV1API(store *stores.Store, manager *Manager, authMgr *auth.Manager, enfo
 	}
 	a.buildRoutes()
 	return a
+}
+
+// Installs the source repository access hook, set once at startup
+func (a *V1API) SetLinkedAccess(l auth.LinkedAccess) {
+	a.access.SetLinkedAccess(l)
 }
 
 // Mounts login and refresh, never namespace rewritten
@@ -280,7 +289,7 @@ func (a *V1API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	a.auditLogin(r, user.Username, user.ID, audit.OutcomeSuccess)
 
-	writeJSON(w, http.StatusOK, v1AuthResponse{
+	writeJSON(w, v1AuthResponse{
 		Token:     token,
 		ExpiresIn: int(time.Until(expiresAt).Seconds()),
 		IssuedAt:  time.Now().UTC(),
@@ -310,7 +319,7 @@ func (a *V1API) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, v1AuthResponse{
+	writeJSON(w, v1AuthResponse{
 		Token:     token,
 		ExpiresIn: int(time.Until(expiresAt).Seconds()),
 		IssuedAt:  time.Now().UTC(),
@@ -413,7 +422,7 @@ func (a *V1API) handleListRepos(w http.ResponseWriter, r *http.Request, user *au
 	for _, repo := range repos {
 		out = append(out, a.repoToV1(r, repo, owners))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, out)
 }
 
 func (a *V1API) handleDeleteRepo(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
@@ -445,7 +454,7 @@ func (a *V1API) handleInitiateUpload(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 
-	uploadID, err := a.manager.Blobs().InitiateUpload()
+	uploadID, err := a.manager.Blobs().InitiateOwnedUpload(auth.UploadOwner(user))
 	if err != nil {
 		http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
 		return
@@ -461,9 +470,17 @@ func (a *V1API) handleInitiateUpload(w http.ResponseWriter, r *http.Request, use
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// No permission gate per chunk, v1 quirk kept
-func (a *V1API) handleUploadChunk(w http.ResponseWriter, r *http.Request, _ *auth.AuthenticatedUser, vars map[string]string) {
+// The session owner gates each chunk instead of a repo lookup
+func (a *V1API) handleUploadChunk(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
+	if err := a.manager.Blobs().VerifyUploadOwner(vars["uuid"], auth.UploadOwners(user)...); err != nil {
+		a.writeManagerErr(w, err)
+		return
+	}
 	if _, err := a.manager.Blobs().AppendChunk(vars["uuid"], r.Body); err != nil {
+		if errors.Is(err, ErrUploadNotFound) {
+			a.writeManagerErr(w, err)
+			return
+		}
 		http.Error(w, "UPLOAD FAILED", http.StatusInternalServerError)
 		return
 	}
@@ -485,6 +502,11 @@ func (a *V1API) handleCompleteUpload(w http.ResponseWriter, r *http.Request, use
 	}
 	if repo.IsPrivate && !a.access.HasRepoAccess(r.Context(), user, repo, rbac.ActionPush) {
 		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	if err := a.manager.Blobs().VerifyUploadOwner(vars["uuid"], auth.UploadOwners(user)...); err != nil {
+		a.writeManagerErr(w, err)
 		return
 	}
 
@@ -542,6 +564,21 @@ func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *aut
 		return
 	}
 	defer f.Close()
+	ct := artifact.MimeType
+	if ct == "" {
+		ct = mime.TypeByExtension(path.Ext(artifact.Name))
+	}
+	if ct == "" {
+		head := make([]byte, 512)
+		n, _ := io.ReadFull(f, head)
+		ct = http.DetectContentType(head[:n])
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
+			return
+		}
+	}
+	utils.HardenUserContent(w.Header(), ct)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.Name))
 	http.ServeContent(w, r, artifact.Name, info.ModTime(), f)
 }
 
@@ -590,7 +627,7 @@ func (a *V1API) handleQuery(w http.ResponseWriter, r *http.Request, user *auth.A
 		criteria.Limit = n
 	}
 
-	skip := map[string]bool{"num": true, "format": true, "name": true, "version": true, "upload_id": true, "path": true, "sort": true, "order": true, "flat": true}
+	skip := map[string]bool{"num": true, "format": true, "name": true, "version": true, "upload_id": true, "path": true, "sort": true, "order": true, "flat": true, "kind": true}
 	for key, values := range query {
 		if skip[key] || len(values) == 0 {
 			continue
@@ -643,7 +680,7 @@ func (a *V1API) handleListVersions(w http.ResponseWriter, r *http.Request, user 
 	for _, artifact := range artifacts {
 		grouped[artifact.Version] = append(grouped[artifact.Version], artifactToV1(artifact))
 	}
-	writeJSON(w, http.StatusOK, grouped)
+	writeJSON(w, grouped)
 }
 
 // ── Search ───────────────────────────────────────────────────────────────
@@ -723,7 +760,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 			return
 		}
 		if len(repos) == 0 {
-			writeJSON(w, http.StatusOK, v1SearchResponse{Results: []v1Artifact{}, Sort: sortField, Order: order})
+			writeJSON(w, v1SearchResponse{Results: []v1Artifact{}, Sort: sortField, Order: order})
 			return
 		}
 		for _, repo := range repos {
@@ -731,7 +768,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 		}
 	}
 
-	skip := map[string]bool{"username": true, "repo": true, "namespace": true, "num": true, "offset": true, "archive": true, "format": true, "name": true, "version": true, "path": true, "sort": true, "order": true}
+	skip := map[string]bool{"username": true, "repo": true, "namespace": true, "num": true, "offset": true, "archive": true, "format": true, "name": true, "version": true, "path": true, "sort": true, "order": true, "kind": true}
 	for key, values := range query {
 		if skip[key] || len(values) == 0 {
 			continue
@@ -751,7 +788,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 	}
 
 	// V1 quirks, total is row count and offset zero
-	writeJSON(w, http.StatusOK, v1SearchResponse{
+	writeJSON(w, v1SearchResponse{
 		Results: results,
 		Total:   len(results),
 		Limit:   min(criteria.Limit, len(results)),
@@ -906,7 +943,7 @@ func (a *V1API) handleRename(w http.ResponseWriter, r *http.Request, user *auth.
 	}
 
 	if err := a.store.UpdateArtifact(r.Context(), artifact); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			http.Error(w, "CONFLICT", http.StatusConflict)
 			return
 		}
@@ -1060,6 +1097,8 @@ func (a *V1API) writeManagerErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrUploadNotFound):
 		http.Error(w, "Upload not found", http.StatusNotFound)
+	case errors.Is(err, ErrUploadDenied):
+		http.Error(w, "Access denied", http.StatusForbidden)
 	case errors.Is(err, ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
@@ -1067,8 +1106,8 @@ func (a *V1API) writeManagerErr(w http.ResponseWriter, err error) {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
+func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(v)
 }
