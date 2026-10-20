@@ -438,7 +438,7 @@ func (j *job) runDockerAction(ctx context.Context, act *actionDef, env map[strin
 	mount := j.dir + ":" + j.pathOf(j.dir)
 	code, err := runContainer(ctx, cli, containerRun{
 		Image: image, Cmd: args, Entrypoint: entrypoint, Env: envSlice(env), Dir: j.pathOf(j.workspace),
-		Binds: []string{mount}, Network: j.network, Out: out,
+		Binds: []string{mount}, Network: j.network, Hosts: j.hosts, Out: out,
 	})
 	return exitErr(code, err)
 }

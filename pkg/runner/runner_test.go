@@ -13,21 +13,43 @@ func TestEvalCondition(t *testing.T) {
 		steps:  map[string]any{"build": map[string]any{"outcome": "failure", "outputs": map[string]any{"v": "1.2"}}},
 		status: "failure",
 	}
-	cases := map[string]bool{
-		"":                                      false,
-		"success()":                             false,
-		"failure()":                             true,
-		"always()":                              true,
-		"cancelled()":                           false,
-		"steps.build.outcome == 'failure'":      true,
-		"steps.build.outputs.v == 1.2":          true,
-		"github.ref == 'refs/heads/main'":       true,
-		"startsWith(github.ref, 'refs/heads/')": true,
-		"env.FOO == 'BAR' && !cancelled()":      true,
-		"contains('abc', 'z') || false":         false,
+	// A failed job implies success() unless the condition names a status function
+	failed := map[string]bool{
+		"":                                 false,
+		"success()":                        false,
+		"failure()":                        true,
+		"always()":                         true,
+		"cancelled()":                      false,
+		"steps.build.outcome == 'failure'": false,
+		"failure() && steps.build.outcome == 'failure'": true,
+		"github.ref == 'refs/heads/main'":               false,
+		"always() && github.ref == 'refs/heads/main'":   true,
+		"env.FOO == 'BAR' && !cancelled()":              true,
+		"contains('abc', 'z') || false":                 false,
+	}
+	for src, want := range failed {
+		got, err := evalCondition(src, c)
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		if got != want {
+			t.Errorf("%q after failure: got %v want %v", src, got, want)
+		}
+	}
+	c.status = ""
+	healthy := map[string]bool{
+		"":                                           true,
+		"success()":                                  true,
+		"failure()":                                  false,
+		"steps.build.outcome == 'failure'":           true,
+		"steps.build.outputs.v == 1.2":               true,
+		"github.ref == 'refs/heads/main'":            true,
+		"startsWith(github.ref, 'refs/heads/')":      true,
+		"env.FOO == 'BAR' && !cancelled()":           true,
+		"contains('abc', 'z') || false":              false,
 		"(1 < 2) && (steps.missing.outcome == null)": true,
 	}
-	for src, want := range cases {
+	for src, want := range healthy {
 		got, err := evalCondition(src, c)
 		if err != nil {
 			t.Fatalf("%q: %v", src, err)
@@ -126,5 +148,15 @@ func TestImageFor(t *testing.T) {
 	cfg.HostEnabled = true
 	if _, host, ok := cfg.ImageFor([]string{"host"}); !ok || !host {
 		t.Fatal("host executor should resolve when enabled")
+	}
+}
+
+func TestGatewayHosts(t *testing.T) {
+	hosts, unreachable := gatewayHosts("http://localhost:8080", "http://127.0.0.1:8080/nick/x.git", "https://[::1]:9443", "https://10.0.0.5:8080", "")
+	if len(hosts) != 0 {
+		t.Errorf("literal loopback addresses cannot map to the gateway: %v", hosts)
+	}
+	if strings.Join(unreachable, ",") != "localhost,127.0.0.1,::1" {
+		t.Errorf("unreachable = %v", unreachable)
 	}
 }

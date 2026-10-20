@@ -115,14 +115,41 @@ func Eval(src string, c *ExprContext) (any, error) {
 
 // EvalBool evaluates an if style condition, empty means success()
 func EvalBool(src string, c *ExprContext) (bool, error) {
+	ok := c.Status == "" || c.Status == "success"
 	if strings.TrimSpace(src) == "" {
-		return c.Status == "" || c.Status == "success", nil
+		return ok, nil
+	}
+	// GitHub implies success() unless a status function is named
+	if !ok && !HasStatusCheck(src) {
+		return false, nil
 	}
 	v, err := Eval(src, c)
 	if err != nil {
 		return false, err
 	}
 	return truthy(v), nil
+}
+
+// Reports whether a condition calls always, success, failure, or cancelled
+func HasStatusCheck(src string) bool {
+	src = strings.TrimSpace(src)
+	if strings.HasPrefix(src, "${{") && strings.HasSuffix(src, "}}") {
+		src = strings.TrimSpace(src[3 : len(src)-2])
+	}
+	toks, err := exprTokenize(src)
+	if err != nil {
+		return false
+	}
+	for i := 0; i+1 < len(toks); i++ {
+		if toks[i].kind != tokIdent || toks[i+1].kind != tokOp || toks[i+1].text != "(" {
+			continue
+		}
+		switch strings.ToLower(toks[i].text) {
+		case "always", "success", "failure", "cancelled":
+			return true
+		}
+	}
+	return false
 }
 
 // Interpolate replaces every ${{ }} it can evaluate, deferred ones stay

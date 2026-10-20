@@ -98,17 +98,42 @@ func evalExpr(src string, c *exprContext) (any, error) {
 	return node.eval(c)
 }
 
-// Empty condition means success()
+// Empty condition means success(), only named status functions override it
 func evalCondition(src string, c *exprContext) (bool, error) {
 	src = strings.TrimSpace(src)
+	ok := c.status == "" || c.status == "success"
 	if src == "" {
-		return c.status == "" || c.status == "success", nil
+		return ok, nil
+	}
+	if !ok && !hasStatusCheck(src) {
+		return false, nil
 	}
 	v, err := evalExpr(src, c)
 	if err != nil {
 		return false, err
 	}
 	return truthy(v), nil
+}
+
+// Reports whether a condition calls always, success, failure, or cancelled
+func hasStatusCheck(src string) bool {
+	if strings.HasPrefix(src, "${{") && strings.HasSuffix(src, "}}") {
+		src = strings.TrimSpace(src[3 : len(src)-2])
+	}
+	toks, err := tokenize(src)
+	if err != nil {
+		return false
+	}
+	for i := 0; i+1 < len(toks); i++ {
+		if toks[i].kind != tokIdent || toks[i+1].kind != tokOp || toks[i+1].text != "(" {
+			continue
+		}
+		switch strings.ToLower(toks[i].text) {
+		case "always", "success", "failure", "cancelled":
+			return true
+		}
+	}
+	return false
 }
 
 // Replaces every expression it can evaluate, failures stay verbatim

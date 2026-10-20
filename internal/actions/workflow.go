@@ -160,6 +160,8 @@ type Strategy struct {
 	MatrixOrder []string         `json:"matrix_order,omitempty"`
 	Include     []map[string]any `json:"include,omitempty"`
 	Exclude     []map[string]any `json:"exclude,omitempty"`
+	// Key order of each include entry as written
+	IncludeOrder [][]string `json:"include_order,omitempty"`
 	// Whole matrix given as an expression, expanded when a run starts
 	MatrixExpr  string `json:"matrix_expr,omitempty"`
 	FailFast    *bool  `json:"fail_fast,omitempty"`
@@ -837,7 +839,7 @@ func parseStrategy(n *yaml.Node) (*Strategy, error) {
 				for mk, mv := range mapPairs(v) {
 					switch mk {
 					case "include":
-						st.Include = parseObjectList(mv)
+						st.Include, st.IncludeOrder = parseObjectListOrdered(mv)
 					case "exclude":
 						st.Exclude = parseObjectList(mv)
 					default:
@@ -858,21 +860,31 @@ func parseStrategy(n *yaml.Node) (*Strategy, error) {
 }
 
 func parseObjectList(n *yaml.Node) []map[string]any {
+	list, _ := parseObjectListOrdered(n)
+	return list
+}
+
+// Objects plus the key order each one was written in
+func parseObjectListOrdered(n *yaml.Node) ([]map[string]any, [][]string) {
 	if n.Kind != yaml.SequenceNode {
-		return nil
+		return nil, nil
 	}
 	var out []map[string]any
+	var orders [][]string
 	for _, item := range n.Content {
 		if item.Kind != yaml.MappingNode {
 			continue
 		}
 		m := map[string]any{}
+		var order []string
 		for k, v := range mapPairs(item) {
 			m[k] = anyValue(v)
+			order = append(order, k)
 		}
 		out = append(out, m)
+		orders = append(orders, order)
 	}
-	return out
+	return out, orders
 }
 
 // ── Matrix ───────────────────────────────────────────────────────────────
@@ -931,15 +943,16 @@ func MatrixCombinations(st *Strategy) ([]map[string]any, []string, error) {
 	combos = filtered
 	extraKeys := []string{}
 	var extra []map[string]any
-	for _, inc := range st.Include {
+	for i, inc := range st.Include {
+		incKeys := includeKeys(st, i, inc)
 		added := false
 		for _, c := range combos {
 			if matrixIncludeFits(c, inc, keys) {
-				for ik, iv := range inc {
+				for _, ik := range incKeys {
 					if _, isMatrixKey := st.Matrix[ik]; isMatrixKey {
 						continue
 					}
-					c[ik] = iv
+					c[ik] = inc[ik]
 					if !containsString(keys, ik) && !containsString(extraKeys, ik) {
 						extraKeys = append(extraKeys, ik)
 					}
@@ -949,8 +962,8 @@ func MatrixCombinations(st *Strategy) ([]map[string]any, []string, error) {
 		}
 		if !added {
 			nc := map[string]any{}
-			for ik, iv := range inc {
-				nc[ik] = iv
+			for _, ik := range incKeys {
+				nc[ik] = inc[ik]
 				if !containsString(keys, ik) && !containsString(extraKeys, ik) {
 					extraKeys = append(extraKeys, ik)
 				}
@@ -963,6 +976,19 @@ func MatrixCombinations(st *Strategy) ([]map[string]any, []string, error) {
 		return []map[string]any{nil}, nil, nil
 	}
 	return combos, append(keys, extraKeys...), nil
+}
+
+// Keys of one include as written, sorted when the order is unknown
+func includeKeys(st *Strategy, i int, inc map[string]any) []string {
+	if i < len(st.IncludeOrder) && len(st.IncludeOrder[i]) == len(inc) {
+		return st.IncludeOrder[i]
+	}
+	keys := make([]string, 0, len(inc))
+	for k := range inc {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // Exclude objects match when every one of their keys agrees

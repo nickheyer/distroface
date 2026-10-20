@@ -578,7 +578,7 @@ func (j *job) buildPush(ctx context.Context, with map[string]string, outputs map
 	code, err := runContainer(ctx, cli, containerRun{
 		Image: image, Entrypoint: []string{"buildctl-daemonless.sh"}, Cmd: args,
 		Env:   []string{"BUILDKITD_FLAGS=" + daemonFlags, "HOME=/home/user"},
-		Binds: binds, Network: j.network, SecurityOpt: []string{"seccomp=unconfined", "apparmor=unconfined"},
+		Binds: binds, Network: j.network, Hosts: j.hosts, SecurityOpt: []string{"seccomp=unconfined", "apparmor=unconfined"},
 		Devices: devices, Labels: map[string]string{"dfcli.runner.job": j.task.JobId}, Out: tail,
 	})
 	if err != nil {

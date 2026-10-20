@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -43,6 +44,8 @@ type dockerExecutor struct {
 	externals string
 	// Runner level consent to the docker socket, --privileged, and host binds
 	privileged bool
+	// Host entries every container of the job receives
+	hosts []string
 
 	networkID   string
 	containerID string
@@ -99,6 +102,7 @@ func (d *dockerExecutor) Start(ctx context.Context) error {
 		return err
 	}
 	opts := parseContainerOptions(d.options)
+	opts.hosts = append(opts.hosts, d.hosts...)
 	binds := d.restrict(&opts, nil, "container")
 	d.user = opts.user
 	cfg := &container.Config{
@@ -153,6 +157,7 @@ func (d *dockerExecutor) startService(ctx context.Context, svc *v1.TaskService) 
 		return err
 	}
 	opts := parseContainerOptions(svc.Options)
+	opts.hosts = append(opts.hosts, d.hosts...)
 	binds := d.restrict(&opts, svc.Volumes, "service "+svc.Name)
 	cfg := &container.Config{Image: svc.Image, Env: append(envSlice(svc.Env), opts.env...), Labels: d.labels(), User: opts.user, ExposedPorts: nat.PortSet{}}
 	if len(opts.entrypoint) > 0 {
@@ -389,6 +394,7 @@ type containerRun struct {
 	Dir         string
 	Binds       []string
 	Network     string
+	Hosts       []string
 	SecurityOpt []string
 	Devices     []container.DeviceMapping
 	Labels      map[string]string
@@ -401,7 +407,7 @@ func runContainer(ctx context.Context, cli *client.Client, spec containerRun) (i
 	if spec.Entrypoint != nil {
 		cfg.Entrypoint = spec.Entrypoint
 	}
-	host := &container.HostConfig{Binds: spec.Binds, SecurityOpt: spec.SecurityOpt}
+	host := &container.HostConfig{Binds: spec.Binds, SecurityOpt: spec.SecurityOpt, ExtraHosts: spec.Hosts}
 	if len(spec.Devices) > 0 {
 		host.Devices = spec.Devices
 	}
@@ -652,6 +658,47 @@ func registryHost(serverURL string) string {
 		return ""
 	}
 	return u.Host
+}
+
+// Names resolving to loopback on the runner host map to the docker gateway
+func gatewayHosts(urls ...string) (hosts, unreachable []string) {
+	seen := map[string]bool{}
+	for _, raw := range urls {
+		u, err := url.Parse(raw)
+		if err != nil {
+			continue
+		}
+		h := strings.ToLower(u.Hostname())
+		if h == "" || seen[h] {
+			continue
+		}
+		seen[h] = true
+		if ip := net.ParseIP(h); ip != nil {
+			if ip.IsLoopback() {
+				unreachable = append(unreachable, h)
+			}
+			continue
+		}
+		if h == "localhost" {
+			unreachable = append(unreachable, h)
+			continue
+		}
+		addrs, err := net.LookupHost(h)
+		if err != nil || len(addrs) == 0 {
+			continue
+		}
+		loopback := true
+		for _, a := range addrs {
+			if ip := net.ParseIP(a); ip == nil || !ip.IsLoopback() {
+				loopback = false
+				break
+			}
+		}
+		if loopback {
+			hosts = append(hosts, h+":host-gateway")
+		}
+	}
+	return hosts, unreachable
 }
 
 func imagePullOptions() image.PullOptions {

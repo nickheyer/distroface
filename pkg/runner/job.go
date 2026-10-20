@@ -49,8 +49,10 @@ type job struct {
 	exec       executor
 	docker     *client.Client
 	network    string
-	confined   bool
-	hasBash    atomic.Int32
+	// Host entries that let containers reach a loopback bound server
+	hosts    []string
+	confined bool
+	hasBash  atomic.Int32
 
 	github  map[string]any
 	inputs  map[string]any
@@ -385,11 +387,17 @@ func (j *job) prepare() error {
 	j.docker = cli
 	j.network = "dfcli-" + shortID(j.task.JobId)
 	j.confined = true
+	var unreachable []string
+	j.hosts, unreachable = gatewayHosts(j.task.ServerUrl, j.task.CloneUrl)
+	for _, h := range unreachable {
+		j.log.Line("##[warning]Server address %s is loopback, job containers cannot reach it, register the runner with a hostname instead", h)
+	}
 	j.exec = &dockerExecutor{
 		cli: cli, jobID: j.task.JobId, jobDir: dir, image: image, options: j.task.ContainerOptions,
 		services: j.task.Services, log: j.log, auth: registryAuth{host: registryHost(j.task.ServerUrl), token: j.task.Token},
 		externals:  j.r.ext.root,
 		privileged: j.r.cfg.PrivilegedJobs,
+		hosts:      j.hosts,
 	}
 	return nil
 }

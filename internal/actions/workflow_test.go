@@ -284,11 +284,32 @@ func TestMatrixCombinations(t *testing.T) {
 	if len(none) != 1 || none[0] != nil {
 		t.Errorf("nil strategy should yield one empty combination")
 	}
-	only := &Strategy{Include: []map[string]any{
-		{"goos": "linux", "goarch": "amd64"},
-		{"goos": "linux", "goarch": "arm64", "cc": "aarch64-linux-gnu-gcc"},
-		{"goos": "windows", "goarch": "amd64", "cc": "x86_64-w64-mingw32-gcc"},
-	}}
+	onlyWf, err := ParseWorkflow([]byte(`
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+            cc: aarch64-linux-gnu-gcc
+          - goos: windows
+            goarch: amd64
+            cc: x86_64-w64-mingw32-gcc
+    steps:
+      - run: true
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	only := onlyWf.Jobs["build"].Strategy
+	if len(only.IncludeOrder) != 3 || strings.Join(only.IncludeOrder[1], ",") != "goos,goarch,cc" {
+		t.Fatalf("include order = %v", only.IncludeOrder)
+	}
 	combos, order, err = MatrixCombinations(only)
 	if err != nil {
 		t.Fatal(err)
@@ -302,8 +323,15 @@ func TestMatrixCombinations(t *testing.T) {
 	if combos[2]["cc"] != "x86_64-w64-mingw32-gcc" {
 		t.Errorf("third include lost its own values: %v", combos[2])
 	}
-	if len(order) != 3 || order[0] != "goos" || order[1] != "goarch" || order[2] != "cc" {
+	if strings.Join(order, ",") != "goos,goarch,cc" {
 		t.Errorf("include only order = %v", order)
+	}
+	if got := MatrixSuffix(combos[1], order); got != " (linux, arm64, aarch64-linux-gnu-gcc)" {
+		t.Errorf("suffix = %q", got)
+	}
+	unordered := &Strategy{Include: []map[string]any{{"goos": "linux", "goarch": "amd64"}}}
+	if _, order, _ := MatrixCombinations(unordered); strings.Join(order, ",") != "goarch,goos" {
+		t.Errorf("unknown include order should sort, got %v", order)
 	}
 	banana := &Strategy{
 		Matrix: map[string][]any{"fruit": {"apple", "pear"}, "animal": {"cat", "dog"}}, MatrixOrder: []string{"fruit", "animal"},

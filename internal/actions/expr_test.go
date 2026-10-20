@@ -156,7 +156,14 @@ func TestEvalFunctions(t *testing.T) {
 func TestEvalStatusFunctions(t *testing.T) {
 	ctx := testContext()
 	ctx.Status = ConclusionFailure
-	for expr, want := range map[string]bool{"success()": false, "failure()": true, "always()": true, "cancelled()": false, "": false} {
+	for expr, want := range map[string]bool{
+		"success()": false, "failure()": true, "always()": true, "cancelled()": false, "": false,
+		"github.ref == 'refs/heads/main'":                 false,
+		"${{ github.ref == 'refs/heads/main' }}":          false,
+		"always() && github.ref == 'refs/heads/main'":     true,
+		"failure() || github.ref == 'refs/heads/main'":    true,
+		"!cancelled() && github.ref == 'refs/heads/main'": true,
+	} {
 		got, err := EvalBool(expr, ctx)
 		if err != nil {
 			t.Fatalf("%q: %v", expr, err)
@@ -164,6 +171,10 @@ func TestEvalStatusFunctions(t *testing.T) {
 		if got != want {
 			t.Errorf("%q with failure status = %v, want %v", expr, got, want)
 		}
+	}
+	ctx.Status = ConclusionSkipped
+	if ok, _ := EvalBool("github.ref == 'refs/heads/main'", ctx); ok {
+		t.Error("skipped needs should skip a job without a status function")
 	}
 	ctx.Status = ""
 	if ok, _ := EvalBool("", ctx); !ok {
