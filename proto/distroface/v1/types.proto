@@ -79,6 +79,7 @@ message Organization {
   google.protobuf.Timestamp created_at = 6;
   google.protobuf.Timestamp updated_at = 7;
   OrgRole current_user_role = 8;
+  int32 teams_count = 9;
 }
 
 // OrgMember represents a user's membership in an organization.
@@ -97,6 +98,8 @@ message APIToken {
   google.protobuf.Timestamp created_at = 4;
   google.protobuf.Timestamp expires_at = 5;
   google.protobuf.Timestamp last_used_at = 6;
+  // Absent for a full identity token
+  CredentialScope scope = 7;
 }
 
 // Content source kinds for artifact repositories
@@ -110,6 +113,36 @@ enum ArtifactRepoType {
   ARTIFACT_REPO_TYPE_GITLAB_RELEASES = 3;
   // Mirrors release assets from a gitea or forgejo repo
   ARTIFACT_REPO_TYPE_GITEA_RELEASES = 4;
+}
+
+// Content source kinds for git repositories
+enum GitRepoType {
+  GIT_REPO_TYPE_UNSPECIFIED = 0;
+  // Populated by pushes
+  GIT_REPO_TYPE_STANDARD = 1;
+  // Fetches refs from an upstream git url
+  GIT_REPO_TYPE_MIRROR = 2;
+  // Copy of another repository on this instance
+  GIT_REPO_TYPE_FORK = 3;
+  // Standard repository offered as a starting point for new ones
+  GIT_REPO_TYPE_TEMPLATE = 4;
+}
+
+// What a credential may touch beyond the owner's identity
+enum CredentialScopeType {
+  CREDENTIAL_SCOPE_TYPE_UNSPECIFIED = 0;
+  // One git repository and its linked packages
+  CREDENTIAL_SCOPE_TYPE_GIT_REPO = 1;
+  // One organization namespace
+  CREDENTIAL_SCOPE_TYPE_ORG = 2;
+}
+
+// Narrows an api token or deploy key to one object
+message CredentialScope {
+  CredentialScopeType type = 1;
+  // namespace/name for git repos, org name for orgs
+  string id = 2;
+  bool read_only = 3;
 }
 
 // Content source kinds for image repositories
@@ -188,6 +221,8 @@ message Repository {
   google.protobuf.Timestamp mirror_next_attempt = 22;
   // True while a sync is running right now
   bool mirror_syncing = 23;
+  // Full name of the linked git repository, empty when standalone
+  string source_repository = 24;
 }
 
 // Platform describes the platform which the image in the manifest runs on.
@@ -225,6 +260,8 @@ message Tag {
   map<string, string> annotations = 7;
   // artifact_type is the IANA media type of the artifact, if set.
   string artifact_type = 8;
+  // True when the source repository has a release with this tag
+  bool has_release = 9;
 }
 
 // Descriptor is the universal content-addressable reference type per the OCI spec.
@@ -276,6 +313,19 @@ enum WebhookEvent {
   WEBHOOK_EVENT_PUSH = 1;
   WEBHOOK_EVENT_PULL = 2;
   WEBHOOK_EVENT_DELETE = 3;
+  WEBHOOK_EVENT_GIT_PUSH = 4;
+  WEBHOOK_EVENT_GIT_BRANCH = 5;
+  WEBHOOK_EVENT_GIT_TAG = 6;
+  WEBHOOK_EVENT_GIT_ISSUE = 7;
+  WEBHOOK_EVENT_GIT_ISSUE_COMMENT = 8;
+  WEBHOOK_EVENT_GIT_PULL_REQUEST = 9;
+  WEBHOOK_EVENT_GIT_PULL_REQUEST_REVIEW = 10;
+  WEBHOOK_EVENT_GIT_PULL_REQUEST_COMMENT = 11;
+  WEBHOOK_EVENT_GIT_RELEASE = 12;
+  WEBHOOK_EVENT_GIT_WIKI = 13;
+  WEBHOOK_EVENT_GIT_FORK = 14;
+  WEBHOOK_EVENT_GIT_REPOSITORY = 15;
+  WEBHOOK_EVENT_GIT_WORKFLOW_RUN = 16;
 }
 
 // WebhookScope represents what a webhook is scoped to.
@@ -283,6 +333,7 @@ enum WebhookScope {
   WEBHOOK_SCOPE_UNSPECIFIED = 0;
   WEBHOOK_SCOPE_REPOSITORY = 1;
   WEBHOOK_SCOPE_ORGANIZATION = 2;
+  WEBHOOK_SCOPE_GIT_REPOSITORY = 3;
 }
 
 // Webhook represents a configured webhook endpoint.
@@ -300,6 +351,7 @@ message Webhook {
   google.protobuf.Timestamp updated_at = 11;
   string scope_name = 12;
   string payload_template = 13;
+  string git_repo_id = 14;
 }
 
 // WebhookDelivery represents a single delivery attempt for a webhook.
@@ -344,6 +396,8 @@ message ArtifactRepository {
   google.protobuf.Timestamp mirror_next_attempt = 16;
   // True while a sync is running right now
   bool mirror_syncing = 17;
+  // Full name of the linked git repository, empty when standalone
+  string source_repository = 18;
 }
 
 // Artifact is a single stored artifact (file) within an artifact repository.

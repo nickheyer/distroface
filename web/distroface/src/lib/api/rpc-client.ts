@@ -21,14 +21,26 @@ import { MirrorService } from '$lib/proto/distroface/v1/mirror_pb';
 import { GCService } from '$lib/proto/distroface/v1/gc_pb';
 import { CertificateService } from '$lib/proto/distroface/v1/certificate_pb';
 import { AuditService } from '$lib/proto/distroface/v1/audit_pb';
+import { GitService } from '$lib/proto/distroface/v1/git_pb';
+import { GitRefService } from '$lib/proto/distroface/v1/git_pb';
+import { GitFileService } from '$lib/proto/distroface/v1/git_pb';
+import { ReleaseService } from '$lib/proto/distroface/v1/release_pb';
+import { IssueService } from '$lib/proto/distroface/v1/issue_pb';
+import { PullRequestService } from '$lib/proto/distroface/v1/pull_pb';
+import { WikiService } from '$lib/proto/distroface/v1/wiki_pb';
+import { ProjectService } from '$lib/proto/distroface/v1/project_pb';
+import { NotificationService } from '$lib/proto/distroface/v1/notification_pb';
+import { KeyService } from '$lib/proto/distroface/v1/keys_pb';
+import { MailService } from '$lib/proto/distroface/v1/mail_pb';
+import { ActionsService } from '$lib/proto/distroface/v1/actions_pb';
 import { toast } from 'svelte-sonner';
 import { networkStore } from '$lib/stores/network.svelte';
 
 const SESSION_KEY = 'distroface_session';
 
-// Long lived streams never drive the global progress bar
+// Long lived streams and background fetches never drive the global progress bar
 const progressInterceptor: Interceptor = (next) => async (req) => {
-	if (req.stream) return next(req);
+	if (req.stream || req.header.get('X-Background-Request')) return next(req);
 	networkStore.start();
 	try {
 		return await next(req);
@@ -69,6 +81,11 @@ export const silentCallOptions: CallOptions = {
 	headers: new Headers({ 'X-Silent-Request': '1' })
 };
 
+// Silent and invisible, for data that fills in after the page is usable
+export const backgroundCallOptions: CallOptions = {
+	headers: new Headers({ 'X-Silent-Request': '1', 'X-Background-Request': '1' })
+};
+
 export class RpcClient {
 	public readonly health: Client<typeof HealthService>;
 	public readonly auth: Client<typeof AuthService>;
@@ -85,6 +102,18 @@ export class RpcClient {
 	public readonly gc: Client<typeof GCService>;
 	public readonly certificate: Client<typeof CertificateService>;
 	public readonly audit: Client<typeof AuditService>;
+	public readonly git: Client<typeof GitService>;
+	public readonly gitRefs: Client<typeof GitRefService>;
+	public readonly gitFiles: Client<typeof GitFileService>;
+	public readonly release: Client<typeof ReleaseService>;
+	public readonly issue: Client<typeof IssueService>;
+	public readonly pull: Client<typeof PullRequestService>;
+	public readonly wiki: Client<typeof WikiService>;
+	public readonly project: Client<typeof ProjectService>;
+	public readonly notification: Client<typeof NotificationService>;
+	public readonly key: Client<typeof KeyService>;
+	public readonly mail: Client<typeof MailService>;
+	public readonly actions: Client<typeof ActionsService>;
 
 	constructor() {
 		this.health = createClient(HealthService, transport);
@@ -102,6 +131,18 @@ export class RpcClient {
 		this.gc = createClient(GCService, transport);
 		this.certificate = createClient(CertificateService, transport);
 		this.audit = createClient(AuditService, transport);
+		this.git = createClient(GitService, transport);
+		this.gitRefs = createClient(GitRefService, transport);
+		this.gitFiles = createClient(GitFileService, transport);
+		this.release = createClient(ReleaseService, transport);
+		this.issue = createClient(IssueService, transport);
+		this.pull = createClient(PullRequestService, transport);
+		this.wiki = createClient(WikiService, transport);
+		this.project = createClient(ProjectService, transport);
+		this.notification = createClient(NotificationService, transport);
+		this.key = createClient(KeyService, transport);
+		this.mail = createClient(MailService, transport);
+		this.actions = createClient(ActionsService, transport);
 	}
 }
 

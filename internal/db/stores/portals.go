@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
@@ -22,7 +23,7 @@ func (s *Store) GetRegistryPortal(ctx context.Context, id string) (*db.RegistryP
 	var portal db.RegistryPortal
 	err := s.db.WithContext(ctx).First(&portal, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err

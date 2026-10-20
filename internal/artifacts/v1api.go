@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"path"
@@ -21,6 +23,7 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
+	"github.com/nickheyer/distroface/pkg/utils"
 )
 
 // Drop in v1 rest facade for old dfcli and ci
@@ -51,6 +54,11 @@ func NewV1API(store *stores.Store, manager *Manager, authMgr *auth.Manager, enfo
 	}
 	a.buildRoutes()
 	return a
+}
+
+// Installs the source repository access hook, set once at startup
+func (a *V1API) SetLinkedAccess(l auth.LinkedAccess) {
+	a.access.SetLinkedAccess(l)
 }
 
 // Mounts login and refresh, never namespace rewritten
@@ -280,7 +288,7 @@ func (a *V1API) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	a.auditLogin(r, user.Username, user.ID, audit.OutcomeSuccess)
 
-	writeJSON(w, http.StatusOK, v1AuthResponse{
+	writeJSON(w, v1AuthResponse{
 		Token:     token,
 		ExpiresIn: int(time.Until(expiresAt).Seconds()),
 		IssuedAt:  time.Now().UTC(),
@@ -310,7 +318,7 @@ func (a *V1API) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, v1AuthResponse{
+	writeJSON(w, v1AuthResponse{
 		Token:     token,
 		ExpiresIn: int(time.Until(expiresAt).Seconds()),
 		IssuedAt:  time.Now().UTC(),
@@ -413,7 +421,7 @@ func (a *V1API) handleListRepos(w http.ResponseWriter, r *http.Request, user *au
 	for _, repo := range repos {
 		out = append(out, a.repoToV1(r, repo, owners))
 	}
-	writeJSON(w, http.StatusOK, out)
+	writeJSON(w, out)
 }
 
 func (a *V1API) handleDeleteRepo(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
@@ -542,6 +550,21 @@ func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *aut
 		return
 	}
 	defer f.Close()
+	ct := artifact.MimeType
+	if ct == "" {
+		ct = mime.TypeByExtension(path.Ext(artifact.Name))
+	}
+	if ct == "" {
+		head := make([]byte, 512)
+		n, _ := io.ReadFull(f, head)
+		ct = http.DetectContentType(head[:n])
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
+			return
+		}
+	}
+	utils.HardenUserContent(w.Header(), ct)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.Name))
 	http.ServeContent(w, r, artifact.Name, info.ModTime(), f)
 }
 
@@ -643,7 +666,7 @@ func (a *V1API) handleListVersions(w http.ResponseWriter, r *http.Request, user 
 	for _, artifact := range artifacts {
 		grouped[artifact.Version] = append(grouped[artifact.Version], artifactToV1(artifact))
 	}
-	writeJSON(w, http.StatusOK, grouped)
+	writeJSON(w, grouped)
 }
 
 // ── Search ───────────────────────────────────────────────────────────────
@@ -723,7 +746,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 			return
 		}
 		if len(repos) == 0 {
-			writeJSON(w, http.StatusOK, v1SearchResponse{Results: []v1Artifact{}, Sort: sortField, Order: order})
+			writeJSON(w, v1SearchResponse{Results: []v1Artifact{}, Sort: sortField, Order: order})
 			return
 		}
 		for _, repo := range repos {
@@ -751,7 +774,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 	}
 
 	// V1 quirks, total is row count and offset zero
-	writeJSON(w, http.StatusOK, v1SearchResponse{
+	writeJSON(w, v1SearchResponse{
 		Results: results,
 		Total:   len(results),
 		Limit:   min(criteria.Limit, len(results)),
@@ -1067,8 +1090,8 @@ func (a *V1API) writeManagerErr(w http.ResponseWriter, err error) {
 	}
 }
 
-func writeJSON(w http.ResponseWriter, status int, v any) {
+func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(v)
 }

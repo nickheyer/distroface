@@ -1,0 +1,722 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// IssueService manages issues, comments, labels, milestones, reactions, dependencies, and time tracking.
+// Pull requests share the issue number sequence and the comment timeline.
+service IssueService {
+  // CreateIssue opens an issue.
+  rpc CreateIssue(CreateIssueRequest) returns (CreateIssueResponse) {}
+  // GetIssue returns one issue.
+  rpc GetIssue(GetIssueRequest) returns (GetIssueResponse) {}
+  // ListIssues pages issues or pull requests of a repository.
+  rpc ListIssues(ListIssuesRequest) returns (ListIssuesResponse) {}
+  // SearchIssues searches across every repository the caller can read.
+  rpc SearchIssues(SearchIssuesRequest) returns (SearchIssuesResponse) {}
+  // UpdateIssue changes the set fields.
+  rpc UpdateIssue(UpdateIssueRequest) returns (UpdateIssueResponse) {}
+  // BulkUpdateIssues applies the same change to many issues.
+  rpc BulkUpdateIssues(BulkUpdateIssuesRequest) returns (BulkUpdateIssuesResponse) {}
+  // LockIssue locks the conversation.
+  rpc LockIssue(LockIssueRequest) returns (LockIssueResponse) {}
+  // UnlockIssue unlocks the conversation.
+  rpc UnlockIssue(UnlockIssueRequest) returns (UnlockIssueResponse) {}
+  // PinIssue pins an issue to the top of the list.
+  rpc PinIssue(PinIssueRequest) returns (PinIssueResponse) {}
+  // UnpinIssue removes a pin.
+  rpc UnpinIssue(UnpinIssueRequest) returns (UnpinIssueResponse) {}
+  // DeleteIssue removes an issue and its comments.
+  rpc DeleteIssue(DeleteIssueRequest) returns (DeleteIssueResponse) {}
+  // CreateComment adds a comment.
+  rpc CreateComment(CreateCommentRequest) returns (CreateCommentResponse) {}
+  // UpdateComment edits a comment.
+  rpc UpdateComment(UpdateCommentRequest) returns (UpdateCommentResponse) {}
+  // DeleteComment removes a comment.
+  rpc DeleteComment(DeleteCommentRequest) returns (DeleteCommentResponse) {}
+  // ListComments pages the timeline, comments and events.
+  rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse) {}
+  // AddReaction reacts to an issue or comment.
+  rpc AddReaction(AddReactionRequest) returns (AddReactionResponse) {}
+  // RemoveReaction removes the caller's reaction.
+  rpc RemoveReaction(RemoveReactionRequest) returns (RemoveReactionResponse) {}
+  // ListLabels returns repository labels plus inherited organization labels.
+  rpc ListLabels(ListLabelsRequest) returns (ListLabelsResponse) {}
+  // CreateLabel adds a repository or organization label.
+  rpc CreateLabel(CreateLabelRequest) returns (CreateLabelResponse) {}
+  // UpdateLabel changes a label.
+  rpc UpdateLabel(UpdateLabelRequest) returns (UpdateLabelResponse) {}
+  // DeleteLabel removes a label from every issue.
+  rpc DeleteLabel(DeleteLabelRequest) returns (DeleteLabelResponse) {}
+  // ListMilestones pages milestones.
+  rpc ListMilestones(ListMilestonesRequest) returns (ListMilestonesResponse) {}
+  // CreateMilestone adds a milestone.
+  rpc CreateMilestone(CreateMilestoneRequest) returns (CreateMilestoneResponse) {}
+  // UpdateMilestone changes a milestone.
+  rpc UpdateMilestone(UpdateMilestoneRequest) returns (UpdateMilestoneResponse) {}
+  // DeleteMilestone removes a milestone, issues keep no milestone.
+  rpc DeleteMilestone(DeleteMilestoneRequest) returns (DeleteMilestoneResponse) {}
+  // AddDependency marks an issue as blocked by another.
+  rpc AddDependency(AddDependencyRequest) returns (AddDependencyResponse) {}
+  // RemoveDependency removes a blocker.
+  rpc RemoveDependency(RemoveDependencyRequest) returns (RemoveDependencyResponse) {}
+  // ListDependencies returns blockers and blocked issues.
+  rpc ListDependencies(ListDependenciesRequest) returns (ListDependenciesResponse) {}
+  // AddTrackedTime records time spent.
+  rpc AddTrackedTime(AddTrackedTimeRequest) returns (AddTrackedTimeResponse) {}
+  // DeleteTrackedTime removes a time entry.
+  rpc DeleteTrackedTime(DeleteTrackedTimeRequest) returns (DeleteTrackedTimeResponse) {}
+  // ListTrackedTime returns time entries of an issue.
+  rpc ListTrackedTime(ListTrackedTimeRequest) returns (ListTrackedTimeResponse) {}
+  // SubscribeIssue subscribes the caller to notifications for an issue.
+  rpc SubscribeIssue(SubscribeIssueRequest) returns (SubscribeIssueResponse) {}
+  // UnsubscribeIssue removes the caller's subscription.
+  rpc UnsubscribeIssue(UnsubscribeIssueRequest) returns (UnsubscribeIssueResponse) {}
+}
+
+// Open or closed
+enum IssueState {
+  ISSUE_STATE_UNSPECIFIED = 0;
+  ISSUE_STATE_OPEN = 1;
+  ISSUE_STATE_CLOSED = 2;
+}
+
+// Kind of a timeline entry
+enum CommentType {
+  COMMENT_TYPE_UNSPECIFIED = 0;
+  COMMENT_TYPE_COMMENT = 1;
+  COMMENT_TYPE_LABELED = 2;
+  COMMENT_TYPE_UNLABELED = 3;
+  COMMENT_TYPE_ASSIGNED = 4;
+  COMMENT_TYPE_UNASSIGNED = 5;
+  COMMENT_TYPE_MILESTONED = 6;
+  COMMENT_TYPE_DEMILESTONED = 7;
+  COMMENT_TYPE_CLOSED = 8;
+  COMMENT_TYPE_REOPENED = 9;
+  COMMENT_TYPE_REFERENCED = 10;
+  COMMENT_TYPE_RENAMED = 11;
+  COMMENT_TYPE_LOCKED = 12;
+  COMMENT_TYPE_UNLOCKED = 13;
+  COMMENT_TYPE_PINNED = 14;
+  COMMENT_TYPE_UNPINNED = 15;
+  COMMENT_TYPE_DUE_DATE = 16;
+  COMMENT_TYPE_DEPENDENCY_ADDED = 17;
+  COMMENT_TYPE_DEPENDENCY_REMOVED = 18;
+  COMMENT_TYPE_TIME_TRACKED = 19;
+  COMMENT_TYPE_REVIEW_REQUESTED = 20;
+  COMMENT_TYPE_REVIEW_REQUEST_REMOVED = 21;
+  COMMENT_TYPE_HEAD_PUSHED = 22;
+  COMMENT_TYPE_FORCE_PUSHED = 23;
+  COMMENT_TYPE_MERGED = 24;
+  COMMENT_TYPE_AUTO_MERGE_ARMED = 25;
+  COMMENT_TYPE_AUTO_MERGE_CANCELLED = 26;
+  COMMENT_TYPE_CONVERTED_TO_DRAFT = 27;
+  COMMENT_TYPE_READY_FOR_REVIEW = 28;
+  COMMENT_TYPE_REVIEW = 29;
+  COMMENT_TYPE_BASE_CHANGED = 30;
+  COMMENT_TYPE_PROJECT_CHANGED = 31;
+  COMMENT_TYPE_REVIEW_DISMISSED = 32;
+  COMMENT_TYPE_BLOCKER_CLOSED = 33;
+  COMMENT_TYPE_BLOCKER_REOPENED = 34;
+}
+
+// Public identity of a user on issues and comments
+message IssueUser {
+  string id = 1;
+  string username = 2;
+  string display_name = 3;
+}
+
+// Label is a colored tag.
+message Label {
+  string id = 1;
+  string name = 2;
+  string color = 3;
+  string description = 4;
+  // Inherited from the organization
+  bool is_org_label = 5;
+  // Prefix before the slash, labels sharing a scope exclude each other
+  string exclusive_scope = 6;
+  int64 open_issues = 7;
+  int64 closed_issues = 8;
+}
+
+// Milestone groups issues toward a date.
+message Milestone {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  IssueState state = 4;
+  google.protobuf.Timestamp due_date = 5;
+  int64 open_issues = 6;
+  int64 closed_issues = 7;
+  google.protobuf.Timestamp closed_at = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+// Reaction counts for one emoji
+message ReactionGroup {
+  string emoji = 1;
+  int32 count = 2;
+  // Caller reacted with this emoji
+  bool reacted = 3;
+  repeated string usernames = 4;
+}
+
+// Summary of the pull request half of an issue
+message IssuePullSummary {
+  string head_branch = 1;
+  string base_branch = 2;
+  string head_repo_full_name = 3;
+  bool draft = 4;
+  bool merged = 5;
+  // unknown, clean, conflict, blocked, checking
+  string mergeable_state = 6;
+}
+
+// Issue is an issue or the issue half of a pull request.
+message Issue {
+  string id = 1;
+  string repo_full_name = 2;
+  int64 number = 3;
+  bool is_pull = 4;
+  string title = 5;
+  string body = 6;
+  IssueState state = 7;
+  IssueUser author = 8;
+  repeated Label labels = 9;
+  Milestone milestone = 10;
+  repeated IssueUser assignees = 11;
+  bool locked = 12;
+  string lock_reason = 13;
+  bool pinned = 14;
+  google.protobuf.Timestamp due_date = 15;
+  google.protobuf.Timestamp closed_at = 16;
+  IssueUser closed_by = 17;
+  int32 comment_count = 18;
+  repeated ReactionGroup reactions = 19;
+  // Blocked by open issues
+  bool blocked = 20;
+  int64 tracked_seconds = 21;
+  bool subscribed = 22;
+  IssuePullSummary pull = 23;
+  string html_url = 24;
+  // Project column the issue sits in, when on a board
+  string project_id = 25;
+  string project_column_id = 26;
+  google.protobuf.Timestamp created_at = 27;
+  google.protobuf.Timestamp updated_at = 28;
+  // Seconds spent open, summed from the closed and reopened events
+  int64 open_seconds = 29;
+}
+
+// Comment is a comment or a timeline event.
+message Comment {
+  string id = 1;
+  CommentType type = 2;
+  IssueUser author = 3;
+  string body = 4;
+  // Event details as json, shape depends on type
+  string payload = 5;
+  repeated ReactionGroup reactions = 6;
+  // Review id for review events
+  string review_id = 7;
+  bool edited = 8;
+  // Posted from an email reply
+  bool via_email = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
+}
+
+// One tracked time entry
+message TrackedTime {
+  string id = 1;
+  IssueUser user = 2;
+  int64 seconds = 3;
+  string note = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+// Short reference to another issue
+message IssueRef {
+  string repo_full_name = 1;
+  int64 number = 2;
+  string title = 3;
+  IssueState state = 4;
+  bool is_pull = 5;
+}
+
+// CreateIssueRequest opens an issue.
+message CreateIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  string title = 3;
+  string body = 4;
+  repeated string label_ids = 5;
+  string milestone_id = 6;
+  repeated string assignee_ids = 7;
+  google.protobuf.Timestamp due_date = 8;
+  // Template filename the body came from
+  string template = 9;
+  string project_id = 10;
+}
+
+// CreateIssueResponse contains the issue.
+message CreateIssueResponse {
+  Issue issue = 1;
+}
+
+// GetIssueRequest identifies an issue by number.
+message GetIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// GetIssueResponse contains the issue.
+message GetIssueResponse {
+  Issue issue = 1;
+}
+
+// ListIssuesRequest filters issues of a repository.
+message ListIssuesRequest {
+  // page.query filters on title and body. page.order_by accepts created_at, updated_at, comments, due_date
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  // Empty lists open issues
+  IssueState state = 4;
+  // All listed labels must be present, by name
+  repeated string labels = 5;
+  string milestone = 6;
+  string assignee = 7;
+  string author = 8;
+  string mentioned = 9;
+  // Issues only, pulls only, or both when unset
+  optional bool is_pull = 10;
+  string project_id = 11;
+}
+
+// ListIssuesResponse contains a page of issues.
+message ListIssuesResponse {
+  repeated Issue issues = 1;
+  PageInfo page = 2;
+  int64 open_count = 3;
+  int64 closed_count = 4;
+}
+
+// SearchIssuesRequest searches across visible repositories.
+message SearchIssuesRequest {
+  PageRequest page = 1;
+  IssueState state = 2;
+  optional bool is_pull = 3;
+  // Only issues involving the caller as author, assignee, or mentioned
+  bool involved = 4;
+  string namespace = 5;
+}
+
+// SearchIssuesResponse contains matching issues.
+message SearchIssuesResponse {
+  repeated Issue issues = 1;
+  PageInfo page = 2;
+}
+
+// UpdateIssueRequest changes the set fields.
+message UpdateIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  optional string title = 4;
+  optional string body = 5;
+  optional IssueState state = 6;
+  // Empty string clears the milestone
+  optional string milestone_id = 7;
+  // Zero timestamp clears the due date
+  optional google.protobuf.Timestamp due_date = 8;
+  bool set_labels = 9;
+  repeated string label_ids = 10;
+  bool set_assignees = 11;
+  repeated string assignee_ids = 12;
+}
+
+// UpdateIssueResponse contains the issue.
+message UpdateIssueResponse {
+  Issue issue = 1;
+}
+
+// BulkUpdateIssuesRequest applies one change to many issues.
+message BulkUpdateIssuesRequest {
+  string namespace = 1;
+  string name = 2;
+  repeated int64 numbers = 3;
+  optional IssueState state = 4;
+  optional string milestone_id = 5;
+  repeated string add_label_ids = 6;
+  repeated string remove_label_ids = 7;
+  repeated string add_assignee_ids = 8;
+  repeated string remove_assignee_ids = 9;
+}
+
+// BulkUpdateIssuesResponse reports how many changed.
+message BulkUpdateIssuesResponse {
+  int32 updated_count = 1;
+}
+
+// LockIssueRequest locks the conversation.
+message LockIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string reason = 4;
+}
+
+// LockIssueResponse contains the issue.
+message LockIssueResponse {
+  Issue issue = 1;
+}
+
+// UnlockIssueRequest unlocks the conversation.
+message UnlockIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// UnlockIssueResponse contains the issue.
+message UnlockIssueResponse {
+  Issue issue = 1;
+}
+
+// PinIssueRequest pins an issue.
+message PinIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// PinIssueResponse contains the issue.
+message PinIssueResponse {
+  Issue issue = 1;
+}
+
+// UnpinIssueRequest removes a pin.
+message UnpinIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// UnpinIssueResponse contains the issue.
+message UnpinIssueResponse {
+  Issue issue = 1;
+}
+
+// DeleteIssueRequest removes an issue.
+message DeleteIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// DeleteIssueResponse is empty on success.
+message DeleteIssueResponse {}
+
+// CreateCommentRequest adds a comment.
+message CreateCommentRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string body = 4;
+}
+
+// CreateCommentResponse contains the comment.
+message CreateCommentResponse {
+  Comment comment = 1;
+}
+
+// UpdateCommentRequest edits a comment body.
+message UpdateCommentRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+  string body = 4;
+}
+
+// UpdateCommentResponse contains the comment.
+message UpdateCommentResponse {
+  Comment comment = 1;
+}
+
+// DeleteCommentRequest removes a comment.
+message DeleteCommentRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// DeleteCommentResponse is empty on success.
+message DeleteCommentResponse {}
+
+// ListCommentsRequest pages the timeline.
+message ListCommentsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  int64 number = 4;
+  // Only plain comments, no events
+  bool comments_only = 5;
+}
+
+// ListCommentsResponse contains timeline entries oldest first.
+message ListCommentsResponse {
+  repeated Comment comments = 1;
+  PageInfo page = 2;
+}
+
+// AddReactionRequest reacts to an issue or a comment.
+message AddReactionRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  // Empty reacts to the issue body
+  string comment_id = 4;
+  string emoji = 5;
+}
+
+// AddReactionResponse contains the updated groups.
+message AddReactionResponse {
+  repeated ReactionGroup reactions = 1;
+}
+
+// RemoveReactionRequest removes the caller's reaction.
+message RemoveReactionRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string comment_id = 4;
+  string emoji = 5;
+}
+
+// RemoveReactionResponse contains the updated groups.
+message RemoveReactionResponse {
+  repeated ReactionGroup reactions = 1;
+}
+
+// ListLabelsRequest lists repository or organization labels.
+message ListLabelsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  // Organization labels only, used when namespace and name are empty
+  string org_id = 4;
+}
+
+// ListLabelsResponse contains labels.
+message ListLabelsResponse {
+  repeated Label labels = 1;
+  PageInfo page = 2;
+}
+
+// CreateLabelRequest adds a label to a repository or organization.
+message CreateLabelRequest {
+  string namespace = 1;
+  string name = 2;
+  string org_id = 3;
+  string label_name = 4;
+  string color = 5;
+  string description = 6;
+  bool exclusive = 7;
+}
+
+// CreateLabelResponse contains the label.
+message CreateLabelResponse {
+  Label label = 1;
+}
+
+// UpdateLabelRequest changes the set fields.
+message UpdateLabelRequest {
+  string namespace = 1;
+  string name = 2;
+  string org_id = 3;
+  string id = 4;
+  optional string label_name = 5;
+  optional string color = 6;
+  optional string description = 7;
+  optional bool exclusive = 8;
+}
+
+// UpdateLabelResponse contains the label.
+message UpdateLabelResponse {
+  Label label = 1;
+}
+
+// DeleteLabelRequest removes a label.
+message DeleteLabelRequest {
+  string namespace = 1;
+  string name = 2;
+  string org_id = 3;
+  string id = 4;
+}
+
+// DeleteLabelResponse is empty on success.
+message DeleteLabelResponse {}
+
+// ListMilestonesRequest pages milestones.
+message ListMilestonesRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  IssueState state = 4;
+}
+
+// ListMilestonesResponse contains milestones.
+message ListMilestonesResponse {
+  repeated Milestone milestones = 1;
+  PageInfo page = 2;
+}
+
+// CreateMilestoneRequest adds a milestone.
+message CreateMilestoneRequest {
+  string namespace = 1;
+  string name = 2;
+  string title = 3;
+  string description = 4;
+  google.protobuf.Timestamp due_date = 5;
+}
+
+// CreateMilestoneResponse contains the milestone.
+message CreateMilestoneResponse {
+  Milestone milestone = 1;
+}
+
+// UpdateMilestoneRequest changes the set fields.
+message UpdateMilestoneRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+  optional string title = 4;
+  optional string description = 5;
+  optional google.protobuf.Timestamp due_date = 6;
+  optional IssueState state = 7;
+}
+
+// UpdateMilestoneResponse contains the milestone.
+message UpdateMilestoneResponse {
+  Milestone milestone = 1;
+}
+
+// DeleteMilestoneRequest removes a milestone.
+message DeleteMilestoneRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// DeleteMilestoneResponse is empty on success.
+message DeleteMilestoneResponse {}
+
+// AddDependencyRequest marks number as blocked by depends_on.
+message AddDependencyRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  // Blocker as number or ns/name#number
+  string depends_on = 4;
+}
+
+// AddDependencyResponse contains the blockers.
+message AddDependencyResponse {
+  repeated IssueRef blocked_by = 1;
+}
+
+// RemoveDependencyRequest removes a blocker.
+message RemoveDependencyRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string depends_on = 4;
+}
+
+// RemoveDependencyResponse contains the blockers.
+message RemoveDependencyResponse {
+  repeated IssueRef blocked_by = 1;
+}
+
+// ListDependenciesRequest identifies an issue.
+message ListDependenciesRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// ListDependenciesResponse contains both directions.
+message ListDependenciesResponse {
+  repeated IssueRef blocked_by = 1;
+  repeated IssueRef blocking = 2;
+}
+
+// AddTrackedTimeRequest records time.
+message AddTrackedTimeRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  int64 seconds = 4;
+  string note = 5;
+}
+
+// AddTrackedTimeResponse contains the entry.
+message AddTrackedTimeResponse {
+  TrackedTime time = 1;
+}
+
+// DeleteTrackedTimeRequest removes an entry.
+message DeleteTrackedTimeRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string id = 4;
+}
+
+// DeleteTrackedTimeResponse is empty on success.
+message DeleteTrackedTimeResponse {}
+
+// ListTrackedTimeRequest identifies an issue.
+message ListTrackedTimeRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  int64 number = 4;
+}
+
+// ListTrackedTimeResponse contains manual time entries and their sum.
+message ListTrackedTimeResponse {
+  reserved 4;
+  repeated TrackedTime times = 1;
+  PageInfo page = 2;
+  int64 total_seconds = 3;
+}
+
+// SubscribeIssueRequest subscribes the caller.
+message SubscribeIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// SubscribeIssueResponse is empty on success.
+message SubscribeIssueResponse {}
+
+// UnsubscribeIssueRequest removes the subscription.
+message UnsubscribeIssueRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// UnsubscribeIssueResponse is empty on success.
+message UnsubscribeIssueResponse {}

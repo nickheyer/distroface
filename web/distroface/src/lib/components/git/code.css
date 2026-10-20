@@ -1,0 +1,406 @@
+.shiki,
+.shiki span,
+.code-line span {
+	color: var(--shiki-light);
+}
+.dark .shiki,
+.dark .shiki span,
+.dark .code-line span {
+	color: var(--shiki-dark);
+}
+.shiki {
+	background-color: var(--muted) !important;
+}
+
+.markdown-body {
+	font-size: 0.9rem;
+	line-height: 1.65;
+	color: var(--foreground);
+	overflow-wrap: anywhere;
+}
+.markdown-body > :first-child {
+	margin-top: 0;
+}
+.markdown-body > :last-child {
+	margin-bottom: 0;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	line-height: 1.3;
+	margin: 1.5rem 0 0.75rem;
+	scroll-margin-top: 5rem;
+}
+.markdown-body h1 {
+	font-size: 1.6rem;
+	padding-bottom: 0.4rem;
+	border-bottom: 1px solid var(--border);
+}
+.markdown-body h2 {
+	font-size: 1.3rem;
+	padding-bottom: 0.3rem;
+	border-bottom: 1px solid var(--border);
+}
+.markdown-body h3 {
+	font-size: 1.1rem;
+}
+.markdown-body h4 {
+	font-size: 1rem;
+}
+.markdown-body h5,
+.markdown-body h6 {
+	font-size: 0.9rem;
+}
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre,
+.markdown-body table,
+.markdown-body details {
+	margin: 0 0 1rem;
+}
+.markdown-body ul,
+.markdown-body ol {
+	padding-left: 1.75rem;
+}
+.markdown-body ul {
+	list-style: disc;
+}
+.markdown-body ol {
+	list-style: decimal;
+}
+.markdown-body li + li {
+	margin-top: 0.25rem;
+}
+.markdown-body li > p {
+	margin-bottom: 0.5rem;
+}
+.markdown-body li.task-item {
+	list-style: none;
+	margin-left: -1.5rem;
+}
+.markdown-body li.task-item input[type='checkbox'] {
+	margin-right: 0.5rem;
+	vertical-align: middle;
+}
+.markdown-body a {
+	color: var(--primary);
+	text-decoration: none;
+}
+.markdown-body a:hover {
+	text-decoration: underline;
+}
+.markdown-body blockquote {
+	border-left: 3px solid var(--border);
+	padding: 0.25rem 1rem;
+	color: var(--muted-foreground);
+}
+.markdown-body code {
+	font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+	font-size: 0.85em;
+}
+.markdown-body :not(pre) > code {
+	background-color: var(--muted);
+	border-radius: 0.3rem;
+	padding: 0.15em 0.35em;
+}
+.markdown-body pre {
+	background-color: var(--muted);
+	border: 1px solid var(--border);
+	border-radius: 0.6rem;
+	padding: 0.85rem 1rem;
+	overflow-x: auto;
+	font-size: 0.82rem;
+	line-height: 1.55;
+}
+.markdown-body pre code {
+	background: transparent;
+	padding: 0;
+	font-size: inherit;
+}
+.markdown-body table {
+	border-collapse: collapse;
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	font-size: 0.85rem;
+}
+.markdown-body th,
+.markdown-body td {
+	border: 1px solid var(--border);
+	padding: 0.4rem 0.75rem;
+	text-align: left;
+}
+.markdown-body th {
+	font-weight: 600;
+	background-color: var(--muted);
+}
+.markdown-body img {
+	max-width: 100%;
+	height: auto;
+	border-radius: 0.4rem;
+}
+.markdown-body hr {
+	border: 0;
+	border-top: 1px solid var(--border);
+	margin: 1.5rem 0;
+}
+.markdown-body del {
+	color: var(--muted-foreground);
+}
+.markdown-body kbd {
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 0.8em;
+	border: 1px solid var(--border);
+	border-bottom-width: 2px;
+	border-radius: 0.3rem;
+	padding: 0.05em 0.35em;
+	background-color: var(--muted);
+}
+.markdown-body details > summary {
+	cursor: pointer;
+	font-weight: 500;
+}
+.markdown-body .heading-anchor {
+	color: var(--muted-foreground);
+	opacity: 0;
+	margin-left: 0.4rem;
+	font-weight: 400;
+	text-decoration: none;
+}
+.markdown-body h1:hover .heading-anchor,
+.markdown-body h2:hover .heading-anchor,
+.markdown-body h3:hover .heading-anchor,
+.markdown-body h4:hover .heading-anchor,
+.markdown-body h5:hover .heading-anchor,
+.markdown-body h6:hover .heading-anchor {
+	opacity: 1;
+}
+
+.code-table {
+	border-collapse: collapse;
+	width: 100%;
+	font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+	font-size: 0.8rem;
+	line-height: 1.5rem;
+	tab-size: 4;
+}
+.code-table td {
+	padding: 0;
+	vertical-align: top;
+}
+.code-table .line-no {
+	width: 1%;
+	min-width: 3rem;
+	padding: 0 0.75rem 0 0.75rem;
+	text-align: right;
+	color: var(--muted-foreground);
+	opacity: 0.6;
+	user-select: none;
+	white-space: nowrap;
+}
+.code-table .line-no a,
+.code-table .line-no button {
+	color: inherit;
+	text-decoration: none;
+	cursor: pointer;
+	display: block;
+	font: inherit;
+	background: transparent;
+	border: 0;
+	width: 100%;
+	text-align: right;
+}
+.code-table .line-no a:hover,
+.code-table .line-no button:hover {
+	opacity: 1;
+	color: var(--primary);
+}
+.code-table .code-line {
+	padding: 0 1rem 0 0.75rem;
+	white-space: pre;
+}
+.code-table .code-line.wrap {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.code-table tr.highlighted td {
+	background-color: color-mix(in oklch, var(--primary) 12%, transparent);
+}
+.code-table tr.highlighted .line-no {
+	opacity: 1;
+	color: var(--primary);
+}
+.code-table tr.diff-add td {
+	background-color: color-mix(in oklch, var(--success) 14%, transparent);
+}
+.code-table tr.diff-add .line-no {
+	background-color: color-mix(in oklch, var(--success) 22%, transparent);
+}
+.code-table tr.diff-del td {
+	background-color: color-mix(in oklch, var(--destructive) 12%, transparent);
+}
+.code-table tr.diff-del .line-no {
+	background-color: color-mix(in oklch, var(--destructive) 20%, transparent);
+}
+.code-table tr.diff-hunk td {
+	background-color: color-mix(in oklch, var(--primary) 8%, transparent);
+	color: var(--muted-foreground);
+	padding: 0.15rem 0.75rem;
+	white-space: pre;
+}
+.code-table td.diff-sign {
+	width: 1%;
+	padding: 0 0.25rem 0 0.5rem;
+	user-select: none;
+	color: var(--muted-foreground);
+}
+.code-table td.diff-empty {
+	background-color: color-mix(in oklch, var(--muted) 60%, transparent);
+}
+.code-table .split-cell {
+	width: 50%;
+}
+
+/* Diff tables wrap long lines so neither side ever scrolls sideways */
+.code-table.diff-table {
+	table-layout: fixed;
+}
+.code-table.diff-table .diff-col-no {
+	width: 3.25rem;
+}
+.code-table.diff-table .diff-col-sign {
+	width: 1.25rem;
+}
+.code-table.diff-table .diff-col-code {
+	width: auto;
+}
+.code-table.diff-table .line-no {
+	min-width: 0;
+	padding: 0 0.5rem;
+	overflow: hidden;
+}
+.code-table.diff-table .code-line {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	word-break: break-all;
+}
+.code-table.diff-table tr.diff-hunk td {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+.code-table.diff-table td.diff-cell-add {
+	background-color: color-mix(in oklch, var(--success) 14%, transparent);
+}
+.code-table.diff-table td.diff-cell-del {
+	background-color: color-mix(in oklch, var(--destructive) 12%, transparent);
+}
+.code-table.diff-table tr.diff-extra td {
+	padding: 0;
+}
+
+/* Diff rows, gutters, dividers, and intra line marks */
+.code-table.diff-table tr.diff-row:hover td.code-line {
+	background-color: color-mix(in oklch, var(--foreground) 4%, transparent);
+}
+.code-table.diff-table tr.diff-row.diff-add:hover td.code-line,
+.code-table.diff-table tr.diff-row:hover td.diff-cell-add {
+	background-color: color-mix(in oklch, var(--success) 20%, transparent);
+}
+.code-table.diff-table tr.diff-row.diff-del:hover td.code-line,
+.code-table.diff-table tr.diff-row:hover td.diff-cell-del {
+	background-color: color-mix(in oklch, var(--destructive) 18%, transparent);
+}
+.code-table.diff-table td.line-no.commentable button {
+	border-radius: 0.25rem;
+}
+.code-table.diff-table tr.diff-row:hover td.line-no.commentable button {
+	opacity: 1;
+	color: var(--primary);
+}
+.code-table.diff-table.diff-split td:nth-child(3) {
+	border-left: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+}
+.code-table.diff-table tr.diff-hunk td {
+	padding: 0.2rem 0.75rem;
+	background-color: color-mix(in oklch, var(--primary) 7%, transparent);
+	border-top: 1px solid color-mix(in oklch, var(--primary) 14%, transparent);
+	border-bottom: 1px solid color-mix(in oklch, var(--primary) 14%, transparent);
+}
+.diff-expand {
+	display: inline-flex;
+	align-items: center;
+	height: 1.25rem;
+	border-radius: 9999px;
+	border: 1px solid color-mix(in oklch, var(--primary) 30%, transparent);
+	background-color: color-mix(in oklch, var(--primary) 10%, transparent);
+	color: var(--primary);
+	font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif);
+	font-size: 11px;
+	line-height: 1;
+	overflow: hidden;
+}
+.diff-expand button {
+	display: inline-flex;
+	align-items: center;
+	gap: 0.2rem;
+	height: 100%;
+	padding: 0 0.45rem;
+	color: inherit;
+	font: inherit;
+	background: transparent;
+	border: 0;
+	cursor: pointer;
+}
+.diff-expand button + button {
+	border-left: 1px solid color-mix(in oklch, var(--primary) 25%, transparent);
+}
+.diff-expand button:hover {
+	background-color: color-mix(in oklch, var(--primary) 16%, transparent);
+}
+.diff-expand[aria-busy='true'] {
+	padding: 0 0.45rem;
+}
+.diff-word-del {
+	background-color: color-mix(in oklch, var(--destructive) 34%, transparent);
+	border-radius: 2px;
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--destructive) 18%, transparent);
+}
+.diff-word-add {
+	background-color: color-mix(in oklch, var(--success) 38%, transparent);
+	border-radius: 2px;
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--success) 20%, transparent);
+}
+.diff-progress {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -1px;
+	height: 2px;
+	overflow: hidden;
+	background-color: color-mix(in oklch, var(--primary) 15%, transparent);
+}
+.diff-progress::after {
+	content: '';
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: -40%;
+	width: 40%;
+	background-color: var(--primary);
+	animation: diff-progress-slide 1s ease-in-out infinite;
+}
+@keyframes diff-progress-slide {
+	from {
+		left: -40%;
+	}
+	to {
+		left: 100%;
+	}
+}

@@ -6,8 +6,9 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import FormCard from '$lib/components/form-card.svelte';
+	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
+	import FormSection from '$lib/components/form-section.svelte';
 	import { Loader2 } from '@lucide/svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -47,10 +48,13 @@
 
 	async function loadPending() {
 		try {
-			const resp = await rpcClient.certificate.listCertificateDomains({
-				pendingOnly: true,
-				page: { pageSize: 200 }
-			}, silentCallOptions);
+			const resp = await rpcClient.certificate.listCertificateDomains(
+				{
+					pendingOnly: true,
+					page: { pageSize: 200 }
+				},
+				silentCallOptions
+			);
 			pending = resp.domains;
 		} catch {
 			// List refreshes on the next action
@@ -61,7 +65,10 @@
 		loading = true;
 		loadError = '';
 		try {
-			const resp = await rpcClient.settings.getEffectiveSettings({ scope: systemScope }, silentCallOptions);
+			const resp = await rpcClient.settings.getEffectiveSettings(
+				{ scope: systemScope },
+				silentCallOptions
+			);
 			eff = resp.settings ?? null;
 			prov = resp.provenance;
 			if (eff) seedForms(eff);
@@ -88,13 +95,20 @@
 
 	function setRequireApproval(v: boolean) {
 		requireApproval = v;
-		apply(approvalSwitchAct, { portals: { requireHostnameApproval: v } }, ['portals.require_hostname_approval']);
+		apply(approvalSwitchAct, { portals: { requireHostnameApproval: v } }, [
+			'portals.require_hostname_approval'
+		]);
 	}
 
 	function commitBlacklist() {
-		const patterns = blacklistText.split('\n').map((s) => s.trim()).filter(Boolean);
+		const patterns = blacklistText
+			.split('\n')
+			.map((s) => s.trim())
+			.filter(Boolean);
 		if (patterns.join('\n') === (eff?.portals?.hostnameBlacklist ?? []).join('\n')) return;
-		apply(blacklistAct, { portals: { hostnameBlacklist: patterns } }, ['portals.hostname_blacklist']);
+		apply(blacklistAct, { portals: { hostnameBlacklist: patterns } }, [
+			'portals.hostname_blacklist'
+		]);
 	}
 
 	async function approve(domain: CertificateDomain) {
@@ -116,107 +130,119 @@
 	}
 
 	onMount(() => {
-		if (!authStore.canManageSettings) { goto(resolve('/admin')); return; }
+		if (!authStore.canManageSettings) {
+			goto(resolve('/admin'));
+			return;
+		}
 		load();
 	});
 </script>
 
 {#if loading}
 	<div class="space-y-6">
-		<Skeleton class="h-40 w-full rounded-xl" />
+		<Skeleton class="h-40 w-full rounded-lg" />
 	</div>
 {:else if loadError}
-	<div class="rounded-xl border border-destructive/40 bg-destructive/5 px-6 py-10 text-center space-y-3">
+	<div class="flex flex-col items-center rounded-lg border bg-card px-6 py-10 text-center">
 		<p class="text-sm text-destructive">{loadError}</p>
-		<Button variant="outline" size="sm" onclick={load}>Retry</Button>
+		<Button variant="outline" size="sm" class="mt-3" onclick={load}>Retry</Button>
 	</div>
 {:else if eff}
-	<div class="space-y-6">
-		<FormCard title="Portal Hostnames" description="Rules for hostnames portals can claim">
-			<div class="space-y-3">
-				<FormField
-					label="Require approval"
-					horizontal
-					help={lockHint('portals.require_hostname_approval', 'New portal hostnames wait for an admin')}
-					tag={approvalSwitchAct.tag}
-					error={approvalSwitchAct.error}
-				>
-					<Switch
-						checked={requireApproval}
-						disabled={approvalSwitchAct.busy || locked('portals.require_hostname_approval')}
-						onCheckedChange={setRequireApproval}
-					/>
-				</FormField>
+	<FormPage
+		level="section"
+		title="Portals"
+		description="Instance wide rules for the addresses organizations may claim."
+	>
+		<FormSection title="Portal hostnames" description="Rules for hostnames portals can claim.">
+			<FormField
+				label="Require approval"
+				layout="toggle"
+				help={lockHint(
+					'portals.require_hostname_approval',
+					'New portal hostnames wait for an admin'
+				)}
+				tag={approvalSwitchAct.tag}
+				error={approvalSwitchAct.error}
+			>
+				<Switch
+					checked={requireApproval}
+					disabled={approvalSwitchAct.busy || locked('portals.require_hostname_approval')}
+					onCheckedChange={setRequireApproval}
+				/>
+			</FormField>
 
-				{#if pending.length > 0}
-					<FormField
-						label="Waiting for approval"
-						help="Approve to allow issuance"
-						tag={approvalsAct.tag}
-						error={approvalsAct.error}
-					>
-						<div class="rounded-lg border border-border/60 divide-y divide-border/40">
-							{#each pending as domain (domain.id)}
-								<div class="flex items-center justify-between gap-3 px-3 py-2.5">
-									<div class="min-w-0 flex items-center gap-2 flex-wrap">
-										<span class="font-mono text-sm">{domain.domain}</span>
-										{#if domain.orgName}
-											<a href={resolve('/orgs/[name]', { name: domain.orgName })} class="text-xs text-muted-foreground hover:text-primary transition-colors">
-												{domain.orgName}
-											</a>
-										{/if}
-										{#if domain.createdAt}
-											<span class="text-xs text-muted-foreground/70">{relativeTime(timestampDate(domain.createdAt))}</span>
-										{/if}
-									</div>
-									<div class="flex gap-1 shrink-0">
-										<Button
-											variant="outline"
-											size="sm"
-											class="h-7"
-											disabled={approvalBusy !== null}
-											onclick={() => approve(domain)}
+			{#if pending.length > 0}
+				<FormField
+					label="Waiting for approval"
+					help="Approve to allow issuance"
+					tag={approvalsAct.tag}
+					error={approvalsAct.error}
+				>
+					<div class="box divide-y">
+						{#each pending as domain (domain.id)}
+							<div class="flex items-center justify-between gap-3 px-4 py-2.5">
+								<div class="flex min-w-0 flex-wrap items-center gap-2">
+									<span class="font-mono text-sm">{domain.domain}</span>
+									{#if domain.orgName}
+										<a
+											href={resolve('/orgs/[name]', { name: domain.orgName })}
+											class="text-xs text-muted-foreground transition-colors hover:text-primary"
 										>
-											{#if approvalBusy === domain.id}
-												<Loader2 class="h-3.5 w-3.5 animate-spin" />
-											{:else}
-												Approve
-											{/if}
-										</Button>
-										<Button
-											variant="ghost"
-											size="sm"
-											class="h-7 px-2 text-xs text-destructive hover:text-destructive"
-											disabled={approvalBusy !== null}
-											onclick={() => deny(domain)}
+											{domain.orgName}
+										</a>
+									{/if}
+									{#if domain.createdAt}
+										<span class="text-xs text-muted-foreground"
+											>{relativeTime(timestampDate(domain.createdAt))}</span
 										>
-											Deny
-										</Button>
-									</div>
+									{/if}
 								</div>
-							{/each}
-						</div>
-					</FormField>
-				{/if}
-
-				<FormField
-					label="Blocked patterns"
-					id="hostname-blacklist"
-					help={lockHint('portals.hostname_blacklist', 'One pattern per line')}
-					tag={blacklistAct.tag}
-					error={blacklistAct.error}
-				>
-					<Textarea
-						id="hostname-blacklist"
-						bind:value={blacklistText}
-						class="font-mono text-xs"
-						rows={3}
-						placeholder={blacklistPlaceholder}
-						disabled={blacklistAct.busy || locked('portals.hostname_blacklist')}
-						onblur={commitBlacklist}
-					/>
+								<div class="flex shrink-0 gap-1">
+									<Button
+										variant="outline"
+										size="sm"
+										disabled={approvalBusy !== null}
+										onclick={() => approve(domain)}
+									>
+										{#if approvalBusy === domain.id}
+											<Loader2 class="animate-spin" />
+										{:else}
+											Approve
+										{/if}
+									</Button>
+									<Button
+										variant="ghost"
+										size="sm"
+										class="text-destructive hover:text-destructive"
+										disabled={approvalBusy !== null}
+										onclick={() => deny(domain)}
+									>
+										Deny
+									</Button>
+								</div>
+							</div>
+						{/each}
+					</div>
 				</FormField>
-			</div>
-		</FormCard>
-	</div>
+			{/if}
+
+			<FormField
+				label="Blocked patterns"
+				id="hostname-blacklist"
+				help={lockHint('portals.hostname_blacklist', 'One pattern per line')}
+				tag={blacklistAct.tag}
+				error={blacklistAct.error}
+			>
+				<Textarea
+					id="hostname-blacklist"
+					bind:value={blacklistText}
+					class="font-mono"
+					rows={3}
+					placeholder={blacklistPlaceholder}
+					disabled={blacklistAct.busy || locked('portals.hostname_blacklist')}
+					onblur={commitBlacklist}
+				/>
+			</FormField>
+		</FormSection>
+	</FormPage>
 {/if}

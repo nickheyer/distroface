@@ -90,13 +90,18 @@ func (ts *TokenService) expiry() time.Duration {
 
 // SignToken creates a signed JWT for the given subject and access claims.
 func (ts *TokenService) SignToken(subject string, access []*ResourceActions) (string, error) {
+	return ts.SignTokenAudience(ts.service, ts.expiry(), subject, access)
+}
+
+// Signs a token for another audience such as the git lfs service
+func (ts *TokenService) SignTokenAudience(audience string, ttl time.Duration, subject string, access []*ResourceActions) (string, error) {
 	now := time.Now().UTC()
 
 	claims := ClaimSet{
 		Issuer:     ts.issuer,
 		Subject:    subject,
-		Audience:   josejwt.Audience{ts.service},
-		Expiration: josejwt.NewNumericDate(now.Add(ts.expiry())),
+		Audience:   josejwt.Audience{audience},
+		Expiration: josejwt.NewNumericDate(now.Add(ttl)),
 		NotBefore:  josejwt.NewNumericDate(now.Add(-10 * time.Second)),
 		IssuedAt:   josejwt.NewNumericDate(now),
 		JWTID:      uuid.New().String(),
@@ -139,6 +144,29 @@ func (ts *TokenService) VerifyTokenSubject(raw string) (string, error) {
 		return "", err
 	}
 	return claims.Subject, nil
+}
+
+// Verifies a token for one audience and returns its subject and access
+func (ts *TokenService) VerifyAccess(raw, audience string) (string, []*ResourceActions, error) {
+	tok, err := josejwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
+	if err != nil {
+		return "", nil, err
+	}
+	var claims ClaimSet
+	if err := tok.Claims(ts.privateKey.Public(), &claims); err != nil {
+		return "", nil, err
+	}
+	if !claims.Audience.Contains(audience) {
+		return "", nil, fmt.Errorf("token audience mismatch")
+	}
+	now := time.Now()
+	if claims.Expiration != nil && claims.Expiration.Time().Before(now) {
+		return "", nil, fmt.Errorf("token expired")
+	}
+	if claims.NotBefore != nil && claims.NotBefore.Time().After(now) {
+		return "", nil, fmt.Errorf("token not yet valid")
+	}
+	return claims.Subject, claims.Access, nil
 }
 
 func (ts *TokenService) loadOrGenerate(keyPath, certPath string) error {

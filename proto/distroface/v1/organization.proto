@@ -4,6 +4,7 @@ package distroface.v1;
 
 import "distroface/v1/pagination.proto";
 import "distroface/v1/types.proto";
+import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
 
@@ -29,7 +30,203 @@ service OrganizationService {
   rpc UpdateOrgMemberRole(UpdateOrgMemberRoleRequest) returns (UpdateOrgMemberRoleResponse) {}
   // TransferOrgOwnership makes another member the owner and demotes the caller to admin.
   rpc TransferOrgOwnership(TransferOrgOwnershipRequest) returns (TransferOrgOwnershipResponse) {}
+  // ListTeams returns the organization's teams.
+  rpc ListTeams(ListTeamsRequest) returns (ListTeamsResponse) {}
+  // GetTeam returns one team with its permissions.
+  rpc GetTeam(GetTeamRequest) returns (GetTeamResponse) {}
+  // CreateTeam adds a team to an organization.
+  rpc CreateTeam(CreateTeamRequest) returns (CreateTeamResponse) {}
+  // UpdateTeam changes a team's flags and unit permissions.
+  rpc UpdateTeam(UpdateTeamRequest) returns (UpdateTeamResponse) {}
+  // DeleteTeam removes a team, the default team cannot be deleted.
+  rpc DeleteTeam(DeleteTeamRequest) returns (DeleteTeamResponse) {}
+  // ListTeamMembers returns the members of a team.
+  rpc ListTeamMembers(ListTeamMembersRequest) returns (ListTeamMembersResponse) {}
+  // AddTeamMember adds an org member to a team.
+  rpc AddTeamMember(AddTeamMemberRequest) returns (AddTeamMemberResponse) {}
+  // RemoveTeamMember removes a user from a team.
+  rpc RemoveTeamMember(RemoveTeamMemberRequest) returns (RemoveTeamMemberResponse) {}
+  // ListTeamRepos returns the repositories a team includes.
+  rpc ListTeamRepos(ListTeamReposRequest) returns (ListTeamReposResponse) {}
+  // AddTeamRepo includes a repository in a team.
+  rpc AddTeamRepo(AddTeamRepoRequest) returns (AddTeamRepoResponse) {}
+  // RemoveTeamRepo drops a repository from a team.
+  rpc RemoveTeamRepo(RemoveTeamRepoRequest) returns (RemoveTeamRepoResponse) {}
 }
+
+// Access level a team grants on one repository unit
+enum TeamUnitLevel {
+  TEAM_UNIT_LEVEL_UNSPECIFIED = 0;
+  TEAM_UNIT_LEVEL_NONE = 1;
+  TEAM_UNIT_LEVEL_READ = 2;
+  TEAM_UNIT_LEVEL_WRITE = 3;
+}
+
+// Level for one named repository unit
+message TeamUnitPermission {
+  // code, issues, pulls, releases, wiki, projects, packages, actions
+  string unit = 1;
+  TeamUnitLevel level = 2;
+}
+
+// Team is a named group of organization members with unit permissions.
+message Team {
+  string id = 1;
+  string org_id = 2;
+  string name = 3;
+  string description = 4;
+  // Every member belongs implicitly, cannot be deleted
+  bool is_default = 5;
+  bool can_create_repos = 6;
+  bool includes_all_repos = 7;
+  // Repo admin on included repositories
+  bool admin_access = 8;
+  repeated TeamUnitPermission units = 9;
+  int32 member_count = 10;
+  int32 repo_count = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+// ListTeamsRequest pages the teams of an organization.
+message ListTeamsRequest {
+  PageRequest page = 1;
+  string org_id = 2;
+}
+
+// ListTeamsResponse contains a page of teams.
+message ListTeamsResponse {
+  repeated Team teams = 1;
+  PageInfo page = 2;
+}
+
+// GetTeamRequest identifies a team by id.
+message GetTeamRequest {
+  string org_id = 1;
+  string id = 2;
+}
+
+// GetTeamResponse contains the requested team.
+message GetTeamResponse {
+  Team team = 1;
+}
+
+// CreateTeamRequest contains the fields for a new team.
+message CreateTeamRequest {
+  string org_id = 1;
+  string name = 2;
+  string description = 3;
+  bool can_create_repos = 4;
+  bool includes_all_repos = 5;
+  bool admin_access = 6;
+  repeated TeamUnitPermission units = 7;
+}
+
+// CreateTeamResponse contains the created team.
+message CreateTeamResponse {
+  Team team = 1;
+}
+
+// UpdateTeamRequest changes the set fields of a team.
+message UpdateTeamRequest {
+  string org_id = 1;
+  string id = 2;
+  optional string name = 3;
+  optional string description = 4;
+  optional bool can_create_repos = 5;
+  optional bool includes_all_repos = 6;
+  optional bool admin_access = 7;
+  // Replaces the unit permissions when set_units is true
+  bool set_units = 8;
+  repeated TeamUnitPermission units = 9;
+}
+
+// UpdateTeamResponse contains the updated team.
+message UpdateTeamResponse {
+  Team team = 1;
+}
+
+// DeleteTeamRequest identifies the team to delete.
+message DeleteTeamRequest {
+  string org_id = 1;
+  string id = 2;
+}
+
+// DeleteTeamResponse is empty on success.
+message DeleteTeamResponse {}
+
+// ListTeamMembersRequest pages a team's members.
+message ListTeamMembersRequest {
+  PageRequest page = 1;
+  string org_id = 2;
+  string team_id = 3;
+}
+
+// ListTeamMembersResponse contains a page of members.
+message ListTeamMembersResponse {
+  repeated OrgMember members = 1;
+  PageInfo page = 2;
+}
+
+// AddTeamMemberRequest adds an org member to a team.
+message AddTeamMemberRequest {
+  string org_id = 1;
+  string team_id = 2;
+  string user_id = 3;
+}
+
+// AddTeamMemberResponse is empty on success.
+message AddTeamMemberResponse {}
+
+// RemoveTeamMemberRequest removes a user from a team.
+message RemoveTeamMemberRequest {
+  string org_id = 1;
+  string team_id = 2;
+  string user_id = 3;
+}
+
+// RemoveTeamMemberResponse is empty on success.
+message RemoveTeamMemberResponse {}
+
+// ListTeamReposRequest pages the repositories a team includes.
+message ListTeamReposRequest {
+  PageRequest page = 1;
+  string org_id = 2;
+  string team_id = 3;
+}
+
+// TeamRepo names one included repository.
+message TeamRepo {
+  string repo_id = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// ListTeamReposResponse contains a page of included repositories.
+message ListTeamReposResponse {
+  repeated TeamRepo repos = 1;
+  PageInfo page = 2;
+}
+
+// AddTeamRepoRequest includes a git repository in a team.
+message AddTeamRepoRequest {
+  string org_id = 1;
+  string team_id = 2;
+  string repo_name = 3;
+}
+
+// AddTeamRepoResponse is empty on success.
+message AddTeamRepoResponse {}
+
+// RemoveTeamRepoRequest drops a repository from a team.
+message RemoveTeamRepoRequest {
+  string org_id = 1;
+  string team_id = 2;
+  string repo_name = 3;
+}
+
+// RemoveTeamRepoResponse is empty on success.
+message RemoveTeamRepoResponse {}
 
 // CreateOrganizationRequest contains the fields to create a new organization.
 message CreateOrganizationRequest {

@@ -1,24 +1,17 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { onMount, getContext } from 'svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
-	} from '$lib/components/ui/table';
-	import {
-		Select, SelectContent, SelectItem, SelectTrigger
-	} from '$lib/components/ui/select';
-	import FormPanel from '$lib/components/form-panel.svelte';
-	import FormField from '$lib/components/form-field.svelte';
-	import FormSection from '$lib/components/form-section.svelte';
+	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
-	import AsyncSelect from '$lib/components/async-select.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Users, Plus, UserPlus } from '@lucide/svelte';
+	import { Users, Plus } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -31,6 +24,8 @@
 
 	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
 	const orgId = $derived(ctx.org?.id ?? '');
+	const orgName = $derived(page.params.name ?? '');
+	const newHref = $derived(resolve('/orgs/[name]/members/new', { name: orgName }));
 
 	let members = $state<OrgMember[]>([]);
 	const pager = new Pager(20);
@@ -40,11 +35,6 @@
 		{ key: 'username', label: 'Username' },
 		{ key: 'role', label: 'Role' }
 	]);
-
-	let addMemberOpen = $state(false);
-	let addUserId = $state('');
-	let addRole = $state<OrgRole>(OrgRole.MEMBER);
-	let addingMember = $state(false);
 
 	let removeMemberOpen = $state(false);
 	let removeMemberId = $state('');
@@ -71,28 +61,6 @@
 	function filterChanged() {
 		pager.reset();
 		loadMembers();
-	}
-
-	async function addMember() {
-		if (!addUserId) return;
-		addingMember = true;
-		try {
-			await rpcClient.organization.addOrgMember({
-				orgId,
-				userId: addUserId,
-				role: addRole
-			});
-			toast.success('Member added');
-			addMemberOpen = false;
-			addUserId = '';
-			addRole = OrgRole.MEMBER;
-			await loadMembers();
-			await ctx.refresh();
-		} catch {
-			// error interceptor
-		} finally {
-			addingMember = false;
-		}
 	}
 
 	async function changeMemberRole(userId: string, role: OrgRole) {
@@ -131,145 +99,117 @@
 
 <div class="space-y-4">
 	<div class="section-header">
-		<h2 class="section-title">Members</h2>
+		<div class="min-w-0">
+			<h2 class="section-title">Members</h2>
+			<p class="section-subtitle">People who can push to this organization's namespace.</p>
+		</div>
 		{#if ctx.canAdmin}
-			<Button size="sm" onclick={() => (addMemberOpen = true)}>
-				<Plus class="h-4 w-4 mr-1.5" />
-				Add Member
+			<Button class="shrink-0" href={newHref}>
+				<Plus />
+				Add member
 			</Button>
 		{/if}
 	</div>
 
 	<div class="max-w-md">
-		<QueryFilterBar {filter} placeholder="Search members..." onchange={filterChanged} />
+		<QueryFilterBar {filter} placeholder="Search members" onchange={filterChanged} />
 	</div>
 
 	{#if !loaded}
-		<div class="space-y-2">
+		<div class="box divide-y">
 			{#each { length: 3 }, i (i)}
-				<Skeleton class="h-14 w-full rounded-lg" />
+				<div class="flex items-center gap-3 px-4 py-3">
+					<Skeleton class="size-7 rounded-full" />
+					<div class="flex-1 space-y-2">
+						<Skeleton class="h-4 w-32" />
+						<Skeleton class="h-3 w-24" />
+					</div>
+					<Skeleton class="h-5 w-16 rounded-full" />
+				</div>
 			{/each}
 		</div>
 	{:else if members.length === 0}
 		<EmptyState
 			icon={Users}
 			message={filter.active ? 'No matching members' : 'No members'}
-			description={filter.active ? 'Try a different search.' : 'Add members to collaborate on this organization.'}
-		/>
+			description={filter.active
+				? 'Try a different search.'
+				: 'Add members to collaborate on this organization.'}
+		>
+			{#snippet actions()}
+				{#if ctx.canAdmin && !filter.active}
+					<Button variant="outline" href={newHref}>
+						<Plus />
+						Add member
+					</Button>
+				{/if}
+			{/snippet}
+		</EmptyState>
 	{:else}
-		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
-			<Table>
-				<TableHeader>
-					<TableRow class="bg-muted/30 hover:bg-muted/30">
-						<TableHead class="th">Username</TableHead>
-						<TableHead class="th">Role</TableHead>
-						<TableHead class="th">Joined</TableHead>
-						{#if ctx.canAdmin}
-							<TableHead class="th w-20"></TableHead>
+		<div class="box divide-y transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
+			{#each members as member (member.userId)}
+				<div class="flex items-center gap-3 px-4 py-3">
+					<Avatar class="size-7">
+						<AvatarFallback>{member.username.slice(0, 2)}</AvatarFallback>
+					</Avatar>
+					<div class="min-w-0 flex-1">
+						<a
+							href={resolve('/[namespace]', { namespace: member.username })}
+							class="truncate text-sm font-semibold underline-offset-2 hover:text-primary hover:underline"
+						>
+							{member.username}
+						</a>
+						<p class="mt-0.5 text-xs text-muted-foreground">
+							Joined {member.joinedAt ? relativeTime(timestampDate(member.joinedAt)) : '-'}
+						</p>
+					</div>
+					<div class="flex shrink-0 items-center gap-2">
+						{#if ctx.canAdmin && member.role !== OrgRole.OWNER}
+							<Select
+								type="single"
+								value={String(member.role)}
+								onValueChange={(v) => {
+									if (v) changeMemberRole(member.userId, Number(v) as OrgRole);
+								}}
+							>
+								<SelectTrigger class="w-32" aria-label="Role for {member.username}">
+									{orgRoleLabel(member.role)}
+								</SelectTrigger>
+								<SelectContent>
+									<SelectItem value={String(OrgRole.ADMIN)}>Admin</SelectItem>
+									<SelectItem value={String(OrgRole.MEMBER)}>Member</SelectItem>
+								</SelectContent>
+							</Select>
+						{:else}
+							<Badge variant={member.role === OrgRole.OWNER ? 'default' : 'outline'}>
+								{orgRoleLabel(member.role)}
+							</Badge>
 						{/if}
-					</TableRow>
-				</TableHeader>
-				<TableBody>
-					{#each members as member (member.userId)}
-						<TableRow>
-							<TableCell class="font-medium py-3 px-3">
-								<a href={resolve('/[username]', { username: member.username })} class="hover:text-primary transition-colors">{member.username}</a>
-							</TableCell>
-							<TableCell class="py-3 px-3">
-								{#if ctx.canAdmin && member.role !== OrgRole.OWNER}
-									<Select
-										type="single"
-										value={String(member.role)}
-										onValueChange={(v) => { if (v) changeMemberRole(member.userId, Number(v) as OrgRole); }}
-									>
-										<SelectTrigger class="w-32 h-8">{orgRoleLabel(member.role)}</SelectTrigger>
-										<SelectContent>
-											<SelectItem value={String(OrgRole.ADMIN)}>Admin</SelectItem>
-											<SelectItem value={String(OrgRole.MEMBER)}>Member</SelectItem>
-										</SelectContent>
-									</Select>
-								{:else}
-									<Badge variant={member.role === OrgRole.OWNER ? 'default' : 'outline'} class="text-xs">
-										{orgRoleLabel(member.role)}
-									</Badge>
-								{/if}
-							</TableCell>
-							<TableCell class="text-muted-foreground text-sm py-3 px-3">
-								{member.joinedAt ? relativeTime(timestampDate(member.joinedAt)) : '-'}
-							</TableCell>
-							{#if ctx.canAdmin}
-								<TableCell class="text-right py-3 px-3">
-									{#if member.role !== OrgRole.OWNER}
-										<Button
-											variant="ghost"
-											size="sm"
-											class="text-destructive hover:text-destructive"
-											onclick={() => openRemoveMember(member)}
-										>
-											Remove
-										</Button>
-									{/if}
-								</TableCell>
-							{/if}
-						</TableRow>
-					{/each}
-				</TableBody>
-			</Table>
-			<DataPagination attached {pager} onChange={loadMembers} />
+						{#if ctx.canAdmin && member.role !== OrgRole.OWNER}
+							<Button
+								variant="ghost"
+								size="sm"
+								class="text-destructive hover:text-destructive"
+								onclick={() => openRemoveMember(member)}
+							>
+								Remove
+							</Button>
+						{/if}
+					</div>
+				</div>
+			{/each}
 		</div>
+		<DataPagination {pager} onChange={loadMembers} />
 	{/if}
 </div>
 
-<FormPanel
-	bind:open={addMemberOpen}
-	title="Add Member"
-	description="Members can push images to the shared namespace."
-	icon={UserPlus}
+<ConfirmDialog
+	bind:open={removeMemberOpen}
+	title="Remove member"
+	confirmLabel="Remove"
+	onConfirm={confirmRemoveMember}
+	loading={removingMember}
 >
-	<div class="space-y-6">
-		<FormSection title="User">
-			<FormField label="User" id="add-user" required>
-				<AsyncSelect
-					bind:selected={addUserId}
-					placeholder="Select a user..."
-					searchPlaceholder="Search users..."
-					fetchPage={async (query, pageToken) => {
-						const resp = await rpcClient.user.searchUsers({
-							page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 }
-						});
-						return {
-							items: resp.users.map((u) => ({ value: u.id, label: u.username })),
-							nextPageToken: resp.page?.nextPageToken ?? ''
-						};
-					}}
-				/>
-			</FormField>
-		</FormSection>
-
-		<FormSection title="Role" description="Admins manage members and settings, members push images.">
-			<Select
-				type="single"
-				value={String(addRole)}
-				onValueChange={(v) => { if (v) addRole = Number(v) as OrgRole; }}
-			>
-				<SelectTrigger class="w-full">{orgRoleLabel(addRole)}</SelectTrigger>
-				<SelectContent>
-					<SelectItem value={String(OrgRole.ADMIN)}>Admin</SelectItem>
-					<SelectItem value={String(OrgRole.MEMBER)}>Member</SelectItem>
-				</SelectContent>
-			</Select>
-		</FormSection>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (addMemberOpen = false)}>Cancel</Button>
-		<Button onclick={addMember} disabled={addingMember || !addUserId}>
-			{addingMember ? 'Adding...' : 'Add Member'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<ConfirmDialog bind:open={removeMemberOpen} title="Remove Member" confirmLabel="Remove" onConfirm={confirmRemoveMember} loading={removingMember}>
 	{#snippet description()}
 		Remove <strong>{removeMemberName}</strong> from this organization?
 	{/snippet}

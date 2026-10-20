@@ -15,7 +15,7 @@ const (
 
 // Event is one repo entering or leaving a sync
 type Event struct {
-	// Either image or artifact
+	// One of image, artifact, git, git_push, import
 	Kind      string
 	RepoID    string
 	Namespace string
@@ -25,6 +25,8 @@ type Event struct {
 	OwnerID string
 	Phase   Phase
 	Err     string
+	// Progress line for long running imports
+	Message string
 	At      time.Time
 }
 
@@ -91,6 +93,19 @@ func (m *Monitor) beginSync(key string, ev Event) {
 	ev.At = time.Now().UTC()
 	m.mu.Lock()
 	m.activeSyncs[key] = ev
+	m.mu.Unlock()
+	m.events.publish(ev)
+}
+
+// Republishes a running sync with a fresh progress line
+func (m *Monitor) progress(key string, ev Event, msg string) {
+	ev.Phase = PhaseStarted
+	ev.Message = msg
+	ev.At = time.Now().UTC()
+	m.mu.Lock()
+	if _, ok := m.activeSyncs[key]; ok {
+		m.activeSyncs[key] = ev
+	}
 	m.mu.Unlock()
 	m.events.publish(ev)
 }

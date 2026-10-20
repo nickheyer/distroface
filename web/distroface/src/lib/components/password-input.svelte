@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { Input } from '$lib/components/ui/input';
 	import { Eye, EyeOff } from '@lucide/svelte';
+	import { cn } from '$lib/utils';
 	import type { HTMLInputAttributes } from 'svelte/elements';
 
 	let {
@@ -9,6 +10,7 @@
 		id,
 		placeholder = 'Password',
 		autocomplete = 'current-password',
+		class: className,
 		...restProps
 	}: {
 		value: string;
@@ -16,6 +18,7 @@
 		id?: string;
 		placeholder?: string;
 		autocomplete?: HTMLInputAttributes['autocomplete'];
+		class?: string;
 	} & Record<string, unknown> = $props();
 
 	let visible = $state(false);
@@ -27,21 +30,22 @@
 		type={visible ? 'text' : 'password'}
 		{placeholder}
 		{autocomplete}
-		class="pr-10"
+		class={cn('pr-8', className)}
 		bind:value
 		aria-invalid={error}
 		{...restProps}
 	/>
 	<button
 		type="button"
-		class="absolute right-0 top-0 h-10 w-10 flex items-center justify-center text-muted-foreground hover:text-foreground transition-colors"
-		onclick={() => visible = !visible}
+		class="absolute inset-y-0 right-0 flex w-8 items-center justify-center rounded-r-md text-muted-foreground transition-colors hover:text-foreground"
+		onclick={() => (visible = !visible)}
 		tabindex={-1}
+		aria-label={visible ? 'Hide password' : 'Show password'}
 	>
 		{#if visible}
-			<EyeOff class="h-4 w-4" />
+			<EyeOff class="size-3.5" />
 		{:else}
-			<Eye class="h-4 w-4" />
+			<Eye class="size-3.5" />
 		{/if}
 	</button>
 </div>

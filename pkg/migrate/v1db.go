@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	// Registers the sqlite driver for the v1 database
 	_ "github.com/mattn/go-sqlite3"
 )
 

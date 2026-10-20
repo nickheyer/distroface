@@ -6,34 +6,30 @@
 		title,
 		description,
 		children,
-		actions,
+		footer,
 		class: className
 	}: {
-		title?: string;
+		title: string;
 		description?: string;
 		children: Snippet;
-		actions?: Snippet;
+		footer?: Snippet;
 		class?: string;
 	} = $props();
 </script>
 
-<section class={cn('space-y-3', className)}>
-	{#if title}
-		<div class="pb-2 border-b border-border/40">
-			<div class="flex items-center justify-between gap-4">
-				<div>
-					<h3 class="text-sm font-semibold tracking-tight">{title}</h3>
-					{#if description}
-						<p class="text-[13px] text-muted-foreground mt-0.5">{description}</p>
-					{/if}
-				</div>
-				{#if actions}
-					<div class="shrink-0">
-						{@render actions()}
-					</div>
-				{/if}
+<section class={cn('form-split', className)}>
+	<div class="min-w-0">
+		<h3 class="text-base leading-6 font-semibold">{title}</h3>
+		{#if description}
+			<p class="mt-1 text-sm text-muted-foreground">{description}</p>
+		{/if}
+	</div>
+	<div class="form-fields min-w-0">
+		{@render children()}
+		{#if footer}
+			<div class="flex flex-wrap items-center gap-2 pt-2">
+				{@render footer()}
 			</div>
-		</div>
-	{/if}
-	{@render children()}
+		{/if}
+	</div>
 </section>

@@ -9,9 +9,11 @@ import (
 	"time"
 
 	"connectrpc.com/connect/v2"
+	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/mailer"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -25,18 +27,22 @@ import (
 
 var _ distrofacev1connect.AuthServiceHandler = (*AuthService)(nil)
 
-var usernameRegex = utils.UsernameRegex
-
 type AuthService struct {
 	store       *stores.Store
 	log         *logger.Logger
 	authManager *auth.Manager
 	enforcer    *rbac.Enforcer
 	oidcHandler *auth.OIDCHandler
+	mail        *mailer.Service
+	// Password reset requests per client ip and per identifier
+	resets *admin.Limiter
 }
 
-func NewAuthService(store *stores.Store, manager *auth.Manager, enforcer *rbac.Enforcer, oidcHandler *auth.OIDCHandler, log *logger.Logger) *AuthService {
-	return &AuthService{store: store, authManager: manager, enforcer: enforcer, oidcHandler: oidcHandler, log: log}
+// Reset mails allowed per hour from one address or for one identifier
+const passwordResetsPerHour = 5
+
+func NewAuthService(store *stores.Store, manager *auth.Manager, enforcer *rbac.Enforcer, oidcHandler *auth.OIDCHandler, mail *mailer.Service, log *logger.Logger) *AuthService {
+	return &AuthService{store: store, authManager: manager, enforcer: enforcer, oidcHandler: oidcHandler, log: log, mail: mail, resets: admin.NewLimiter(passwordResetsPerHour, time.Hour)}
 }
 
 func (s *AuthService) Register(ctx context.Context, req *v1.RegisterRequest) (*v1.RegisterResponse, error) {
@@ -78,8 +84,8 @@ func (s *AuthService) Register(ctx context.Context, req *v1.RegisterRequest) (*v
 		return nil, connect.NewError(connect.CodeInvalidArgument, "")
 	}
 
-	if !usernameRegex.MatchString(msg.Username) {
-		return nil, connect.NewError(connect.CodeInvalidArgument, "")
+	if !utils.NamespaceAllowed(msg.Username) {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "username is invalid or reserved")
 	}
 
 	if len(msg.Password) < 8 {
@@ -163,6 +169,15 @@ func (s *AuthService) Register(ctx context.Context, req *v1.RegisterRequest) (*v
 
 	roles, _ := s.store.GetUserRoles(ctx, user.ID)
 
+	if user.Email != nil && *user.Email != "" {
+		if err := s.sendVerification(ctx, user); err != nil {
+			s.log.Debug("verification mail for %s: %v", user.Username, err)
+		}
+	}
+	if s.needsVerification(ctx, user) {
+		return &v1.RegisterResponse{User: userToProto(user, roles)}, nil
+	}
+
 	// Login the newly registered user
 	_, _, token, _, err := s.authManager.Login(ctx, msg.Username, msg.Password)
 	if err != nil {
@@ -188,6 +203,11 @@ func (s *AuthService) Login(ctx context.Context, req *v1.LoginRequest) (*v1.Logi
 	user, roleNames, token, _, err := s.authManager.Login(ctx, msg.Identifier, msg.Password)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeUnauthenticated, err.Error()).WithCause(err)
+	}
+	if s.needsVerification(ctx, user) {
+		_ = s.authManager.Logout(ctx, token)
+		_ = s.sendVerification(ctx, user)
+		return nil, connect.Errorf(connect.CodePermissionDenied, "verify your email address before signing in, a new link was sent")
 	}
 
 	roles, _ := s.store.GetUserRoles(ctx, user.ID)
@@ -261,11 +281,12 @@ func (s *AuthService) GetAuthStatus(ctx context.Context, req *v1.GetAuthStatusRe
 	authCfg := s.authManager.Settings().System(ctx).GetAuth()
 
 	return &v1.GetAuthStatusResponse{
-		LocalEnabled:        authCfg.GetLocalEnabled(),
-		OidcEnabled:         authCfg.GetOidc().GetEnabled(),
-		RegistrationEnabled: authCfg.GetLocalEnabled() && authCfg.GetLocalAllowRegistration(),
-		AnonymousAccess:     portal.AnonymousAllowed(ctx, authCfg.GetAnonymousAccess()),
-		FirstUserSetup:      count == 0,
+		LocalEnabled:         authCfg.GetLocalEnabled(),
+		OidcEnabled:          authCfg.GetOidc().GetEnabled(),
+		RegistrationEnabled:  authCfg.GetLocalEnabled() && authCfg.GetLocalAllowRegistration(),
+		PasswordResetEnabled: authCfg.GetLocalEnabled() && s.mail != nil && s.mail.Enabled(ctx, mailer.Scope{}),
+		AnonymousAccess:      portal.AnonymousAllowed(ctx, authCfg.GetAnonymousAccess()),
+		FirstUserSetup:       count == 0,
 	}, nil
 }
 
@@ -336,6 +357,7 @@ func (s *AuthService) CreateInvite(ctx context.Context, req *v1.CreateInviteRequ
 	if err := s.store.CreateRegistrationInvite(ctx, invite); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	s.mailInvite(ctx, invite, msg.Emails)
 
 	return &v1.CreateInviteResponse{
 		Invite: s.inviteToProto(ctx, invite),

@@ -5,8 +5,9 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
-	import FormCard from '$lib/components/form-card.svelte';
+	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
+	import FormSection from '$lib/components/form-section.svelte';
 	import CertMaterialRow from '$lib/components/cert-material-row.svelte';
 	import CertUploadPanel from '$lib/components/cert-upload-panel.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
@@ -14,7 +15,13 @@
 	import { Act, errText } from '$lib/act.svelte';
 	import { downloadBlob } from '$lib/download';
 	import CopyButton from '$lib/components/copy-button.svelte';
-	import { acmeDirectoryURL, isLocked, patchSettings, systemScope, type SettingsPatch } from '$lib/settings-utils';
+	import {
+		acmeDirectoryURL,
+		isLocked,
+		patchSettings,
+		systemScope,
+		type SettingsPatch
+	} from '$lib/settings-utils';
 	import type { FieldProvenance, Settings } from '$lib/proto/distroface/v1/settings_pb';
 	import { TLSScope, type GetTLSMaterialResponse } from '$lib/proto/distroface/v1/certificate_pb';
 
@@ -39,7 +46,9 @@
 			: '/.well-known/distroface/ca.pem'
 	);
 	const dfcliHint = $derived(
-		primaryHostname ? `dfcli trust install --server https://${primaryHostname}` : 'dfcli trust install'
+		primaryHostname
+			? `dfcli trust install --server https://${primaryHostname}`
+			: 'dfcli trust install'
 	);
 
 	// Pinned fields render disabled with a lock hint
@@ -55,7 +64,10 @@
 		loading = true;
 		loadError = '';
 		try {
-			const resp = await rpcClient.settings.getEffectiveSettings({ scope: systemScope }, silentCallOptions);
+			const resp = await rpcClient.settings.getEffectiveSettings(
+				{ scope: systemScope },
+				silentCallOptions
+			);
 			eff = resp.settings ?? null;
 			prov = resp.provenance;
 			if (eff) seedForms(eff);
@@ -117,31 +129,43 @@
 
 	function removeAppCA() {
 		appCaAct.run(async () => {
-			await rpcClient.certificate.deleteTLSCertificate({ scope: TLSScope.TLS_SCOPE_APP_CA }, silentCallOptions);
+			await rpcClient.certificate.deleteTLSCertificate(
+				{ scope: TLSScope.TLS_SCOPE_APP_CA },
+				silentCallOptions
+			);
 			await load();
 		});
 	}
 
 	onMount(() => {
-		if (!authStore.canManageSettings) { goto(resolve('/admin')); return; }
+		if (!authStore.canManageSettings) {
+			goto(resolve('/admin'));
+			return;
+		}
 		load();
 	});
 </script>
 
 {#if loading}
 	<div class="space-y-6">
-		<Skeleton class="h-28 w-full rounded-xl" />
-		<Skeleton class="h-32 w-full rounded-xl" />
+		<Skeleton class="h-28 w-full rounded-lg" />
+		<Skeleton class="h-32 w-full rounded-lg" />
 	</div>
 {:else if loadError}
-	<div class="rounded-xl border border-destructive/40 bg-destructive/5 px-6 py-10 text-center space-y-3">
+	<div class="flex flex-col items-center rounded-lg border bg-card px-6 py-10 text-center">
 		<p class="text-sm text-destructive">{loadError}</p>
-		<Button variant="outline" size="sm" onclick={load}>Retry</Button>
+		<Button variant="outline" size="sm" class="mt-3" onclick={load}>Retry</Button>
 	</div>
 {:else if eff}
-	<div class="space-y-6">
-		<!-- Root of trust first, everything below chains to it -->
-		<FormCard title="Instance CA" description="Signs server certificates and organization CAs">
+	<FormPage
+		level="section"
+		title="Certificate authority"
+		description="The instance root that signs server certificates and organization CAs."
+	>
+		<FormSection
+			title="Instance CA"
+			description="The primary hostname's own certificate is configured under Network security."
+		>
 			<CertMaterialRow
 				title="Root certificate"
 				empty="Generate or upload a root"
@@ -153,65 +177,63 @@
 				onDownload={material?.appCa ? downloadAppCA : undefined}
 				onRemove={removeAppCA}
 			/>
+			<CertUploadPanel bind:open={uploadOpen} title="Upload instance CA" onSubmit={submitUpload} />
 			{#if material?.appCa}
-				<div class="mt-3 pt-3 border-t border-border/40">
-					<FormField label="Trust anchor" help="Clients fetch this to trust self-issued TLS">
-						<div class="flex items-center gap-2">
-							<code class="text-xs bg-muted px-2 py-1 rounded font-mono min-w-0 flex-1 truncate">{caEndpoint}</code>
-							<CopyButton text={caEndpoint} />
-							<Button variant="outline" size="sm" class="h-7 shrink-0" onclick={downloadTrustAnchor}>Download</Button>
-						</div>
-						<div class="flex items-center gap-2 mt-1.5">
-							<code class="text-xs bg-muted px-2 py-1 rounded font-mono min-w-0 flex-1 truncate">{dfcliHint}</code>
-							<CopyButton text={dfcliHint} />
-						</div>
-						<p class="text-[13px] text-muted-foreground">
-							Run <code class="font-mono">dfcli trust install</code> on a client so docker pull trusts the registry.
-						</p>
-					</FormField>
-				</div>
-			{/if}
-			<p class="mt-3 text-[13px] text-muted-foreground">
-				The primary hostname's own certificate is configured under
-				<a href={resolve('/admin/network')} class="underline hover:text-foreground">Network Security</a>.
-			</p>
-		</FormCard>
-
-		<!-- Acme server issuing from the instance root to other machines -->
-		<FormCard title="ACME Server" description="Let external machines request certificates from this CA">
-			<div class="space-y-3">
-				<FormField
-					label="Built-in ACME server"
-					horizontal
-					help={lockHint('ca.acme_enabled', 'ACME directory backed by the instance CA')}
-					tag={caAcmeAct.tag}
-					error={caAcmeAct.error}
-				>
-					<Switch
-						checked={caAcme}
-						disabled={caAcmeAct.busy || locked('ca.acme_enabled')}
-						onCheckedChange={setCaAcme}
-					/>
+				<FormField label="Trust anchor" help="Clients fetch this to trust self-issued TLS">
+					<div class="flex items-center gap-2">
+						<code class="code-inline min-w-0 flex-1 truncate">{caEndpoint}</code>
+						<CopyButton text={caEndpoint} />
+						<Button variant="outline" size="sm" class="shrink-0" onclick={downloadTrustAnchor}
+							>Download</Button
+						>
+					</div>
+					<div class="mt-2 flex items-center gap-2">
+						<code class="code-inline min-w-0 flex-1 truncate">{dfcliHint}</code>
+						<CopyButton text={dfcliHint} />
+					</div>
+					<p class="text-sm text-muted-foreground">
+						Run <code class="font-mono">dfcli trust install</code> on a client so docker pull trusts the
+						registry.
+					</p>
 				</FormField>
-				{#if caAcme}
-					{#if !material?.appCa}
-						<p class="text-[13px] text-amber-600 dark:text-amber-400">Generate the instance CA above so issued certificates chain to a root</p>
-					{/if}
-					<FormField label="Directory URL" help="Point certbot, caddy, lego, or step here">
-						<div class="flex items-center gap-2">
-							<code class="text-xs bg-muted px-2 py-1 rounded font-mono min-w-0 flex-1 truncate">{directoryURL}</code>
-							{#if directoryURL}<CopyButton text={directoryURL} />{/if}
-						</div>
-						<p class="text-[13px] text-muted-foreground">
-							External clients enrolled here receive certificates that chain to the instance root CA.
-							This instance and its portals cannot enroll against themselves — portals wanting
-							instance-issued certificates use the Org CA source instead.
-						</p>
-					</FormField>
-				{/if}
-			</div>
-		</FormCard>
-	</div>
-{/if}
+			{/if}
+		</FormSection>
 
-<CertUploadPanel bind:open={uploadOpen} title="Upload Instance CA" onSubmit={submitUpload} />
+		<FormSection
+			title="ACME server"
+			description="Let external machines request certificates from this CA."
+		>
+			<FormField
+				label="Built-in ACME server"
+				layout="toggle"
+				help={lockHint('ca.acme_enabled', 'ACME directory backed by the instance CA')}
+				tag={caAcmeAct.tag}
+				error={caAcmeAct.error}
+			>
+				<Switch
+					checked={caAcme}
+					disabled={caAcmeAct.busy || locked('ca.acme_enabled')}
+					onCheckedChange={setCaAcme}
+				/>
+			</FormField>
+			{#if caAcme}
+				{#if !material?.appCa}
+					<p class="text-sm text-warning">
+						Generate the instance CA above so issued certificates chain to a root
+					</p>
+				{/if}
+				<FormField label="Directory URL" help="Point certbot, caddy, lego, or step here">
+					<div class="flex items-center gap-2">
+						<code class="code-inline min-w-0 flex-1 truncate">{directoryURL}</code>
+						{#if directoryURL}<CopyButton text={directoryURL} />{/if}
+					</div>
+					<p class="text-sm text-muted-foreground">
+						External clients enrolled here receive certificates that chain to the instance root CA.
+						This instance and its portals cannot enroll against themselves, portals wanting
+						instance-issued certificates use the Org CA source instead.
+					</p>
+				</FormField>
+			{/if}
+		</FormSection>
+	</FormPage>
+{/if}

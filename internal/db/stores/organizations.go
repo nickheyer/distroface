@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
@@ -23,7 +24,7 @@ func (s *Store) GetOrganization(ctx context.Context, name string) (*db.Organizat
 	var org db.Organization
 	err := s.db.WithContext(ctx).First(&org, "name = ?", name).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -35,7 +36,7 @@ func (s *Store) GetOrganizationByID(ctx context.Context, id string) (*db.Organiz
 	var org db.Organization
 	err := s.db.WithContext(ctx).First(&org, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -119,7 +120,7 @@ func (s *Store) GetOrgMember(ctx context.Context, orgID, userID string) (*db.Org
 	var member db.OrgMember
 	err := s.db.WithContext(ctx).First(&member, "org_id = ? AND user_id = ?", orgID, userID).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -181,8 +182,14 @@ func (s *Store) UpdateOrgMember(ctx context.Context, member *db.OrgMember) error
 	return s.db.WithContext(ctx).Save(member).Error
 }
 
+// Drops the membership and every team seat it carried
 func (s *Store) RemoveOrgMember(ctx context.Context, orgID, userID string) error {
-	return s.db.WithContext(ctx).Where("org_id = ? AND user_id = ?", orgID, userID).Delete(&db.OrgMember{}).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ? AND team_id IN (SELECT id FROM org_teams WHERE org_id = ?)", userID, orgID).Delete(&db.OrgTeamMember{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("org_id = ? AND user_id = ?", orgID, userID).Delete(&db.OrgMember{}).Error
+	})
 }
 
 // Memberships a user got from one source with orgs preloaded

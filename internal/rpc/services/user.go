@@ -8,11 +8,13 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	"github.com/nickheyer/distroface/pkg/utils"
 )
 
 var _ distrofacev1connect.UserServiceHandler = (*UserService)(nil)
@@ -21,11 +23,34 @@ type UserService struct {
 	store       *stores.Store
 	authManager *auth.Manager
 	enforcer    *rbac.Enforcer
+	git         *gitrepo.Manager
 	log         *logger.Logger
 }
 
-func NewUserService(store *stores.Store, manager *auth.Manager, enforcer *rbac.Enforcer, log *logger.Logger) *UserService {
-	return &UserService{store: store, authManager: manager, enforcer: enforcer, log: log}
+func NewUserService(store *stores.Store, manager *auth.Manager, enforcer *rbac.Enforcer, git *gitrepo.Manager, log *logger.Logger) *UserService {
+	return &UserService{store: store, authManager: manager, enforcer: enforcer, git: git, log: log}
+}
+
+// Removes the git repositories owned by a user's namespace before the account goes
+func (s *UserService) deleteUserGitRepos(ctx context.Context, userID string) error {
+	if s.git == nil {
+		return nil
+	}
+	u, err := s.store.GetUserByID(ctx, userID)
+	if err != nil || u == nil {
+		return err
+	}
+	repos, err := s.store.ListGitRepositoriesByNamespace(ctx, u.Username)
+	if err != nil {
+		return err
+	}
+	actor := auth.UserFromContext(ctx)
+	for _, repo := range repos {
+		if err := s.git.Delete(ctx, actor, repo, true); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *UserService) GetUser(ctx context.Context, req *v1.GetUserRequest) (*v1.GetUserResponse, error) {
@@ -89,6 +114,9 @@ func (s *UserService) UpdateUser(ctx context.Context, req *v1.UpdateUserRequest)
 		}
 		if existing != nil && existing.ID != user.ID {
 			return nil, connect.NewError(connect.CodeAlreadyExists, "")
+		}
+		if user.Email == nil || *user.Email != *req.Email {
+			user.EmailVerifiedAt = nil
 		}
 		user.Email = req.Email
 	}
@@ -196,6 +224,9 @@ func (s *UserService) AdminUpdateUser(ctx context.Context, req *v1.AdminUpdateUs
 		}
 	}
 	if msg.Email != nil {
+		if user.Email == nil || *user.Email != *msg.Email {
+			user.EmailVerifiedAt = nil
+		}
 		user.Email = msg.Email
 	}
 	if msg.IsActive != nil {
@@ -276,6 +307,9 @@ func (s *UserService) AdminDeleteUser(ctx context.Context, req *v1.AdminDeleteUs
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "cannot delete your own account")
 	}
 
+	if err := s.deleteUserGitRepos(ctx, req.UserId); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
 	if err := s.store.DeleteUser(ctx, req.UserId); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -288,8 +322,8 @@ func (s *UserService) AdminCreateUser(ctx context.Context, req *v1.AdminCreateUs
 	if msg.Username == "" || msg.Password == "" {
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "username and password are required")
 	}
-	if !usernameRegex.MatchString(msg.Username) {
-		return nil, connect.Errorf(connect.CodeInvalidArgument, "invalid username")
+	if !utils.NamespaceAllowed(msg.Username) {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "username is invalid or reserved")
 	}
 	if len(msg.Password) < 8 {
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "password must be at least 8 characters")
@@ -430,6 +464,11 @@ func (s *UserService) AdminBulkDeleteUsers(ctx context.Context, req *v1.AdminBul
 		targets = append(targets, id)
 	}
 
+	for _, id := range targets {
+		if err := s.deleteUserGitRepos(ctx, id); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		}
+	}
 	if err := s.store.BulkDeleteUsers(ctx, targets); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}

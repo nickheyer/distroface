@@ -1,0 +1,606 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/git.proto";
+import "distroface/v1/issue.proto";
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// PullRequestService manages pull requests, reviews, and merges.
+service PullRequestService {
+  // CreatePullRequest opens a pull request between two branches.
+  rpc CreatePullRequest(CreatePullRequestRequest) returns (CreatePullRequestResponse) {}
+  // GetPullRequest returns one pull request.
+  rpc GetPullRequest(GetPullRequestRequest) returns (GetPullRequestResponse) {}
+  // ListPullRequests pages pull requests.
+  rpc ListPullRequests(ListPullRequestsRequest) returns (ListPullRequestsResponse) {}
+  // UpdatePullRequest changes title, body, base, draft, or maintainer edits.
+  rpc UpdatePullRequest(UpdatePullRequestRequest) returns (UpdatePullRequestResponse) {}
+  // GetPullRequestDiff pages the files changed by the pull request, hunks excluded.
+  rpc GetPullRequestDiff(GetPullRequestDiffRequest) returns (GetPullRequestDiffResponse) {}
+  // GetPullRequestFile returns the hunks of one changed file.
+  rpc GetPullRequestFile(GetPullRequestFileRequest) returns (GetPullRequestFileResponse) {}
+  // ListPullRequestCommits lists the commits a pull request adds.
+  rpc ListPullRequestCommits(ListPullRequestCommitsRequest) returns (ListPullRequestCommitsResponse) {}
+  // GetMergeability computes whether the pull request can merge and why not.
+  rpc GetMergeability(GetMergeabilityRequest) returns (GetMergeabilityResponse) {}
+  // MergePullRequest merges with a method.
+  rpc MergePullRequest(MergePullRequestRequest) returns (MergePullRequestResponse) {}
+  // ScheduleAutoMerge merges automatically once every rule passes.
+  rpc ScheduleAutoMerge(ScheduleAutoMergeRequest) returns (ScheduleAutoMergeResponse) {}
+  // CancelAutoMerge disarms a scheduled merge.
+  rpc CancelAutoMerge(CancelAutoMergeRequest) returns (CancelAutoMergeResponse) {}
+  // ClosePullRequest closes without merging.
+  rpc ClosePullRequest(ClosePullRequestRequest) returns (ClosePullRequestResponse) {}
+  // ReopenPullRequest reopens a closed pull request.
+  rpc ReopenPullRequest(ReopenPullRequestRequest) returns (ReopenPullRequestResponse) {}
+  // UpdateBranch brings the head branch up to date with the base.
+  rpc UpdateBranch(UpdateBranchRequest) returns (UpdateBranchResponse) {}
+  // RequestReviewers asks users or teams for review.
+  rpc RequestReviewers(RequestReviewersRequest) returns (RequestReviewersResponse) {}
+  // RemoveReviewers withdraws review requests.
+  rpc RemoveReviewers(RemoveReviewersRequest) returns (RemoveReviewersResponse) {}
+  // CreateReview starts a pending review or submits one with comments.
+  rpc CreateReview(CreateReviewRequest) returns (CreateReviewResponse) {}
+  // SubmitReview submits a pending review with a state.
+  rpc SubmitReview(SubmitReviewRequest) returns (SubmitReviewResponse) {}
+  // DismissReview removes the weight of a review.
+  rpc DismissReview(DismissReviewRequest) returns (DismissReviewResponse) {}
+  // ListReviews returns reviews on a pull request.
+  rpc ListReviews(ListReviewsRequest) returns (ListReviewsResponse) {}
+  // CreateReviewComment adds an inline comment, to a pending review or standalone.
+  rpc CreateReviewComment(CreateReviewCommentRequest) returns (CreateReviewCommentResponse) {}
+  // UpdateReviewComment edits an inline comment.
+  rpc UpdateReviewComment(UpdateReviewCommentRequest) returns (UpdateReviewCommentResponse) {}
+  // DeleteReviewComment removes an inline comment.
+  rpc DeleteReviewComment(DeleteReviewCommentRequest) returns (DeleteReviewCommentResponse) {}
+  // ListReviewComments returns inline comments grouped by thread.
+  rpc ListReviewComments(ListReviewCommentsRequest) returns (ListReviewCommentsResponse) {}
+  // ResolveReviewThread resolves or unresolves a thread.
+  rpc ResolveReviewThread(ResolveReviewThreadRequest) returns (ResolveReviewThreadResponse) {}
+  // ApplySuggestion commits a suggestion block to the head branch.
+  rpc ApplySuggestion(ApplySuggestionRequest) returns (ApplySuggestionResponse) {}
+  // RestoreHeadBranch recreates a deleted head branch from the pull request ref.
+  rpc RestoreHeadBranch(RestoreHeadBranchRequest) returns (RestoreHeadBranchResponse) {}
+}
+
+// Outcome of a review
+enum ReviewState {
+  REVIEW_STATE_UNSPECIFIED = 0;
+  REVIEW_STATE_PENDING = 1;
+  REVIEW_STATE_APPROVED = 2;
+  REVIEW_STATE_CHANGES_REQUESTED = 3;
+  REVIEW_STATE_COMMENTED = 4;
+}
+
+// Whether the pull request can merge
+enum MergeableState {
+  MERGEABLE_STATE_UNSPECIFIED = 0;
+  MERGEABLE_STATE_UNKNOWN = 1;
+  MERGEABLE_STATE_CLEAN = 2;
+  MERGEABLE_STATE_CONFLICT = 3;
+  MERGEABLE_STATE_BLOCKED = 4;
+  MERGEABLE_STATE_CHECKING = 5;
+}
+
+// One requested reviewer
+message ReviewRequest {
+  IssueUser user = 1;
+  string team_id = 2;
+  string team_name = 3;
+  bool fulfilled = 4;
+}
+
+// Review is a batch of inline comments plus a state.
+message Review {
+  string id = 1;
+  IssueUser reviewer = 2;
+  ReviewState state = 3;
+  string body = 4;
+  string commit_sha = 5;
+  bool dismissed = 6;
+  string dismissed_by = 7;
+  int32 comment_count = 8;
+  google.protobuf.Timestamp submitted_at = 9;
+  google.protobuf.Timestamp created_at = 10;
+}
+
+// One inline comment on a diff line
+message ReviewComment {
+  string id = 1;
+  string review_id = 2;
+  IssueUser author = 3;
+  string path = 4;
+  int32 line = 5;
+  // old or new
+  string side = 6;
+  int32 start_line = 7;
+  string diff_hunk = 8;
+  string body = 9;
+  bool resolved = 10;
+  string resolved_by = 11;
+  // Anchored line no longer exists in the current head
+  bool outdated = 12;
+  string commit_sha = 13;
+  // Thread root comment id, equals id for the root
+  string thread_id = 14;
+  repeated ReactionGroup reactions = 15;
+  bool pending = 16;
+  google.protobuf.Timestamp created_at = 17;
+  google.protobuf.Timestamp updated_at = 18;
+}
+
+// One unmet merge rule
+message MergeBlocker {
+  // approvals, code_owners, status_checks, changes_requested, signed_commits, linear_history, up_to_date, merger, conflict, draft, closed, archived
+  string rule = 1;
+  string message = 2;
+}
+
+// PullRequest is the pull request half of an issue.
+message PullRequest {
+  Issue issue = 1;
+  string head_repo_full_name = 2;
+  string head_branch = 3;
+  string head_sha = 4;
+  string base_branch = 5;
+  string merge_base_sha = 6;
+  bool draft = 7;
+  MergeableState mergeable_state = 8;
+  repeated string conflict_paths = 9;
+  int32 changed_files = 10;
+  int32 additions = 11;
+  int32 deletions = 12;
+  int32 commit_count = 13;
+  bool allow_maintainer_edits = 14;
+  GitMergeMethod auto_merge_method = 15;
+  string auto_merge_by = 16;
+  google.protobuf.Timestamp merged_at = 17;
+  IssueUser merged_by = 18;
+  string merge_commit_sha = 19;
+  GitMergeMethod merge_method = 20;
+  bool head_deleted = 21;
+  repeated ReviewRequest review_requests = 22;
+  repeated Review reviews = 23;
+  // Combined status on the head sha
+  CommitStatusState status = 24;
+  repeated MergeBlocker blockers = 25;
+  // Methods the repository allows
+  repeated GitMergeMethod allowed_methods = 26;
+  GitMergeMethod default_method = 27;
+  // Caller may merge now
+  bool can_merge = 28;
+  // Ref name reviewers can fetch
+  string head_ref = 29;
+}
+
+// CreatePullRequestRequest opens a pull request.
+message CreatePullRequestRequest {
+  string namespace = 1;
+  string name = 2;
+  string base = 3;
+  // Branch, or ns/name:branch for a fork head
+  string head = 4;
+  string title = 5;
+  string body = 6;
+  bool draft = 7;
+  repeated string label_ids = 8;
+  string milestone_id = 9;
+  repeated string assignee_ids = 10;
+  repeated string reviewer_ids = 11;
+  repeated string team_reviewer_ids = 12;
+  bool allow_maintainer_edits = 13;
+}
+
+// CreatePullRequestResponse contains the pull request.
+message CreatePullRequestResponse {
+  PullRequest pull_request = 1;
+}
+
+// GetPullRequestRequest identifies a pull request by number.
+message GetPullRequestRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// GetPullRequestResponse contains the pull request.
+message GetPullRequestResponse {
+  PullRequest pull_request = 1;
+}
+
+// ListPullRequestsRequest filters pull requests.
+message ListPullRequestsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  IssueState state = 4;
+  repeated string labels = 5;
+  string milestone = 6;
+  string assignee = 7;
+  string author = 8;
+  string reviewer = 9;
+  string base = 10;
+  // Branch in this repository, or prefixed with the fork repository for a fork head
+  string head = 11;
+  optional bool draft = 12;
+}
+
+// ListPullRequestsResponse contains a page of pull requests.
+message ListPullRequestsResponse {
+  repeated PullRequest pull_requests = 1;
+  PageInfo page = 2;
+  int64 open_count = 3;
+  int64 closed_count = 4;
+}
+
+// UpdatePullRequestRequest changes the set fields.
+message UpdatePullRequestRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  optional string title = 4;
+  optional string body = 5;
+  optional string base = 6;
+  optional bool draft = 7;
+  optional bool allow_maintainer_edits = 8;
+}
+
+// UpdatePullRequestResponse contains the pull request.
+message UpdatePullRequestResponse {
+  PullRequest pull_request = 1;
+}
+
+// GetPullRequestDiffRequest pages changed files.
+message GetPullRequestDiffRequest {
+  // page.query.text keeps only paths containing it
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  int64 number = 4;
+  // Diff a range of the pull request's commits instead of the whole change
+  string start_sha = 5;
+  string end_sha = 6;
+}
+
+// GetPullRequestDiffResponse contains a page of file diffs.
+message GetPullRequestDiffResponse {
+  GitDiff diff = 1;
+  PageInfo page = 2;
+  string base_sha = 3;
+  string head_sha = 4;
+}
+
+// GetPullRequestFileRequest reads the hunks of one changed file.
+message GetPullRequestFileRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string path = 4;
+  // Diff a range of the pull request's commits instead of the whole change
+  string start_sha = 5;
+  string end_sha = 6;
+}
+
+// GetPullRequestFileResponse contains the file diff.
+message GetPullRequestFileResponse {
+  DiffFile file = 1;
+}
+
+// ListPullRequestCommitsRequest pages the commits.
+message ListPullRequestCommitsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  int64 number = 4;
+}
+
+// ListPullRequestCommitsResponse contains commits oldest first.
+message ListPullRequestCommitsResponse {
+  repeated GitCommit commits = 1;
+  PageInfo page = 2;
+}
+
+// GetMergeabilityRequest identifies a pull request.
+message GetMergeabilityRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// GetMergeabilityResponse reports the state and unmet rules.
+message GetMergeabilityResponse {
+  MergeableState state = 1;
+  repeated string conflict_paths = 2;
+  repeated MergeBlocker blockers = 3;
+  bool can_merge = 4;
+}
+
+// MergePullRequestRequest merges.
+message MergePullRequestRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  GitMergeMethod method = 4;
+  // Commit title for merge and squash, empty uses the default
+  string title = 5;
+  string message = 6;
+  bool delete_branch = 7;
+  // Refused when the head moved past this sha
+  string expected_head_sha = 8;
+}
+
+// MergePullRequestResponse contains the merged pull request.
+message MergePullRequestResponse {
+  PullRequest pull_request = 1;
+  string merge_commit_sha = 2;
+}
+
+// ScheduleAutoMergeRequest arms an automatic merge.
+message ScheduleAutoMergeRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  GitMergeMethod method = 4;
+  string title = 5;
+  string message = 6;
+  bool delete_branch = 7;
+}
+
+// ScheduleAutoMergeResponse contains the pull request.
+message ScheduleAutoMergeResponse {
+  PullRequest pull_request = 1;
+}
+
+// CancelAutoMergeRequest disarms an automatic merge.
+message CancelAutoMergeRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// CancelAutoMergeResponse contains the pull request.
+message CancelAutoMergeResponse {
+  PullRequest pull_request = 1;
+}
+
+// ClosePullRequestRequest closes without merging.
+message ClosePullRequestRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  bool delete_branch = 4;
+}
+
+// ClosePullRequestResponse contains the pull request.
+message ClosePullRequestResponse {
+  PullRequest pull_request = 1;
+}
+
+// ReopenPullRequestRequest reopens.
+message ReopenPullRequestRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// ReopenPullRequestResponse contains the pull request.
+message ReopenPullRequestResponse {
+  PullRequest pull_request = 1;
+}
+
+// UpdateBranchRequest brings the head up to date.
+message UpdateBranchRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  // Rebase the head onto the base instead of merging the base in
+  bool rebase = 4;
+}
+
+// UpdateBranchResponse contains the pull request.
+message UpdateBranchResponse {
+  PullRequest pull_request = 1;
+}
+
+// RequestReviewersRequest asks for reviews.
+message RequestReviewersRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  repeated string user_ids = 4;
+  repeated string team_ids = 5;
+}
+
+// RequestReviewersResponse contains the pull request.
+message RequestReviewersResponse {
+  PullRequest pull_request = 1;
+}
+
+// RemoveReviewersRequest withdraws requests.
+message RemoveReviewersRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  repeated string user_ids = 4;
+  repeated string team_ids = 5;
+}
+
+// RemoveReviewersResponse contains the pull request.
+message RemoveReviewersResponse {
+  PullRequest pull_request = 1;
+}
+
+// One inline comment in a review batch
+message ReviewCommentInput {
+  string path = 1;
+  int32 line = 2;
+  string side = 3;
+  int32 start_line = 4;
+  string body = 5;
+}
+
+// CreateReviewRequest creates a review, pending when state is unspecified.
+message CreateReviewRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  ReviewState state = 4;
+  string body = 5;
+  repeated ReviewCommentInput comments = 6;
+  // Review this head, empty uses the current head
+  string commit_sha = 7;
+}
+
+// CreateReviewResponse contains the review.
+message CreateReviewResponse {
+  Review review = 1;
+}
+
+// SubmitReviewRequest submits a pending review.
+message SubmitReviewRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string review_id = 4;
+  ReviewState state = 5;
+  string body = 6;
+}
+
+// SubmitReviewResponse contains the review.
+message SubmitReviewResponse {
+  Review review = 1;
+}
+
+// DismissReviewRequest removes the weight of a review.
+message DismissReviewRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string review_id = 4;
+  string message = 5;
+}
+
+// DismissReviewResponse contains the review.
+message DismissReviewResponse {
+  Review review = 1;
+}
+
+// ListReviewsRequest pages reviews.
+message ListReviewsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  int64 number = 4;
+}
+
+// ListReviewsResponse contains reviews oldest first.
+message ListReviewsResponse {
+  repeated Review reviews = 1;
+  PageInfo page = 2;
+}
+
+// CreateReviewCommentRequest adds an inline comment.
+message CreateReviewCommentRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  // Pending review to add to, empty posts immediately
+  string review_id = 4;
+  string path = 5;
+  int32 line = 6;
+  string side = 7;
+  int32 start_line = 8;
+  string body = 9;
+  // Reply in an existing thread
+  string thread_id = 10;
+  string commit_sha = 11;
+}
+
+// CreateReviewCommentResponse contains the comment.
+message CreateReviewCommentResponse {
+  ReviewComment comment = 1;
+}
+
+// UpdateReviewCommentRequest edits a comment.
+message UpdateReviewCommentRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string id = 4;
+  string body = 5;
+}
+
+// UpdateReviewCommentResponse contains the comment.
+message UpdateReviewCommentResponse {
+  ReviewComment comment = 1;
+}
+
+// DeleteReviewCommentRequest removes a comment.
+message DeleteReviewCommentRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string id = 4;
+}
+
+// DeleteReviewCommentResponse is empty on success.
+message DeleteReviewCommentResponse {}
+
+// ListReviewCommentsRequest lists inline comments.
+message ListReviewCommentsRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  // Only this file
+  string path = 4;
+}
+
+// ListReviewCommentsResponse contains comments ordered by thread then time.
+message ListReviewCommentsResponse {
+  repeated ReviewComment comments = 1;
+}
+
+// ResolveReviewThreadRequest resolves or unresolves.
+message ResolveReviewThreadRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string thread_id = 4;
+  bool resolved = 5;
+}
+
+// ResolveReviewThreadResponse contains the thread root.
+message ResolveReviewThreadResponse {
+  ReviewComment comment = 1;
+}
+
+// ApplySuggestionRequest commits a suggestion.
+message ApplySuggestionRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+  string comment_id = 4;
+  // Commit message, empty uses a default
+  string message = 5;
+}
+
+// ApplySuggestionResponse contains the new head commit.
+message ApplySuggestionResponse {
+  GitCommit commit = 1;
+}
+
+// RestoreHeadBranchRequest recreates the head branch.
+message RestoreHeadBranchRequest {
+  string namespace = 1;
+  string name = 2;
+  int64 number = 3;
+}
+
+// RestoreHeadBranchResponse contains the pull request.
+message RestoreHeadBranchResponse {
+  PullRequest pull_request = 1;
+}

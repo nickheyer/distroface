@@ -30,6 +30,35 @@ class ConfigStore {
 	get httpsOnly(): boolean {
 		return this.settings?.tls?.mode === TLSMode.TLS_MODE_HTTPS_ONLY;
 	}
+
+	get gitEnabled(): boolean {
+		return this.settings?.git?.enabled === true;
+	}
+
+	get sshEnabled(): boolean {
+		return this.gitEnabled && this.settings?.git?.sshEnabled === true;
+	}
+
+	// Host or host:port shown in ssh clone urls
+	get sshPublicHost(): string {
+		const configured = this.settings?.git?.sshPublicHost;
+		if (configured) return configured;
+		const host = this.publicHostname.replace(/:\d+$/, '');
+		const port = this.sshPort;
+		return port && port !== 22 ? `${host}:${port}` : host;
+	}
+
+	get sshPort(): number {
+		return this.settings?.git?.sshPort ?? 22;
+	}
+
+	get lfsEnabled(): boolean {
+		return this.settings?.git?.lfsEnabled === true;
+	}
+
+	get actionsEnabled(): boolean {
+		return this.gitEnabled && this.settings?.git?.actions?.enabled === true;
+	}
 }
 
 export const configStore = new ConfigStore();

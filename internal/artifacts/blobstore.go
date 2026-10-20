@@ -31,6 +31,9 @@ func NewBlobStore(root string) (*BlobStore, error) {
 	return &BlobStore{root: root}, nil
 }
 
+// Directory holding blobs and staging areas
+func (b *BlobStore) Root() string { return b.root }
+
 // Creates an empty upload session
 func (b *BlobStore) InitiateUpload() (string, error) {
 	id := uuid.New().String()

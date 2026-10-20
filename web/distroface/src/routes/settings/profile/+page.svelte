@@ -5,9 +5,10 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
-	import FormCard from '$lib/components/form-card.svelte';
-	import { User, Save } from '@lucide/svelte';
+	import FormSection from '$lib/components/form-section.svelte';
+	import { Save, Loader2 } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -63,88 +64,74 @@
 	onMount(load);
 </script>
 
-<div class="space-y-6">
-	<div>
-		<h2 class="section-title">Profile</h2>
-		<p class="section-subtitle">Update your personal information.</p>
-	</div>
-
+<FormPage
+	level="section"
+	title="Profile"
+	description="How you appear to other people on this instance."
+>
 	{#if loading}
 		<div class="space-y-6">
 			<div class="flex items-center gap-4">
-				<Skeleton class="h-16 w-16 rounded-full" />
+				<Skeleton class="size-12 rounded-full" />
 				<div class="space-y-2">
-					<Skeleton class="h-5 w-32" />
-					<Skeleton class="h-4 w-24" />
+					<Skeleton class="h-4 w-32" />
+					<Skeleton class="h-3.5 w-24" />
 				</div>
 			</div>
-			<Skeleton class="h-40 w-full rounded-xl" />
+			<Skeleton class="h-48 w-full rounded-lg" />
 		</div>
 	{:else}
-		<div class="flex items-center gap-4 p-5 rounded-xl border border-border/60 bg-card">
-			<Avatar class="h-14 w-14">
-				<AvatarFallback class="text-lg bg-primary/10 text-primary font-semibold">
-					{getInitials()}
-				</AvatarFallback>
-			</Avatar>
-			<div class="flex-1 min-w-0">
-				<p class="font-semibold">{authStore.user?.username}</p>
-				<div class="flex items-center gap-2 mt-1">
-					<Badge variant="outline" class="text-xs">
-						{authStore.user?.authProvider === 'local'
-							? 'Local account'
-							: authStore.user?.authProvider}
-					</Badge>
-					{#each authStore.user?.roles ?? [] as role (role.id)}
-						<Badge
-							variant="secondary"
-							class="text-xs"
-						>{role.name}</Badge>
-					{/each}
+		<FormSection title="Account" description="Sign-in method and roles granted to you.">
+			<div class="flex items-center gap-4 rounded-lg border bg-card p-4">
+				<Avatar class="size-12">
+					<AvatarFallback class="text-base">{getInitials()}</AvatarFallback>
+				</Avatar>
+				<div class="min-w-0 flex-1">
+					<p class="text-sm font-semibold">{authStore.user?.username}</p>
+					<div class="mt-1 flex flex-wrap items-center gap-1.5">
+						<Badge variant="outline">
+							{authStore.user?.authProvider === 'local'
+								? 'Local account'
+								: authStore.user?.authProvider}
+						</Badge>
+						{#each authStore.user?.roles ?? [] as role (role.id)}
+							<Badge variant="secondary">{role.name}</Badge>
+						{/each}
+					</div>
 				</div>
 			</div>
-		</div>
+		</FormSection>
 
-		<form
-			onsubmit={(e) => {
-				e.preventDefault();
-				save();
-			}}
-		>
-			<FormCard title="Personal Information" icon={User}>
-				<div class="space-y-3">
-					<FormField
-						label="Display Name"
-						id="display-name"
-						help="Shown on your profile and repositories"
-					>
-						<Input
-							id="display-name"
-							bind:value={displayName}
-							placeholder="Your display name"
-						/>
-					</FormField>
-
-					<FormField
-						label="Email"
-						id="email"
-						help="For notifications, not publicly visible"
-					>
-						<Input
-							id="email"
-							type="email"
-							bind:value={email}
-							placeholder="you@example.com"
-						/>
-					</FormField>
-				</div>
-				{#snippet footer()}
-					<Button type="submit" disabled={saving} class="gap-2">
-						<Save class="h-4 w-4" />
-						{saving ? 'Saving...' : 'Save Changes'}
+		<FormSection title="Personal information" description="Shown on your profile and repositories.">
+			<form
+				class="form-fields"
+				onsubmit={(e) => {
+					e.preventDefault();
+					save();
+				}}
+			>
+				<FormField label="Display name" id="display-name" span="half">
+					<Input id="display-name" bind:value={displayName} placeholder="Your display name" />
+				</FormField>
+				<FormField
+					label="Email"
+					id="email"
+					help="Used for notifications, never shown publicly"
+					span="half"
+				>
+					<Input id="email" type="email" bind:value={email} placeholder="you@example.com" />
+				</FormField>
+				<div class="flex flex-wrap items-center gap-2 pt-1">
+					<Button type="submit" disabled={saving}>
+						{#if saving}
+							<Loader2 class="animate-spin" />
+						{:else}
+							<Save />
+						{/if}
+						Save changes
 					</Button>
-				{/snippet}
-			</FormCard>
-		</form>
+				</div>
+			</form>
+		</FormSection>
 	{/if}
-</div>
+</FormPage>

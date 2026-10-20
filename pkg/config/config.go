@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,6 +23,7 @@ type Config struct {
 	Logging   LoggingConfig   `mapstructure:"logging"`
 	Registry  RegistryConfig  `mapstructure:"registry"`
 	Artifacts ArtifactsConfig `mapstructure:"artifacts"`
+	Git       GitConfig       `mapstructure:"git"`
 	TLS       TLSConfig       `mapstructure:"tls"`
 	Auth      AuthConfig      `mapstructure:"auth"`
 	Bootstrap BootstrapConfig `mapstructure:"bootstrap"`
@@ -52,6 +54,8 @@ type TLSConfig struct {
 // Secret material only, toggles are runtime settings
 type AuthConfig struct {
 	JWTSecret string `mapstructure:"jwt_secret"`
+	// Key behind stored secrets, generated into the data dir when unset
+	SealingKey string `mapstructure:"sealing_key"`
 }
 
 type DatabaseConfig struct {
@@ -70,6 +74,10 @@ type RegistryConfig struct {
 }
 
 type ArtifactsConfig struct {
+	StoragePath string `mapstructure:"storage_path"`
+}
+
+type GitConfig struct {
 	StoragePath string `mapstructure:"storage_path"`
 }
 
@@ -151,13 +159,16 @@ func Load(configPath string) (*Config, error) {
 	_ = v.BindEnv("database.path")
 	_ = v.BindEnv("registry.storage_path")
 	_ = v.BindEnv("artifacts.storage_path")
+	_ = v.BindEnv("git.storage_path")
 	_ = v.BindEnv("logging.dir")
 	_ = v.BindEnv("auth.jwt_secret")
+	_ = v.BindEnv("auth.sealing_key")
 	_ = v.BindEnv("tls.cert_file")
 	_ = v.BindEnv("tls.key_file")
 
 	if err := v.ReadInConfig(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+		var notFound viper.ConfigFileNotFoundError
+		if !errors.As(err, &notFound) {
 			return nil, fmt.Errorf("error reading config file: %w", err)
 		}
 	}
@@ -333,6 +344,9 @@ func applyDerivedPaths(cfg *Config) {
 	if cfg.Artifacts.StoragePath == "" {
 		cfg.Artifacts.StoragePath = filepath.Join(cfg.Storage.DataDir, "artifacts")
 	}
+	if cfg.Git.StoragePath == "" {
+		cfg.Git.StoragePath = filepath.Join(cfg.Storage.DataDir, "git")
+	}
 	if cfg.Logging.Dir == "" {
 		cfg.Logging.Dir = filepath.Join(cfg.Storage.DataDir, "logs")
 	}
@@ -358,6 +372,11 @@ func validateConfig(cfg *Config) error {
 	cfg.Artifacts.StoragePath, err = filepath.Abs(cfg.Artifacts.StoragePath)
 	if err != nil {
 		return fmt.Errorf("invalid artifact storage path: %w", err)
+	}
+
+	cfg.Git.StoragePath, err = filepath.Abs(cfg.Git.StoragePath)
+	if err != nil {
+		return fmt.Errorf("invalid git storage path: %w", err)
 	}
 
 	cfg.Logging.Dir, err = filepath.Abs(cfg.Logging.Dir)

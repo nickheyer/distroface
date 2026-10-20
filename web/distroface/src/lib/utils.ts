@@ -60,6 +60,17 @@ export function relativeTime(date: Date | string): string {
 	return `${diffYear}y ago`;
 }
 
+// Only http and https links are rendered as hrefs, anything else stays plain text
+export function safeHref(raw: string | undefined | null): string | undefined {
+	if (!raw) return undefined;
+	try {
+		const u = new URL(raw);
+		return u.protocol === 'http:' || u.protocol === 'https:' ? raw : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function truncateDigest(digest: string, len = 16): string {
 	if (!digest) return '';
 	if (digest.startsWith('sha256:')) {

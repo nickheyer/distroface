@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 
 	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -36,6 +37,48 @@ type Service struct {
 	res      *settings.Resolver
 	mainPort int
 	log      *logger.Logger
+
+	changeMu sync.RWMutex
+	onChange []func()
+	// Reports whether a git ssh port is bindable, nil when git over ssh is not wired
+	sshProbe func(port int) (listening bool, err error)
+}
+
+// Installs the git ssh port probe used before a portal ssh port is stored
+func (s *Service) SetSSHProbe(fn func(port int) (bool, error)) { s.sshProbe = fn }
+
+// A dedicated portal ssh port must be free, unique, and clear of every http port
+func (s *Service) validateSSHPort(ctx context.Context, port int, excludePortalID string) error {
+	if port == 0 {
+		return nil
+	}
+	if port < 1 || port > 65535 {
+		return connect.Errorf(connect.CodeInvalidArgument, "invalid ssh port")
+	}
+	if port == s.mainPort {
+		return connect.Errorf(connect.CodeInvalidArgument, "ssh port %d is the app's own port", port)
+	}
+	if port == int(s.res.System(ctx).GetGit().GetSshPort()) {
+		return connect.Errorf(connect.CodeInvalidArgument, "ssh port %d is the primary git ssh port", port)
+	}
+	portals, err := s.store.ListRegistryPortals(ctx)
+	if err != nil {
+		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	for _, p := range portals {
+		if p.Port == port {
+			return connect.Errorf(connect.CodeAlreadyExists, "port %d already serves a portal over http", port)
+		}
+		if p.ID != excludePortalID && p.SSHPort == port {
+			return connect.Errorf(connect.CodeAlreadyExists, "ssh port %d already belongs to another portal", port)
+		}
+	}
+	if s.sshProbe != nil {
+		if listening, err := s.sshProbe(port); err != nil && !listening {
+			return connect.Errorf(connect.CodeFailedPrecondition, "ssh port %d cannot be bound: %v", port, err)
+		}
+	}
+	return nil
 }
 
 func NewService(store *stores.Store, enforcer *rbac.Enforcer, proxies *Manager, engine *certs.Engine, res *settings.Resolver, mainPort int, log *logger.Logger) *Service {
@@ -273,6 +316,9 @@ func (s *Service) CreatePortal(ctx context.Context, req *v1.CreatePortalRequest)
 	if err != nil {
 		return nil, err
 	}
+	if err := s.validateSSHPort(ctx, int(msg.SshPort), ""); err != nil {
+		return nil, err
+	}
 	certSource, err := portalCertSource(msg.CertSource)
 	if err != nil {
 		return nil, err
@@ -312,6 +358,7 @@ func (s *Service) CreatePortal(ctx context.Context, req *v1.CreatePortalRequest)
 		BackendURL:         backendURL,
 		BackendRewriteHost: msg.BackendRewriteHost,
 		BackendInsecure:    msg.BackendInsecure,
+		SSHPort:            int(msg.SshPort),
 		Enabled:            true,
 	}
 	scrubProxyPortal(portal)
@@ -416,6 +463,12 @@ func (s *Service) UpdatePortal(ctx context.Context, req *v1.UpdatePortalRequest)
 	}
 	if msg.MapUnqualified != nil {
 		portal.MapUnqualified = *msg.MapUnqualified
+	}
+	if msg.SshPort != nil {
+		if err := s.validateSSHPort(ctx, int(*msg.SshPort), portal.ID); err != nil {
+			return nil, err
+		}
+		portal.SSHPort = int(*msg.SshPort)
 	}
 	if msg.SetRules {
 		rulesJSON, err := s.encodeRules(msg.Rules)
@@ -554,6 +607,19 @@ func (s *Service) reconcile(ctx context.Context) {
 	if err := s.proxies.Reconcile(ctx); err != nil {
 		s.log.Error("portal proxy reconcile: %v", err)
 	}
+	s.changeMu.RLock()
+	hooks := append([]func(){}, s.onChange...)
+	s.changeMu.RUnlock()
+	for _, fn := range hooks {
+		fn()
+	}
+}
+
+// Registers a callback run after every portal write
+func (s *Service) OnChange(fn func()) {
+	s.changeMu.Lock()
+	s.onChange = append(s.onChange, fn)
+	s.changeMu.Unlock()
 }
 
 func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {
@@ -572,6 +638,7 @@ func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {
 		BackendUrl:         p.BackendURL,
 		BackendRewriteHost: p.BackendRewriteHost,
 		BackendInsecure:    p.BackendInsecure,
+		SshPort:            int32(p.SSHPort),
 		Enabled:            p.Enabled,
 		CreatedAt:          timestamppb.New(p.CreatedAt),
 		UpdatedAt:          timestamppb.New(p.UpdatedAt),

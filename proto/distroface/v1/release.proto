@@ -1,0 +1,253 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/git.proto";
+import "distroface/v1/pagination.proto";
+import "distroface/v1/types.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// ReleaseService manages releases, their assets, and their images.
+// Assets are artifacts in the repository's artifact package at the tag version.
+service ReleaseService {
+  // CreateRelease creates a release for a tag, creating the tag when it does not exist.
+  rpc CreateRelease(CreateReleaseRequest) returns (CreateReleaseResponse) {}
+  // GetRelease returns one release with assets and images.
+  rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse) {}
+  // ListReleases pages releases newest first.
+  rpc ListReleases(ListReleasesRequest) returns (ListReleasesResponse) {}
+  // UpdateRelease changes notes and flags.
+  rpc UpdateRelease(UpdateReleaseRequest) returns (UpdateReleaseResponse) {}
+  // DeleteRelease removes a release and optionally its tag.
+  rpc DeleteRelease(DeleteReleaseRequest) returns (DeleteReleaseResponse) {}
+  // PublishRelease turns a draft into a published release.
+  rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse) {}
+  // AttachReleaseAsset attaches an uploaded artifact as a release asset.
+  rpc AttachReleaseAsset(AttachReleaseAssetRequest) returns (AttachReleaseAssetResponse) {}
+  // DetachReleaseAsset removes an asset and its artifact.
+  rpc DetachReleaseAsset(DetachReleaseAssetRequest) returns (DetachReleaseAssetResponse) {}
+  // AttachReleaseImage pins an image reference to a release.
+  rpc AttachReleaseImage(AttachReleaseImageRequest) returns (AttachReleaseImageResponse) {}
+  // DetachReleaseImage removes a pinned image.
+  rpc DetachReleaseImage(DetachReleaseImageRequest) returns (DetachReleaseImageResponse) {}
+  // GetLatestRelease returns the newest published non prerelease.
+  rpc GetLatestRelease(GetLatestReleaseRequest) returns (GetLatestReleaseResponse) {}
+  // GenerateReleaseNotes drafts notes from commits and merged pull requests since the previous tag.
+  rpc GenerateReleaseNotes(GenerateReleaseNotesRequest) returns (GenerateReleaseNotesResponse) {}
+}
+
+// One file attached to a release
+message ReleaseAsset {
+  // Artifact id in the artifact package
+  string artifact_id = 1;
+  string name = 2;
+  int64 size = 3;
+  string digest = 4;
+  string content_type = 5;
+  string download_url = 6;
+  // Page of the artifact package version
+  string artifact_url = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+// One container image belonging to a release
+message ReleaseImage {
+  string namespace = 1;
+  string name = 2;
+  string full_name = 3;
+  string tag = 4;
+  string digest = 5;
+  // Pinned by hand rather than matched by tag
+  bool pinned = 6;
+  repeated Platform platforms = 7;
+  int64 size_bytes = 8;
+  string pull_command = 9;
+  // Page of the image repository
+  string image_url = 10;
+}
+
+// Release is a tagged version with notes, assets, and images.
+message Release {
+  string id = 1;
+  string tag = 2;
+  string name = 3;
+  string body = 4;
+  bool draft = 5;
+  bool prerelease = 6;
+  string author = 7;
+  string target_sha = 8;
+  GitCommit commit = 9;
+  repeated ReleaseAsset assets = 10;
+  repeated ReleaseImage images = 11;
+  string zip_url = 12;
+  string tar_url = 13;
+  string html_url = 14;
+  google.protobuf.Timestamp published_at = 15;
+  google.protobuf.Timestamp created_at = 16;
+  google.protobuf.Timestamp updated_at = 17;
+}
+
+// CreateReleaseRequest creates a release.
+message CreateReleaseRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+  // Branch or sha the tag is created at when it does not exist
+  string target = 4;
+  string title = 5;
+  string body = 6;
+  bool draft = 7;
+  bool prerelease = 8;
+}
+
+// CreateReleaseResponse contains the release.
+message CreateReleaseResponse {
+  Release release = 1;
+}
+
+// GetReleaseRequest identifies a release by tag.
+message GetReleaseRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+}
+
+// GetReleaseResponse contains the release.
+message GetReleaseResponse {
+  Release release = 1;
+}
+
+// ListReleasesRequest pages releases.
+message ListReleasesRequest {
+  // page.query filters on tag and name
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  bool include_drafts = 4;
+  bool include_prereleases = 5;
+}
+
+// ListReleasesResponse contains a page of releases.
+message ListReleasesResponse {
+  repeated Release releases = 1;
+  PageInfo page = 2;
+}
+
+// UpdateReleaseRequest changes the set fields.
+message UpdateReleaseRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+  optional string title = 4;
+  optional string body = 5;
+  optional bool draft = 6;
+  optional bool prerelease = 7;
+}
+
+// UpdateReleaseResponse contains the release.
+message UpdateReleaseResponse {
+  Release release = 1;
+}
+
+// DeleteReleaseRequest identifies a release.
+message DeleteReleaseRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+  bool delete_tag = 4;
+}
+
+// DeleteReleaseResponse is empty on success.
+message DeleteReleaseResponse {}
+
+// PublishReleaseRequest identifies a draft.
+message PublishReleaseRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+}
+
+// PublishReleaseResponse contains the release.
+message PublishReleaseResponse {
+  Release release = 1;
+}
+
+// AttachReleaseAssetRequest attaches an artifact already uploaded to the package.
+message AttachReleaseAssetRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+  string artifact_id = 4;
+}
+
+// AttachReleaseAssetResponse contains the asset.
+message AttachReleaseAssetResponse {
+  ReleaseAsset asset = 1;
+}
+
+// DetachReleaseAssetRequest removes an asset.
+message DetachReleaseAssetRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+  string artifact_id = 4;
+}
+
+// DetachReleaseAssetResponse is empty on success.
+message DetachReleaseAssetResponse {}
+
+// AttachReleaseImageRequest pins an image reference.
+message AttachReleaseImageRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+  // Image repository name within the same namespace
+  string image_name = 4;
+  string image_tag = 5;
+}
+
+// AttachReleaseImageResponse contains the image.
+message AttachReleaseImageResponse {
+  ReleaseImage image = 1;
+}
+
+// DetachReleaseImageRequest removes a pinned image.
+message DetachReleaseImageRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+  string image_name = 4;
+  string image_tag = 5;
+}
+
+// DetachReleaseImageResponse is empty on success.
+message DetachReleaseImageResponse {}
+
+// GetLatestReleaseRequest identifies a repository.
+message GetLatestReleaseRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// GetLatestReleaseResponse contains the release or nothing.
+message GetLatestReleaseResponse {
+  Release release = 1;
+}
+
+// GenerateReleaseNotesRequest names the tag and optional previous tag.
+message GenerateReleaseNotesRequest {
+  string namespace = 1;
+  string name = 2;
+  string tag = 3;
+  string target = 4;
+  // Empty picks the previous tag automatically
+  string previous_tag = 5;
+}
+
+// GenerateReleaseNotesResponse contains drafted markdown.
+message GenerateReleaseNotesResponse {
+  string title = 1;
+  string body = 2;
+}

@@ -16,6 +16,37 @@ service SettingsService {
   rpc UpdateSettings(UpdateSettingsRequest) returns (UpdateSettingsResponse) {}
   // Fully resolved values for a scope with per field provenance
   rpc GetEffectiveSettings(GetEffectiveSettingsRequest) returns (GetEffectiveSettingsResponse) {}
+  // Checks a git ssh port binds on this host before it is saved
+  rpc ProbeGitSSHPort(ProbeGitSSHPortRequest) returns (ProbeGitSSHPortResponse) {}
+  // Host keys, signing key, storage path and usage for the admin git page
+  rpc GetGitServerInfo(GetGitServerInfoRequest) returns (GetGitServerInfoResponse) {}
+}
+
+// GetGitServerInfoRequest has no fields, the answer is instance wide.
+message GetGitServerInfoRequest {}
+
+// GetGitServerInfoResponse describes the git server as the admin page shows it.
+message GetGitServerInfoResponse {
+  repeated string ssh_host_keys = 1; // Public key lines in authorized_keys form
+  repeated string ssh_host_key_fingerprints = 2; // Key type and SHA256 fingerprint, same order as ssh_host_keys
+  string signing_public_key = 3; // Armored OpenPGP public key of the instance
+  string storage_path = 4;
+  int64 repository_count = 5;
+  int64 repository_bytes = 6;
+  int64 lfs_bytes = 7;
+}
+
+// ProbeGitSSHPortRequest names the port, zero probes the effective one
+message ProbeGitSSHPortRequest {
+  int32 port = 1;
+}
+
+// ProbeGitSSHPortResponse reports whether the port is usable
+message ProbeGitSSHPortResponse {
+  int32 port = 1;
+  bool ok = 2; // Bindable now or already served by this instance
+  bool listening = 3; // This instance already serves git ssh on it
+  string message = 4; // Reason when not ok
 }
 
 // Which tier a settings row belongs to
@@ -24,12 +55,13 @@ enum SettingsScopeType {
   SETTINGS_SCOPE_TYPE_SYSTEM = 1;
   SETTINGS_SCOPE_TYPE_ORG = 2;
   SETTINGS_SCOPE_TYPE_PORTAL = 3;
+  SETTINGS_SCOPE_TYPE_REPO = 4;
 }
 
 // System scope leaves scope_id empty
 message SettingsScope {
   SettingsScopeType type = 1;
-  string scope_id = 2; // Org or portal id
+  string scope_id = 2; // Org, portal, or git repo id
 }
 
 // Where a resolved field value came from
@@ -40,6 +72,7 @@ enum SettingsTier {
   SETTINGS_TIER_SYSTEM = 3;
   SETTINGS_TIER_ORG = 4;
   SETTINGS_TIER_PORTAL = 5;
+  SETTINGS_TIER_REPO = 6;
 }
 
 // Tier that supplied one resolved field
@@ -64,6 +97,8 @@ message Settings {
   SecuritySettings security = 10;
   MirrorSettings mirror = 11;
   CASettings ca = 12;
+  GitSettings git = 13;
+  MailSettings mail = 14;
 }
 
 // Instance identity as clients reach it
@@ -79,6 +114,7 @@ message AuthSettings {
   optional bool local_enabled = 4;
   optional bool local_allow_registration = 5;
   OIDCSettings oidc = 6;
+  optional bool require_email_verification = 7; // Local accounts must confirm their address before login
 }
 
 // External identity provider wiring
@@ -199,6 +235,84 @@ message MirrorSettings {
   optional int32 max_cooldown_minutes = 9; // Longest honored cooldown or backoff
   optional int32 failure_backoff_minutes = 10; // Base of the exponential failure backoff
   optional int32 max_sync_depth = 11; // Cap on releases or tags per sync, 0 unlimited
+}
+
+// Git hosting, org scope may override lfs, visibility, default branch, quota, actions enabled
+message GitSettings {
+  optional bool enabled = 1;
+  optional bool ssh_enabled = 2;
+  optional int32 ssh_port = 3; // System only, default 22, listener rebinds live
+  optional string ssh_public_host = 4; // Host or host:port shown in clone urls, defaults to the public hostname
+  optional bool lfs_enabled = 5;
+  optional int64 max_lfs_object_mb = 6;
+  optional int64 max_repo_size_mb = 7; // Zero unlimited
+  optional bool private_by_default = 8;
+  optional string default_branch = 9;
+  optional bool release_on_tag = 10; // Annotated tags create draft releases
+  optional int32 max_concurrent_transfers = 11; // System only
+  optional bool allow_forks = 12;
+  GitGCSettings gc = 13;
+  GitSigningSettings signing = 14;
+  GitActionsSettings actions = 15;
+}
+
+// Scheduled repack and prune of every repository, system only
+message GitGCSettings {
+  optional bool enabled = 1;
+  optional int32 interval_hours = 2;
+}
+
+// Instance signing key for web commits and merges
+message GitSigningSettings {
+  optional bool enabled = 1;
+}
+
+// Workflow execution policy
+message GitActionsSettings {
+  optional bool enabled = 1;
+  optional int32 artifact_retention_days = 2; // Zero keeps forever
+  optional int32 log_retention_days = 3; // Zero keeps forever
+  optional bool run_on_mirror = 4; // Mirror fetches trigger workflows too
+  optional string default_runs_on = 5; // Label used when a job names none
+}
+
+// Transport security for the smtp connection
+enum MailSecurity {
+  MAIL_SECURITY_UNSPECIFIED = 0;
+  MAIL_SECURITY_NONE = 1;
+  MAIL_SECURITY_STARTTLS = 2;
+  MAIL_SECURITY_TLS = 3;
+}
+
+// Outbound and inbound mail, org and repo scopes may override every field
+message MailSettings {
+  optional bool enabled = 1;
+  optional string smtp_host = 2;
+  optional int32 smtp_port = 3;
+  optional MailSecurity security = 4;
+  optional string username = 5;
+  optional string password = 6; // Write only, reads redact
+  bool password_set = 7; // Output only
+  optional string from_address = 8;
+  optional string from_name = 9;
+  optional string reply_to = 10;
+  optional bool allow_private_networks = 11; // Relays are usually internal
+  optional bool skip_tls_verify = 12;
+  optional int32 max_per_minute = 13; // Zero unlimited
+  MailIncomingSettings incoming = 14;
+}
+
+// Reply by email through an imap mailbox
+message MailIncomingSettings {
+  optional bool enabled = 1;
+  optional string imap_host = 2;
+  optional int32 imap_port = 3;
+  optional bool tls = 4;
+  optional string username = 5;
+  optional string password = 6; // Write only, reads redact
+  bool password_set = 7; // Output only
+  optional string mailbox = 8; // Defaults to INBOX
+  optional string reply_address = 9; // Address whose plus extension carries the reply token
 }
 
 // Hardening toggles

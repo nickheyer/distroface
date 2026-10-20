@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { SvelteMap } from 'svelte/reactivity';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
-	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Check, ChevronsUpDown, X, Loader2, Search } from '@lucide/svelte';
 	import { cn } from '$lib/utils';
@@ -18,7 +17,10 @@
 		disabled = false,
 		triggerClass = ''
 	}: {
-		fetchPage: (query: string, pageToken: string) => Promise<{ items: Option[]; nextPageToken: string }>;
+		fetchPage: (
+			query: string,
+			pageToken: string
+		) => Promise<{ items: Option[]; nextPageToken: string }>;
 		selected: string[] | string;
 		// Seeds labels for values chosen before any page loads (edit forms)
 		initialSelected?: Option[];
@@ -133,7 +135,7 @@
 				type="button"
 				{disabled}
 				class={cn(
-					'flex min-h-9 w-full items-center justify-between gap-2 rounded-md border border-input bg-transparent px-3 py-1.5 text-sm shadow-xs transition-colors hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50',
+					'flex min-h-8 w-full cursor-pointer items-center justify-between gap-2 rounded-md border border-input bg-field px-2.5 py-1 text-sm text-foreground shadow-[inset_0_1px_1px_0_rgb(0_0_0/0.04)] transition-[border-color,box-shadow] duration-150 outline-none hover:border-border-strong focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 disabled:cursor-not-allowed disabled:opacity-50 dark:shadow-[inset_0_1px_1px_0_rgb(0_0_0/0.2)]',
 					triggerClass
 				)}
 			>
@@ -146,30 +148,30 @@
 								{labelOf(v)}
 								<button
 									type="button"
-									class="rounded-sm hover:bg-muted-foreground/20"
+									class="rounded-full p-0.5 transition-colors hover:bg-foreground/10 hover:text-foreground"
 									onclick={(e) => removeChip(v, e)}
 									aria-label={`Remove ${labelOf(v)}`}
 								>
-									<X class="h-3 w-3" />
+									<X class="size-3" />
 								</button>
 							</Badge>
 						{/each}
 					{:else}
-						<span>{labelOf(selectedValues[0])}</span>
+						<span class="truncate">{labelOf(selectedValues[0])}</span>
 					{/if}
 				</span>
-				<ChevronsUpDown class="h-4 w-4 shrink-0 text-muted-foreground" />
+				<ChevronsUpDown class="size-3.5 shrink-0 text-muted-foreground" />
 			</button>
 		{/snippet}
 	</PopoverTrigger>
 	<PopoverContent class="w-(--bits-popover-anchor-width) p-0" align="start">
-		<div class="flex items-center border-b px-3">
-			<Search class="h-4 w-4 shrink-0 text-muted-foreground" />
-			<Input
+		<div class="flex items-center gap-2 border-b px-2.5">
+			<Search class="size-3.5 shrink-0 text-muted-foreground" />
+			<input
 				bind:value={query}
 				oninput={onSearch}
 				placeholder={searchPlaceholder}
-				class="h-9 border-0 shadow-none focus-visible:ring-0"
+				class="h-8 flex-1 bg-transparent text-sm outline-none"
 				autocomplete="off"
 			/>
 		</div>
@@ -182,14 +184,19 @@
 					<button
 						type="button"
 						class={cn(
-							'flex w-full items-start gap-2 rounded-sm px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted',
+							'flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted',
 							active && 'bg-primary/5'
 						)}
 						onclick={() => choose(opt.value)}
 					>
-						<Check class={cn('mt-0.5 h-4 w-4 shrink-0', active ? 'opacity-100 text-primary' : 'opacity-0')} />
+						<Check
+							class={cn(
+								'mt-0.5 size-4 shrink-0 text-primary',
+								active ? 'opacity-100' : 'opacity-0'
+							)}
+						/>
 						<span class="min-w-0 space-y-0.5">
-							<span class="block truncate font-medium leading-none">{opt.label}</span>
+							<span class="block truncate leading-none font-medium">{opt.label}</span>
 							{#if opt.description}
 								<span class="block truncate text-xs text-muted-foreground">{opt.description}</span>
 							{/if}
@@ -200,7 +207,7 @@
 			{/if}
 			{#if loading}
 				<div class="flex items-center justify-center py-3">
-					<Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+					<Loader2 class="size-4 animate-spin text-muted-foreground" />
 				</div>
 			{/if}
 		</div>

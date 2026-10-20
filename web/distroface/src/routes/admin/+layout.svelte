@@ -5,8 +5,24 @@
 	import type { Pathname } from '$app/types';
 	import { onMount } from 'svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
-	import { LayoutDashboard, Shield, ShieldCheck, Lock, Globe, ScrollText, HardDrive, HardDriveDownload, Users, Key, Ticket } from '@lucide/svelte';
+	import {
+		LayoutDashboard,
+		Shield,
+		ShieldCheck,
+		Lock,
+		Globe,
+		ScrollText,
+		HardDrive,
+		HardDriveDownload,
+		Users,
+		Key,
+		Ticket,
+		GitBranch,
+		Mail,
+		Cpu
+	} from '@lucide/svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
+	import SideNav from '$lib/components/side-nav.svelte';
 
 	let { children } = $props();
 
@@ -21,19 +37,36 @@
 			: []),
 		...(authStore.canManageSettings
 			? [
-					{ href: '/admin/network', label: 'Network Security', icon: Lock } satisfies NavItem,
-					{ href: '/admin/pki', label: 'Certificate Authority', icon: ShieldCheck } satisfies NavItem,
+					{ href: '/admin/network', label: 'Network security', icon: Lock } satisfies NavItem,
+					{
+						href: '/admin/pki',
+						label: 'Certificate authority',
+						icon: ShieldCheck
+					} satisfies NavItem,
 					{ href: '/admin/portals', label: 'Portals', icon: Globe } satisfies NavItem
 				]
 			: []),
 		...(authStore.canReadSettings
-			? [{ href: '/admin/audit', label: 'Audit Log', icon: ScrollText } satisfies NavItem]
+			? [{ href: '/admin/audit', label: 'Audit log', icon: ScrollText } satisfies NavItem]
 			: []),
 		...(authStore.canReadSettings
 			? [{ href: '/admin/storage', label: 'Storage', icon: HardDrive } satisfies NavItem]
 			: []),
 		...(authStore.canReadSettings
-			? [{ href: '/admin/mirroring', label: 'Mirroring', icon: HardDriveDownload } satisfies NavItem]
+			? [
+					{
+						href: '/admin/mirroring',
+						label: 'Mirroring',
+						icon: HardDriveDownload
+					} satisfies NavItem
+				]
+			: []),
+		...(authStore.canReadSettings
+			? [
+					{ href: '/admin/git', label: 'Git', icon: GitBranch } satisfies NavItem,
+					{ href: '/admin/mail', label: 'Mail', icon: Mail } satisfies NavItem,
+					{ href: '/admin/runners', label: 'Runners', icon: Cpu } satisfies NavItem
+				]
 			: []),
 		...(authStore.canReadUsers
 			? [{ href: '/admin/users', label: 'Users', icon: Users } satisfies NavItem]
@@ -46,8 +79,14 @@
 			: [])
 	]);
 
+	const sideNavItems = $derived(
+		navItems.map((i) => ({ href: resolve(i.href), label: i.label, icon: i.icon }))
+	);
+
 	function isActive(href: string): boolean {
-		return page.url.pathname === href;
+		const current = page.url.pathname.replace(/\/$/, '');
+		if (href === '/admin') return current === href;
+		return current === href || current.startsWith(`${href}/`);
 	}
 
 	onMount(() => {
@@ -57,26 +96,11 @@
 	});
 </script>
 
-<PageHeader title="Administration" subtitle="Manage your Distroface instance" />
+<PageHeader title="Administration" subtitle="Manage this Distroface instance" />
 
-<div class="flex flex-col md:flex-row gap-8 mt-2">
-	<nav class="md:w-52 shrink-0">
-		<div class="flex md:flex-col gap-0.5 overflow-x-auto md:overflow-visible pb-2 md:pb-0 md:sticky md:top-20">
-			{#each navItems as item (item.href)}
-				<a
-					href={resolve(item.href)}
-					class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors {isActive(item.href)
-						? 'bg-accent text-accent-foreground'
-						: 'text-muted-foreground hover:text-foreground hover:bg-accent/50'}"
-				>
-					<item.icon class="h-4 w-4" />
-					{item.label}
-				</a>
-			{/each}
-		</div>
-	</nav>
-
-	<div class="flex-1 min-w-0">
+<div class="flex flex-col gap-8 md:flex-row">
+	<SideNav items={sideNavItems} {isActive} />
+	<div class="min-w-0 flex-1">
 		{#key page.url.pathname}
 			<div class="page-enter">
 				{@render children?.()}

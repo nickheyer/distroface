@@ -8,12 +8,17 @@ import (
 	"connectrpc.com/connect/v2"
 	"connectrpc.com/connect/v2/connecthttp"
 	"connectrpc.com/grpcreflect/v2"
+	"github.com/nickheyer/distroface/internal/actions"
 	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/certs"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/forge"
+	"github.com/nickheyer/distroface/internal/ghapi"
+	"github.com/nickheyer/distroface/internal/gitrepo"
+	"github.com/nickheyer/distroface/internal/mailer"
 	"github.com/nickheyer/distroface/internal/mirror"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
@@ -26,8 +31,6 @@ import (
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"github.com/nickheyer/distroface/pkg/utils"
 	web "github.com/nickheyer/distroface/web/distroface"
-	"golang.org/x/net/http2"
-	"golang.org/x/net/http2/h2c"
 )
 
 type ServerDeps struct {
@@ -54,7 +57,16 @@ type ServerDeps struct {
 	CertService         *certs.Service  // Nil hides the certificate api
 	AuditRecorder       *audit.Recorder // Nil disables the audit trail
 	AuditService        *audit.Service
+	GitHTTP             *gitrepo.HTTP       // Nil disables git over http
+	GitManager          *gitrepo.Manager    // Nil hides the git services
+	GitSSH              *gitrepo.SSHManager // Nil disables the ssh port probe
+	ForgeManager        *forge.Manager
+	ActionsManager      *actions.Manager
+	MailService         *mailer.Service
 }
+
+// Largest request message any procedure accepts, uploads stream over plain http
+const rpcReadMaxBytes = 64 << 20
 
 type Server struct {
 	ServerDeps
@@ -122,28 +134,65 @@ func (s *Server) setupHandler() {
 		}))
 	}
 
+	if s.GitManager != nil && s.ForgeManager != nil && s.ArtifactManager != nil {
+
+		// gh flavored octokit tooling api
+		mux.Handle(ghapi.Prefix+"/", http.StripPrefix(ghapi.Prefix, ghapi.New(s.Store, s.AuthManager, s.GitManager, s.ForgeManager, s.ArtifactManager, s.Enforcer, s.Log)))
+	}
+
 	// Register RPC services
 	distrofacev1connect.RegisterHealthServiceHandler(rpcServer, services.NewHealthService(s.Log))
-	distrofacev1connect.RegisterAuthServiceHandler(rpcServer, services.NewAuthService(s.Store, s.AuthManager, s.Enforcer, s.OIDCHandler, s.Log))
-	distrofacev1connect.RegisterUserServiceHandler(rpcServer, services.NewUserService(s.Store, s.AuthManager, s.Enforcer, s.Log))
-	distrofacev1connect.RegisterRepositoryServiceHandler(rpcServer, services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.MirrorMonitor, s.Log))
-	distrofacev1connect.RegisterSettingsServiceHandler(rpcServer, services.NewSettingsService(s.Store, s.Resolver, s.Enforcer, s.Log))
+	distrofacev1connect.RegisterAuthServiceHandler(rpcServer, services.NewAuthService(s.Store, s.AuthManager, s.Enforcer, s.OIDCHandler, s.MailService, s.Log))
+	distrofacev1connect.RegisterUserServiceHandler(rpcServer, services.NewUserService(s.Store, s.AuthManager, s.Enforcer, s.GitManager, s.Log))
+	distrofacev1connect.RegisterRepositoryServiceHandler(rpcServer, services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.MirrorMonitor, s.GitManager, s.Log))
+	distrofacev1connect.RegisterSettingsServiceHandler(rpcServer, services.NewSettingsService(s.Store, s.Resolver, s.Enforcer, s.GitManager, s.GitSSH, s.Log))
 	distrofacev1connect.RegisterRoleServiceHandler(rpcServer, services.NewRoleService(s.Store, s.Enforcer, s.Log))
-	distrofacev1connect.RegisterTokenServiceHandler(rpcServer, services.NewTokenService(s.AuthManager, s.Enforcer, s.Log))
-	distrofacev1connect.RegisterOrganizationServiceHandler(rpcServer, services.NewOrganizationService(s.Store, s.RegistryAccess, s.Enforcer, s.Resolver, s.Log))
-	distrofacev1connect.RegisterWebhookServiceHandler(rpcServer, services.NewWebhookService(s.Store, s.Enforcer, s.WebhookDispatcher, s.Log))
+	distrofacev1connect.RegisterTokenServiceHandler(rpcServer, services.NewTokenService(s.AuthManager, s.Enforcer, s.GitManager, s.Log))
+	distrofacev1connect.RegisterOrganizationServiceHandler(rpcServer, services.NewOrganizationService(s.Store, s.RegistryAccess, s.Enforcer, s.Resolver, s.GitManager, s.Log))
+	distrofacev1connect.RegisterWebhookServiceHandler(rpcServer, services.NewWebhookService(s.Store, s.Enforcer, s.WebhookDispatcher, s.GitManager, s.Log))
 
 	if s.PortalService != nil {
 		distrofacev1connect.RegisterPortalServiceHandler(rpcServer, s.PortalService)
 	}
 
 	if s.ArtifactManager != nil {
-		distrofacev1connect.RegisterArtifactServiceHandler(rpcServer, services.NewArtifactService(s.Store, s.ArtifactManager, s.Enforcer, s.MirrorMonitor, s.Log))
+		distrofacev1connect.RegisterArtifactServiceHandler(rpcServer, services.NewArtifactService(s.Store, s.ArtifactManager, s.Enforcer, s.MirrorMonitor, s.GitManager, s.Log))
 	}
 
 	if s.MirrorMonitor != nil {
-		distrofacev1connect.RegisterMirrorServiceHandler(rpcServer, services.NewMirrorService(s.MirrorMonitor, s.Enforcer,
-			artifacts.NewAccess(s.Store, s.Enforcer), auth.NewRepoAccess(s.Store, s.Enforcer), s.Log))
+		artifactAccess := artifacts.NewAccess(s.Store, s.Enforcer)
+		repoAccess := auth.NewRepoAccess(s.Store, s.Enforcer)
+		if s.GitManager != nil {
+			artifactAccess.SetLinkedAccess(s.GitManager.Access())
+			repoAccess.SetLinkedAccess(s.GitManager.Access())
+		}
+		distrofacev1connect.RegisterMirrorServiceHandler(rpcServer, services.NewMirrorService(s.MirrorMonitor, s.Enforcer, artifactAccess, repoAccess, s.Log))
+	}
+
+	// Git hosting and the forge features ride on the git manager
+	if s.GitManager != nil {
+		distrofacev1connect.RegisterGitServiceHandler(rpcServer, services.NewGitService(s.Store, s.GitManager, s.ForgeManager, s.MirrorMonitor, s.Enforcer, s.Log))
+		distrofacev1connect.RegisterGitRefServiceHandler(rpcServer, services.NewGitRefService(s.Store, s.GitManager, s.Log))
+		distrofacev1connect.RegisterGitFileServiceHandler(rpcServer, services.NewGitFileService(s.Store, s.GitManager, s.Log))
+		distrofacev1connect.RegisterWikiServiceHandler(rpcServer, services.NewWikiService(s.Store, s.GitManager, s.Log))
+		distrofacev1connect.RegisterKeyServiceHandler(rpcServer, services.NewKeyService(s.Store, s.GitManager, s.Log))
+		if s.ForgeManager != nil {
+			distrofacev1connect.RegisterReleaseServiceHandler(rpcServer, services.NewReleaseService(s.Store, s.GitManager, s.ForgeManager, s.ArtifactManager, s.RegistryAccess, s.Log))
+			distrofacev1connect.RegisterIssueServiceHandler(rpcServer, services.NewIssueService(s.Store, s.ForgeManager, s.Log))
+			distrofacev1connect.RegisterPullRequestServiceHandler(rpcServer, services.NewPullRequestService(s.Store, s.ForgeManager, s.Log))
+			distrofacev1connect.RegisterProjectServiceHandler(rpcServer, services.NewProjectService(s.Store, s.ForgeManager, s.Log))
+			distrofacev1connect.RegisterNotificationServiceHandler(rpcServer, services.NewNotificationService(s.Store, s.ForgeManager, s.Log))
+		}
+		if s.MailService != nil {
+			distrofacev1connect.RegisterMailServiceHandler(rpcServer, services.NewMailService(s.Store, s.MailService, s.GitManager, s.Enforcer, s.Log))
+		}
+		if s.ActionsManager != nil {
+			distrofacev1connect.RegisterActionsServiceHandler(rpcServer, services.NewActionsService(s.Store, s.ActionsManager, s.GitManager, s.RegistryAccess, s.Log))
+			distrofacev1connect.RegisterRunnerServiceHandler(rpcServer, services.NewRunnerService(s.Store, s.ActionsManager, s.Log))
+
+			// Legacy artifactcache protocol for actions/cache and setup-* actions
+			mux.Handle("/api/actions/cache/", http.StripPrefix("/api/actions/cache", s.ActionsManager.CacheHandler()))
+		}
 	}
 
 	// Registered even without a collector, it also serves storage usage
@@ -156,7 +205,7 @@ func (s *Server) setupHandler() {
 	if s.AuditService != nil {
 		distrofacev1connect.RegisterAuditServiceHandler(rpcServer, s.AuditService)
 	}
-	connecthttp.Mount(mux, rpcServer)
+	connecthttp.Mount(mux, rpcServer, connecthttp.WithReadMaxBytes(rpcReadMaxBytes))
 
 	// Reflection on token only
 	reflectServer := connect.NewServer(s.reflectionAuthInterceptor())
@@ -177,7 +226,7 @@ func (s *Server) setupHandler() {
 	}
 	// Verified mtls identity rides the request context for auth and audit
 	root = certs.ClientCertMiddleware(root)
-	s.handler = h2c.NewHandler(root, &http2.Server{})
+	s.handler = root
 }
 
 // Live public hostname for portal aware middleware
@@ -237,13 +286,20 @@ func serviceNames(server *connect.Server) []string {
 	return names
 }
 
+// Git data plane paths are claimed ahead of the spa catch all
 func (s *Server) setupFrontend(mux *http.ServeMux) {
 	fs := s.getFrontendFS()
+	var root http.Handler
 	if fs == nil {
 		s.Log.Warn("No frontend found - API only mode")
-		return
+		root = http.NotFoundHandler()
+	} else {
+		root = s.createFrontendHandler(fs)
 	}
-	mux.Handle("/", s.createFrontendHandler(fs))
+	if s.GitHTTP != nil {
+		root = s.GitHTTP.Wrap(root)
+	}
+	mux.Handle("/", root)
 }
 
 func (s *Server) getFrontendFS() http.FileSystem {

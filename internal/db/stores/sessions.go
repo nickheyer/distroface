@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,7 +23,7 @@ func (s *Store) GetSession(ctx context.Context, token string) (*db.Session, erro
 	var session db.Session
 	err := s.db.WithContext(ctx).Preload("User").Where("token = ? AND expires_at > ?", token, time.Now()).First(&session).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -36,4 +37,9 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 
 func (s *Store) CleanAllSessions(ctx context.Context) error {
 	return s.db.WithContext(ctx).Where("1 = 1").Delete(&db.Session{}).Error
+}
+
+// Signs a user out everywhere
+func (s *Store) DeleteSessionsByUser(ctx context.Context, userID string) error {
+	return s.db.WithContext(ctx).Where("user_id = ?", userID).Delete(&db.Session{}).Error
 }

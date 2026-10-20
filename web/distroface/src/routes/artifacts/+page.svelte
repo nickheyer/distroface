@@ -1,34 +1,18 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
-	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Input } from '$lib/components/ui/input';
-	import { Switch } from '$lib/components/ui/switch';
-	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
-	} from '$lib/components/ui/table';
-	import {
-		Select, SelectContent, SelectItem, SelectTrigger
-	} from '$lib/components/ui/select';
-	import AsyncSelect from '$lib/components/async-select.svelte';
-	import FormPanel from '$lib/components/form-panel.svelte';
 	import MirrorBadge from '$lib/components/mirror-badge.svelte';
-	import MirrorConfigFields, {
-		emptyMirrorForm, mirrorInit
-	} from '$lib/components/mirror-config-fields.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
-	import FormField from '$lib/components/form-field.svelte';
-	import FormSection from '$lib/components/form-section.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Archive, Plus, Trash2, Lock, Globe } from '@lucide/svelte';
+	import { Archive, Plus, Trash2, Lock, Globe, HardDrive, Clock, User } from '@lucide/svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { Code, ConnectError } from '@connectrpc/connect';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -39,9 +23,7 @@
 	import { QueryFilter } from '$lib/query.svelte';
 	import { ArtifactRepoType } from '$lib/proto/distroface/v1/types_pb';
 	import type { ArtifactRepository } from '$lib/proto/distroface/v1/types_pb';
-	import {
-		artifactRepoTypeOptions, artifactMirrorKind, artifactMirrorLabel
-	} from '$lib/mirror';
+	import { artifactMirrorLabel } from '$lib/mirror';
 
 	let repos = $state<ArtifactRepository[]>([]);
 	let loading = $state(true);
@@ -52,18 +34,7 @@
 		{ key: 'namespace', label: 'Namespace' },
 		{ key: 'description', label: 'Description' }
 	]);
-
-	let createPanelOpen = $state(false);
-	let newName = $state('');
-	let newNamespace = $state('');
-	let newDescription = $state('');
-	let newPrivate = $state(false);
-	let newType = $state<ArtifactRepoType>(ArtifactRepoType.FILE);
-	let newMirror = $state(emptyMirrorForm());
-	let creating = $state(false);
-	const isMirror = $derived(newType !== ArtifactRepoType.FILE);
-
-	const ownNamespace = $derived(authStore.user?.username ?? '');
+	const newHref = resolve('/artifacts/new');
 
 	// Anonymous role lacks the read grant, the list stays quiet
 	let browseDenied = $state(false);
@@ -100,38 +71,6 @@
 		loadRepos();
 	}
 
-	async function createRepo() {
-		if (!newName.trim() || (isMirror && !newMirror.upstream.trim())) return;
-		creating = true;
-		try {
-			await rpcClient.artifact.createArtifactRepository({
-				name: newName.trim(),
-				namespace: newNamespace || ownNamespace,
-				description: newDescription.trim(),
-				isPrivate: newPrivate,
-				type: newType,
-				mirror: isMirror ? mirrorInit(newMirror) : undefined
-			});
-			toast.success('Repository created');
-			closeCreatePanel();
-			await loadRepos();
-		} catch {
-			// Error interceptor already toasted
-		} finally {
-			creating = false;
-		}
-	}
-
-	function closeCreatePanel() {
-		createPanelOpen = false;
-		newName = '';
-		newNamespace = '';
-		newDescription = '';
-		newPrivate = false;
-		newType = ArtifactRepoType.FILE;
-		newMirror = emptyMirrorForm();
-	}
-
 	function openDelete(repo: ArtifactRepository, e: MouseEvent) {
 		e.stopPropagation();
 		deleteTarget = repo;
@@ -142,7 +81,10 @@
 		if (!deleteTarget) return;
 		deleting = true;
 		try {
-			await rpcClient.artifact.deleteArtifactRepository({ name: deleteTarget.name, namespace: deleteTarget.namespace });
+			await rpcClient.artifact.deleteArtifactRepository({
+				name: deleteTarget.name,
+				namespace: deleteTarget.namespace
+			});
 			toast.success('Repository deleted');
 			deleteDialogOpen = false;
 			await loadRepos();
@@ -155,8 +97,7 @@
 
 	function canDelete(repo: ArtifactRepository): boolean {
 		return (
-			repo.owner === authStore.user?.username ||
-			authStore.hasPermission('artifacts', 'manage')
+			repo.owner === authStore.user?.username || authStore.hasPermission('artifacts', 'manage')
 		);
 	}
 
@@ -176,33 +117,46 @@
 </script>
 
 <svelte:head>
-	<title>Artifact Repositories - Distroface</title>
+	<title>Artifacts - Distroface</title>
 </svelte:head>
 
 <PageHeader
-	title="Artifact Repositories"
+	title="Artifacts"
 	subtitle="Build outputs, packages, and mirrored release assets"
 	icon={Archive}
 >
 	{#snippet actions()}
+		{#if !loading && pager.totalCount > 0}
+			<span class="text-xs text-muted-foreground tabular-nums">
+				{pager.totalCount} repositor{pager.totalCount === 1 ? 'y' : 'ies'}
+			</span>
+		{/if}
 		<PermissionGate resource="artifacts" action="create">
-			<Button size="sm" onclick={() => (createPanelOpen = true)}>
-				<Plus class="h-4 w-4 mr-1.5" />
-				New Repository
+			<Button href={newHref}>
+				<Plus />
+				New repository
 			</Button>
 		</PermissionGate>
 	{/snippet}
 </PageHeader>
 
-<div class="space-y-6">
+<div class="space-y-4">
 	<div class="max-w-md">
-		<QueryFilterBar {filter} placeholder="Search repositories..." onchange={filterChanged} />
+		<QueryFilterBar {filter} placeholder="Search repositories" onchange={filterChanged} />
 	</div>
 
 	{#if !loaded}
-		<div class="space-y-2">
-			{#each Array(3)}
-				<Skeleton class="h-14 w-full rounded-xl" />
+		<div class="box divide-y">
+			{#each { length: 4 }, i (i)}
+				<div class="space-y-2.5 px-4 py-3.5">
+					<Skeleton class="h-4 w-48" />
+					<Skeleton class="h-3.5 w-72" />
+					<div class="flex gap-4">
+						<Skeleton class="h-3 w-14" />
+						<Skeleton class="h-3 w-14" />
+						<Skeleton class="h-3 w-20" />
+					</div>
+				</div>
 			{/each}
 		</div>
 	{:else if repos.length === 0}
@@ -210,7 +164,9 @@
 			icon={Archive}
 			message={browseDenied
 				? 'Sign in to browse artifacts'
-				: filter.active ? 'No artifact repositories found' : 'No artifact repositories yet'}
+				: filter.active
+					? 'No artifact repositories found'
+					: 'No artifact repositories yet'}
 			description={browseDenied
 				? 'Anonymous browsing is not permitted here'
 				: filter.active
@@ -220,156 +176,106 @@
 			{#snippet actions()}
 				{#if !filter.active && !browseDenied}
 					<PermissionGate resource="artifacts" action="create">
-						<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>
-							<Plus class="h-4 w-4 mr-1.5" />New Artifact Repository
+						<Button variant="outline" href={newHref}>
+							<Plus />
+							New repository
 						</Button>
 					</PermissionGate>
 				{/if}
 			{/snippet}
 		</EmptyState>
 	{:else}
-		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
-			<Table>
-				<TableHeader>
-					<TableRow class="bg-muted/30 hover:bg-muted/30">
-						<TableHead class="th">Name</TableHead>
-						<TableHead class="th">Owner</TableHead>
-						<TableHead class="th">Artifacts</TableHead>
-						<TableHead class="th">Size</TableHead>
-						<TableHead class="th">Created</TableHead>
-						<TableHead class="th w-16"></TableHead>
-					</TableRow>
-				</TableHeader>
-				<TableBody>
-					{#each repos as repo (repo.id)}
-						<TableRow class="cursor-pointer" onclick={() => goto(resolve('/artifacts/[namespace]/[repo]', { namespace: repo.namespace, repo: repo.name }))}>
-							<TableCell class="py-3 px-3">
-								<div class="flex items-center gap-2">
-									<span class="font-medium">
-										{#if repo.namespace}<span class="text-muted-foreground font-normal">{repo.namespace}/</span>{/if}{repo.name}
-									</span>
-									<Badge
-										variant="outline"
-										class="text-xs gap-1 {repo.isPrivate ? 'border-amber-500/30 text-amber-600 dark:text-amber-400' : ''}"
-									>
-										{#if repo.isPrivate}
-											<Lock class="h-2.5 w-2.5" />Private
-										{:else}
-											<Globe class="h-2.5 w-2.5" />Public
-										{/if}
-									</Badge>
-									{#if repo.type !== ArtifactRepoType.FILE && repo.type !== ArtifactRepoType.UNSPECIFIED}
-										<MirrorBadge
-											label={artifactMirrorLabel(repo.type)}
-											error={repo.mirrorLastError}
-											title={repo.mirror?.upstream ?? ''}
-											syncing={repo.mirrorSyncing || mirrorSyncStore.syncing('artifact', repo.id)}
-										/>
-									{/if}
-								</div>
-								{#if repo.description}
-									<p class="text-xs text-muted-foreground mt-0.5 line-clamp-1">{repo.description}</p>
+		<div class="box divide-y transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
+			{#each repos as repo (repo.id)}
+				<div class="group flex items-center gap-3 px-4 py-3 transition-colors hover:bg-muted/30">
+					<a
+						href={resolve('/artifacts/[namespace]/[repo]', {
+							namespace: repo.namespace,
+							repo: repo.name
+						})}
+						class="min-w-0 flex-1"
+					>
+						<div class="flex flex-wrap items-center gap-x-2 gap-y-1">
+							<span class="flex min-w-0 items-baseline text-sm font-semibold">
+								{#if repo.namespace}
+									<span class="truncate font-normal text-muted-foreground">{repo.namespace}</span>
+									<span class="mx-0.5 text-muted-foreground/50">/</span>
 								{/if}
-							</TableCell>
-							<TableCell class="text-muted-foreground text-sm py-3 px-3">{repo.owner || '-'}</TableCell>
-							<TableCell class="text-sm py-3 px-3 tabular-nums">{repo.artifactCount}</TableCell>
-							<TableCell class="text-sm py-3 px-3 tabular-nums">{formatBytes(Number(repo.totalSize))}</TableCell>
-							<TableCell class="text-muted-foreground text-sm py-3 px-3">
-								{repo.createdAt ? relativeTime(timestampDate(repo.createdAt)) : '-'}
-							</TableCell>
-							<TableCell class="text-right py-3 px-3">
-								{#if canDelete(repo)}
-									<Button
-										variant="ghost" size="icon"
-										class="h-7 w-7 text-destructive hover:text-destructive"
-										onclick={(e) => openDelete(repo, e)}
-									>
-										<Trash2 class="h-3.5 w-3.5" />
-									</Button>
+								<span
+									class="truncate underline-offset-2 group-hover:text-primary group-hover:underline"
+								>
+									{repo.name}
+								</span>
+							</span>
+							<Badge variant="outline">
+								{#if repo.isPrivate}
+									<Lock />Private
+								{:else}
+									<Globe />Public
 								{/if}
-							</TableCell>
-						</TableRow>
-					{/each}
-				</TableBody>
-			</Table>
-			<DataPagination attached {pager} onChange={loadRepos} />
+							</Badge>
+							{#if repo.type !== ArtifactRepoType.FILE && repo.type !== ArtifactRepoType.UNSPECIFIED}
+								<MirrorBadge
+									label={artifactMirrorLabel(repo.type)}
+									error={repo.mirrorLastError}
+									title={repo.mirror?.upstream ?? ''}
+									syncing={repo.mirrorSyncing || mirrorSyncStore.syncing('artifact', repo.id)}
+								/>
+							{/if}
+						</div>
+						{#if repo.description}
+							<p class="mt-0.5 line-clamp-1 text-sm text-muted-foreground">{repo.description}</p>
+						{/if}
+						<div
+							class="mt-1.5 flex flex-wrap items-center gap-x-3.5 gap-y-1 text-xs text-muted-foreground"
+						>
+							{#if repo.owner}
+								<span class="flex items-center gap-1"><User class="size-3.5" />{repo.owner}</span>
+							{/if}
+							<span class="flex items-center gap-1 tabular-nums">
+								<Archive class="size-3.5" />{repo.artifactCount} artifact{Number(
+									repo.artifactCount
+								) === 1
+									? ''
+									: 's'}
+							</span>
+							<span class="flex items-center gap-1">
+								<HardDrive class="size-3.5" />{formatBytes(Number(repo.totalSize))}
+							</span>
+							{#if repo.createdAt}
+								<span class="flex items-center gap-1">
+									<Clock class="size-3.5" />Created {relativeTime(timestampDate(repo.createdAt))}
+								</span>
+							{/if}
+						</div>
+					</a>
+					{#if canDelete(repo)}
+						<Button
+							variant="ghost-muted"
+							size="icon-sm"
+							class="shrink-0 hover:text-destructive"
+							onclick={(e) => openDelete(repo, e)}
+							aria-label="Delete {repo.namespace}/{repo.name}"
+						>
+							<Trash2 />
+						</Button>
+					{/if}
+				</div>
+			{/each}
 		</div>
+		<DataPagination {pager} onChange={loadRepos} />
 	{/if}
 </div>
 
-<FormPanel
-	open={createPanelOpen}
-	onOpenChange={(v) => { if (!v) closeCreatePanel(); }}
-	title="New Artifact Repository"
-	description="Stores build artifacts and packages."
-	icon={Archive}
+<ConfirmDialog
+	bind:open={deleteDialogOpen}
+	title="Delete repository"
+	confirmLabel="Delete"
+	onConfirm={confirmDelete}
+	loading={deleting}
 >
-	<div class="space-y-6">
-		<FormSection title="Repository Details">
-			<div class="space-y-3">
-				<FormField label="Namespace" id="repo-namespace" help="Your namespace or an organization you administer">
-					<AsyncSelect
-						bind:selected={newNamespace}
-						placeholder={ownNamespace}
-						searchPlaceholder="Search organizations..."
-						fetchPage={async (query, pageToken) => {
-							const resp = await rpcClient.organization.listOrganizations({
-								page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 }
-							});
-							const items = resp.organizations.map((o) => ({ value: o.name, label: o.displayName || o.name }));
-							if (!pageToken && ownNamespace && ownNamespace.toLowerCase().includes(query.toLowerCase())) {
-								items.unshift({ value: ownNamespace, label: `${ownNamespace} (you)` });
-							}
-							return { items, nextPageToken: resp.page?.nextPageToken ?? '' };
-						}}
-					/>
-				</FormField>
-				<FormField label="Name" id="repo-name" required help="Letters, digits, dots, dashes, underscores">
-					<Input id="repo-name" bind:value={newName} placeholder="build-artifacts" />
-				</FormField>
-				<FormField label="Description" id="repo-description">
-					<Input id="repo-description" bind:value={newDescription} placeholder="What is stored here?" />
-				</FormField>
-				<FormField label="Type" id="repo-type" help="Mirrors pull upstream releases automatically">
-					<Select type="single" value={String(newType)} onValueChange={(v) => { if (v) newType = Number(v) as ArtifactRepoType; }}>
-						<SelectTrigger class="w-full" id="repo-type">
-							{artifactRepoTypeOptions.find((o) => o.value === newType)?.label ?? 'Select type'}
-						</SelectTrigger>
-						<SelectContent>
-							{#each artifactRepoTypeOptions as o (o.value)}
-								<SelectItem value={String(o.value)}>
-									<div>
-										<div>{o.label}</div>
-										<div class="text-xs text-muted-foreground">{o.description}</div>
-									</div>
-								</SelectItem>
-							{/each}
-						</SelectContent>
-					</Select>
-				</FormField>
-				<FormField label="Private" horizontal help="Visible only to you and admins">
-					<Switch bind:checked={newPrivate} />
-				</FormField>
-			</div>
-		</FormSection>
-
-		{#if isMirror}
-			<FormSection title="Mirror Source">
-				<MirrorConfigFields form={newMirror} kind={artifactMirrorKind(newType)} idPrefix="repo-mirror" />
-			</FormSection>
-		{/if}
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={closeCreatePanel}>Cancel</Button>
-		<Button onclick={createRepo} disabled={creating || !newName.trim() || (isMirror && !newMirror.upstream.trim())}>
-			{creating ? (isMirror ? 'Validating...' : 'Creating...') : 'Create Repository'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<ConfirmDialog bind:open={deleteDialogOpen} title="Delete Repository" confirmLabel="Delete" onConfirm={confirmDelete} loading={deleting}>
 	{#snippet description()}
-		This permanently deletes <strong>{deleteTarget?.namespace}/{deleteTarget?.name}</strong> and all its artifacts.
+		This permanently deletes <strong>{deleteTarget?.namespace}/{deleteTarget?.name}</strong> and all its
+		artifacts.
 	{/snippet}
 </ConfirmDialog>

@@ -70,7 +70,8 @@ type Client struct {
 
 var client *Client
 
-func initClient() error {
+// An explicit --server always wins over the server of the last login
+func initClient(serverFlagSet bool) error {
 	config, err := readAuthConfig()
 	if err != nil {
 		return err
@@ -83,9 +84,10 @@ func initClient() error {
 	}
 
 	serverURL := viper.GetString("server")
-	if serverURL == defaultServerURL && config.Server != "" {
+	if !serverFlagSet && serverURL == defaultServerURL && config.Server != "" {
 		serverURL = config.Server
 	}
+	debugf("Using server %s", serverURL)
 	if !strings.HasPrefix(serverURL, "http://") && !strings.HasPrefix(serverURL, "https://") {
 		serverURL = detectScheme(serverURL) + "://" + serverURL
 		debugf("No scheme on server URL, using %s", serverURL)
@@ -162,6 +164,54 @@ func (c *Client) Repositories() distrofacev1connect.RepositoryServiceClient {
 	return distrofacev1connect.NewRepositoryServiceClient(c.rpc())
 }
 
+func (c *Client) Git() distrofacev1connect.GitServiceClient {
+	return distrofacev1connect.NewGitServiceClient(c.rpc())
+}
+
+func (c *Client) GitRefs() distrofacev1connect.GitRefServiceClient {
+	return distrofacev1connect.NewGitRefServiceClient(c.rpc())
+}
+
+func (c *Client) GitFiles() distrofacev1connect.GitFileServiceClient {
+	return distrofacev1connect.NewGitFileServiceClient(c.rpc())
+}
+
+func (c *Client) Releases() distrofacev1connect.ReleaseServiceClient {
+	return distrofacev1connect.NewReleaseServiceClient(c.rpc())
+}
+
+func (c *Client) Issues() distrofacev1connect.IssueServiceClient {
+	return distrofacev1connect.NewIssueServiceClient(c.rpc())
+}
+
+func (c *Client) Pulls() distrofacev1connect.PullRequestServiceClient {
+	return distrofacev1connect.NewPullRequestServiceClient(c.rpc())
+}
+
+func (c *Client) Keys() distrofacev1connect.KeyServiceClient {
+	return distrofacev1connect.NewKeyServiceClient(c.rpc())
+}
+
+func (c *Client) Organizations() distrofacev1connect.OrganizationServiceClient {
+	return distrofacev1connect.NewOrganizationServiceClient(c.rpc())
+}
+
+func (c *Client) APITokens() distrofacev1connect.TokenServiceClient {
+	return distrofacev1connect.NewTokenServiceClient(c.rpc())
+}
+
+func (c *Client) Actions() distrofacev1connect.ActionsServiceClient {
+	return distrofacev1connect.NewActionsServiceClient(c.rpc())
+}
+
+func (c *Client) Runner() distrofacev1connect.RunnerServiceClient {
+	return distrofacev1connect.NewRunnerServiceClient(c.rpc())
+}
+
+func (c *Client) Users() distrofacev1connect.UserServiceClient {
+	return distrofacev1connect.NewUserServiceClient(c.rpc())
+}
+
 // Bearer header plus proactive and reactive session refresh
 func (c *Client) authInterceptor() connect.ClientInterceptor {
 	return func(next connect.ClientFunc) connect.ClientFunc {
@@ -227,7 +277,7 @@ func (r *refreshingStream) Receive(msg any) error {
 	if r.info != nil {
 		r.info.RequestHeader().Set("Authorization", "Bearer "+r.client.Tokens.GetToken())
 	}
-	_ = r.ClientStream.Close()
+	_ = r.Close()
 
 	stream, err := r.next(r.ctx, r.spec)
 	if err != nil {
@@ -267,7 +317,7 @@ func (c *Client) refreshToken(ctx context.Context) error {
 	info.RequestHeader().Set("Authorization", "Bearer "+token)
 	resp, err := distrofacev1connect.NewAuthServiceClient(c.bareRPC()).RefreshSession(ctx, &v1.RefreshSessionRequest{})
 	if err != nil {
-		return fmt.Errorf("session refresh failed: %v - run 'dfcli login'", rpcErr(err))
+		return fmt.Errorf("session refresh failed: %w - run 'dfcli login'", rpcErr(err))
 	}
 
 	expiresAt := time.Unix(resp.ExpiresAt, 0)
@@ -279,6 +329,13 @@ func (c *Client) refreshToken(ctx context.Context) error {
 func rpcErr(err error) error {
 	var ce *connect.Error
 	if errors.As(err, &ce) {
+		if ce.Code() == connect.CodeUnimplemented {
+			server := "The server"
+			if client != nil {
+				server = client.BaseURL
+			}
+			return hintTLS(fmt.Errorf("%s does not expose this call (%s)\nIt may be an older release or have the feature disabled, check --server", server, ce.Message()))
+		}
 		return hintTLS(fmt.Errorf("server returned %s: %s", ce.Code(), ce.Message()))
 	}
 	return hintTLS(err)

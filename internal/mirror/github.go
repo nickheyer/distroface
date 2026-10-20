@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -55,7 +56,8 @@ func (githubDriver) validate(ctx context.Context, c *http.Client, cfg *v1.Mirror
 	if _, limited := RetryAfter(err); limited {
 		return fmt.Errorf("github rate limited this server, wait before validating again: %w", err)
 	}
-	if ue, ok := err.(*upstreamError); ok {
+	var ue *upstreamError
+	if errors.As(err, &ue) {
 		switch ue.status {
 		case http.StatusNotFound:
 			return fmt.Errorf("%w: github repository %q not found (private repos need a token with repo read access)", ErrInvalid, cfg.GetUpstream())

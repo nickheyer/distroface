@@ -15,22 +15,20 @@
 	} = $props();
 </script>
 
-<div class="flex items-center gap-4 pb-6">
+<div class="mb-6 flex items-center gap-3 border-b pb-5">
 	{#if icon}
 		{@const Icon = icon}
-		<div
-			class="h-12 w-12 rounded-xl bg-linear-to-br from-primary/15 to-primary/5 border border-primary/10 flex items-center justify-center shrink-0"
-		>
-			<Icon class="h-6 w-6 text-primary" />
-		</div>
+		<Icon class="size-5 shrink-0 text-muted-foreground" />
 	{/if}
-	<div class="flex-1 min-w-0">
-		<h1 class="text-2xl font-bold tracking-tight">{title}</h1>
+	<div class="min-w-0 flex-1">
+		<h1 class="text-xl leading-7 font-semibold tracking-tight">{title}</h1>
 		{#if subtitle}
-			<p class="text-sm text-muted-foreground mt-0.5">{subtitle}</p>
+			<p class="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>
 		{/if}
 	</div>
 	{#if actions}
-		{@render actions()}
+		<div class="flex shrink-0 items-center gap-2">
+			{@render actions()}
+		</div>
 	{/if}
 </div>

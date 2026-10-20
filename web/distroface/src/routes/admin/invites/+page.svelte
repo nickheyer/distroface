@@ -6,22 +6,22 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Input } from '$lib/components/ui/input';
-	import UnitInput from '$lib/components/unit-input.svelte';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import {
-		Table, TableBody, TableCell, TableHead, TableHeader, TableRow
+		Table,
+		TableBody,
+		TableCell,
+		TableHead,
+		TableHeader,
+		TableRow
 	} from '$lib/components/ui/table';
-	import FormPanel from '$lib/components/form-panel.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
-	import FormField from '$lib/components/form-field.svelte';
-	import AsyncSelect from '$lib/components/async-select.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import BulkActionBar from '$lib/components/bulk-action-bar.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Ticket } from '@lucide/svelte';
+	import { Plus, Ticket } from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
@@ -42,14 +42,7 @@
 		{ key: 'description', label: 'Description' },
 		{ key: 'created_by', label: 'Created By' }
 	]);
-
-	let createPanelOpen = $state(false);
-	let inviteDescription = $state('');
-	let inviteSelectedRoles = $state<string[]>([]);
-	let invitePin = $state('');
-	let inviteMaxUses = $state<number | undefined>(undefined);
-	let inviteExpiryHours = $state<number | undefined>(undefined);
-	let creating = $state(false);
+	const newHref = resolve('/admin/invites/new');
 
 	let deleteDialogOpen = $state(false);
 	let deleteInvite = $state<RegistrationInvite | null>(null);
@@ -103,7 +96,7 @@
 		toast.error(
 			errors.length === 1
 				? `${who}: ${first.error}`
-				: `${errors.length} failed (${who}: ${first.error}, ...)`
+				: `${errors.length} failed (${who}: ${first.error}, and ${errors.length - 1} more)`
 		);
 	}
 
@@ -119,35 +112,6 @@
 			// error interceptor
 		} finally {
 			bulkWorking = false;
-		}
-	}
-
-	function resetCreateForm() {
-		inviteDescription = '';
-		inviteSelectedRoles = [];
-		invitePin = '';
-		inviteMaxUses = undefined;
-		inviteExpiryHours = undefined;
-	}
-
-	async function createInvite() {
-		if (!inviteDescription.trim()) return;
-		creating = true;
-		try {
-			await rpcClient.auth.createInvite({
-				description: inviteDescription.trim(),
-				roleIds: inviteSelectedRoles,
-				pin: invitePin || undefined,
-				maxUses: inviteMaxUses && inviteMaxUses > 0 ? inviteMaxUses : undefined,
-				expiresInHours: inviteExpiryHours && inviteExpiryHours > 0 ? inviteExpiryHours : undefined
-			});
-			createPanelOpen = false;
-			resetCreateForm();
-			await loadInvites();
-		} catch {
-			// error interceptor
-		} finally {
-			creating = false;
 		}
 	}
 
@@ -175,41 +139,58 @@
 	}
 
 	onMount(() => {
-		if (!authStore.hasPermission('settings', 'read')) { goto(resolve('/admin')); return; }
+		if (!authStore.hasPermission('settings', 'read')) {
+			goto(resolve('/admin'));
+			return;
+		}
 		loadInvites();
 	});
 </script>
 
 <div class="space-y-4">
-	<div class="section-header">
-		<div>
-			<h2 class="section-title">Registration Invites</h2>
+	<div class="section-header flex-wrap">
+		<div class="min-w-0">
+			<h2 class="section-title">Registration invites</h2>
 			<p class="section-subtitle">Let users register when public registration is off</p>
 		</div>
-		<div class="flex items-center gap-2">
+		<div class="flex shrink-0 items-center gap-2">
 			<div class="w-96">
-				<QueryFilterBar {filter} placeholder="Search invites..." onchange={filterChanged} />
+				<QueryFilterBar {filter} placeholder="Search invites" onchange={filterChanged} />
 			</div>
 			<PermissionGate resource="settings" action="create">
-				<Button size="sm" onclick={() => (createPanelOpen = true)}>Create Invite</Button>
+				<Button href={newHref}>
+					<Plus />
+					Create invite
+				</Button>
 			</PermissionGate>
 		</div>
 	</div>
 
 	{#if !loaded}
-		<div class="space-y-2">
+		<div class="box divide-y">
 			{#each { length: 3 }, i (i)}
-				<Skeleton class="h-12 w-full rounded-lg" />
+				<div class="flex items-center gap-4 px-4 py-3">
+					<Skeleton class="h-4 w-40" />
+					<Skeleton class="h-4 w-28" />
+					<Skeleton class="h-4 w-16 rounded-full" />
+					<Skeleton class="ml-auto h-4 w-12" />
+				</div>
 			{/each}
 		</div>
 	{:else if invites.length === 0}
 		<EmptyState
 			icon={Ticket}
-			message={filter.active ? 'No invites match the current filter' : 'No invites yet'}
+			message={filter.active ? 'No matching invites' : 'No invites yet'}
+			description={filter.active
+				? 'No results match the current filter.'
+				: 'Create an invite to let someone register.'}
 		>
 			{#snippet actions()}
 				<PermissionGate resource="settings" action="create">
-					<Button variant="outline" size="sm" onclick={() => (createPanelOpen = true)}>Create Invite</Button>
+					<Button variant="outline" href={newHref}>
+						<Plus />
+						Create invite
+					</Button>
 				</PermissionGate>
 			{/snippet}
 		</EmptyState>
@@ -217,9 +198,9 @@
 		<div class="data-table transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			<Table>
 				<TableHeader>
-					<TableRow class="bg-muted/30 hover:bg-muted/30">
+					<TableRow>
 						<PermissionGate resource="settings" action="delete">
-							<TableHead class="th w-10">
+							<TableHead class="w-10">
 								<Checkbox
 									checked={allOnPageSelected}
 									indeterminate={someOnPageSelected && !allOnPageSelected}
@@ -228,22 +209,22 @@
 								/>
 							</TableHead>
 						</PermissionGate>
-						<TableHead class="th">Description</TableHead>
-						<TableHead class="th">Code</TableHead>
-						<TableHead class="th">Roles</TableHead>
-						<TableHead class="th">Uses</TableHead>
-						<TableHead class="th">Security</TableHead>
-						<TableHead class="th">Expires</TableHead>
+						<TableHead>Description</TableHead>
+						<TableHead>Code</TableHead>
+						<TableHead>Roles</TableHead>
+						<TableHead>Uses</TableHead>
+						<TableHead>Security</TableHead>
+						<TableHead>Expires</TableHead>
 						<PermissionGate resource="settings" action="delete">
-							<TableHead class="th w-12"></TableHead>
+							<TableHead class="w-12"></TableHead>
 						</PermissionGate>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
 					{#each invites as invite (invite.id)}
-						<TableRow class={selected.has(invite.id) ? 'bg-primary/5 hover:bg-primary/5' : ''}>
+						<TableRow data-state={selected.has(invite.id) ? 'selected' : undefined}>
 							<PermissionGate resource="settings" action="delete">
-								<TableCell class="py-3 px-3">
+								<TableCell>
 									<Checkbox
 										checked={selected.has(invite.id)}
 										onCheckedChange={() => toggleSelect(invite.id)}
@@ -251,35 +232,40 @@
 									/>
 								</TableCell>
 							</PermissionGate>
-							<TableCell class="font-medium py-3 px-3">{invite.description}</TableCell>
-							<TableCell class="py-3 px-3">
+							<TableCell class="font-medium">{invite.description}</TableCell>
+							<TableCell>
 								<div class="flex items-center gap-1">
-									<code class="font-mono text-xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{invite.code}</code>
-									<CopyButton text={getInviteUrl(invite.code)} label="Invite link copied!" />
+									<code
+										class="rounded-md bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground"
+										>{invite.code}</code
+									>
+									<CopyButton text={getInviteUrl(invite.code)} label="Invite link copied" />
 								</div>
 							</TableCell>
-							<TableCell class="py-3 px-3">
-								<div class="flex gap-1 flex-wrap">
+							<TableCell>
+								<div class="flex flex-wrap gap-1">
 									{#each invite.roles as role (role.id)}
-										<Badge variant="outline" class="text-xs">{role.name}</Badge>
+										<Badge variant="outline">{role.name}</Badge>
 									{/each}
 								</div>
 							</TableCell>
-							<TableCell class="text-sm py-3 px-3">
-								<span class="tabular-nums">{invite.useCount}{invite.maxUses > 0 ? `/${invite.maxUses}` : ''}</span>
+							<TableCell class="text-sm">
+								<span class="tabular-nums"
+									>{invite.useCount}{invite.maxUses > 0 ? `/${invite.maxUses}` : ''}</span
+								>
 							</TableCell>
-							<TableCell class="py-3 px-3">
+							<TableCell>
 								{#if invite.hasPin}
-									<Badge variant="outline" class="text-xs">PIN</Badge>
+									<Badge variant="outline">PIN</Badge>
 								{:else}
 									<span class="text-xs text-muted-foreground">None</span>
 								{/if}
 							</TableCell>
-							<TableCell class="text-sm text-muted-foreground py-3 px-3">
+							<TableCell class="text-sm text-muted-foreground">
 								{#if invite.expiresAt}
 									{@const expires = timestampDate(invite.expiresAt)}
 									{@const isExpired = expires < new Date()}
-									<Badge variant={isExpired ? 'destructive' : 'outline'} class="text-xs">
+									<Badge variant={isExpired ? 'destructive' : 'outline'}>
 										{isExpired ? 'Expired' : relativeTime(expires).replace(' ago', '')}
 									</Badge>
 								{:else}
@@ -287,8 +273,13 @@
 								{/if}
 							</TableCell>
 							<PermissionGate resource="settings" action="delete">
-								<TableCell class="text-right py-3 px-3">
-									<Button variant="ghost" size="sm" class="h-7 px-2 text-xs text-destructive hover:text-destructive" onclick={() => openDelete(invite)}>
+								<TableCell class="text-right">
+									<Button
+										variant="ghost"
+										size="sm"
+										class="text-destructive hover:text-destructive"
+										onclick={() => openDelete(invite)}
+									>
 										Delete
 									</Button>
 								</TableCell>
@@ -302,13 +293,12 @@
 	{/if}
 </div>
 
-<!-- Bulk Actions -->
 <BulkActionBar count={selected.size} onClear={() => selected.clear()}>
 	<PermissionGate resource="settings" action="delete">
 		<Button
 			variant="ghost"
 			size="sm"
-			class="h-7 text-destructive hover:text-destructive"
+			class="text-destructive hover:text-destructive"
 			disabled={bulkWorking}
 			onclick={() => (bulkDeleteDialogOpen = true)}
 		>
@@ -317,54 +307,9 @@
 	</PermissionGate>
 </BulkActionBar>
 
-<!-- Create Invite Panel -->
-<FormPanel bind:open={createPanelOpen} title="Create Registration Invite" wide>
-	<div class="space-y-3">
-		<FormField label="Description" id="invite-desc" required>
-			<Input id="invite-desc" bind:value={inviteDescription} placeholder="Team onboarding Q1" />
-		</FormField>
-		<FormField label="Roles" help="Granted on registration">
-			<AsyncSelect
-				multiple
-				bind:selected={inviteSelectedRoles}
-				placeholder="Select roles..."
-				searchPlaceholder="Search roles..."
-				fetchPage={async (query, pageToken) => {
-					const resp = await rpcClient.role.listRoles({
-						page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 }
-					});
-					return {
-						items: resp.roles.map((r) => ({ value: r.id, label: r.name, description: r.description })),
-						nextPageToken: resp.page?.nextPageToken ?? ''
-					};
-				}}
-			/>
-		</FormField>
-		<FormField label="PIN" id="invite-pin-input" help="Also required to register">
-			<Input id="invite-pin-input" bind:value={invitePin} placeholder="None" autocomplete="new-password" data-1p-ignore data-lpignore="true" data-bwignore />
-		</FormField>
-		<div class="grid grid-cols-2 gap-3">
-			<FormField label="Max uses" id="invite-max">
-				<Input id="invite-max" type="number" bind:value={inviteMaxUses} placeholder="Unlimited" min={1} />
-			</FormField>
-			<FormField label="Expires" id="invite-expiry">
-				<UnitInput id="invite-expiry" unit="hrs" bind:value={inviteExpiryHours} placeholder="Never" min={1} />
-			</FormField>
-		</div>
-	</div>
-
-	{#snippet footer()}
-		<Button variant="outline" onclick={() => (createPanelOpen = false)}>Cancel</Button>
-		<Button onclick={createInvite} disabled={creating || !inviteDescription.trim()}>
-			{creating ? 'Creating...' : 'Create Invite'}
-		</Button>
-	{/snippet}
-</FormPanel>
-
-<!-- Delete Confirmation -->
 <ConfirmDialog
 	bind:open={deleteDialogOpen}
-	title="Delete Invite"
+	title="Delete invite"
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
@@ -374,16 +319,16 @@
 	{/snippet}
 </ConfirmDialog>
 
-<!-- Bulk Delete Confirmation -->
 <ConfirmDialog
 	bind:open={bulkDeleteDialogOpen}
-	title="Delete Invites"
+	title="Delete invites"
 	confirmLabel="Delete"
 	onConfirm={confirmBulkDelete}
 	loading={bulkWorking}
 >
 	{#snippet description()}
-		Are you sure you want to delete <strong>{selected.size} invite{selected.size !== 1 ? 's' : ''}</strong>?
-		The links will stop working immediately.
+		Are you sure you want to delete <strong
+			>{selected.size} invite{selected.size !== 1 ? 's' : ''}</strong
+		>? The links will stop working immediately.
 	{/snippet}
 </ConfirmDialog>

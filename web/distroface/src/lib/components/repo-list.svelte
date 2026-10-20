@@ -33,28 +33,28 @@
 
 <div class="space-y-4">
 	{#if showSkeleton}
-		<div class="space-y-2">
+		<div class="box divide-y">
 			{#each { length: 4 }, i (i)}
-				<div class="rounded-xl border border-border/40 p-4">
-					<div class="flex items-start gap-3.5">
-						<Skeleton class="h-10 w-10 rounded-lg shrink-0" />
-						<div class="flex-1 space-y-2.5">
-							<Skeleton class="h-4 w-48" />
-							<Skeleton class="h-3 w-72" />
-							<div class="flex gap-4">
-								<Skeleton class="h-3 w-16" />
-								<Skeleton class="h-3 w-16" />
-								<Skeleton class="h-3 w-20" />
-							</div>
-						</div>
+				<div class="space-y-2.5 px-4 py-3.5">
+					<Skeleton class="h-4 w-48" />
+					<Skeleton class="h-3.5 w-72" />
+					<div class="flex gap-4">
+						<Skeleton class="h-3 w-14" />
+						<Skeleton class="h-3 w-14" />
+						<Skeleton class="h-3 w-20" />
 					</div>
 				</div>
 			{/each}
 		</div>
 	{:else if repos.length === 0}
-		<EmptyState icon={Package} message={emptyMessage} description={emptyDescription} actions={emptyActions} />
+		<EmptyState
+			icon={Package}
+			message={emptyMessage}
+			description={emptyDescription}
+			actions={emptyActions}
+		/>
 	{:else}
-		<div class="space-y-2 transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
+		<div class="box divide-y transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			{#each repos as repo (repo.id)}
 				<RepoCard {repo} />
 			{/each}

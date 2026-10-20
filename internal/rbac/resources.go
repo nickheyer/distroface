@@ -10,6 +10,7 @@ const (
 	ResourceOrganizations = "organizations"
 	ResourceWebhooks      = "webhooks"
 	ResourceArtifacts     = "artifacts"
+	ResourceGit           = "git"
 )
 
 // Action constants
@@ -39,4 +40,5 @@ var ResourceActions = []ResourceActionEntry{
 	{Resource: ResourceOrganizations, Actions: []string{ActionRead, ActionCreate, ActionUpdate, ActionDelete, ActionManage}},
 	{Resource: ResourceWebhooks, Actions: []string{ActionRead, ActionCreate, ActionUpdate, ActionDelete}},
 	{Resource: ResourceArtifacts, Actions: []string{ActionRead, ActionCreate, ActionUpdate, ActionDelete, ActionPush, ActionPull, ActionManage}},
+	{Resource: ResourceGit, Actions: []string{ActionRead, ActionCreate, ActionUpdate, ActionDelete, ActionPush, ActionPull, ActionManage}},
 }

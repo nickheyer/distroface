@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/go-git/go-git/v6/plumbing/transport"
 	"net/http"
 	"slices"
 	"strings"
@@ -12,8 +13,10 @@ import (
 	"time"
 
 	"github.com/nickheyer/distroface/internal/artifacts"
+	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -47,12 +50,16 @@ func (e *CooldownError) Error() string {
 
 // Monitor polls mirror repos and pulls new upstream content
 type Monitor struct {
-	store     *stores.Store
-	res       *settings.Resolver
-	artifacts *artifacts.Manager
-	oci       *ociSyncer
-	log       *logger.Logger
-	client    *http.Client
+	store        *stores.Store
+	res          *settings.Resolver
+	artifacts    *artifacts.Manager
+	oci          *ociSyncer
+	git          *gitrepo.Manager
+	sealer       *auth.Sealer
+	legacySealer *auth.Sealer
+	log          *logger.Logger
+	client       *http.Client
+	dial         transport.DialContextFunc
 
 	baseCtx     context.Context
 	mu          sync.Mutex
@@ -61,6 +68,7 @@ type Monitor struct {
 	cancels     map[string]context.CancelFunc
 	stopped     map[string]bool
 	activeSyncs map[string]Event
+	pushTimers  map[string]*time.Timer
 	events      *hub
 }
 
@@ -69,6 +77,7 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		return res.System(context.Background()).GetMirror().GetAllowPrivateNetworks()
 	}
 	pace := newPacer()
+	dial := safeDialer(allowPrivate).DialContext
 	client := &http.Client{
 		Transport: &pacedTransport{inner: safeTransport(allowPrivate), pace: pace},
 		Timeout:   0,
@@ -94,11 +103,13 @@ func NewMonitor(store *stores.Store, res *settings.Resolver, mgr *artifacts.Mana
 		oci:         oci,
 		log:         log,
 		client:      client,
+		dial:        dial,
 		baseCtx:     context.Background(),
 		inflight:    make(map[string]bool),
 		cancels:     make(map[string]context.CancelFunc),
 		stopped:     make(map[string]bool),
 		activeSyncs: make(map[string]Event),
+		pushTimers:  make(map[string]*time.Timer),
 		events:      newHub(),
 	}
 }
@@ -239,7 +250,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 		m.log.Error("mirror sweep artifact repo list: %v", err)
 	}
 	for _, repo := range repos {
-		cfg, err := ParseConfig(repo.MirrorConfig)
+		cfg, err := m.Config(repo.MirrorConfig)
 		if err != nil {
 			m.log.Error("mirror config for artifact repo %s/%s: %v", repo.Namespace, repo.Name, err)
 			continue
@@ -247,7 +258,6 @@ func (m *Monitor) sweep(ctx context.Context) {
 		if !m.due(ctx, cfg, repo.MirrorLastSync, ParseState(repo.MirrorState)) {
 			continue
 		}
-		repo, cfg := repo, cfg
 		jobs = append(jobs, func() {
 			key := fmt.Sprintf("artifact:%d", repo.ID)
 			if !m.try(key) {
@@ -264,7 +274,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 			m.log.Error("mirror sweep image repo list: %v", err)
 		}
 		for _, repo := range imageRepos {
-			cfg, err := ParseConfig(repo.MirrorConfig)
+			cfg, err := m.Config(repo.MirrorConfig)
 			if err != nil {
 				m.log.Error("mirror config for image repo %s/%s: %v", repo.Namespace, repo.Name, err)
 				continue
@@ -272,7 +282,6 @@ func (m *Monitor) sweep(ctx context.Context) {
 			if !m.due(ctx, cfg, repo.MirrorLastSync, ParseState(repo.MirrorState)) {
 				continue
 			}
-			repo, cfg := repo, cfg
 			jobs = append(jobs, func() {
 				key := "image:" + repo.ID
 				if !m.try(key) {
@@ -282,6 +291,10 @@ func (m *Monitor) sweep(ctx context.Context) {
 				m.execImageSync(ctx, repo, cfg)
 			})
 		}
+	}
+
+	if m.git != nil {
+		jobs = append(jobs, m.gitJobs(ctx)...)
 	}
 
 	sem := make(chan struct{}, lim.Workers)
@@ -298,7 +311,7 @@ func (m *Monitor) sweep(ctx context.Context) {
 
 // SyncArtifactRepoNow starts an immediate background sync
 func (m *Monitor) SyncArtifactRepoNow(repo *db.ArtifactRepository) error {
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}
@@ -328,7 +341,7 @@ func (m *Monitor) SyncImageRepoNow(repo *db.Repository) error {
 	if m.oci == nil || repo.Type != v1.RepositoryType_REPOSITORY_TYPE_MIRROR {
 		return fmt.Errorf("%w: repository is not a mirror", ErrInvalid)
 	}
-	cfg, err := ParseConfig(repo.MirrorConfig)
+	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}
@@ -361,6 +374,7 @@ func (m *Monitor) execArtifactSync(ctx context.Context, repo *db.ArtifactReposit
 		OwnerID:   repo.OwnerID,
 	}
 	state := ParseState(repo.MirrorState)
+	prevETag := state.ListETag
 	runCtx, cancel := context.WithTimeout(ctx, currentLimits().SyncTimeout)
 	m.armCancel(key, cancel)
 	m.beginSync(key, ev)
@@ -382,6 +396,10 @@ func (m *Monitor) execArtifactSync(ctx context.Context, repo *db.ArtifactReposit
 	}
 	if err := m.store.SetArtifactRepoMirrorStatus(statusCtx(ctx), repo.ID, time.Now().UTC(), msg, state.Encode()); err != nil {
 		m.log.Error("mirror status update for artifact repo %d: %v", repo.ID, err)
+	}
+	// Linked git repos take release notes whenever the listing changed
+	if m.git != nil && repo.GitRepoID != nil && (syncErr == nil || nothing != nil) && (state.ListETag == "" || state.ListETag != prevETag) {
+		m.syncLinkedReleases(statusCtx(ctx), repo, cfg)
 	}
 	m.endSync(key, ev, syncErr)
 }
@@ -613,7 +631,7 @@ func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository
 		return err
 	}
 	if _, err := blobs.AppendChunk(uploadID, resp.Body); err != nil {
-		blobs.CancelUpload(uploadID)
+		_ = blobs.CancelUpload(uploadID)
 		return err
 	}
 

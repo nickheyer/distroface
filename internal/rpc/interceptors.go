@@ -67,6 +67,10 @@ func unauthenticated() error {
 	return connect.NewError(connect.CodeUnauthenticated, auth.ErrInvalidToken.Error()).WithCause(auth.ErrInvalidToken)
 }
 
+func scopeDenied() error {
+	return connect.Errorf(connect.CodePermissionDenied, "credential scope does not cover this procedure")
+}
+
 // Failed auth counts toward lockout success clears it
 func (s *Server) rateLimitInterceptor() connect.ServerInterceptor {
 	return func(next connect.ServerFunc) connect.ServerFunc {
@@ -176,7 +180,7 @@ func (g *gatedStream) Receive(msg any) error {
 }
 
 // Identity tier and rbac grant checks for one resolved caller
-func (s *Server) authorize(_ context.Context, req any, user *auth.AuthenticatedUser, procedure string) error {
+func (s *Server) authorize(ctx context.Context, req any, user *auth.AuthenticatedUser, procedure string) error {
 	if user == nil {
 		return unauthenticated()
 	}
@@ -184,6 +188,12 @@ func (s *Server) authorize(_ context.Context, req any, user *auth.AuthenticatedU
 	// Forced rotation blocks everything but session and password rpcs
 	if user.MustChangePassword && !mustChangeExemptProcedures[procedure] {
 		return connect.Errorf(connect.CodePermissionDenied, "password change required before continuing")
+	}
+
+	if user.IsScoped() {
+		if err := s.scopeAllows(ctx, req, user, procedure); err != nil {
+			return err
+		}
 	}
 
 	if rbac.IdentityProcedures[procedure] {
@@ -199,7 +209,11 @@ func (s *Server) authorize(_ context.Context, req any, user *auth.AuthenticatedU
 	}
 
 	perm, ok := rbac.ProcedurePermissions[procedure]
-	if !ok || s.Enforcer == nil {
+	if !ok {
+		// Every procedure names its policy, an unmapped one is denied rather than waved through
+		return connect.Errorf(connect.CodePermissionDenied, "procedure %s has no access policy", procedure)
+	}
+	if s.Enforcer == nil {
 		return nil
 	}
 	objectID := "*"
@@ -220,6 +234,69 @@ func (s *Server) authorize(_ context.Context, req any, user *auth.AuthenticatedU
 		return connect.Errorf(connect.CodePermissionDenied, "insufficient permissions for %s/%s on %s", perm.Resource, perm.Action, objectID)
 	}
 	return nil
+}
+
+// Scoped credentials reach their object and their own identity, nothing else
+func (s *Server) scopeAllows(ctx context.Context, req any, user *auth.AuthenticatedUser, procedure string) error {
+	if procedure == distrofacev1connect.AuthServiceGetCurrentUserProcedure {
+		return nil
+	}
+	perm, ok := rbac.ProcedurePermissions[procedure]
+	if !ok {
+		return scopeDenied()
+	}
+	switch perm.Resource {
+	case rbac.ResourceGit, rbac.ResourceRepositories, rbac.ResourceArtifacts:
+	default:
+		return scopeDenied()
+	}
+	if perm.ObjectIDField == "" {
+		// Lists filter visibility in service, creates never fit a scope
+		if perm.Action == rbac.ActionRead || perm.Action == rbac.ActionPull {
+			return nil
+		}
+		return scopeDenied()
+	}
+	objectID := rbac.ExtractObjectID(req, perm.ObjectIDField)
+	if objectID == "*" {
+		return scopeDenied()
+	}
+	namespace, _, _ := strings.Cut(objectID, "/")
+	ids := []string{objectID, namespace}
+	if src := s.linkedSource(ctx, perm.Resource, objectID); src != "" {
+		ids = append(ids, src)
+	}
+	if !auth.ScopeAllows(user, perm.Action, ids...) {
+		return scopeDenied()
+	}
+	return nil
+}
+
+// Full name of the git repo a package links to, empty when standalone
+func (s *Server) linkedSource(ctx context.Context, resource, objectID string) string {
+	namespace, name, ok := strings.Cut(objectID, "/")
+	if !ok {
+		return ""
+	}
+	store := s.AuthManager.GetStore()
+	var gitID *string
+	switch resource {
+	case rbac.ResourceRepositories:
+		if repo, _ := store.GetRepository(ctx, namespace, name); repo != nil {
+			gitID = repo.GitRepoID
+		}
+	case rbac.ResourceArtifacts:
+		if repo, _ := store.GetArtifactRepository(ctx, namespace, name); repo != nil {
+			gitID = repo.GitRepoID
+		}
+	}
+	if gitID == nil {
+		return ""
+	}
+	if g, _ := store.GetGitRepositoryByID(ctx, *gitID); g != nil {
+		return g.Namespace + "/" + g.Name
+	}
+	return ""
 }
 
 // Reflection needs a real token, anonymous never browses the schema
@@ -377,7 +454,7 @@ func portalAllowsProcedure(ctx context.Context, procedure string) error {
 		return nil
 	}
 	perm, ok := rbac.ProcedurePermissions[procedure]
-	if !ok || (perm.Resource != rbac.ResourceArtifacts && perm.Resource != rbac.ResourceRepositories) {
+	if !ok || (perm.Resource != rbac.ResourceArtifacts && perm.Resource != rbac.ResourceRepositories && perm.Resource != rbac.ResourceGit) {
 		return nil
 	}
 	if perm.Action == rbac.ActionRead || perm.Action == rbac.ActionPull {

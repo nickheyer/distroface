@@ -46,6 +46,35 @@ func (r *RegistryAccess) DeleteNamespace(namespace string) error {
 	return os.RemoveAll(repoPath)
 }
 
+// Removes the registry link tree for one repository, blobs stay in the global store
+func (r *RegistryAccess) DeleteRepository(namespace, name string) error {
+	repoPath := filepath.Join(r.storagePath, "docker", "registry", "v2", "repositories", namespace, name)
+	return os.RemoveAll(repoPath)
+}
+
+// Moves the registry link tree of a repository, refused while uploads are in flight
+func (r *RegistryAccess) MoveRepository(oldNamespace, oldName, newNamespace, newName string) error {
+	base := filepath.Join(r.storagePath, "docker", "registry", "v2", "repositories")
+	src := filepath.Join(base, oldNamespace, oldName)
+	if _, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if entries, err := os.ReadDir(filepath.Join(src, "_uploads")); err == nil && len(entries) > 0 {
+		return fmt.Errorf("repository %s/%s has uploads in progress", oldNamespace, oldName)
+	}
+	dst := filepath.Join(base, newNamespace, newName)
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("repository %s/%s already exists in registry storage", newNamespace, newName)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(src, dst)
+}
+
 // ListTags returns all tags for a repository as proto Tag messages.
 // Returns nil with no error if the repository has no tags or doesn't exist in storage.
 func (r *RegistryAccess) ListTags(ctx context.Context, namespace, name string) ([]*v1.Tag, error) {

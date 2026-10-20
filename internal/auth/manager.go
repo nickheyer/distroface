@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,6 +39,41 @@ type Manager struct {
 	enforcer  *rbac.Enforcer
 	res       *settings.Resolver
 	jwtSecret []byte
+	// Key behind sealed secrets, independent of the session signing secret
+	sealKey []byte
+}
+
+// Installs the sealing key from config or the data dir, generating it once
+func (m *Manager) LoadSealingKey(configured, dataDir string) error {
+	if configured != "" {
+		m.sealKey = []byte(configured)
+		return nil
+	}
+	path := filepath.Join(dataDir, "sealing.key")
+	raw, err := os.ReadFile(path)
+	if err == nil {
+		key, err := hex.DecodeString(strings.TrimSpace(string(raw)))
+		if err != nil || len(key) == 0 {
+			return fmt.Errorf("sealing key %s is not hex encoded", path)
+		}
+		m.sealKey = key
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reading sealing key: %w", err)
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return fmt.Errorf("generating sealing key: %w", err)
+	}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return fmt.Errorf("creating data dir for the sealing key: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
+		return fmt.Errorf("writing sealing key: %w", err)
+	}
+	m.sealKey = key
+	return nil
 }
 
 const jwtSecretSettingKey = "jwt_secret"
@@ -303,6 +340,24 @@ func (m *Manager) ChangePassword(ctx context.Context, userID, oldPassword, newPa
 	return m.store.UpdateUser(ctx, user)
 }
 
+// Replaces a local user's password without the old one, for mailed resets
+func (m *Manager) SetPassword(ctx context.Context, userID, newPassword string) error {
+	user, err := m.store.GetUserByID(ctx, userID)
+	if err != nil || user == nil {
+		return ErrInvalidCredentials
+	}
+	if user.AuthProvider != "local" {
+		return errors.New("password reset only available for local auth users")
+	}
+	hashedPassword, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	user.PasswordHash = hashedPassword
+	user.MustChangePassword = false
+	return m.store.UpdateUser(ctx, user)
+}
+
 func (m *Manager) AnonymousUser() *AuthenticatedUser {
 	return &AuthenticatedUser{
 		ID:       "anonymous",
@@ -340,6 +395,11 @@ func (m *Manager) GetStore() *stores.Store {
 
 // GenerateAPIToken creates a new API token for a user. Plaintext is returned, SHA-256 hash is stored.
 func (m *Manager) GenerateAPIToken(ctx context.Context, userID, name string, expiresInDays *int32) (string, *db.APIToken, error) {
+	return m.GenerateScopedAPIToken(ctx, userID, name, expiresInDays, nil)
+}
+
+// Creates a token narrowed to one object when scope is set
+func (m *Manager) GenerateScopedAPIToken(ctx context.Context, userID, name string, expiresInDays *int32, scope *CredentialScope) (string, *db.APIToken, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", nil, fmt.Errorf("failed to generate token: %w", err)
@@ -362,6 +422,11 @@ func (m *Manager) GenerateAPIToken(ctx context.Context, userID, name string, exp
 		Name:      name,
 		TokenHash: hashHex,
 		ExpiresAt: expiresAt,
+	}
+	if scope != nil {
+		token.ScopeType = int32(scope.Type)
+		token.ScopeID = scope.ID
+		token.ReadOnly = scope.ReadOnly
 	}
 
 	if err := m.store.CreateAPIToken(ctx, token); err != nil {
@@ -420,12 +485,22 @@ func (m *Manager) ValidateAPIToken(ctx context.Context, rawToken string) (*Authe
 		Roles:              roleNames,
 		Provider:           user.AuthProvider,
 		MustChangePassword: user.MustChangePassword,
+		Scope:              TokenScope(apiToken),
+		TokenID:            apiToken.ID,
 	}
 	if user.Email != nil {
 		authUser.Email = *user.Email
 	}
 
 	return authUser, nil
+}
+
+// Credential scope stored on a token row, nil for full identity tokens
+func TokenScope(t *db.APIToken) *CredentialScope {
+	if t == nil || t.ScopeType == 0 {
+		return nil
+	}
+	return &CredentialScope{Type: v1.CredentialScopeType(t.ScopeType), ID: t.ScopeID, ReadOnly: t.ReadOnly}
 }
 
 func (m *Manager) generateJWT(userID, username string, roles []string, expiresAt time.Time) (string, error) {
@@ -475,3 +550,6 @@ func checkPassword(hashedPassword, password string) bool {
 	err := bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 	return err == nil
 }
+
+// JWTSecret exposes the signing secret for derived keys
+func (m *Manager) JWTSecret() []byte { return m.jwtSecret }

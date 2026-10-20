@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/git.proto";
+import "distroface/v1/pagination.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// WikiService edits the markdown pages of a repository wiki.
+// Every write is a commit in the wiki repository.
+service WikiService {
+  // ListWikiPages returns every page title.
+  rpc ListWikiPages(ListWikiPagesRequest) returns (ListWikiPagesResponse) {}
+  // GetWikiPage returns one page.
+  rpc GetWikiPage(GetWikiPageRequest) returns (GetWikiPageResponse) {}
+  // CreateWikiPage adds a page.
+  rpc CreateWikiPage(CreateWikiPageRequest) returns (CreateWikiPageResponse) {}
+  // UpdateWikiPage changes or renames a page.
+  rpc UpdateWikiPage(UpdateWikiPageRequest) returns (UpdateWikiPageResponse) {}
+  // DeleteWikiPage removes a page.
+  rpc DeleteWikiPage(DeleteWikiPageRequest) returns (DeleteWikiPageResponse) {}
+  // ListWikiRevisions pages the history of one page.
+  rpc ListWikiRevisions(ListWikiRevisionsRequest) returns (ListWikiRevisionsResponse) {}
+}
+
+// WikiPage is one markdown page.
+message WikiPage {
+  string title = 1;
+  // File name in the wiki repository
+  string filename = 2;
+  string content = 3;
+  GitCommit last_commit = 4;
+  // Sidebar and footer rendered around the page
+  string sidebar = 5;
+  string footer = 6;
+}
+
+// ListWikiPagesRequest identifies a repository.
+message ListWikiPagesRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+}
+
+// ListWikiPagesResponse contains page titles with their last commit.
+message ListWikiPagesResponse {
+  repeated WikiPage pages = 1;
+  PageInfo page = 2;
+  // Wiki repository exists and has pages
+  bool exists = 3;
+  string http_clone_url = 4;
+  string ssh_clone_url = 5;
+}
+
+// GetWikiPageRequest identifies a page by title.
+message GetWikiPageRequest {
+  string namespace = 1;
+  string name = 2;
+  string title = 3;
+  // Read the page at this commit instead of the tip
+  string sha = 4;
+}
+
+// GetWikiPageResponse contains the page.
+message GetWikiPageResponse {
+  WikiPage page = 1;
+}
+
+// CreateWikiPageRequest adds a page.
+message CreateWikiPageRequest {
+  string namespace = 1;
+  string name = 2;
+  string title = 3;
+  string content = 4;
+  string message = 5;
+}
+
+// CreateWikiPageResponse contains the page.
+message CreateWikiPageResponse {
+  WikiPage page = 1;
+}
+
+// UpdateWikiPageRequest changes a page.
+message UpdateWikiPageRequest {
+  string namespace = 1;
+  string name = 2;
+  string title = 3;
+  optional string new_title = 4;
+  optional string content = 5;
+  string message = 6;
+  // Refused when the page changed past this sha
+  string expected_sha = 7;
+}
+
+// UpdateWikiPageResponse contains the page.
+message UpdateWikiPageResponse {
+  WikiPage page = 1;
+}
+
+// DeleteWikiPageRequest identifies a page.
+message DeleteWikiPageRequest {
+  string namespace = 1;
+  string name = 2;
+  string title = 3;
+}
+
+// DeleteWikiPageResponse is empty on success.
+message DeleteWikiPageResponse {}
+
+// ListWikiRevisionsRequest pages the history of a page.
+message ListWikiRevisionsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string title = 4;
+}
+
+// ListWikiRevisionsResponse contains commits touching the page.
+message ListWikiRevisionsResponse {
+  repeated GitCommit commits = 1;
+  PageInfo page = 2;
+}

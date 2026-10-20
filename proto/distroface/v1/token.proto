@@ -21,6 +21,8 @@ service TokenService {
 message CreateAPITokenRequest {
   string name = 1;
   optional int32 expires_in_days = 2;
+  // Absent creates a full identity token
+  CredentialScope scope = 3;
 }
 
 // CreateAPITokenResponse returns the plaintext token (shown once) and metadata.
@@ -32,6 +34,8 @@ message CreateAPITokenResponse {
 // ListAPITokensRequest supports pagination.
 message ListAPITokensRequest {
   PageRequest page = 1;
+  // Limits to tokens scoped to this git repo, namespace/name
+  string git_repo = 2;
 }
 
 // ListAPITokensResponse contains a page of the user's tokens.
