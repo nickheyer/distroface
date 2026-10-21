@@ -367,10 +367,38 @@ func (m *Manager) buildTask(ctx context.Context, repo *db.GitRepository, run *db
 		"inputs":          ectx.Inputs,
 		"outputs":         outputs,
 		"job":             map[string]any{"key": baseKey(job), "continue_on_error": def.Job.ContinueOnError, "attempt": job.Attempt},
+		"strategy":        strategyContext(def.Job.Strategy, job, jobs),
 		"workflow_path":   run.WorkflowPath,
 		"workflow_source": run.Workflow,
 	})
 	return task, nil
+}
+
+// Strategy context as the hosted runner fills it for one matrix leg
+func strategyContext(st *Strategy, job *db.ActionsJob, jobs []*db.ActionsJob) map[string]any {
+	index, total := 0, 0
+	for _, sibling := range jobs {
+		if sibling.MatrixGroup != job.MatrixGroup {
+			continue
+		}
+		if sibling.ID == job.ID {
+			index = total
+		}
+		total++
+	}
+	if total == 0 {
+		total = 1
+	}
+	out := map[string]any{"fail-fast": true, "job-index": index, "job-total": total, "max-parallel": total}
+	if st != nil {
+		if st.FailFast != nil {
+			out["fail-fast"] = *st.FailFast
+		}
+		if st.MaxParallel > 0 {
+			out["max-parallel"] = st.MaxParallel
+		}
+	}
+	return out
 }
 
 func firstLine(s string) string {

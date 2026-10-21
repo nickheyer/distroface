@@ -1,48 +1,27 @@
 package runner
 
 import (
-	"archive/zip"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	neturl "net/url"
-	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/bmatcuk/doublestar/v4"
-	"github.com/go-git/go-git/v6"
-	"github.com/go-git/go-git/v6/plumbing"
-	"github.com/go-git/go-git/v6/plumbing/client"
-	githttp "github.com/go-git/go-git/v6/plumbing/transport/http"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"gopkg.in/yaml.v3"
 )
 
 const maxActionDepth = 10
 
-var shaPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
-
-// Native handlers first, anything else is a fetched action
-func (j *job) runUses(ctx context.Context, st *v1.TaskStep, env map[string]string, ectx *exprContext, outputs map[string]string, out io.Writer) error {
-	ref := strings.TrimSpace(interpolate(st.Uses, ectx))
-	with := interpolateMap(st.With, ectx)
-	name, _, _ := strings.Cut(ref, "@")
-	if handled, err := j.runNative(ctx, name, with, env, outputs, out); handled {
-		return err
-	}
-	act, err := j.resolveAction(ctx, ref, j.workspace, out)
-	if err != nil {
-		return err
-	}
-	return j.runAction(ctx, act, with, env, ectx, outputs, out, 0)
-}
+var shaPattern = regexp.MustCompile(`^[0-9a-fA-F]{40}$`)
 
 // Subset of action.yml the runner honors
 type actionMeta struct {
@@ -55,14 +34,19 @@ type actionMeta struct {
 		Value string `yaml:"value"`
 	} `yaml:"outputs"`
 	Runs struct {
-		Using      string         `yaml:"using"`
-		Main       string         `yaml:"main"`
-		Post       string         `yaml:"post"`
-		Image      string         `yaml:"image"`
-		Entrypoint string         `yaml:"entrypoint"`
-		Args       []string       `yaml:"args"`
-		Env        map[string]any `yaml:"env"`
-		Steps      []actionStep   `yaml:"steps"`
+		Using          string         `yaml:"using"`
+		Pre            string         `yaml:"pre"`
+		PreIf          string         `yaml:"pre-if"`
+		Main           string         `yaml:"main"`
+		Post           string         `yaml:"post"`
+		PostIf         string         `yaml:"post-if"`
+		Image          string         `yaml:"image"`
+		Entrypoint     string         `yaml:"entrypoint"`
+		PreEntrypoint  string         `yaml:"pre-entrypoint"`
+		PostEntrypoint string         `yaml:"post-entrypoint"`
+		Args           []string       `yaml:"args"`
+		Env            map[string]any `yaml:"env"`
+		Steps          []actionStep   `yaml:"steps"`
 	} `yaml:"runs"`
 }
 
@@ -79,12 +63,61 @@ type actionStep struct {
 	ContinueOnError  bool           `yaml:"continue-on-error"`
 }
 
+func (a actionStep) spec() stepSpec {
+	return stepSpec{
+		ID: a.ID, Name: a.Name, Uses: a.Uses, Run: a.Run, Shell: a.Shell, WorkingDirectory: a.WorkingDirectory, If: a.If,
+		Env: stringValues(a.Env), With: stringValues(a.With), ContinueOnError: a.ContinueOnError,
+	}
+}
+
+func stringValues(m map[string]any) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		out[k] = stringify(v)
+	}
+	return out
+}
+
 type actionDef struct {
-	ref  string
-	repo string
-	dir  string
-	root string
-	meta actionMeta
+	ref     string
+	repo    string
+	version string
+	dir     string
+	root    string
+	meta    actionMeta
+}
+
+func (a *actionDef) using() string {
+	return strings.ToLower(strings.TrimSpace(a.meta.Runs.Using))
+}
+
+func (a *actionDef) isComposite() bool { return a.using() == "composite" }
+func (a *actionDef) isDocker() bool    { return a.using() == "docker" }
+func (a *actionDef) isNode() bool      { return strings.HasPrefix(a.using(), "node") }
+
+// Whether the action declares a pre phase
+func (a *actionDef) hasPre() bool {
+	return a.isNode() && a.meta.Runs.Pre != "" || a.isDocker() && a.meta.Runs.PreEntrypoint != ""
+}
+
+// Whether the action declares a post phase
+func (a *actionDef) hasPost() bool {
+	return a.isNode() && a.meta.Runs.Post != "" || a.isDocker() && a.meta.Runs.PostEntrypoint != ""
+}
+
+// Whether a uses reference points into the checked out tree
+func localAction(ref string) bool {
+	return strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "../")
+}
+
+// Whether a uses reference names something the runner fetches
+func fetchedAction(ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.HasPrefix(ref, "docker://") || localAction(ref) {
+		return false
+	}
+	name, _, _ := strings.Cut(ref, "@")
+	return !nativeAction(name)
 }
 
 // Locates or fetches the action and reads its metadata
@@ -95,10 +128,19 @@ func (j *job) resolveAction(ctx context.Context, ref, localBase string, out io.W
 		act.meta.Runs.Image = ref
 		return act, nil
 	}
-	if strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "../") {
+	if localAction(ref) {
 		dir := filepath.Join(localBase, filepath.FromSlash(ref))
+		if !within(j.dir, dir) {
+			return nil, fmt.Errorf("action %q leaves the job directory", ref)
+		}
 		act := &actionDef{ref: ref, repo: ref, dir: dir, root: localBase}
-		return act, act.load()
+		return act, act.load(j.readFile)
+	}
+	j.mu.Lock()
+	cached := j.prepared[ref]
+	j.mu.Unlock()
+	if cached != nil {
+		return cached, nil
 	}
 	spec, version, _ := strings.Cut(ref, "@")
 	if version == "" {
@@ -114,13 +156,19 @@ func (j *job) resolveAction(ctx context.Context, ref, localBase string, out io.W
 		sub = parts[2]
 	}
 	root := filepath.Join(j.actionsDir, parts[0], parts[1], safeSegment(version))
-	if _, err := os.Stat(filepath.Join(root, ".git")); err != nil {
+	if _, err := j.stat(filepath.Join(root, actionMarkerFile)); err != nil {
 		if err := j.fetchAction(ctx, repo, version, root, out); err != nil {
 			return nil, err
 		}
 	}
-	act := &actionDef{ref: ref, repo: repo, dir: filepath.Join(root, filepath.FromSlash(sub)), root: root}
-	return act, act.load()
+	act := &actionDef{ref: ref, repo: repo, version: version, dir: filepath.Join(root, filepath.FromSlash(sub)), root: root}
+	if err := act.load(j.readFile); err != nil {
+		return nil, err
+	}
+	j.mu.Lock()
+	j.prepared[ref] = act
+	j.mu.Unlock()
+	return act, nil
 }
 
 func safeSegment(s string) string {
@@ -134,21 +182,35 @@ func safeSegment(s string) string {
 
 // Instance first, github.com second, following the DEFAULT_ACTIONS_URL rule
 func (j *job) fetchAction(ctx context.Context, repo, version, dest string, out io.Writer) error {
-	var errs []string
+	var sources []struct{ url, token string }
 	if base := j.cloneBase(); base != "" && !githubOnly(repo) {
-		fmt.Fprintf(out, "Fetching action %s@%s from %s\n", repo, version, base)
-		err := j.cloneHost(ctx, base+"/"+repo+".git", dest, version, 1, j.task.Token)
+		sources = append(sources, struct{ url, token string }{j.hostURL(base + "/" + repo + ".git"), j.task.Token})
+	}
+	sources = append(sources, struct{ url, token string }{"https://github.com/" + repo + ".git", ""})
+	rel, err := j.rel(dest)
+	if err != nil {
+		return err
+	}
+	root, err := j.fsRoot()
+	if err != nil {
+		return err
+	}
+	var errs []string
+	for _, src := range sources {
+		fmt.Fprintf(out, "Download action repository '%s@%s' from %s\n", repo, version, src.url)
+		err := j.r.ext.ensureAction(ctx, src.url, version, src.token, out, func(cached string) error {
+			_ = root.RemoveAll(rel)
+			if err := copyTreeInto(root, cached, rel); err != nil {
+				return fmt.Errorf("copy action %s@%s: %w", repo, version, err)
+			}
+			return root.WriteFile(filepath.Join(rel, actionMarkerFile), []byte("{}"), 0o644)
+		})
 		if err == nil {
 			return nil
 		}
-		errs = append(errs, fmt.Sprintf("%s: %v", base, err))
+		errs = append(errs, fmt.Sprintf("%s: %v", src.url, err))
 	}
-	fmt.Fprintf(out, "Fetching action %s@%s from github.com\n", repo, version)
-	if err := j.cloneHost(ctx, "https://github.com/"+repo+".git", dest, version, 1, ""); err != nil {
-		errs = append(errs, fmt.Sprintf("github.com: %v", err))
-		return fmt.Errorf("fetch action %s@%s: %s", repo, version, strings.Join(errs, "; "))
-	}
-	return nil
+	return fmt.Errorf("fetch action %s@%s: %s", repo, version, strings.Join(errs, "; "))
 }
 
 // Instance base url derived from the clone url
@@ -160,11 +222,34 @@ func (j *job) cloneBase() string {
 	return strings.TrimRight(j.task.ServerUrl, "/")
 }
 
-func (a *actionDef) load() error {
+// Instance urls rewritten to the runner's own server address
+func (j *job) hostURL(raw string) string {
+	server, err := neturl.Parse(j.r.cfg.Server)
+	if err != nil || server.Host == "" {
+		return raw
+	}
+	u, err := neturl.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	instance := map[string]bool{strings.ToLower(u.Host): false}
+	for _, known := range []string{j.task.ServerUrl, j.task.CloneUrl} {
+		if k, err := neturl.Parse(known); err == nil && k.Host != "" {
+			instance[strings.ToLower(k.Host)] = true
+		}
+	}
+	if !instance[strings.ToLower(u.Host)] {
+		return raw
+	}
+	u.Scheme, u.Host = server.Scheme, server.Host
+	return u.String()
+}
+
+func (a *actionDef) load(read func(string) ([]byte, error)) error {
 	var data []byte
 	var err error
 	for _, name := range []string{"action.yml", "action.yaml"} {
-		data, err = os.ReadFile(filepath.Join(a.dir, name))
+		data, err = read(filepath.Join(a.dir, name))
 		if err == nil {
 			break
 		}
@@ -178,10 +263,205 @@ func (a *actionDef) load() error {
 	return nil
 }
 
-// Dispatches on runs.using
-func (j *job) runAction(ctx context.Context, act *actionDef, with map[string]string, env map[string]string, ectx *exprContext, outputs map[string]string, out io.Writer, depth int) error {
-	if depth > maxActionDepth {
-		return fmt.Errorf("action nesting deeper than %d", maxActionDepth)
+// Downloads every fetched action before the first step
+func (j *job) prepareActions(ctx context.Context) error {
+	for _, st := range j.task.Steps {
+		if !fetchedAction(st.Uses) {
+			continue
+		}
+		act, err := j.resolveAction(ctx, strings.TrimSpace(st.Uses), j.workspace, j.log)
+		if err != nil {
+			return err
+		}
+		if err := j.prepareNested(ctx, act, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Composite actions pull in the remote actions their steps use
+func (j *job) prepareNested(ctx context.Context, act *actionDef, depth int) error {
+	if depth > maxActionDepth || !act.isComposite() {
+		return nil
+	}
+	for _, st := range act.meta.Runs.Steps {
+		if !fetchedAction(st.Uses) {
+			continue
+		}
+		nested, err := j.resolveAction(ctx, strings.TrimSpace(st.Uses), act.root, j.log)
+		if err != nil {
+			return err
+		}
+		if err := j.prepareNested(ctx, nested, depth+1); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// One task step whose action declares a pre phase
+type preStep struct {
+	index int
+	row   int
+	act   *actionDef
+}
+
+// Gives every pre phase its own row after Set up job
+func (j *job) planPreSteps() {
+	var names []string
+	for i, ts := range j.task.Steps {
+		if !fetchedAction(ts.Uses) {
+			continue
+		}
+		j.mu.Lock()
+		act := j.prepared[strings.TrimSpace(ts.Uses)]
+		j.mu.Unlock()
+		if act == nil || !act.hasPre() {
+			continue
+		}
+		j.preSteps = append(j.preSteps, preStep{index: i, row: 1 + len(names), act: act})
+		names = append(names, "Pre "+ts.Name)
+	}
+	if len(names) > 0 {
+		j.insertRows(1, names)
+	}
+}
+
+// Runs one pre phase as its own step row
+func (j *job) runPreStep(ctx context.Context, p preStep) {
+	ts := j.task.Steps[p.index]
+	st := taskStepSpec(ts)
+	if j.hardCancel.Load() {
+		j.setStep(p.row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_SKIPPED)
+		return
+	}
+	wasStopped := j.stopped()
+	sc := j.jobScope(p.row)
+	ectx := sc.exprContext()
+	name, err := interpolate(st.Name, ectx)
+	if err != nil {
+		j.log.Line("##[group]Pre %s", ts.Name)
+		j.fail(p.row, "step %q: name: %v", ts.Name, err)
+		j.log.Line("##[endgroup]")
+		j.setStep(p.row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_FAILURE)
+		j.sync(ctx)
+		return
+	}
+	if name == "" {
+		name = defaultStepName(st)
+	}
+	j.nameStep(p.row, "Pre "+name)
+	cond := p.act.meta.Runs.PreIf
+	if cond == "" {
+		cond = "always()"
+	}
+	ok, err := evalCondition(cond, ectx)
+	if err != nil {
+		j.log.Line("##[group]Pre %s", name)
+		j.fail(p.row, "%s: bad pre-if expression: %v", p.act.ref, err)
+		j.log.Line("##[endgroup]")
+		j.setStep(p.row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_FAILURE)
+		j.sync(ctx)
+		return
+	}
+	if !ok {
+		j.setStep(p.row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_SKIPPED)
+		return
+	}
+	j.setStep(p.row, v1.ActionsStatus_ACTIONS_STATUS_RUNNING, 0)
+	j.sync(ctx)
+	if j.hardCancel.Load() || (!wasStopped && j.stopped()) {
+		j.setStep(p.row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_CANCELLED)
+		return
+	}
+	j.log.Line("##[group]Pre %s", name)
+	started := time.Now()
+	var limit int32
+	if wasStopped {
+		limit = postStepMinutes
+	}
+	sctx, cancel := j.stepContext(ctx, limit, wasStopped)
+	err = j.runPre(sctx, sc, st, p.index, p.act, name)
+	interrupted := !wasStopped && j.stopped()
+	cancel()
+	outcome := "success"
+	switch {
+	case interrupted:
+		outcome = "cancelled"
+	case err != nil:
+		outcome = "failure"
+		j.log.Line("##[error]%v", err)
+		j.annotate(Annotation{Level: "error", Message: fmt.Sprintf("Pre %s: %v", name, err), Step: j.rowNumber(p.row)})
+		j.markFailed()
+	}
+	j.log.Line("##[endgroup]")
+	j.setStep(p.row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, protoConclusion(outcome))
+	j.r.out.Printf("job %s: pre step %d %q %s in %s", shortID(j.task.JobId), j.rowNumber(p.row), name, outcome, time.Since(started).Round(time.Millisecond))
+	j.sync(ctx)
+}
+
+// Runs the pre phase with the step's inputs and queues the post phase
+func (j *job) runPre(ctx context.Context, sc *stepScope, st stepSpec, index int, act *actionDef, name string) error {
+	ectx := sc.exprContext()
+	with, err := interpolateMap(st.With, ectx)
+	if err != nil {
+		return fmt.Errorf("with: %w", err)
+	}
+	stepEnv, err := interpolateMap(st.Env, ectx)
+	if err != nil {
+		return fmt.Errorf("env: %w", err)
+	}
+	files, err := j.newCommandFiles()
+	if err != nil {
+		return err
+	}
+	defer files.cleanup()
+	env := sc.baseEnv()
+	maps.Copy(env, stepEnv)
+	env["GITHUB_ACTION"] = j.stepActions[index]
+	files.apply(j, env)
+	state := map[string]string{}
+	cw := j.newCommandWriter(sc.out, j.rowNumber(sc.row), map[string]string{}, state)
+	call, err := j.prepareCall(act, with, env, ectx.withEnv(stepEnv), strconv.Itoa(index), name, cw)
+	if err != nil {
+		return err
+	}
+	j.registerActionPost(call)
+	err = j.runPhase(ctx, call, act.meta.Runs.PreEntrypoint, act.meta.Runs.Pre, call.env, cw)
+	cw.Flush()
+	j.applyCommandFiles(files, map[string]string{})
+	maps.Copy(state, files.stateValues())
+	j.mergeState(call.stateKey, state)
+	return firstErr(err, cw.failure())
+}
+
+// One invocation of an action with its inputs and environment resolved
+type actionCall struct {
+	act    *actionDef
+	with   map[string]string
+	inputs map[string]any
+	// Full environment the action's processes receive
+	env map[string]string
+	// github context with the action fields filled in
+	github map[string]any
+	// Key pre, main, and post share their state under
+	stateKey string
+	// Display name of the step, post rows are named after it
+	name string
+}
+
+// Validates inputs, fills defaults, and builds the action environment
+func (j *job) prepareCall(act *actionDef, with, env map[string]string, ectx *exprContext, stateKey, name string, out io.Writer) (*actionCall, error) {
+	for k, def := range act.meta.Inputs {
+		if _, ok := with[k]; !ok && def.Required && def.Default == nil {
+			return nil, fmt.Errorf("action %s: input required and not supplied: %s", act.ref, k)
+		}
+	}
+	if act.isDocker() || act.isNode() || act.isComposite() {
+		if unexpected := unexpectedInputs(act, with); len(unexpected) > 0 {
+			fmt.Fprintf(out, "##[warning]Unexpected input(s) %s, valid inputs are [%s]\n", quoteInputs(unexpected), quoteInputs(sortedInputs(act)))
+		}
 	}
 	inputs := map[string]any{}
 	for k, def := range act.meta.Inputs {
@@ -190,9 +470,11 @@ func (j *job) runAction(ctx context.Context, act *actionDef, with map[string]str
 			continue
 		}
 		if def.Default != nil {
-			inputs[k] = interpolate(stringify(def.Default), ectx)
-		} else if def.Required {
-			return fmt.Errorf("action %s: input %q is required", act.ref, k)
+			v, err := interpolate(stringify(def.Default), ectx)
+			if err != nil {
+				return nil, fmt.Errorf("action %s: default of input %s: %w", act.ref, k, err)
+			}
+			inputs[k] = v
 		}
 	}
 	for k, v := range with {
@@ -200,719 +482,338 @@ func (j *job) runAction(ctx context.Context, act *actionDef, with map[string]str
 			inputs[k] = v
 		}
 	}
-	aenv := make(map[string]string, len(env)+len(inputs)+4)
-	for k, v := range env {
-		aenv[k] = v
-	}
+	call := &actionCall{act: act, with: with, inputs: inputs, stateKey: stateKey, name: name}
+	call.env = make(map[string]string, len(env)+len(inputs)+4)
+	maps.Copy(call.env, env)
 	for k, v := range inputs {
-		aenv["INPUT_"+strings.ToUpper(strings.ReplaceAll(k, " ", "_"))] = stringify(v)
+		call.env["INPUT_"+strings.ToUpper(strings.ReplaceAll(k, " ", "_"))] = stringify(v)
 	}
-	aenv["GITHUB_ACTION"] = act.ref
-	aenv["GITHUB_ACTION_REPOSITORY"] = act.repo
+	call.env["GITHUB_ACTION_REPOSITORY"] = act.repo
+	call.env["GITHUB_ACTION_REF"] = act.version
 	if act.dir != "" {
-		aenv["GITHUB_ACTION_PATH"] = j.pathOf(act.dir)
+		call.env["GITHUB_ACTION_PATH"] = j.pathOf(act.dir)
+	}
+	call.github = make(map[string]any, len(ectx.github)+4)
+	maps.Copy(call.github, ectx.github)
+	call.github["action"] = env["GITHUB_ACTION"]
+	call.github["action_repository"] = act.repo
+	call.github["action_ref"] = act.version
+	if act.dir != "" {
+		call.github["action_path"] = j.pathOf(act.dir)
 	}
 	actx := *ectx
 	actx.inputs = inputs
+	actx.github = call.github
 	for k, v := range act.meta.Runs.Env {
-		aenv[k] = interpolate(stringify(v), &actx)
+		s, err := interpolate(stringify(v), &actx)
+		if err != nil {
+			return nil, fmt.Errorf("action %s: runs.env %s: %w", act.ref, k, err)
+		}
+		call.env[k] = s
 	}
-	using := strings.ToLower(act.meta.Runs.Using)
+	return call, nil
+}
+
+func unexpectedInputs(act *actionDef, with map[string]string) []string {
+	var out []string
+	for k := range with {
+		if _, ok := act.meta.Inputs[k]; !ok {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedInputs(act *actionDef) []string {
+	out := make([]string, 0, len(act.meta.Inputs))
+	for k := range act.meta.Inputs {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func quoteInputs(items []string) string {
+	quoted := make([]string, len(items))
+	for i, it := range items {
+		quoted[i] = "'" + it + "'"
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// Expression context inside the action
+func (c *actionCall) exprContext(base *exprContext) *exprContext {
+	actx := *base
+	actx.inputs = c.inputs
+	actx.github = c.github
+	return &actx
+}
+
+// Dispatches on runs.using
+func (j *job) runAction(ctx context.Context, sc *stepScope, call *actionCall, outputs map[string]string, out io.Writer) error {
+	if sc.depth > maxActionDepth {
+		return fmt.Errorf("action nesting deeper than %d", maxActionDepth)
+	}
+	act := call.act
 	switch {
-	case using == "composite":
-		return j.runComposite(ctx, act, aenv, &actx, outputs, out, depth)
-	case using == "docker":
-		return j.runDockerAction(ctx, act, aenv, &actx, out)
-	case strings.HasPrefix(using, "node"):
-		return j.runNodeAction(ctx, act, aenv, inputs, out)
+	case act.isComposite():
+		return j.runComposite(ctx, sc, call, outputs, out)
+	case act.isDocker():
+		return j.runDockerAction(ctx, call, out)
+	case act.isNode():
+		return j.runNodeAction(ctx, call, out)
 	}
 	return fmt.Errorf("action %s: unsupported runs.using %q", act.ref, act.meta.Runs.Using)
 }
 
-func (j *job) runComposite(ctx context.Context, act *actionDef, env map[string]string, ectx *exprContext, outputs map[string]string, out io.Writer, depth int) error {
-	local := map[string]any{}
-	status := ""
-	for i, st := range act.meta.Runs.Steps {
-		sctx := *ectx
-		sctx.steps = local
-		sctx.status = status
-		ok, err := evalCondition(st.If, &sctx)
+func (j *job) runComposite(ctx context.Context, parent *stepScope, call *actionCall, outputs map[string]string, out io.Writer) error {
+	sc := &stepScope{j: j, row: parent.row, steps: map[string]any{}, call: call, stateKey: call.stateKey, out: out, depth: parent.depth + 1}
+	for i, as := range call.act.meta.Runs.Steps {
+		st := as.spec()
+		ectx := sc.exprContext()
+		ok, err := evalCondition(st.If, ectx)
 		if err != nil {
 			return fmt.Errorf("composite step %d: bad if expression: %w", i+1, err)
 		}
 		if !ok {
-			if st.ID != "" {
-				local[st.ID] = map[string]any{"outcome": "skipped", "conclusion": "skipped", "outputs": map[string]any{}}
-			}
+			sc.record(st.ID, "skipped", "skipped", nil)
 			continue
 		}
-		name := interpolate(st.Name, &sctx)
+		name, err := interpolate(st.Name, ectx)
+		if err != nil {
+			return fmt.Errorf("composite step %d: name: %w", i+1, err)
+		}
 		if name == "" {
-			name = fmt.Sprintf("step %d", i+1)
+			name = defaultStepName(st)
 		}
 		fmt.Fprintf(out, "##[group]%s\n", name)
-		stepOut, err := j.runCompositeStep(ctx, act, st, env, &sctx, out, depth)
-		fmt.Fprint(out, "##[endgroup]\n")
-		outcome := "success"
+		stepOut, err := sc.exec(ctx, stepRun{spec: st, ectx: ectx, name: name, action: j.nextActionName(st), key: sc.stateKey + "/" + strconv.Itoa(i)})
 		if err != nil {
-			outcome = "failure"
 			fmt.Fprintf(out, "##[error]%v\n", err)
 		}
-		conclusion := outcome
-		if err != nil && st.ContinueOnError {
-			conclusion = "success"
-		}
-		if st.ID != "" {
-			outs := map[string]any{}
-			for k, v := range stepOut {
-				outs[k] = v
-			}
-			local[st.ID] = map[string]any{"outcome": outcome, "conclusion": conclusion, "outputs": outs}
-		}
+		fmt.Fprint(out, "##[endgroup]\n")
+		outcome, conclusion := stepOutcome(err, st.ContinueOnError)
+		sc.record(st.ID, outcome, conclusion, stepOut)
 		if conclusion == "failure" {
-			status = "failure"
+			sc.status = "failure"
 		}
 	}
-	final := *ectx
-	final.steps = local
-	for k, def := range act.meta.Outputs {
-		outputs[k] = interpolate(def.Value, &final)
+	final := sc.exprContext()
+	for k, def := range call.act.meta.Outputs {
+		v, err := interpolate(def.Value, final)
+		if err != nil {
+			return fmt.Errorf("action %s: output %s: %w", call.act.ref, k, err)
+		}
+		outputs[k] = v
 	}
-	if status == "failure" {
+	if sc.status == "failure" {
 		return errors.New("composite action failed")
 	}
 	return nil
 }
 
-func (j *job) runCompositeStep(ctx context.Context, act *actionDef, st actionStep, env map[string]string, ectx *exprContext, out io.Writer, depth int) (map[string]string, error) {
-	files, err := j.newCommandFiles()
-	if err != nil {
-		return nil, err
-	}
-	defer files.cleanup()
-	senv := make(map[string]string, len(env))
-	for k, v := range env {
-		senv[k] = v
-	}
-	j.mu.Lock()
-	for k, v := range j.env {
-		senv[k] = v
-	}
-	j.mu.Unlock()
-	for k, v := range st.Env {
-		senv[k] = interpolate(stringify(v), ectx)
-	}
-	files.apply(j, senv)
-	outputs := map[string]string{}
-	cw := &commandWriter{out: out, onMask: j.log.AddMask, onOutput: func(k, v string) { outputs[k] = v }}
-	cw.onAnnotation = func(a Annotation) { j.annotate(a) }
-	if st.Uses != "" {
-		with := map[string]string{}
-		for k, v := range st.With {
-			with[k] = interpolate(stringify(v), ectx)
-		}
-		ref := interpolate(st.Uses, ectx)
-		if strings.HasPrefix(ref, "./") || strings.HasPrefix(ref, "../") {
-			nested, err := j.resolveAction(ctx, ref, act.root, out)
-			if err != nil {
-				nested, err = j.resolveAction(ctx, ref, j.workspace, out)
-			}
-			if err != nil {
-				return nil, err
-			}
-			err = j.runAction(ctx, nested, with, senv, ectx, outputs, cw, depth+1)
-			cw.Flush()
-			j.applyCommandFiles(files, outputs)
-			return outputs, firstErr(err, cw.failure())
-		}
-		name, _, _ := strings.Cut(ref, "@")
-		handled, nerr := j.runNative(ctx, name, with, senv, outputs, cw)
-		err = nerr
-		if !handled {
-			var nested *actionDef
-			nested, err = j.resolveAction(ctx, ref, j.workspace, out)
-			if err == nil {
-				err = j.runAction(ctx, nested, with, senv, ectx, outputs, cw, depth+1)
-			}
-		}
-		cw.Flush()
-		j.applyCommandFiles(files, outputs)
-		return outputs, firstErr(err, cw.failure())
-	}
-	dir := j.workDir(interpolate(st.WorkingDirectory, ectx))
-	code, err := j.runScript(ctx, interpolate(st.Run, ectx), st.Shell, dir, senv, cw)
-	cw.Flush()
-	j.applyCommandFiles(files, outputs)
-	return outputs, firstErr(exitErr(code, err), cw.failure())
-}
-
-func firstErr(errs ...error) error {
-	for _, err := range errs {
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (j *job) runNodeAction(ctx context.Context, act *actionDef, env map[string]string, inputs map[string]any, out io.Writer) error {
+func (j *job) runNodeAction(ctx context.Context, call *actionCall, out io.Writer) error {
+	act := call.act
 	if act.meta.Runs.Main == "" {
 		return fmt.Errorf("action %s has no runs.main", act.ref)
 	}
+	j.registerActionPost(call)
+	return j.runNodeScript(ctx, call, act.meta.Runs.Main, call.env, out)
+}
+
+// Docker actions run an entrypoint, node actions a script
+func (j *job) runPhase(ctx context.Context, call *actionCall, entrypoint, script string, env map[string]string, out io.Writer) error {
+	if call.act.isDocker() {
+		return j.runDockerPhase(ctx, call, entrypoint, j.dockerActionArgs(call), env, out)
+	}
+	return j.runNodeScript(ctx, call, script, env, out)
+}
+
+// Runs one javascript action script with the shared state
+func (j *job) runNodeScript(ctx context.Context, call *actionCall, script string, env map[string]string, out io.Writer) error {
+	act := call.act
 	node, nodeEnv, err := j.nodeCommand(ctx, act.meta.Runs.Using)
 	if err != nil {
 		return fmt.Errorf("action %s: %w", act.ref, err)
 	}
+	env = maps.Clone(env)
+	for k, v := range j.stateFor(call.stateKey) {
+		env["STATE_"+k] = v
+	}
+	main := j.pathOf(filepath.Join(act.dir, filepath.FromSlash(script)))
+	code, err := j.exec.Exec(ctx, execSpec{Cmd: j.withPath(append(append([]string{}, node...), main)), Env: append(append([]string{}, nodeEnv...), envSlice(env)...), Dir: j.pathOf(j.workspace), Out: out})
+	return exitErr(code, err)
+}
+
+// Queues the post phase once, from pre or main, whichever runs first
+func (j *job) registerActionPost(call *actionCall) {
+	if !call.act.hasPost() {
+		return
+	}
+	key := call.stateKey
+	j.mu.Lock()
+	_, queued := j.actionPosts[key]
+	j.actionPosts[key] = call
+	j.mu.Unlock()
+	if queued {
+		return
+	}
+	j.registerPost(call.name, func(ctx context.Context, cw *commandWriter) error {
+		j.mu.Lock()
+		latest := j.actionPosts[key]
+		j.mu.Unlock()
+		return j.runActionPost(ctx, latest, cw)
+	})
+}
+
+// Post phase under post-if with the inputs main resolved
+func (j *job) runActionPost(ctx context.Context, call *actionCall, cw *commandWriter) error {
+	ectx := call.exprContext(j.exprContext())
+	cond := call.act.meta.Runs.PostIf
+	if cond == "" {
+		cond = "always()"
+	}
+	ok, err := evalCondition(cond, ectx)
+	if err != nil {
+		return fmt.Errorf("bad post-if expression: %w", err)
+	}
+	if !ok {
+		return errSkipped
+	}
+	// Later GITHUB_ENV additions apply on top of the captured env
+	env := maps.Clone(call.env)
+	j.mu.Lock()
+	maps.Copy(env, j.env)
+	j.mu.Unlock()
 	files, err := j.newCommandFiles()
 	if err != nil {
 		return err
 	}
-	main := j.pathOf(filepath.Join(act.dir, filepath.FromSlash(act.meta.Runs.Main)))
-	env["GITHUB_STATE"] = j.pathOf(files.state)
-	code, err := j.exec.Exec(ctx, execSpec{Cmd: j.withPath(append(append([]string{}, node...), main)), Env: append(append([]string{}, nodeEnv...), envSlice(env)...), Dir: j.pathOf(j.workspace), Out: out})
-	state := files.stateValues()
-	files.cleanup()
-	if post := act.meta.Runs.Post; post != "" {
-		postPath := j.pathOf(filepath.Join(act.dir, filepath.FromSlash(post)))
-		j.mu.Lock()
-		j.post = append(j.post, postStep{name: act.ref, run: func(ctx context.Context) error {
-			penv := j.baseEnv()
-			for k, v := range inputs {
-				penv["INPUT_"+strings.ToUpper(strings.ReplaceAll(k, " ", "_"))] = stringify(v)
-			}
-			for k, v := range state {
-				penv["STATE_"+k] = v
-			}
-			penv["GITHUB_ACTION"], penv["GITHUB_ACTION_PATH"], penv["GITHUB_ACTION_REPOSITORY"] = act.ref, j.pathOf(act.dir), act.repo
-			code, err := j.exec.Exec(ctx, execSpec{Cmd: j.withPath(append(append([]string{}, node...), postPath)), Env: append(append([]string{}, nodeEnv...), envSlice(penv)...), Dir: j.pathOf(j.workspace), Out: j.log})
-			return exitErr(code, err)
-		}})
-		j.mu.Unlock()
-	}
-	return exitErr(code, err)
+	defer files.cleanup()
+	files.apply(j, env)
+	err = j.runPhase(ctx, call, call.act.meta.Runs.PostEntrypoint, call.act.meta.Runs.Post, env, cw)
+	j.applyCommandFiles(files, map[string]string{})
+	return err
 }
 
-func (j *job) runDockerAction(ctx context.Context, act *actionDef, env map[string]string, ectx *exprContext, out io.Writer) error {
-	cli := j.docker
-	if cli == nil {
-		var err error
-		if cli, err = newDockerClient(j.r.cfg.DockerHost); err != nil {
-			return err
+// Queues cleanup that runs after the steps in reverse order
+func (j *job) registerPost(name string, run func(ctx context.Context, cw *commandWriter) error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	j.post = append(j.post, postStep{name: name, run: run})
+}
+
+func (j *job) runDockerAction(ctx context.Context, call *actionCall, out io.Writer) error {
+	act := call.act
+	entrypoint := act.meta.Runs.Entrypoint
+	// Workflow entrypoint overrides the action's own for main alone
+	if v, ok := call.with["entrypoint"]; ok && strings.TrimSpace(v) != "" {
+		entrypoint = strings.TrimSpace(v)
+	}
+	j.registerActionPost(call)
+	return j.runDockerPhase(ctx, call, entrypoint, j.dockerActionArgs(call), call.env, out)
+}
+
+// Container arguments, with.args wins over the action's runs.args
+func (j *job) dockerActionArgs(call *actionCall) []string {
+	if v, ok := call.with["args"]; ok && strings.TrimSpace(v) != "" {
+		return splitShellWords(v)
+	}
+	ectx := call.exprContext(j.exprContext())
+	var args []string
+	for _, a := range call.act.meta.Runs.Args {
+		v, err := interpolate(a, ectx)
+		if err != nil {
+			v = a
 		}
-		j.docker = cli
+		args = append(args, v)
+	}
+	return args
+}
+
+// Mounts of a docker action the way the hosted runner lays them out
+const (
+	actionWorkspaceMount    = "/github/workspace"
+	actionHomeMount         = "/github/home"
+	actionWorkflowMount     = "/github/workflow"
+	actionFileCommandsMount = "/github/file_commands"
+)
+
+// Executor path of the job dir as a docker action container sees it
+func (j *job) dockerActionPath(execPath string) string {
+	root := j.pathOf(j.dir)
+	rel, ok := strings.CutPrefix(execPath, root)
+	if !ok || (rel != "" && rel[0] != '/') {
+		return execPath
+	}
+	host := filepath.Join(j.dir, filepath.FromSlash(rel))
+	for _, m := range []struct{ host, mount string }{
+		{j.workspace, actionWorkspaceMount}, {j.homeDir(), actionHomeMount}, {j.workflowDir(), actionWorkflowMount}, {j.fileCommandsDir(), actionFileCommandsMount},
+	} {
+		if within(m.host, host) {
+			r, _ := filepath.Rel(m.host, host)
+			return path.Join(m.mount, filepath.ToSlash(r))
+		}
+	}
+	return execPath
+}
+
+// Resolves the action image and runs it once with the step's state
+func (j *job) runDockerPhase(ctx context.Context, call *actionCall, entrypoint string, args []string, env map[string]string, out io.Writer) error {
+	act := call.act
+	cli, err := j.dockerClient()
+	if err != nil {
+		return err
+	}
+	env = maps.Clone(env)
+	for k, v := range j.stateFor(call.stateKey) {
+		env["STATE_"+k] = v
 	}
 	image := act.meta.Runs.Image
 	switch {
 	case strings.HasPrefix(image, "docker://"):
 		image = strings.TrimPrefix(image, "docker://")
-		if _, err := cli.ImageInspect(ctx, image); err != nil {
-			fmt.Fprintf(out, "Pulling image %s\n", image)
-			rc, err := cli.ImagePull(ctx, image, imagePullOptions())
-			if err != nil {
-				return fmt.Errorf("pull %s: %w", image, err)
-			}
-			err = drainJSONStream(rc, nil)
-			rc.Close()
-			if err != nil {
-				return err
-			}
+		if err := pullImage(ctx, cli, image, j.pullAuth(image), out); err != nil {
+			return err
 		}
 	case image != "":
 		tag := "dfcli-action-" + shortID(strings.ToLower(strings.NewReplacer("/", "-", "@", "-", ".", "-").Replace(act.ref))) + ":" + shortID(j.task.JobId)
-		fmt.Fprintf(out, "Building action image %s\n", tag)
-		if err := buildImage(ctx, cli, act.dir, image, tag, out); err != nil {
-			return err
+		if _, err := cli.ImageInspect(ctx, tag); err != nil {
+			fmt.Fprintf(out, "Building action image %s\n", tag)
+			if err := j.buildLocalImage(ctx, cli, act.dir, image, tag, out); err != nil {
+				return err
+			}
 		}
 		image = tag
 	default:
 		return fmt.Errorf("action %s has no runs.image", act.ref)
 	}
-	var args []string
-	for _, a := range act.meta.Runs.Args {
-		args = append(args, interpolate(a, ectx))
+	var entry []string
+	if entrypoint != "" {
+		entry = []string{entrypoint}
 	}
-	var entrypoint []string
-	if act.meta.Runs.Entrypoint != "" {
-		entrypoint = []string{act.meta.Runs.Entrypoint}
+	for k, v := range env {
+		env[k] = j.dockerActionPath(v)
 	}
-	mount := j.dir + ":" + j.pathOf(j.dir)
+	env["HOME"] = actionHomeMount
+	binds := []string{
+		j.dir + ":" + j.pathOf(j.dir),
+		j.workspace + ":" + actionWorkspaceMount,
+		j.homeDir() + ":" + actionHomeMount,
+		j.workflowDir() + ":" + actionWorkflowMount,
+		j.fileCommandsDir() + ":" + actionFileCommandsMount,
+	}
+	if j.r.cfg.PrivilegedJobs {
+		if sock := dockerSocket(); sock != "" {
+			binds = append(binds, sock+":/var/run/docker.sock")
+		}
+	}
 	code, err := runContainer(ctx, cli, containerRun{
-		Image: image, Cmd: args, Entrypoint: entrypoint, Env: envSlice(env), Dir: j.pathOf(j.workspace),
-		Binds: []string{mount}, Network: j.network, Hosts: j.hosts, Out: out,
+		Image: image, Cmd: args, Entrypoint: entry, Env: envSlice(env), Dir: actionWorkspaceMount,
+		Binds: binds, Network: j.network, Hosts: j.hosts, Labels: j.r.labels(j.task.JobId), Out: out,
 	})
 	return exitErr(code, err)
-}
-
-// actions/checkout
-
-func (j *job) checkout(ctx context.Context, with map[string]string, env map[string]string, out io.Writer) error {
-	repo := strings.TrimSpace(with["repository"])
-	if repo == "" {
-		repo = j.task.RepoFullName
-	}
-	ref := strings.TrimSpace(with["ref"])
-	sha := ""
-	if repo == j.task.RepoFullName && ref == "" {
-		sha = stringify(j.github["sha"])
-		ref = stringify(j.github["ref"])
-	}
-	if shaPattern.MatchString(ref) {
-		sha, ref = ref, ""
-	}
-	if ref != "" && !strings.HasPrefix(ref, "refs/") {
-		ref = "refs/heads/" + ref
-	}
-	token := with["token"]
-	if token == "" {
-		token = j.task.Token
-	}
-	depth := 1
-	if v := strings.TrimSpace(with["fetch-depth"]); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			depth = n
-		}
-	}
-	dest := j.workspace
-	if p := strings.TrimSpace(with["path"]); p != "" {
-		dest = filepath.Join(j.workspace, filepath.FromSlash(p))
-	}
-	url := j.task.CloneUrl
-	if repo != j.task.RepoFullName {
-		url = j.cloneBase() + "/" + repo + ".git"
-	}
-	if err := os.MkdirAll(dest, 0o777); err != nil {
-		return err
-	}
-	_ = os.Chmod(dest, 0o777)
-	fmt.Fprintf(out, "Checking out %s at %s into %s\n", repo, firstNonEmpty(sha, ref), j.pathOf(dest))
-	if j.exec.Has(ctx, "git") {
-		return j.checkoutWithGit(ctx, url, j.pathOf(dest), ref, sha, depth, token, with, env, out)
-	}
-	fmt.Fprintln(out, "No git in the job environment, cloning from the runner host")
-	if err := j.cloneHost(ctx, url, dest, firstNonEmpty(sha, ref), depth, token); err != nil {
-		return err
-	}
-	return nil
-}
-
-func firstNonEmpty(vals ...string) string {
-	for _, v := range vals {
-		if v != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-// Fetches inside the job environment with basic auth
-func (j *job) checkoutWithGit(ctx context.Context, url, dest, ref, sha string, depth int, token string, with map[string]string, env map[string]string, out io.Writer) error {
-	var sb strings.Builder
-	sb.WriteString("set -e\n")
-	fmt.Fprintf(&sb, "cd %s\n", shellQuote(dest))
-	sb.WriteString("git init -q .\n")
-	sb.WriteString("git config --global --add safe.directory '*' 2>/dev/null || true\n")
-	if token != "" {
-		b64 := base64.StdEncoding.EncodeToString([]byte("x-access-token:" + token))
-		j.log.AddMask(b64)
-		scope := url
-		if u, err := neturl.Parse(url); err == nil && u.Host != "" {
-			scope = u.Scheme + "://" + u.Host + "/"
-		}
-		fmt.Fprintf(&sb, "git config --local http.%s.extraheader %s\n", shellQuote(scope), shellQuote("AUTHORIZATION: basic "+b64))
-	}
-	fmt.Fprintf(&sb, "git remote add origin %s 2>/dev/null || git remote set-url origin %s\n", shellQuote(url), shellQuote(url))
-	depthArg := ""
-	if depth > 0 {
-		depthArg = fmt.Sprintf("--depth=%d ", depth)
-	}
-	target := firstNonEmpty(sha, ref)
-	if sha != "" && ref != "" {
-		fmt.Fprintf(&sb, "git fetch %sorigin %s 2>/dev/null || git fetch %sorigin %s\n", depthArg, shellQuote(sha), depthArg, shellQuote(ref))
-	} else {
-		fmt.Fprintf(&sb, "git fetch %sorigin %s\n", depthArg, shellQuote(target))
-	}
-	if sha != "" {
-		fmt.Fprintf(&sb, "git checkout -q --force %s 2>/dev/null || git checkout -q --force FETCH_HEAD\n", shellQuote(sha))
-	} else {
-		sb.WriteString("git checkout -q --force FETCH_HEAD\n")
-	}
-	if ref != "" && strings.HasPrefix(ref, "refs/heads/") {
-		branch := strings.TrimPrefix(ref, "refs/heads/")
-		fmt.Fprintf(&sb, "git checkout -q -B %s 2>/dev/null || true\n", shellQuote(branch))
-	}
-	switch strings.ToLower(strings.TrimSpace(with["submodules"])) {
-	case "true":
-		sb.WriteString("git submodule update --init\n")
-	case "recursive":
-		sb.WriteString("git submodule update --init --recursive\n")
-	}
-	sb.WriteString("git log -1 --format='HEAD is now at %h %s'\n")
-	code, err := j.runScript(ctx, sb.String(), "sh", dest, env, out)
-	return exitErr(code, err)
-}
-
-func shellQuote(s string) string {
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
-}
-
-// Host side go-git clone trying branch, tag, then sha
-func (j *job) cloneHost(ctx context.Context, url, dest, ref string, depth int, token string) error {
-	var copts []client.Option
-	if j.r.http != nil {
-		copts = append(copts, client.WithHTTPClient(j.r.http))
-	}
-	if token != "" {
-		copts = append(copts, client.WithHTTPAuth(&githttp.BasicAuth{Username: "x-access-token", Password: token}))
-	}
-	ref = strings.TrimSpace(ref)
-	if err := os.MkdirAll(dest, 0o777); err != nil {
-		return err
-	}
-	if entries, _ := os.ReadDir(dest); len(entries) > 0 {
-		return fmt.Errorf("destination %s is not empty", dest)
-	}
-	clone := func(name plumbing.ReferenceName, d int) error {
-		_, err := git.PlainCloneContext(ctx, dest, &git.CloneOptions{URL: url, ReferenceName: name, SingleBranch: name != "", Depth: d, ClientOptions: copts, Tags: git.NoTags})
-		if err != nil {
-			_ = os.RemoveAll(dest)
-			_ = os.MkdirAll(dest, 0o777)
-		}
-		return err
-	}
-	if ref == "" {
-		return clone("", depth)
-	}
-	if shaPattern.MatchString(ref) {
-		if err := clone("", 0); err != nil {
-			return err
-		}
-		return checkoutHash(dest, ref)
-	}
-	var candidates []plumbing.ReferenceName
-	if strings.HasPrefix(ref, "refs/") {
-		candidates = append(candidates, plumbing.ReferenceName(ref))
-	} else {
-		candidates = append(candidates, plumbing.NewBranchReferenceName(ref), plumbing.NewTagReferenceName(ref))
-	}
-	var last error
-	for _, c := range candidates {
-		if last = clone(c, depth); last == nil {
-			return nil
-		}
-	}
-	if err := clone("", 0); err != nil {
-		return last
-	}
-	return checkoutHash(dest, ref)
-}
-
-func checkoutHash(dest, rev string) error {
-	repo, err := git.PlainOpen(dest)
-	if err != nil {
-		return err
-	}
-	h, err := repo.ResolveRevision(plumbing.Revision(rev))
-	if err != nil {
-		return fmt.Errorf("resolve %s: %w", rev, err)
-	}
-	wt, err := repo.Worktree()
-	if err != nil {
-		return err
-	}
-	return wt.Checkout(&git.CheckoutOptions{Hash: *h, Force: true})
-}
-
-// actions/upload-artifact and actions/download-artifact
-
-func (j *job) uploadArtifact(ctx context.Context, with map[string]string, out io.Writer) error {
-	name := strings.TrimSpace(with["name"])
-	if name == "" {
-		name = "artifact"
-	}
-	files, err := j.collectFiles(with["path"])
-	if err != nil {
-		return err
-	}
-	if len(files) == 0 {
-		msg := "No files were found with the provided path: " + strings.TrimSpace(with["path"])
-		switch strings.ToLower(strings.TrimSpace(with["if-no-files-found"])) {
-		case "ignore":
-		case "error":
-			return errors.New(msg)
-		default:
-			fmt.Fprintf(out, "##[warning]%s\n", msg)
-		}
-		return nil
-	}
-	root := commonDir(files)
-	var total int64
-	for _, f := range files {
-		rel, err := filepath.Rel(root, f)
-		if err != nil {
-			rel = filepath.Base(f)
-		}
-		fh, err := os.Open(f)
-		if err != nil {
-			return err
-		}
-		info, _ := fh.Stat()
-		_, err = j.r.client.UploadArtifact(ctx, j.task.JobId, j.task.Token, name, filepath.ToSlash(rel), fh)
-		fh.Close()
-		if err != nil {
-			return fmt.Errorf("upload %s: %w", rel, err)
-		}
-		if info != nil {
-			total += info.Size()
-		}
-	}
-	fmt.Fprintf(out, "Uploaded %d file(s), %d bytes, to artifact %q\n", len(files), total, name)
-	return nil
-}
-
-// Expands upload patterns against the host side mount
-func (j *job) collectFiles(spec string) ([]string, error) {
-	var include, exclude []string
-	for _, line := range strings.Split(spec, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		pat, err := j.hostPattern(strings.TrimPrefix(line, "!"))
-		if err != nil {
-			return nil, err
-		}
-		if strings.HasPrefix(line, "!") {
-			exclude = append(exclude, pat)
-		} else {
-			include = append(include, pat)
-		}
-	}
-	seen := map[string]bool{}
-	var files []string
-	for _, pat := range include {
-		if info, err := os.Stat(pat); err == nil {
-			if info.IsDir() {
-				pat = filepath.Join(pat, "**")
-			} else {
-				if !seen[pat] {
-					seen[pat] = true
-					files = append(files, pat)
-				}
-				continue
-			}
-		}
-		matches, err := doublestar.FilepathGlob(pat, doublestar.WithFilesOnly())
-		if err != nil {
-			return nil, fmt.Errorf("bad pattern %q: %w", pat, err)
-		}
-		for _, m := range matches {
-			if !seen[m] {
-				seen[m] = true
-				files = append(files, m)
-			}
-		}
-	}
-	var kept []string
-	for _, f := range files {
-		skip := false
-		for _, ex := range exclude {
-			if ok, _ := doublestar.PathMatch(filepath.ToSlash(ex), filepath.ToSlash(f)); ok {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			kept = append(kept, f)
-		}
-	}
-	for _, f := range kept {
-		if !j.realInside(f) {
-			return nil, fmt.Errorf("path %q resolves outside the job directory", j.pathOf(f))
-		}
-	}
-	sort.Strings(kept)
-	return kept, nil
-}
-
-// Host path for an executor path, confined to the job dir in containers
-func (j *job) hostPattern(p string) (string, error) {
-	p = filepath.ToSlash(p)
-	root := filepath.ToSlash(j.pathOf(j.dir))
-	var host string
-	switch {
-	case root != "" && (p == root || strings.HasPrefix(p, root+"/")):
-		host = filepath.Join(j.dir, filepath.FromSlash(strings.TrimPrefix(p, root)))
-	case path.IsAbs(p):
-		host = filepath.FromSlash(p)
-	default:
-		host = filepath.Join(j.workspace, filepath.FromSlash(p))
-	}
-	if j.confined && !within(j.dir, host) {
-		return "", fmt.Errorf("path %q is outside the job directory", p)
-	}
-	return host, nil
-}
-
-// Whether target sits under root after cleaning, symlinks not followed
-func within(root, target string) bool {
-	rel, err := filepath.Rel(root, filepath.Clean(target))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-// Symlink resolved containment, always true outside containers
-func (j *job) realInside(p string) bool {
-	if !j.confined {
-		return true
-	}
-	resolved, err := filepath.EvalSymlinks(p)
-	if err != nil {
-		return false
-	}
-	root, err := filepath.EvalSymlinks(j.dir)
-	if err != nil {
-		return false
-	}
-	return within(root, resolved)
-}
-
-// Creates a directory in the job, refusing symlinked escapes
-func (j *job) mkdirInside(dir string) error {
-	if j.confined {
-		existing := dir
-		for {
-			if _, err := os.Lstat(existing); err == nil {
-				break
-			}
-			parent := filepath.Dir(existing)
-			if parent == existing {
-				break
-			}
-			existing = parent
-		}
-		if !j.realInside(existing) {
-			return fmt.Errorf("path %q resolves outside the job directory", j.pathOf(dir))
-		}
-	}
-	return os.MkdirAll(dir, 0o777)
-}
-
-func commonDir(files []string) string {
-	if len(files) == 0 {
-		return ""
-	}
-	dir := filepath.Dir(files[0])
-	for _, f := range files[1:] {
-		for !strings.HasPrefix(f, dir+string(filepath.Separator)) && dir != filepath.Dir(dir) {
-			dir = filepath.Dir(dir)
-		}
-	}
-	return dir
-}
-
-func (j *job) downloadArtifact(ctx context.Context, with map[string]string, out io.Writer) error {
-	name := strings.TrimSpace(with["name"])
-	dest := j.workspace
-	if p := strings.TrimSpace(with["path"]); p != "" {
-		var err error
-		if dest, err = j.hostPattern(p); err != nil {
-			return err
-		}
-	}
-	ns, repo, _ := strings.Cut(j.task.RepoFullName, "/")
-	version := "actions-" + stringify(j.github["run_number"])
-	prefix := ""
-	if name != "" {
-		prefix = sanitizeArtifactName(name) + "/"
-	}
-	body, err := j.r.client.DownloadArtifacts(ctx, j.task.Token, ns, repo, version, prefix)
-	if errors.Is(err, errNoArtifacts) {
-		return fmt.Errorf("no artifact named %q was found for this run", name)
-	}
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(j.tempDir, "artifact-*.zip")
-	if err != nil {
-		body.Close()
-		return err
-	}
-	size, err := io.Copy(tmp, body)
-	_ = body.Close()
-	if cerr := tmp.Close(); err == nil {
-		err = cerr
-	}
-	defer os.Remove(tmp.Name())
-	if err != nil {
-		return err
-	}
-	zr, err := zip.OpenReader(tmp.Name())
-	if err != nil {
-		return fmt.Errorf("artifact archive: %w", err)
-	}
-	defer zr.Close()
-	count := 0
-	for _, f := range zr.File {
-		if f.FileInfo().IsDir() || !strings.HasPrefix(f.Name, version+"/") {
-			continue
-		}
-		rel := strings.TrimPrefix(f.Name, version+"/")
-		if prefix != "" {
-			if !strings.HasPrefix(rel, prefix) {
-				continue
-			}
-			rel = strings.TrimPrefix(rel, prefix)
-		}
-		rel = path.Clean(rel)
-		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
-			continue
-		}
-		target := filepath.Join(dest, filepath.FromSlash(rel))
-		if err := j.mkdirInside(filepath.Dir(target)); err != nil {
-			return err
-		}
-		if fi, err := os.Lstat(target); err == nil && fi.Mode()&os.ModeSymlink != 0 {
-			os.Remove(target)
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		w, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o666)
-		if err != nil {
-			rc.Close()
-			return err
-		}
-		_, err = io.Copy(w, rc)
-		_ = rc.Close()
-		if cerr := w.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil {
-			return err
-		}
-		count++
-	}
-	if count == 0 && name != "" {
-		return fmt.Errorf("no artifact named %q was found for this run", name)
-	}
-	fmt.Fprintf(out, "Downloaded %d file(s), %d bytes, into %s\n", count, size, j.pathOf(dest))
-	return nil
-}
-
-// Mirrors artifacts.SanitizePath on the server
-func sanitizeArtifactName(name string) string {
-	s := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '-', r == '_':
-			return r
-		}
-		return '-'
-	}, name)
-	s = strings.Trim(s, "-.")
-	if s == "" {
-		return "artifact"
-	}
-	return s
 }
 
 // Namespaces reserved on the instance resolve on github.com alone

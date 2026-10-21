@@ -28,6 +28,9 @@ type commandWriter struct {
 	onAnnotation func(Annotation)
 	onMask       func(string)
 	onOutput     func(key, value string)
+	onState      func(key, value string)
+	debug        bool
+	echo         bool
 	disabled     string
 	stopToken    string
 	partial      []byte
@@ -78,6 +81,20 @@ func (w *commandWriter) line(line string) {
 		io.WriteString(w.out, line+"\n")
 		return
 	}
+	// Masks and the echo switch itself never echo
+	switch cmd {
+	case "echo":
+		w.echo = strings.EqualFold(strings.TrimSpace(value), "on")
+		return
+	case "add-mask":
+		if w.onMask != nil {
+			w.onMask(value)
+		}
+		return
+	}
+	if w.echo {
+		io.WriteString(w.out, line+"\n")
+	}
 	switch cmd {
 	case "group":
 		w.depth++
@@ -87,10 +104,6 @@ func (w *commandWriter) line(line string) {
 			w.depth--
 		}
 		io.WriteString(w.out, "##[endgroup]\n")
-	case "add-mask":
-		if w.onMask != nil {
-			w.onMask(value)
-		}
 	case "error", "warning", "notice":
 		a := Annotation{Level: cmd, Message: value, Title: props["title"], File: props["file"]}
 		a.Line = atoi(props["line"])
@@ -102,12 +115,18 @@ func (w *commandWriter) line(line string) {
 		}
 		io.WriteString(w.out, "##["+cmd+"]"+value+"\n")
 	case "debug":
-		io.WriteString(w.out, "##[debug]"+value+"\n")
+		if w.debug {
+			io.WriteString(w.out, "##[debug]"+value+"\n")
+		}
 	case "stop-commands":
 		w.stopToken = value
 	case "set-output":
 		if w.onOutput != nil {
 			w.onOutput(props["name"], value)
+		}
+	case "save-state":
+		if w.onState != nil {
+			w.onState(props["name"], value)
 		}
 	case "set-env", "add-path":
 		// Log injection reaches these, the files cannot be forged from output
@@ -117,9 +136,10 @@ func (w *commandWriter) line(line string) {
 			w.onAnnotation(Annotation{Level: "error", Message: msg})
 		}
 		io.WriteString(w.out, "##[error]"+msg+"\n")
-	case "echo", "save-state":
 	default:
-		io.WriteString(w.out, line+"\n")
+		if !w.echo {
+			io.WriteString(w.out, line+"\n")
+		}
 	}
 }
 

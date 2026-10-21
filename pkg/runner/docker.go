@@ -1,7 +1,6 @@
 package runner
 
 import (
-	"archive/tar"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -13,10 +12,12 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/docker/docker/api/types/build"
+	"github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
@@ -24,11 +25,35 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
+	"github.com/google/uuid"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
 // Job dir as seen inside containers
 const containerWorkRoot = "/__w"
+
+// Grace between terminate and kill of a cancelled step
+const (
+	execTermGrace = 3 * time.Second
+	execKillGrace = 5 * time.Second
+)
+
+// Walks the pid file's process tree and signals leaves first
+const killTreeScript = `p=$(cat "$1" 2>/dev/null); [ -n "$p" ] || exit 0
+kt() { for d in /proc/[0-9]*; do pp=; while read -r k v _; do [ "$k" = "PPid:" ] && { pp=$v; break; }; done 2>/dev/null < "$d/status"; [ "$pp" = "$1" ] && kt "${d#/proc/}" "$2"; done; kill -"$2" "$1" 2>/dev/null; }
+kt "$p" "$2"`
+
+// What the job context reports about containers
+type executorInfo struct {
+	containerID string
+	network     string
+	services    map[string]serviceInfo
+}
+
+type serviceInfo struct {
+	id    string
+	ports map[string]string
+}
 
 // One job container plus service sidecars on a private network
 type dockerExecutor struct {
@@ -39,24 +64,36 @@ type dockerExecutor struct {
 	options  string
 	services []*v1.TaskService
 	log      *logStream
-	auth     registryAuth
+	// Encoded registry auth for a reference, empty if anonymous
+	auth func(ref string) string
 	// Host dir of the runner's node builds, bound read only
 	externals string
 	// Runner level consent to the docker socket, --privileged, and host binds
 	privileged bool
 	// Host entries every container of the job receives
-	hosts []string
+	hosts  []string
+	labels map[string]string
 
 	networkID   string
+	networkName string
 	containerID string
 	serviceIDs  []string
+	serviceInfo map[string]serviceInfo
 	user        string
+	// Guards containerID between a shutdown kill and the teardown
+	idMu sync.Mutex
 }
 
-// Pulls from the instance registry use the job token
-type registryAuth struct {
-	host  string
-	token string
+func (d *dockerExecutor) container() string {
+	d.idMu.Lock()
+	defer d.idMu.Unlock()
+	return d.containerID
+}
+
+func (d *dockerExecutor) setContainer(id string) {
+	d.idMu.Lock()
+	d.containerID = id
+	d.idMu.Unlock()
 }
 
 func newDockerClient(host string) (*client.Client, error) {
@@ -83,16 +120,21 @@ func (d *dockerExecutor) Path(hostPath string) string {
 	return path.Join(containerWorkRoot, filepath.ToSlash(rel))
 }
 
+func (d *dockerExecutor) Info() executorInfo {
+	return executorInfo{containerID: d.container(), network: d.networkName, services: d.serviceInfo}
+}
+
 func (d *dockerExecutor) Start(ctx context.Context) error {
 	if _, err := d.cli.Ping(ctx); err != nil {
 		return fmt.Errorf("docker daemon unreachable: %w", err)
 	}
-	netName := "dfcli-" + shortID(d.jobID)
-	net, err := d.cli.NetworkCreate(ctx, netName, network.CreateOptions{Driver: "bridge", Labels: d.labels()})
+	d.networkName = "dfcli-" + shortID(d.jobID)
+	net, err := d.cli.NetworkCreate(ctx, d.networkName, network.CreateOptions{Driver: "bridge", Labels: d.labels})
 	if err != nil {
 		return fmt.Errorf("create network: %w", err)
 	}
 	d.networkID = net.ID
+	d.serviceInfo = map[string]serviceInfo{}
 	for _, svc := range d.services {
 		if err := d.startService(ctx, svc); err != nil {
 			return fmt.Errorf("service %s: %w", svc.Name, err)
@@ -111,8 +153,9 @@ func (d *dockerExecutor) Start(ctx context.Context) error {
 		Cmd:        []string{"-f", "/dev/null"},
 		Env:        opts.env,
 		WorkingDir: containerWorkRoot,
-		Labels:     d.labels(),
+		Labels:     d.labels,
 		User:       opts.user,
+		Hostname:   opts.hostname,
 	}
 	if len(opts.entrypoint) > 0 {
 		cfg.Entrypoint = opts.entrypoint
@@ -120,7 +163,7 @@ func (d *dockerExecutor) Start(ctx context.Context) error {
 	}
 	host := &container.HostConfig{
 		Binds:       append([]string{d.jobDir + ":" + containerWorkRoot}, binds...),
-		NetworkMode: container.NetworkMode(netName),
+		NetworkMode: container.NetworkMode(d.networkName),
 		Privileged:  opts.privileged,
 		ExtraHosts:  opts.hosts,
 		DNS:         opts.dns,
@@ -131,16 +174,16 @@ func (d *dockerExecutor) Start(ctx context.Context) error {
 		}
 	}
 	if d.privileged {
-		if _, err := os.Stat("/var/run/docker.sock"); err == nil {
-			host.Binds = append(host.Binds, "/var/run/docker.sock:/var/run/docker.sock")
+		if sock := dockerSocket(); sock != "" {
+			host.Binds = append(host.Binds, sock+":/var/run/docker.sock")
 		}
 	}
-	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{netName: {Aliases: []string{"job"}}}}
+	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{d.networkName: {Aliases: []string{"job"}}}}
 	resp, err := d.cli.ContainerCreate(ctx, cfg, host, netCfg, nil, "dfcli-job-"+shortID(d.jobID))
 	if err != nil {
 		return fmt.Errorf("create job container: %w", err)
 	}
-	d.containerID = resp.ID
+	d.setContainer(resp.ID)
 	if err := d.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("start job container: %w", err)
 	}
@@ -148,8 +191,17 @@ func (d *dockerExecutor) Start(ctx context.Context) error {
 	return nil
 }
 
-func (d *dockerExecutor) labels() map[string]string {
-	return map[string]string{"dfcli.runner.job": d.jobID}
+// Daemon socket on this host, empty when absent
+func dockerSocket() string {
+	for _, p := range []string{"/var/run/docker.sock", filepath.Join(os.Getenv("XDG_RUNTIME_DIR"), "docker.sock")} {
+		if p == "docker.sock" {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 func (d *dockerExecutor) startService(ctx context.Context, svc *v1.TaskService) error {
@@ -159,7 +211,10 @@ func (d *dockerExecutor) startService(ctx context.Context, svc *v1.TaskService) 
 	opts := parseContainerOptions(svc.Options)
 	opts.hosts = append(opts.hosts, d.hosts...)
 	binds := d.restrict(&opts, svc.Volumes, "service "+svc.Name)
-	cfg := &container.Config{Image: svc.Image, Env: append(envSlice(svc.Env), opts.env...), Labels: d.labels(), User: opts.user, ExposedPorts: nat.PortSet{}}
+	cfg := &container.Config{
+		Image: svc.Image, Env: append(envSlice(svc.Env), opts.env...), Labels: d.labels, User: opts.user,
+		ExposedPorts: nat.PortSet{}, Healthcheck: opts.health, Hostname: opts.hostname,
+	}
 	if len(opts.entrypoint) > 0 {
 		cfg.Entrypoint = opts.entrypoint
 	}
@@ -180,9 +235,8 @@ func (d *dockerExecutor) startService(ctx context.Context, svc *v1.TaskService) 
 		cfg.ExposedPorts[port] = struct{}{}
 		host.PortBindings[port] = append(host.PortBindings[port], nat.PortBinding{HostPort: hostPort})
 	}
-	netName := "dfcli-" + shortID(d.jobID)
-	host.NetworkMode = container.NetworkMode(netName)
-	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{netName: {Aliases: []string{svc.Name}}}}
+	host.NetworkMode = container.NetworkMode(d.networkName)
+	netCfg := &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{d.networkName: {Aliases: []string{svc.Name}}}}
 	resp, err := d.cli.ContainerCreate(ctx, cfg, host, netCfg, nil, fmt.Sprintf("dfcli-%s-%s", shortID(d.jobID), svc.Name))
 	if err != nil {
 		return err
@@ -192,6 +246,17 @@ func (d *dockerExecutor) startService(ctx context.Context, svc *v1.TaskService) 
 		return err
 	}
 	d.log.Line("Started service %s from %s", svc.Name, svc.Image)
+	info := serviceInfo{id: resp.ID, ports: map[string]string{}}
+	if insp, err := d.cli.ContainerInspect(ctx, resp.ID); err == nil && insp.NetworkSettings != nil {
+		for port, bindings := range insp.NetworkSettings.Ports {
+			for _, b := range bindings {
+				if b.HostPort != "" {
+					info.ports[port.Port()] = b.HostPort
+				}
+			}
+		}
+	}
+	d.serviceInfo[svc.Name] = info
 	return d.waitHealthy(ctx, resp.ID, svc.Name)
 }
 
@@ -251,11 +316,16 @@ func (d *dockerExecutor) restrict(o *containerOptions, volumes []string, what st
 // Pulls before every job, a local copy serves only when the pull fails
 func (d *dockerExecutor) pull(ctx context.Context, ref string) error {
 	auth := ""
-	if d.auth.token != "" && d.auth.host != "" && strings.HasPrefix(ref, d.auth.host+"/") {
-		raw, _ := json.Marshal(registry.AuthConfig{Username: "x-access-token", Password: d.auth.token, ServerAddress: d.auth.host})
-		auth = base64.URLEncoding.EncodeToString(raw)
+	if d.auth != nil {
+		auth = d.auth(ref)
 	}
 	return pullImage(ctx, d.cli, ref, auth, d.log)
+}
+
+// Base64 auth config docker's pull api expects
+func encodeRegistryAuth(host, user, pass string) string {
+	raw, _ := json.Marshal(registry.AuthConfig{Username: user, Password: pass, ServerAddress: host})
+	return base64.URLEncoding.EncodeToString(raw)
 }
 
 // Pull with an optional encoded auth, local copy on failure
@@ -285,16 +355,25 @@ type execSpec struct {
 	Env []string
 	Dir string
 	Out io.Writer
+	// Overrides the job user, root for cleanup
+	User string
 }
 
 func (d *dockerExecutor) Exec(ctx context.Context, spec execSpec) (int, error) {
-	if d.containerID == "" {
+	id := d.container()
+	if id == "" {
 		return -1, fmt.Errorf("job container is not running")
 	}
-	pidFile := path.Join(containerWorkRoot, "_temp", "pid-"+shortID(fmt.Sprint(time.Now().UnixNano())))
-	cmd := append([]string{"/bin/sh", "-c", `echo $$ > "$0"; exec "$@"`, pidFile}, spec.Cmd...)
-	created, err := d.cli.ContainerExecCreate(ctx, d.containerID, container.ExecOptions{
-		Cmd: cmd, Env: spec.Env, WorkingDir: spec.Dir, AttachStdout: true, AttachStderr: true, User: d.user,
+	pidName := "pid-" + uuid.NewString()[:8]
+	defer os.Remove(filepath.Join(d.jobDir, "_temp", pidName))
+	pidFile := path.Join(containerWorkRoot, "_temp", pidName)
+	cmd := append([]string{"/bin/sh", "-c", `echo $$ > "$0" && exec "$@"`, pidFile}, spec.Cmd...)
+	user := d.user
+	if spec.User != "" {
+		user = spec.User
+	}
+	created, err := d.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
+		Cmd: cmd, Env: spec.Env, WorkingDir: spec.Dir, AttachStdout: true, AttachStderr: true, User: user,
 	})
 	if err != nil {
 		return -1, fmt.Errorf("exec create: %w", err)
@@ -311,11 +390,15 @@ func (d *dockerExecutor) Exec(ctx context.Context, spec execSpec) (int, error) {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		d.killExec(pidFile)
+		d.signalTree(pidFile, "TERM")
 		select {
 		case <-done:
-		case <-time.After(5 * time.Second):
-			d.Kill()
+		case <-time.After(execTermGrace):
+			d.signalTree(pidFile, "KILL")
+			select {
+			case <-done:
+			case <-time.After(execKillGrace):
+			}
 		}
 		resp.Close()
 		return -1, ctx.Err()
@@ -339,12 +422,15 @@ func (d *dockerExecutor) Exec(ctx context.Context, spec execSpec) (int, error) {
 	}
 }
 
-// Kills the recorded pid, the container itself is the fallback
-func (d *dockerExecutor) killExec(pidFile string) {
+// Signals the step's whole process tree inside the container
+func (d *dockerExecutor) signalTree(pidFile, sig string) {
 	bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	script := fmt.Sprintf(`p=$(cat "%s" 2>/dev/null); [ -n "$p" ] && kill -KILL -- -"$p" 2>/dev/null; [ -n "$p" ] && kill -KILL "$p" 2>/dev/null; true`, pidFile)
-	created, err := d.cli.ContainerExecCreate(bg, d.containerID, container.ExecOptions{Cmd: []string{"/bin/sh", "-c", script}})
+	id := d.container()
+	if id == "" {
+		return
+	}
+	created, err := d.cli.ContainerExecCreate(bg, id, container.ExecOptions{Cmd: []string{"/bin/sh", "-c", killTreeScript, "sh", pidFile, sig}, User: "0"})
 	if err != nil {
 		return
 	}
@@ -357,29 +443,40 @@ func (d *dockerExecutor) Has(ctx context.Context, bin string) bool {
 }
 
 func (d *dockerExecutor) Kill() {
-	if d.containerID == "" {
+	id := d.container()
+	if id == "" {
 		return
 	}
 	bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_ = d.cli.ContainerKill(bg, d.containerID, "KILL")
+	_ = d.cli.ContainerKill(bg, id, "KILL")
 }
 
 func (d *dockerExecutor) Close(ctx context.Context) error {
 	bg, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	if d.containerID != "" {
+	if id := d.container(); id != "" {
 		// Root owned files from the container would block host cleanup
-		_, _ = d.Exec(bg, execSpec{Cmd: []string{"/bin/sh", "-c", "rm -rf " + containerWorkRoot + "/* " + containerWorkRoot + "/.[!.]* 2>/dev/null; true"}, Out: io.Discard})
-		_ = d.cli.ContainerRemove(bg, d.containerID, container.RemoveOptions{Force: true, RemoveVolumes: true})
-		d.containerID = ""
+		clean := execSpec{Cmd: []string{"/bin/sh", "-c", "rm -rf " + containerWorkRoot + "/* " + containerWorkRoot + "/.[!.]* 2>/dev/null; true"}, Out: io.Discard, User: "0"}
+		if _, err := d.Exec(bg, clean); err != nil {
+			clean.User = ""
+			_, _ = d.Exec(bg, clean)
+		}
+		_ = d.cli.ContainerRemove(bg, id, container.RemoveOptions{Force: true, RemoveVolumes: true})
+		d.setContainer("")
 	}
 	for _, id := range d.serviceIDs {
 		_ = d.cli.ContainerRemove(bg, id, container.RemoveOptions{Force: true, RemoveVolumes: true})
 	}
 	d.serviceIDs = nil
 	if d.networkID != "" {
-		_ = d.cli.NetworkRemove(bg, d.networkID)
+		// Endpoints of force removed containers linger briefly
+		for range 5 {
+			if err := d.cli.NetworkRemove(bg, d.networkID); err == nil || errdefs.IsNotFound(err) {
+				break
+			}
+			time.Sleep(time.Second)
+		}
 		d.networkID = ""
 	}
 	return nil
@@ -392,6 +489,7 @@ type containerRun struct {
 	Entrypoint  []string
 	Env         []string
 	Dir         string
+	User        string
 	Binds       []string
 	Network     string
 	Hosts       []string
@@ -403,7 +501,7 @@ type containerRun struct {
 
 // Starts a throwaway container and waits for exit
 func runContainer(ctx context.Context, cli *client.Client, spec containerRun) (int, error) {
-	cfg := &container.Config{Image: spec.Image, Cmd: spec.Cmd, Env: spec.Env, WorkingDir: spec.Dir, Labels: spec.Labels}
+	cfg := &container.Config{Image: spec.Image, Cmd: spec.Cmd, Env: spec.Env, WorkingDir: spec.Dir, Labels: spec.Labels, User: spec.User}
 	if spec.Entrypoint != nil {
 		cfg.Entrypoint = spec.Entrypoint
 	}
@@ -438,37 +536,29 @@ func runContainer(ctx context.Context, cli *client.Client, spec containerRun) (i
 	} else {
 		close(logDone)
 	}
-	select {
-	case res := <-waitCh:
+	// The log copier stops before the caller flushes
+	drain := func(wait time.Duration) {
 		select {
 		case <-logDone:
-		case <-time.After(2 * time.Second):
+		case <-time.After(wait):
 		}
+	}
+	select {
+	case res := <-waitCh:
+		drain(10 * time.Second)
 		return int(res.StatusCode), nil
 	case err := <-errCh:
 		_ = cli.ContainerKill(bg, resp.ID, "KILL")
+		drain(5 * time.Second)
 		if ctx.Err() != nil {
 			return -1, ctx.Err()
 		}
 		return -1, err
 	case <-ctx.Done():
 		_ = cli.ContainerKill(bg, resp.ID, "KILL")
+		drain(5 * time.Second)
 		return -1, ctx.Err()
 	}
-}
-
-// Builds a Dockerfile directory into a tag
-func buildImage(ctx context.Context, cli *client.Client, dir, dockerfile, tag string, out io.Writer) error {
-	pr, pw := io.Pipe()
-	go func() {
-		pw.CloseWithError(tarDirectory(dir, pw))
-	}()
-	resp, err := cli.ImageBuild(ctx, pr, build.ImageBuildOptions{Tags: []string{tag}, Dockerfile: dockerfile, Remove: true, ForceRemove: true})
-	if err != nil {
-		return fmt.Errorf("build %s: %w", tag, err)
-	}
-	defer resp.Body.Close()
-	return drainJSONStream(resp.Body, out)
 }
 
 // Reads a docker progress stream, surfacing errors and stream text
@@ -494,65 +584,28 @@ func drainJSONStream(r io.Reader, out io.Writer) error {
 	}
 }
 
-func tarDirectory(dir string, w io.Writer) error {
-	tw := tar.NewWriter(w)
-	err := filepath.Walk(dir, func(p string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil || rel == "." {
-			return nil
-		}
-		if info.IsDir() && info.Name() == ".git" {
-			return filepath.SkipDir
-		}
-		hdr, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return err
-		}
-		hdr.Name = filepath.ToSlash(rel)
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(p)
-			if err != nil {
-				return err
-			}
-			hdr.Linkname = target
-		}
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return nil
-		}
-		f, err := os.Open(p)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-		_, err = io.Copy(tw, f)
-		return err
-	})
-	if err != nil {
-		return err
-	}
-	return tw.Close()
-}
-
 // Subset of docker run flags honored from options strings
 type containerOptions struct {
 	privileged bool
 	user       string
+	hostname   string
 	volumes    []string
 	env        []string
 	entrypoint []string
 	hosts      []string
 	dns        []string
+	health     *container.HealthConfig
 }
 
 func parseContainerOptions(s string) containerOptions {
 	var o containerOptions
 	args := splitShellWords(s)
+	health := func() *container.HealthConfig {
+		if o.health == nil {
+			o.health = &container.HealthConfig{}
+		}
+		return o.health
+	}
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		next := func() string {
@@ -574,6 +627,8 @@ func parseContainerOptions(s string) containerOptions {
 			o.privileged = true
 		case "-u", "--user":
 			o.user = get()
+		case "-h", "--hostname":
+			o.hostname = get()
 		case "-v", "--volume":
 			o.volumes = append(o.volumes, get())
 		case "-e", "--env":
@@ -584,6 +639,18 @@ func parseContainerOptions(s string) containerOptions {
 			o.hosts = append(o.hosts, get())
 		case "--dns":
 			o.dns = append(o.dns, get())
+		case "--health-cmd":
+			health().Test = []string{"CMD-SHELL", get()}
+		case "--health-interval":
+			health().Interval, _ = time.ParseDuration(get())
+		case "--health-timeout":
+			health().Timeout, _ = time.ParseDuration(get())
+		case "--health-start-period":
+			health().StartPeriod, _ = time.ParseDuration(get())
+		case "--health-retries":
+			health().Retries, _ = strconv.Atoi(get())
+		case "--no-healthcheck":
+			o.health = &container.HealthConfig{Test: []string{"NONE"}}
 		default:
 			if strings.HasPrefix(flag, "-") && !hasVal && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
@@ -699,8 +766,4 @@ func gatewayHosts(urls ...string) (hosts, unreachable []string) {
 		}
 	}
 	return hosts, unreachable
-}
-
-func imagePullOptions() image.PullOptions {
-	return image.PullOptions{}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/gitrepo"
+	"github.com/nickheyer/distroface/pkg/expr"
 )
 
 // Commit message markers that suppress runs
@@ -468,11 +469,11 @@ func (m *Manager) pullAuthorCanWrite(ctx context.Context, repo *db.GitRepository
 }
 
 func pullNumber(payload map[string]any) int64 {
-	if n := toNumber(payload["number"]); n > 0 {
+	if n := expr.ToNumber(payload["number"]); n > 0 {
 		return int64(n)
 	}
 	if pr, ok := payload["pull_request"].(map[string]any); ok {
-		if n := toNumber(pr["number"]); n > 0 {
+		if n := expr.ToNumber(pr["number"]); n > 0 {
 			return int64(n)
 		}
 	}

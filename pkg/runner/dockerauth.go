@@ -3,7 +3,6 @@ package runner
 import (
 	"encoding/base64"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -52,10 +51,9 @@ func (j *job) setDockerAuth(key, username, password string) error {
 
 func (j *job) writeDockerConfig() error {
 	dir := j.dockerConfigDir()
-	if err := os.MkdirAll(dir, 0o777); err != nil {
+	if err := j.mkdirAll(dir); err != nil {
 		return err
 	}
-	_ = os.Chmod(dir, 0o777)
 	j.mu.Lock()
 	auths := make(map[string]dockerAuth, len(j.dockerAuths))
 	for k, v := range j.dockerAuths {
@@ -66,12 +64,7 @@ func (j *job) writeDockerConfig() error {
 	if err != nil {
 		return err
 	}
-	p := filepath.Join(dir, "config.json")
-	if err := os.WriteFile(p, data, 0o666); err != nil {
-		return err
-	}
-	_ = os.Chmod(p, 0o666)
-	return nil
+	return j.writeFile(filepath.Join(dir, "config.json"), data, 0o666)
 }
 
 // Serialises auths the way docker login writes them
@@ -100,4 +93,27 @@ func (j *job) seedDockerAuth() error {
 		j.mu.Unlock()
 	}
 	return j.writeDockerConfig()
+}
+
+func (j *job) removeDockerAuth(key string) {
+	j.mu.Lock()
+	delete(j.dockerAuths, key)
+	j.mu.Unlock()
+	_ = j.writeDockerConfig()
+}
+
+// Encoded pull auth for a reference from held logins
+func (j *job) pullAuth(ref string) string {
+	host := tagHost(ref)
+	key := host
+	if host == "docker.io" {
+		key = dockerHubAuthKey
+	}
+	j.mu.Lock()
+	a, ok := j.dockerAuths[key]
+	j.mu.Unlock()
+	if !ok {
+		return ""
+	}
+	return encodeRegistryAuth(host, a.Username, a.Password)
 }

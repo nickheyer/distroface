@@ -1592,7 +1592,14 @@ Runner (`dfcli runner register --server ... --token ...` and `dfcli runner start
   on a per job network, the workspace as a per job directory under the runner work dir
   bound into the job container at one path on both sides, a host executor for `runs-on:
   [host]` labels when enabled. Images are pulled before every job and a local copy is
-  used only when the pull fails. Node for JavaScript actions does not depend on the job
+  used only when the pull fails. Every job starts with a `Set up job` step row (image
+  pull, container and service start, action downloads), continues with one `Pre <step>`
+  row per action that declares a pre phase, and ends with the `Post <step>` rows and a
+  `Complete job` row, as on the hosted runner. Service `options` honor `--health-cmd`,
+  `--health-interval`, `--health-timeout`, `--health-retries` and `--health-start-period`,
+  the `job.container` and `job.services.<name>` contexts carry ids, network and
+  ports, and the `strategy` context carries `fail-fast`, `max-parallel`, `job-index` and
+  `job-total` of the matrix leg. Node for JavaScript actions does not depend on the job
   image: the runner extracts node 20 and node 24 (glibc and musl builds) from the official
   node images into `<work dir>/_externals` once and binds them read only at `/__e` in every
   job container, probing which build runs when the image has no `node` on its path. Every
@@ -1603,31 +1610,66 @@ Runner (`dfcli runner register --server ... --token ...` and `dfcli runner start
   host bind mounts (named volumes and binds inside the job directory pass) unless the
   runner was registered with `--privileged-jobs`, which is root on that machine for every
   workflow author. `upload-artifact` and `download-artifact` paths are confined to the job
-  directory on the docker executor, symlinks included.
+  directory on the docker executor, symlinks included. On start the runner removes
+  containers, networks and job directories a crashed run of the same runner name left
+  behind.
 - Steps: `run` with `shell`, `working-directory`, `env`, `with`. `uses` resolves
-  `actions/checkout` natively (clone with the job token over HTTP), `actions/upload-artifact`
+  `actions/checkout` natively (clone with the job token over HTTP, plus the `Post` cleanup
+  row that drops the token header from git config), `actions/upload-artifact`
   and `actions/download-artifact` natively through the artifact package in 13, and the
   image actions natively: `docker/login-action` stores credentials in the job's docker
-  config (the instance registry needs none), `docker/setup-buildx-action` and
+  config (the instance registry needs none) and logs out in its `Post` row unless
+  `logout: false`, `docker/setup-buildx-action` and
   `docker/setup-qemu-action` are no ops with their outputs, and `docker/build-push-action`
   (alias `distroface/build-push`) builds with a rootless BuildKit container the runner
   starts next to the job (`moby/buildkit:rootless`, `buildkit_image` in the runner config,
   one persistent state volume per concurrency slot for layer cache), honoring context,
-  file, tags, labels, build-args, target, platforms, push, load, no-cache, pull, secrets,
-  secret-files, build-contexts, registry cache-from and cache-to, and emitting `digest`,
-  `imageid` and `metadata` outputs. The job never sees the docker socket and no runner
+  file, tags, labels, annotations, add-hosts, build-args, target, platforms, push, load,
+  no-cache, pull, secrets, secret-files, build-contexts, outputs, registry cache-from and
+  cache-to, and emitting `digest`, `imageid` and `metadata` outputs. BuildKit drops the
+  embedded docker resolver of the per job network from build sandboxes, so the runner
+  probes the resolvers the daemon hands containers on its default bridge once per process
+  and passes them to buildkitd (`buildkit_dns` in the runner config overrides the probe),
+  which keeps `apk`, `apt` and friends resolving inside `RUN` steps while pushes still
+  reach services on the job network. The job never sees the docker socket and no runner
   needs `--privileged-jobs` to build or push images, full BuildKit Dockerfile syntax
   (`--mount`, `# syntax=`) works, and multi platform builds need binfmt on the runner host.
+  Docker actions with `image: Dockerfile` build through the same BuildKit path.
   Any other action is a git repo cloned at the requested ref: composite actions run their
-  steps, docker actions build or pull and run, JavaScript actions run under the runner's
-  node (`node20` or `node24` per `runs.using`). Action references resolve against this
-  instance first, then `github.com`, following the Gitea `DEFAULT_ACTIONS_URL` rule.
+  steps, docker actions build or pull and run (`with.args` and `with.entrypoint` for
+  `docker://` references, `pre-entrypoint` and `post-entrypoint` for cleanup), JavaScript
+  actions run under the runner's node (`node20` or `node24` per `runs.using`) with `pre`,
+  `main` and `post` scripts, `pre-if` and `post-if`, and state shared through
+  `$GITHUB_STATE` and `::save-state::`. Phases get rows the way the hosted runner orders
+  them: every `pre` runs as `Pre <step>` right after `Set up job`, and `Post <step>` is
+  queued the moment pre or main starts, so a failed main and a skipped main after a pre
+  both still get their post. Every action of a job is downloaded in `Set up
+  job` before the first step runs. Downloads land in `<work dir>/_externals/actions` keyed
+  by source and ref and are copied into the job, sha refs are kept forever, branch and tag
+  refs are compared against the remote at most every ten minutes and refetched when they
+  moved. Action references resolve against this instance first, then `github.com`,
+  following the Gitea `DEFAULT_ACTIONS_URL` rule. `actions/checkout` fetches by sha first,
+  then the ref as a branch and as a tag, and honors `fetch-depth`, `fetch-tags`, `path`,
+  `clean`, `submodules` (with the job token), `lfs` and `persist-credentials`.
+  `download-artifact` honors `name`, `pattern` and `merge-multiple` with the v4 layout,
+  `upload-artifact` skips dot files unless `include-hidden-files` is set.
 - Step outputs via `$GITHUB_OUTPUT`, env via `$GITHUB_ENV`, path via `$GITHUB_PATH`, step
   summary via `$GITHUB_STEP_SUMMARY`, log groups `::group::`, masking `::add-mask::`,
-  annotations `::error::` and `::warning::` shown in the UI. `::set-env::` and
+  annotations `::error::` and `::warning::` shown in the UI, `::stop-commands::` and
+  `::echo::on` to print commands verbatim before acting on them. `::set-env::` and
   `::add-path::` are disabled and fail the step, since any logged text could issue them.
+  `::debug::` lines appear only when the `ACTIONS_STEP_DEBUG` secret or variable is
+  `true`, which also sets `runner.debug` and turns command echo on. A `run` step without `shell` uses `bash -e`
+  (`sh -e` without bash), `shell: bash` adds `--noprofile --norc -o pipefail`, and
+  `python`, `pwsh`, `node` and custom `{0}` templates work as on the hosted runner. An
+  expression that fails to evaluate in `run`, `with`, `env` or `working-directory` fails
+  the step instead of reaching the shell as literal text.
 - Concurrency per runner, graceful shutdown finishes running jobs, logs stream in near
-  real time, cancellation from the UI kills the container.
+  real time. Cancellation from the UI terminates the running step's process tree inside
+  the container (SIGTERM, then SIGKILL), later steps run only when their `if` names
+  `always()` or `cancelled()`, `post` scripts still run for cleanup (their `post-if`
+  decides), and the step table keeps updating until `Complete job`. A second signal to the
+  runner is the hard stop that skips cleanup. Multi line secrets are masked line by line.
 
 ## 22. Settings and config
 

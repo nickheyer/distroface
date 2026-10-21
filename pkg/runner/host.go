@@ -28,6 +28,10 @@ func (h *hostExecutor) Path(hostPath string) string {
 	return hostPath
 }
 
+func (h *hostExecutor) Info() executorInfo {
+	return executorInfo{}
+}
+
 func (h *hostExecutor) Start(ctx context.Context) error {
 	h.procs = map[*exec.Cmd]struct{}{}
 	h.log.Line("Running on the host executor")

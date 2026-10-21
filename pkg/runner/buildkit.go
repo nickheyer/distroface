@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -34,6 +35,7 @@ type buildInput struct {
 	Target        string
 	Tags          []string
 	Labels        []string
+	Annotations   []string
 	BuildArgs     []string
 	Platforms     []string
 	CacheFrom     []string
@@ -42,6 +44,7 @@ type buildInput struct {
 	SecretFiles   []string
 	BuildContexts []string
 	Outputs       []string
+	AddHosts      []string
 	Push          bool
 	Load          bool
 	NoCache       bool
@@ -55,11 +58,12 @@ func parseBuildInput(with map[string]string) buildInput {
 	get := func(k string) string { return strings.TrimSpace(with[k]) }
 	return buildInput{
 		Context: get("context"), File: get("file"), Target: get("target"),
-		Tags: splitList(with["tags"]), Labels: splitLines(with["labels"]), BuildArgs: splitLines(with["build-args"]),
-		Platforms: splitList(with["platforms"]), CacheFrom: splitLines(with["cache-from"]), CacheTo: splitLines(with["cache-to"]),
+		Tags: splitList(with["tags"]), Labels: splitLines(with["labels"]), Annotations: splitLines(with["annotations"]),
+		BuildArgs: splitLines(with["build-args"]), Platforms: splitList(with["platforms"]),
+		CacheFrom: splitLines(with["cache-from"]), CacheTo: splitLines(with["cache-to"]),
 		Secrets: splitLines(with["secrets"]), SecretFiles: splitLines(with["secret-files"]), BuildContexts: splitLines(with["build-contexts"]),
-		Outputs: splitLines(with["outputs"]),
-		Push:    boolInput(with["push"]), Load: boolInput(with["load"]), NoCache: boolInput(with["no-cache"]), Pull: boolInput(with["pull"]),
+		Outputs: splitLines(with["outputs"]), AddHosts: splitList(with["add-hosts"]),
+		Push: boolInput(with["push"]), Load: boolInput(with["load"]), NoCache: boolInput(with["no-cache"]), Pull: boolInput(with["pull"]),
 		Provenance: get("provenance"), SBOM: get("sbom"), SSH: get("ssh"),
 	}
 }
@@ -138,6 +142,9 @@ func buildctlArgs(in buildInput, p buildPlan) ([]string, []string, error) {
 	if len(in.Platforms) > 0 {
 		args = append(args, "--opt", "platform="+strings.Join(in.Platforms, ","))
 	}
+	if len(in.AddHosts) > 0 {
+		args = append(args, "--opt", "add-host="+strings.Join(in.AddHosts, ","))
+	}
 	if in.NoCache {
 		args = append(args, "--no-cache")
 	}
@@ -179,10 +186,14 @@ func buildctlArgs(in buildInput, p buildPlan) ([]string, []string, error) {
 	if p.MetadataFile != "" {
 		args = append(args, "--metadata-file", p.MetadataFile)
 	}
+	annotations, bad := annotationAttrs(in.Annotations)
+	for _, b := range bad {
+		notes = append(notes, "annotation "+b+" is not [type:]key=value and was skipped")
+	}
 	switch {
 	case len(in.Outputs) > 0:
 		for _, o := range in.Outputs {
-			args = append(args, "--output", o)
+			args = append(args, "--output", o+annotations)
 		}
 	case in.Push && in.Load:
 		return nil, nil, errors.New("push and load cannot both be set")
@@ -192,7 +203,7 @@ func buildctlArgs(in buildInput, p buildPlan) ([]string, []string, error) {
 		}
 		// Plain http instances are declared in buildkitd.toml, the insecure
 		// output flag would pin the push to a tls attempt that never falls back
-		args = append(args, "--output", "type=image,"+nameAttr(in.Tags)+",push=true")
+		args = append(args, "--output", "type=image,"+nameAttr(in.Tags)+",push=true"+annotations)
 	case in.Load:
 		if len(in.Platforms) > 1 {
 			return nil, nil, errors.New("load supports a single platform")
@@ -216,6 +227,46 @@ func nameAttr(tags []string) string {
 		return "name=" + tags[0]
 	}
 	return `"name=` + strings.Join(tags, ",") + `"`
+}
+
+// Output attrs for [type:]key=value annotations, the way buildx spells them
+func annotationAttrs(entries []string) (string, []string) {
+	var sb strings.Builder
+	var bad []string
+	for _, e := range entries {
+		kv := e
+		typ := ""
+		if t, rest, found := strings.Cut(e, ":"); found && !strings.Contains(t, "=") {
+			typ, kv = t, rest
+		}
+		key, value, found := strings.Cut(kv, "=")
+		key = strings.TrimSpace(key)
+		if !found || key == "" {
+			bad = append(bad, e)
+			continue
+		}
+		switch typ {
+		case "", "manifest", "index", "manifest-descriptor", "index-descriptor":
+		default:
+			bad = append(bad, e)
+			continue
+		}
+		attr := "annotation"
+		if typ != "" {
+			attr += "-" + typ
+		}
+		sb.WriteString(",")
+		sb.WriteString(csvField(attr + "." + key + "=" + value))
+	}
+	return sb.String(), bad
+}
+
+// Quotes a csv field holding commas or quotes
+func csvField(s string) string {
+	if !strings.ContainsAny(s, `,"`) {
+		return s
+	}
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 }
 
 // Registry host of an image reference, docker.io when unqualified
@@ -258,20 +309,87 @@ func containerPath(jobDir, hostPath string) (string, bool) {
 	return path.Join(containerWorkRoot, filepath.ToSlash(rel)), true
 }
 
-// Registry blocks buildkitd needs for the instance, plain http stays http only
-func buildkitdConfig(host string, plainHTTP, ca bool) string {
-	if host == "" || (!plainHTTP && !ca) {
-		return ""
+// Resolver settings handed to buildkitd for the build sandboxes
+type dnsConfig struct {
+	nameservers []string
+	search      []string
+}
+
+// Nameservers and search domains from resolv.conf text, loopback dropped
+func parseResolvConf(data string) *dnsConfig {
+	cfg := &dnsConfig{}
+	for _, line := range strings.Split(data, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		fields := strings.Fields(line)
+		switch fields[0] {
+		case "nameserver":
+			if len(fields) > 1 && !isLoopbackAddr(fields[1]) {
+				cfg.nameservers = append(cfg.nameservers, fields[1])
+			}
+		case "search":
+			cfg.search = append(cfg.search, fields[1:]...)
+		}
 	}
+	return cfg
+}
+
+func isLoopbackAddr(s string) bool {
+	host := s
+	if i := strings.IndexByte(s, '%'); i >= 0 {
+		host = s[:i]
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+// Default bridge resolvers, buildkit drops the embedded 127.0.0.11
+func probeDaemonDNS(ctx context.Context, cli *client.Client, image string) (*dnsConfig, error) {
+	var buf bytes.Buffer
+	code, err := runContainer(ctx, cli, containerRun{Image: image, Entrypoint: []string{"cat"}, Cmd: []string{"/etc/resolv.conf"}, Out: &buf})
+	if err != nil {
+		return nil, err
+	}
+	if code != 0 {
+		return nil, fmt.Errorf("resolv.conf probe exited with code %d", code)
+	}
+	cfg := parseResolvConf(buf.String())
+	if len(cfg.nameservers) == 0 {
+		return nil, errors.New("the daemon's default network lists no usable nameserver")
+	}
+	return cfg, nil
+}
+
+// Registry and dns blocks of buildkitd.toml, empty when nothing applies
+func buildkitdConfig(host string, plainHTTP, ca bool, dns *dnsConfig) string {
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "[registry.%q]\n", host)
-	if plainHTTP {
-		sb.WriteString("  http = true\n")
+	if dns != nil && len(dns.nameservers) > 0 {
+		sb.WriteString("[dns]\n")
+		fmt.Fprintf(&sb, "  nameservers = [%s]\n", quoteList(dns.nameservers))
+		if len(dns.search) > 0 {
+			fmt.Fprintf(&sb, "  searchDomains = [%s]\n", quoteList(dns.search))
+		}
 	}
-	if ca {
-		fmt.Fprintf(&sb, "  ca = [%q]\n", buildKitCAPath)
+	if host != "" && (plainHTTP || ca) {
+		fmt.Fprintf(&sb, "[registry.%q]\n", host)
+		if plainHTTP {
+			sb.WriteString("  http = true\n")
+		}
+		if ca {
+			fmt.Fprintf(&sb, "  ca = [%q]\n", buildKitCAPath)
+		}
 	}
 	return sb.String()
+}
+
+func quoteList(items []string) string {
+	quoted := make([]string, len(items))
+	for i, it := range items {
+		quoted[i] = fmt.Sprintf("%q", it)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // Volume name docker accepts for one runner slot
@@ -359,7 +477,7 @@ func (j *job) prepareBuild(in buildInput) (buildPlan, func(), error) {
 	var scratch []string
 	cleanup := func() {
 		for _, p := range scratch {
-			os.RemoveAll(p)
+			_ = j.removeAll(p)
 		}
 	}
 	fail := func(err error) (buildPlan, func(), error) {
@@ -392,11 +510,11 @@ func (j *job) prepareBuild(in buildInput) (buildPlan, func(), error) {
 		hostCtx = p
 	}
 	if hostCtx != "" {
-		info, err := os.Stat(hostCtx)
+		info, err := j.stat(hostCtx)
 		if err != nil || !info.IsDir() {
 			return fail(fmt.Errorf("context %s is not a directory", ctxIn))
 		}
-		if entries, _ := os.ReadDir(hostCtx); len(entries) == 0 {
+		if entries, _ := j.readDir(hostCtx); len(entries) == 0 {
 			if filepath.Clean(hostCtx) == filepath.Clean(j.workspace) {
 				return fail(errors.New("the workspace is empty, checkout the repository or set context"))
 			}
@@ -415,7 +533,7 @@ func (j *job) prepareBuild(in buildInput) (buildPlan, func(), error) {
 	case in.File == "":
 		plan.DockerfileDir = plan.ContextDir
 		plan.DockerfileName = "Dockerfile"
-		if _, err := os.Stat(filepath.Join(hostCtx, "Dockerfile")); err != nil {
+		if _, err := j.stat(filepath.Join(hostCtx, "Dockerfile")); err != nil {
 			return fail(fmt.Errorf("no Dockerfile in context %s, set file", ctxIn))
 		}
 	case plan.RemoteContext != "":
@@ -425,7 +543,7 @@ func (j *job) prepareBuild(in buildInput) (buildPlan, func(), error) {
 		if err != nil {
 			return fail(err)
 		}
-		if info, err := os.Stat(hostFile); err != nil || info.IsDir() {
+		if info, err := j.stat(hostFile); err != nil || info.IsDir() {
 			return fail(fmt.Errorf("dockerfile %s not found", in.File))
 		}
 		dir, err := inView(filepath.Dir(hostFile), "dockerfile")
@@ -436,7 +554,7 @@ func (j *job) prepareBuild(in buildInput) (buildPlan, func(), error) {
 	}
 
 	meta := filepath.Join(j.tempDir, "buildkit-metadata.json")
-	os.Remove(meta)
+	_ = j.remove(meta)
 	scratch = append(scratch, meta)
 	plan.MetadataFile, _ = containerPath(j.dir, meta)
 	tar := filepath.Join(j.tempDir, "buildkit-image.tar")
@@ -445,10 +563,10 @@ func (j *job) prepareBuild(in buildInput) (buildPlan, func(), error) {
 
 	if len(in.Secrets) > 0 {
 		dir := filepath.Join(j.tempDir, "_build_secrets")
-		if err := os.MkdirAll(dir, 0o777); err != nil {
+		_ = j.removeAll(dir)
+		if err := j.mkdirAll(dir); err != nil {
 			return fail(err)
 		}
-		_ = os.Chmod(dir, 0o777)
 		scratch = append(scratch, dir)
 		for _, kv := range in.Secrets {
 			id, value, found := strings.Cut(kv, "=")
@@ -458,7 +576,7 @@ func (j *job) prepareBuild(in buildInput) (buildPlan, func(), error) {
 			}
 			j.log.AddMask(value)
 			p := filepath.Join(dir, sanitizeArtifactName(id))
-			if err := os.WriteFile(p, []byte(value), 0o644); err != nil {
+			if err := j.writeFile(p, []byte(value), 0o644); err != nil {
 				return fail(err)
 			}
 			plan.SecretFiles[id], _ = containerPath(j.dir, p)
@@ -526,6 +644,58 @@ func (j *job) buildPush(ctx context.Context, with map[string]string, outputs map
 	if err != nil {
 		return err
 	}
+	if err := j.runBuildKit(ctx, cli, args, out); err != nil {
+		return err
+	}
+	raw, err := j.readFile(filepath.Join(j.tempDir, "buildkit-metadata.json"))
+	if err == nil {
+		var meta map[string]any
+		_ = json.Unmarshal(raw, &meta)
+		digest := stringify(meta["containerimage.digest"])
+		imageID := stringify(meta["containerimage.config.digest"])
+		if imageID == "" {
+			imageID = digest
+		}
+		outputs["digest"] = digest
+		outputs["imageid"] = imageID
+		outputs["metadata"] = string(raw)
+		if in.Push {
+			for _, t := range in.Tags {
+				fmt.Fprintf(out, "Pushed %s@%s\n", t, digest)
+			}
+		}
+	}
+	if in.Load && len(in.Outputs) == 0 {
+		if err := j.loadImage(ctx, cli, filepath.Join(j.tempDir, "buildkit-image.tar"), out); err != nil {
+			return fmt.Errorf("load into the runner daemon: %w", err)
+		}
+	}
+	return nil
+}
+
+// Builds a job dir Dockerfile into the runner daemon
+func (j *job) buildLocalImage(ctx context.Context, cli *client.Client, dir, dockerfile, tag string, out io.Writer) error {
+	ctxDir, ok := containerPath(j.dir, dir)
+	if !ok {
+		return fmt.Errorf("build directory %s must live under the job directory", dir)
+	}
+	tar := filepath.Join(j.tempDir, "buildkit-image.tar")
+	_ = j.remove(tar)
+	defer func() { _ = j.remove(tar) }()
+	tarView, _ := containerPath(j.dir, tar)
+	args := []string{
+		"build", "--frontend", "dockerfile.v0", "--progress", "plain",
+		"--local", "context=" + ctxDir, "--local", "dockerfile=" + ctxDir, "--opt", "filename=" + dockerfile,
+		"--output", "type=docker,dest=" + tarView + ",name=" + tag,
+	}
+	if err := j.runBuildKit(ctx, cli, args, out); err != nil {
+		return err
+	}
+	return j.loadImage(ctx, cli, tar, out)
+}
+
+// Runs one buildctl invocation in a throwaway rootless buildkit container
+func (j *job) runBuildKit(ctx context.Context, cli *client.Client, args []string, out io.Writer) error {
 	image := strings.TrimSpace(j.r.cfg.BuildKitImage)
 	if image == "" {
 		image = defaultBuildKitImage
@@ -555,11 +725,19 @@ func (j *job) buildPush(ctx context.Context, with map[string]string, outputs map
 		j.dockerConfigDir() + ":" + buildKitDockerDir + ":ro",
 		volume + ":" + buildKitStateDir,
 	}
+	network := j.network
+	dns := j.r.buildDNS(ctx, cli, image, out)
+	if dns == nil && network != "" {
+		// The default bridge still hands out usable resolvers
+		fmt.Fprintln(out, "##[warning]Could not discover the daemon's resolvers, building on the default docker network where job services are unreachable")
+		network = ""
+	}
+	plainHTTP := strings.HasPrefix(strings.ToLower(j.task.ServerUrl), "http://")
 	// Daemonless buildkitd runs outside a user namespace and reads /etc, name the file
 	daemonFlags := "--oci-worker-no-process-sandbox"
-	if toml := buildkitdConfig(host, plan.InsecureHost != "", caFile != ""); toml != "" {
+	if toml := buildkitdConfig(host, plainHTTP, caFile != "", dns); toml != "" {
 		p := filepath.Join(j.tempDir, "buildkitd.toml")
-		if err := os.WriteFile(p, []byte(toml), 0o644); err != nil {
+		if err := j.writeFile(p, []byte(toml), 0o644); err != nil {
 			return err
 		}
 		binds = append(binds, p+":"+buildKitConfigDir+"/buildkitd.toml:ro")
@@ -578,8 +756,8 @@ func (j *job) buildPush(ctx context.Context, with map[string]string, outputs map
 	code, err := runContainer(ctx, cli, containerRun{
 		Image: image, Entrypoint: []string{"buildctl-daemonless.sh"}, Cmd: args,
 		Env:   []string{"BUILDKITD_FLAGS=" + daemonFlags, "HOME=/home/user"},
-		Binds: binds, Network: j.network, Hosts: j.hosts, SecurityOpt: []string{"seccomp=unconfined", "apparmor=unconfined"},
-		Devices: devices, Labels: map[string]string{"dfcli.runner.job": j.task.JobId}, Out: tail,
+		Binds: binds, Network: network, Hosts: j.hosts, SecurityOpt: []string{"seccomp=unconfined", "apparmor=unconfined"},
+		Devices: devices, Labels: j.r.labels(j.task.JobId), Out: tail,
 	})
 	if err != nil {
 		return fmt.Errorf("buildkit: %w", err)
@@ -587,35 +765,12 @@ func (j *job) buildPush(ctx context.Context, with map[string]string, outputs map
 	if code != 0 {
 		return fmt.Errorf("buildkit exited with code %d\n%s", code, tail.String())
 	}
-	raw, err := os.ReadFile(filepath.Join(j.tempDir, "buildkit-metadata.json"))
-	if err == nil {
-		var meta map[string]any
-		_ = json.Unmarshal(raw, &meta)
-		digest := stringify(meta["containerimage.digest"])
-		imageID := stringify(meta["containerimage.config.digest"])
-		if imageID == "" {
-			imageID = digest
-		}
-		outputs["digest"] = digest
-		outputs["imageid"] = imageID
-		outputs["metadata"] = string(raw)
-		if in.Push {
-			for _, t := range in.Tags {
-				fmt.Fprintf(out, "Pushed %s@%s\n", t, digest)
-			}
-		}
-	}
-	if in.Load && len(in.Outputs) == 0 {
-		if err := loadImage(ctx, cli, filepath.Join(j.tempDir, "buildkit-image.tar"), out); err != nil {
-			return fmt.Errorf("load into the runner daemon: %w", err)
-		}
-	}
 	return nil
 }
 
-// Imports a docker tar into the runner's daemon
-func loadImage(ctx context.Context, cli *client.Client, tarPath string, out io.Writer) error {
-	f, err := os.Open(tarPath)
+// Imports a job dir docker tar into the runner daemon
+func (j *job) loadImage(ctx context.Context, cli *client.Client, tarPath string, out io.Writer) error {
+	f, err := j.open(tarPath)
 	if err != nil {
 		return err
 	}

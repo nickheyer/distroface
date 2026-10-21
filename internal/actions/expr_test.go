@@ -3,6 +3,8 @@ package actions
 import (
 	"errors"
 	"testing"
+
+	"github.com/nickheyer/distroface/pkg/expr"
 )
 
 func testContext() *ExprContext {
@@ -107,7 +109,7 @@ func TestEvalContexts(t *testing.T) {
 			continue
 		}
 		if c.expr == "github.event.pull_request.labels.*.name" {
-			if fv, ok := got.(filteredValues); !ok || len(fv) != 2 {
+			if fv, ok := got.(expr.Filtered); !ok || len(fv) != 2 {
 				t.Errorf("%s = %#v, want two filtered values", c.expr, got)
 			}
 			continue

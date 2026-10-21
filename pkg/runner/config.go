@@ -37,6 +37,8 @@ type Config struct {
 	DockerHost     string `json:"docker_host,omitempty"`
 	// Rootless buildkit image behind native image builds
 	BuildKitImage string `json:"buildkit_image,omitempty"`
+	// Build sandbox nameservers, probed from the daemon when empty
+	BuildKitDNS []string `json:"buildkit_dns,omitempty"`
 	// PEM bundle buildkit trusts for the instance registry
 	RegistryCA string `json:"registry_ca,omitempty"`
 }

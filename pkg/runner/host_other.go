@@ -11,3 +11,8 @@ func killProcessGroup(cmd *exec.Cmd) {
 		_ = cmd.Process.Kill()
 	}
 }
+
+// Liveness cannot be probed here, assume it is gone
+func processAlive(pid int) bool {
+	return false
+}

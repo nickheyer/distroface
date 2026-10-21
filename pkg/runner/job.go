@@ -3,11 +3,14 @@ package runner
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -23,6 +26,10 @@ import (
 const (
 	cancelPollEvery   = 5 * time.Second
 	defaultJobMinutes = 360
+	// Minutes each cleanup step gets after cancel or timeout
+	postStepMinutes  = 10
+	setupStepName    = "Set up job"
+	completeStepName = "Complete job"
 )
 
 // Where a job's commands run
@@ -32,6 +39,7 @@ type executor interface {
 	Start(ctx context.Context) error
 	Exec(ctx context.Context, spec execSpec) (int, error)
 	Has(ctx context.Context, bin string) bool
+	Info() executorInfo
 	Kill()
 	Close(ctx context.Context) error
 }
@@ -46,43 +54,61 @@ type job struct {
 	workspace  string
 	tempDir    string
 	actionsDir string
-	exec       executor
-	docker     *client.Client
-	network    string
+	// Job dir handle that refuses symlink escapes
+	root    *os.Root
+	exec    executor
+	docker  *client.Client
+	network string
 	// Host entries that let containers reach a loopback bound server
 	hosts    []string
 	confined bool
 	hasBash  atomic.Int32
 
-	github  map[string]any
-	inputs  map[string]any
-	matrix  map[string]any
-	needs   map[string]any
-	jobInfo map[string]any
-	outputs map[string]string
+	github   map[string]any
+	inputs   map[string]any
+	matrix   map[string]any
+	needs    map[string]any
+	jobInfo  map[string]any
+	strategy map[string]any
+	outputs  map[string]string
 
 	nodeCmds    map[int]*nodeCmd
 	dockerAuths map[string]dockerAuth
+	prepared    map[string]*actionDef
+	// GITHUB_ACTION of each task step, numbered up front
+	stepActions []string
+	// Task steps whose action declares a pre phase, in step order
+	preSteps []preStep
 
 	mu          sync.Mutex
 	env         map[string]string
 	path        []string
 	steps       []*v1.JobStep
 	stepsCtx    map[string]any
+	stepState   map[string]map[string]string
+	actionNames map[string]int
+	// Queued post phases by state key, main refreshes what pre captured
+	actionPosts map[string]*actionCall
 	annotations []Annotation
 	status      string
 	summary     strings.Builder
 	post        []postStep
 	cancelled   atomic.Bool
 	timedOut    atomic.Bool
-	cancelStep  context.CancelFunc
-	stepCount   int32
+	// Runner shutdown, nothing more runs in the environment
+	hardCancel atomic.Bool
+	cancelStep context.CancelFunc
+	stepCount  int32
 }
 
+// Action cleanup, run in reverse order after the steps
 type postStep struct {
 	name string
-	run  func(ctx context.Context) error
+	run  func(ctx context.Context, out *commandWriter) error
 }
+
+// Post step result when its post-if is false
+var errSkipped = errors.New("skipped")
 
 func newJob(r *Runner, task *v1.Task) *job {
 	j := &job{
@@ -90,20 +116,33 @@ func newJob(r *Runner, task *v1.Task) *job {
 		task:        task,
 		env:         map[string]string{},
 		stepsCtx:    map[string]any{},
+		stepState:   map[string]map[string]string{},
+		actionNames: map[string]int{},
+		actionPosts: map[string]*actionCall{},
 		outputs:     map[string]string{},
 		nodeCmds:    map[int]*nodeCmd{},
 		dockerAuths: map[string]dockerAuth{},
+		prepared:    map[string]*actionDef{},
 	}
 	var ctxJSON struct {
-		GitHub  map[string]any    `json:"github"`
-		Inputs  map[string]any    `json:"inputs"`
-		Outputs map[string]string `json:"outputs"`
-		Job     map[string]any    `json:"job"`
+		GitHub   map[string]any    `json:"github"`
+		Inputs   map[string]any    `json:"inputs"`
+		Outputs  map[string]string `json:"outputs"`
+		Job      map[string]any    `json:"job"`
+		Strategy map[string]any    `json:"strategy"`
 	}
 	_ = json.Unmarshal([]byte(task.Context), &ctxJSON)
 	j.github, j.inputs, j.jobInfo = orMap(ctxJSON.GitHub), orMap(ctxJSON.Inputs), orMap(ctxJSON.Job)
+	// Older servers send no strategy, a single job is the hosted default
+	j.strategy = ctxJSON.Strategy
+	if len(j.strategy) == 0 {
+		j.strategy = map[string]any{"fail-fast": true, "job-index": float64(0), "job-total": float64(1), "max-parallel": float64(1)}
+	}
 	if ctxJSON.Outputs != nil {
 		j.outputs = ctxJSON.Outputs
+	}
+	if _, ok := j.github["token"]; !ok && task.Token != "" {
+		j.github["token"] = task.Token
 	}
 	_ = json.Unmarshal([]byte(task.Matrix), &j.matrix)
 	_ = json.Unmarshal([]byte(task.Needs), &j.needs)
@@ -115,11 +154,17 @@ func newJob(r *Runner, task *v1.Task) *job {
 			task.Env["DISTROFACE_REGISTRY"] = host
 		}
 	}
-	for i, st := range task.Steps {
-		j.steps = append(j.steps, &v1.JobStep{Number: int32(i + 1), Name: st.Name, Status: v1.ActionsStatus_ACTIONS_STATUS_QUEUED})
+	j.addStep(setupStepName)
+	for _, st := range task.Steps {
+		j.addStep(st.Name)
+		j.stepActions = append(j.stepActions, j.nextActionName(taskStepSpec(st)))
 	}
-	j.stepCount = int32(len(task.Steps))
 	return j
+}
+
+// Row of a task step, pre rows sit between setup and the steps
+func (j *job) taskRow(i int) int {
+	return 1 + len(j.preSteps) + i
 }
 
 func (j *job) repoName() string {
@@ -150,24 +195,16 @@ func (j *job) run(parent context.Context) {
 	defer cancel()
 	timer := time.AfterFunc(time.Duration(minutes)*time.Minute, func() {
 		j.timedOut.Store(true)
+		j.log.Line("##[error]The job has exceeded the maximum execution time of %d minutes", minutes)
 		j.cancelRunning()
 	})
-	defer timer.Stop()
 	stopWatch := make(chan struct{})
 	go j.watchCancel(ctx, stopWatch)
 
-	j.log.Line("Runner %s (dfcli %s) picked up job %s of %s", j.r.cfg.Name, j.r.version, j.task.JobName, j.task.RepoFullName)
 	conclusion := j.execute(ctx)
+	timer.Stop()
 	close(stopWatch)
 
-	if j.exec != nil {
-		cctx, ccancel := context.WithTimeout(bg, 2*time.Minute)
-		_ = j.exec.Close(cctx)
-		ccancel()
-	}
-	if j.dir != "" {
-		os.RemoveAll(j.dir)
-	}
 	j.log.Line("Job finished with conclusion %s", strings.ToLower(strings.TrimPrefix(conclusion.String(), "ACTIONS_CONCLUSION_")))
 	if err := j.log.Close(bg); err != nil {
 		j.r.out.Printf("job %s: log upload: %v", shortID(j.task.JobId), err)
@@ -175,17 +212,13 @@ func (j *job) run(parent context.Context) {
 	j.complete(bg, conclusion)
 }
 
-// Stops the running step and kills the job environment
+// Stops the running step, the environment stays for cleanup
 func (j *job) cancelRunning() {
 	j.mu.Lock()
 	cancel := j.cancelStep
-	ex := j.exec
 	j.mu.Unlock()
 	if cancel != nil {
 		cancel()
-	}
-	if ex != nil {
-		ex.Kill()
 	}
 }
 
@@ -199,7 +232,11 @@ func (j *job) watchCancel(ctx context.Context, stop <-chan struct{}) {
 			return
 		case <-ctx.Done():
 			j.cancelled.Store(true)
+			j.hardCancel.Store(true)
 			j.cancelRunning()
+			if ex := j.executor(); ex != nil {
+				ex.Kill()
+			}
 			return
 		case <-t.C:
 			j.sync(ctx)
@@ -207,11 +244,14 @@ func (j *job) watchCancel(ctx context.Context, stop <-chan struct{}) {
 	}
 }
 
+func (j *job) executor() executor {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.exec
+}
+
 // Reports progress and acts on a server side cancel
 func (j *job) sync(ctx context.Context) {
-	if j.cancelled.Load() {
-		return
-	}
 	if j.report(ctx) && !j.cancelled.Swap(true) {
 		j.log.Line("##[error]The job was cancelled")
 		j.cancelRunning()
@@ -250,15 +290,29 @@ func (j *job) annotate(a Annotation) {
 	j.mu.Unlock()
 }
 
-func (j *job) fail(format string, args ...any) {
+// Records a job level failure against a step row
+func (j *job) fail(row int, format string, args ...any) {
 	msg := fmt.Sprintf(format, args...)
 	j.log.Line("##[error]%s", msg)
-	j.annotate(Annotation{Level: "error", Message: msg})
+	j.annotate(Annotation{Level: "error", Message: msg, Step: j.rowNumber(row)})
+	j.markFailed()
+}
+
+func (j *job) markFailed() {
 	j.mu.Lock()
 	if j.status == "" {
 		j.status = "failure"
 	}
 	j.mu.Unlock()
+}
+
+func (j *job) rowNumber(row int) int32 {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if row < 0 || row >= len(j.steps) {
+		return 0
+	}
+	return j.steps[row].Number
 }
 
 func (j *job) complete(ctx context.Context, conclusion v1.ActionsConclusion) {
@@ -284,7 +338,11 @@ func (j *job) evalOutputs() string {
 	ectx := j.exprContext()
 	out := map[string]string{}
 	for k, v := range j.outputs {
-		out[k] = interpolate(v, ectx)
+		s, err := interpolate(v, ectx)
+		if err != nil {
+			j.r.out.Printf("job %s: output %s: %v", shortID(j.task.JobId), k, err)
+		}
+		out[k] = s
 	}
 	raw, _ := json.Marshal(out)
 	return string(raw)
@@ -292,27 +350,101 @@ func (j *job) evalOutputs() string {
 
 // Prepares the environment, runs steps, picks the conclusion
 func (j *job) execute(ctx context.Context) v1.ActionsConclusion {
-	if err := j.prepare(); err != nil {
-		j.fail("%v", err)
-		return j.conclusion()
-	}
-	if err := j.exec.Start(ctx); err != nil {
-		j.fail("could not start the job environment: %v", err)
-		return j.conclusion()
+	ready := j.setup(ctx)
+	for _, p := range j.preSteps {
+		if !ready {
+			j.setStep(p.row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_SKIPPED)
+			continue
+		}
+		j.runPreStep(ctx, p)
 	}
 	for i, st := range j.task.Steps {
+		if !ready {
+			j.finishStep(j.taskRow(i), st.Id, "skipped", "skipped", nil)
+			continue
+		}
 		j.runStep(ctx, i, st)
 	}
 	j.runPost(ctx)
+	j.teardown(ctx)
+	return j.conclusion()
+}
+
+// Set up job, the environment, action downloads, and pre steps
+func (j *job) setup(ctx context.Context) bool {
+	const row = 0
+	j.setStep(row, v1.ActionsStatus_ACTIONS_STATUS_RUNNING, 0)
+	j.log.Line("##[group]%s", setupStepName)
+	j.log.Line("Runner %s (dfcli %s) picked up job %s of %s", j.r.cfg.Name, j.r.version, j.task.JobName, j.task.RepoFullName)
+	j.sync(ctx)
+	sctx, cancel := j.stepContext(ctx, 0, false)
+	err := j.setupEnvironment(sctx)
+	if err == nil {
+		err = j.prepareActions(sctx)
+	}
+	if err == nil {
+		j.planPreSteps()
+	}
+	cancel()
+	switch {
+	case j.stopped():
+		j.log.Line("##[endgroup]")
+		j.setStep(row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_CANCELLED)
+		return false
+	case err != nil:
+		j.fail(row, "%v", err)
+		j.log.Line("##[endgroup]")
+		j.setStep(row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_FAILURE)
+		j.sync(ctx)
+		return false
+	}
+	j.log.Line("##[endgroup]")
+	j.setStep(row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_SUCCESS)
+	j.sync(ctx)
+	return true
+}
+
+func (j *job) setupEnvironment(ctx context.Context) error {
+	if err := j.prepare(); err != nil {
+		return err
+	}
+	if err := j.exec.Start(ctx); err != nil {
+		return fmt.Errorf("could not start the job environment: %w", err)
+	}
+	return nil
+}
+
+// Complete job, cleanup of the environment and the summary
+func (j *job) teardown(ctx context.Context) {
+	row := j.addStep(completeStepName)
+	j.setStep(row, v1.ActionsStatus_ACTIONS_STATUS_RUNNING, 0)
+	j.log.Line("##[group]%s", completeStepName)
+	if j.exec != nil {
+		j.log.Line("Cleaning up the job environment")
+		cctx, ccancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		_ = j.exec.Close(cctx)
+		ccancel()
+	}
+	if j.root != nil {
+		_ = j.root.Close()
+		j.root = nil
+	}
+	if j.dir != "" {
+		if err := os.RemoveAll(j.dir); err != nil {
+			j.log.Line("##[warning]Job directory cleanup: %v", err)
+		}
+	}
 	j.mu.Lock()
-	hasSummary := j.summary.Len() > 0
+	summary := strings.TrimRight(j.summary.String(), "\n")
 	j.mu.Unlock()
-	if hasSummary {
+	if summary != "" {
 		j.log.Line("##[group]Job summary")
-		_, _ = j.log.Write([]byte(strings.TrimRight(j.summary.String(), "\n") + "\n"))
+		_, _ = j.log.Write([]byte(summary + "\n"))
 		j.log.Line("##[endgroup]")
 	}
-	return j.conclusion()
+	j.log.Line("##[endgroup]")
+	j.setStep(row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_SUCCESS)
+	j.report(ctx)
 }
 
 func (j *job) conclusion() v1.ActionsConclusion {
@@ -336,25 +468,27 @@ func (j *job) prepare() error {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return fmt.Errorf("job root %s: %w", root, err)
 	}
-	dir, err := os.MkdirTemp(root, "job-"+shortID(j.task.JobId)+"-")
+	dir, err := os.MkdirTemp(root, j.r.jobDirPrefix()+shortID(j.task.JobId)+"-")
 	if err != nil {
 		return err
 	}
 	j.dir = dir
 	_ = os.Chmod(dir, 0o777)
+	if j.root, err = os.OpenRoot(dir); err != nil {
+		return err
+	}
 	name := j.repoName()
 	j.workspace = filepath.Join(dir, name, name)
 	j.tempDir = filepath.Join(dir, "_temp")
 	j.actionsDir = filepath.Join(dir, "_actions")
-	for _, d := range []string{j.workspace, j.tempDir, j.actionsDir, filepath.Join(dir, "_tool")} {
-		if err := os.MkdirAll(d, 0o777); err != nil {
+	for _, d := range []string{j.workspace, j.tempDir, j.actionsDir, filepath.Join(dir, "_tool"), j.homeDir(), j.workflowDir(), j.fileCommandsDir()} {
+		if err := j.mkdirAll(d); err != nil {
 			return err
 		}
-		_ = os.Chmod(d, 0o777)
 	}
 	if ev, ok := j.github["event"]; ok {
 		raw, _ := json.MarshalIndent(ev, "", "  ")
-		if err := os.WriteFile(filepath.Join(j.tempDir, "event.json"), raw, 0o666); err != nil {
+		if err := j.writeFile(j.eventPath(), raw, 0o666); err != nil {
 			return err
 		}
 	}
@@ -377,7 +511,7 @@ func (j *job) prepare() error {
 		if len(j.task.Services) > 0 {
 			return errHostServices
 		}
-		j.exec = &hostExecutor{jobDir: dir, log: j.log}
+		j.setExecutor(&hostExecutor{jobDir: dir, log: j.log})
 		return nil
 	}
 	cli, err := newDockerClient(j.r.cfg.DockerHost)
@@ -392,14 +526,21 @@ func (j *job) prepare() error {
 	for _, h := range unreachable {
 		j.log.Line("##[warning]Server address %s is loopback, job containers cannot reach it, register the runner with a hostname instead", h)
 	}
-	j.exec = &dockerExecutor{
+	j.setExecutor(&dockerExecutor{
 		cli: cli, jobID: j.task.JobId, jobDir: dir, image: image, options: j.task.ContainerOptions,
-		services: j.task.Services, log: j.log, auth: registryAuth{host: registryHost(j.task.ServerUrl), token: j.task.Token},
+		services: j.task.Services, log: j.log, auth: j.pullAuth,
 		externals:  j.r.ext.root,
 		privileged: j.r.cfg.PrivilegedJobs,
 		hosts:      j.hosts,
-	}
+		labels:     j.r.labels(j.task.JobId),
+	})
 	return nil
+}
+
+func (j *job) setExecutor(ex executor) {
+	j.mu.Lock()
+	j.exec = ex
+	j.mu.Unlock()
 }
 
 // Task labels first, workflow source for older servers
@@ -431,7 +572,10 @@ func (j *job) runsOn() []string {
 	var labels []string
 	add := func(v any) {
 		if s, ok := v.(string); ok {
-			labels = append(labels, strings.TrimSpace(interpolate(s, ectx)))
+			if label, err := interpolate(s, ectx); err == nil {
+				s = label
+			}
+			labels = append(labels, strings.TrimSpace(s))
 		}
 	}
 	switch v := def.RunsOn.(type) {
@@ -465,14 +609,26 @@ func (j *job) exprContext() *exprContext {
 		env[k] = v
 	}
 	status := j.status
-	if j.cancelled.Load() {
+	if j.cancelled.Load() || j.timedOut.Load() {
 		status = "cancelled"
 	}
 	stepsCopy := make(map[string]any, len(j.stepsCtx))
 	for k, v := range j.stepsCtx {
 		stepsCopy[k] = v
 	}
-	jobCtx := map[string]any{"status": orStatus(status), "container": map[string]any{"id": "", "network": j.network}, "services": map[string]any{}}
+	var info executorInfo
+	if j.exec != nil {
+		info = j.exec.Info()
+	}
+	services := map[string]any{}
+	for name, svc := range info.services {
+		ports := map[string]any{}
+		for k, v := range svc.ports {
+			ports[k] = v
+		}
+		services[name] = map[string]any{"id": svc.id, "network": info.network, "ports": ports}
+	}
+	jobCtx := map[string]any{"status": orStatus(status), "container": map[string]any{"id": info.containerID, "network": info.network}, "services": services}
 	for k, v := range j.jobInfo {
 		jobCtx[k] = v
 	}
@@ -480,10 +636,16 @@ func (j *job) exprContext() *exprContext {
 	if j.exec != nil {
 		ws = j.exec.Path(j.workspace)
 	}
+	var wsFS fs.FS
+	if j.root != nil {
+		if rel, err := j.rel(j.workspace); err == nil {
+			wsFS, _ = fs.Sub(j.root.FS(), filepath.ToSlash(rel))
+		}
+	}
 	return &exprContext{
 		github: j.github, env: env, vars: j.task.Variables, secrets: j.task.Secrets, needs: j.needs, matrix: j.matrix,
-		steps: stepsCopy, inputs: j.inputs, job: jobCtx, status: status, workspace: j.workspace,
-		runner: map[string]any{"os": runnerOS(), "arch": runnerArch(), "name": j.r.cfg.Name, "temp": j.pathOf(j.tempDir), "tool_cache": j.pathOf(filepath.Join(j.dir, "_tool")), "workspace": ws},
+		steps: stepsCopy, inputs: j.inputs, job: jobCtx, strategy: j.strategy, status: status, workspace: j.workspace, workspaceFS: wsFS,
+		runner: map[string]any{"os": runnerOS(), "arch": runnerArch(), "name": j.r.cfg.Name, "temp": j.pathOf(j.tempDir), "tool_cache": j.pathOf(filepath.Join(j.dir, "_tool")), "workspace": ws, "debug": runnerDebug(j.debugEnabled())},
 	}
 }
 
@@ -501,6 +663,12 @@ func (j *job) pathOf(hostPath string) string {
 	}
 	return j.exec.Path(hostPath)
 }
+
+// Temp subdirectories laid out the way the hosted runner does
+func (j *job) homeDir() string         { return filepath.Join(j.tempDir, "_github_home") }
+func (j *job) workflowDir() string     { return filepath.Join(j.tempDir, "_github_workflow") }
+func (j *job) fileCommandsDir() string { return filepath.Join(j.tempDir, "_runner_file_commands") }
+func (j *job) eventPath() string       { return filepath.Join(j.workflowDir(), "event.json") }
 
 func runnerOS() string {
 	switch runtime.GOOS {
@@ -534,15 +702,18 @@ func (j *job) baseEnv() map[string]string {
 	env := map[string]string{
 		"CI": "true", "GITHUB_ACTIONS": "true", "DISTROFACE_ACTIONS": "true",
 		"GITHUB_WORKSPACE": ws, "GITHUB_REPOSITORY": j.task.RepoFullName, "GITHUB_REPOSITORY_OWNER": str("repository_owner"),
-		"GITHUB_SHA": str("sha"), "GITHUB_REF": str("ref"), "GITHUB_REF_NAME": str("ref_name"), "GITHUB_REF_TYPE": str("ref_type"),
-		"GITHUB_HEAD_REF": str("head_ref"), "GITHUB_BASE_REF": str("base_ref"), "GITHUB_ACTOR": str("actor"), "GITHUB_TRIGGERING_ACTOR": str("triggering_actor"),
-		"GITHUB_EVENT_NAME": str("event_name"), "GITHUB_EVENT_PATH": j.pathOf(filepath.Join(j.tempDir, "event.json")),
+		"GITHUB_REPOSITORY_ID": str("repository_id"), "GITHUB_REPOSITORY_OWNER_ID": str("repository_owner_id"),
+		"GITHUB_SHA": str("sha"), "GITHUB_REF": str("ref"), "GITHUB_REF_NAME": str("ref_name"), "GITHUB_REF_TYPE": str("ref_type"), "GITHUB_REF_PROTECTED": str("ref_protected"),
+		"GITHUB_HEAD_REF": str("head_ref"), "GITHUB_BASE_REF": str("base_ref"), "GITHUB_ACTOR": str("actor"), "GITHUB_ACTOR_ID": str("actor_id"), "GITHUB_TRIGGERING_ACTOR": str("triggering_actor"),
+		"GITHUB_EVENT_NAME": str("event_name"), "GITHUB_EVENT_PATH": j.pathOf(j.eventPath()),
 		"GITHUB_RUN_ID": j.task.RunId, "GITHUB_RUN_NUMBER": str("run_number"), "GITHUB_RUN_ATTEMPT": str("run_attempt"),
-		"GITHUB_JOB": stringify(j.jobInfo["key"]), "GITHUB_WORKFLOW": str("workflow"), "GITHUB_WORKFLOW_REF": str("workflow_ref"),
-		"GITHUB_SERVER_URL": j.task.ServerUrl, "GITHUB_API_URL": str("api_url"), "GITHUB_GRAPHQL_URL": "",
-		"GITHUB_ACTION": "", "GITHUB_ACTION_PATH": "", "GITHUB_ACTION_REPOSITORY": "",
+		"GITHUB_JOB": stringify(j.jobInfo["key"]), "GITHUB_WORKFLOW": str("workflow"), "GITHUB_WORKFLOW_REF": str("workflow_ref"), "GITHUB_WORKFLOW_SHA": str("workflow_sha"),
+		"GITHUB_SERVER_URL": j.task.ServerUrl, "GITHUB_API_URL": str("api_url"), "GITHUB_GRAPHQL_URL": str("graphql_url"),
+		"GITHUB_ACTION": "", "GITHUB_ACTION_PATH": "", "GITHUB_ACTION_REPOSITORY": "", "GITHUB_ACTION_REF": "",
+		"GITHUB_RETENTION_DAYS": "", "GITHUB_ACTIONS_RUNNER": "dfcli",
 		"RUNNER_OS": runnerOS(), "RUNNER_ARCH": runnerArch(), "RUNNER_NAME": j.r.cfg.Name, "RUNNER_TEMP": j.pathOf(j.tempDir),
 		"RUNNER_TOOL_CACHE": j.pathOf(filepath.Join(j.dir, "_tool")), "RUNNER_WORKSPACE": j.pathOf(filepath.Dir(j.workspace)),
+		"RUNNER_ENVIRONMENT":    "self-hosted",
 		"DISTROFACE_SERVER_URL": j.task.ServerUrl, "DISTROFACE_REPOSITORY": j.task.RepoFullName,
 	}
 	if j.task.ServerUrl == "" {
@@ -563,9 +734,13 @@ func (j *job) baseEnv() map[string]string {
 	return env
 }
 
-func (j *job) setStep(i int, status v1.ActionsStatus, conclusion v1.ActionsConclusion) {
+func (j *job) setStep(row int, status v1.ActionsStatus, conclusion v1.ActionsConclusion) {
 	j.mu.Lock()
-	s := j.steps[i]
+	defer j.mu.Unlock()
+	if row < 0 || row >= len(j.steps) {
+		return
+	}
+	s := j.steps[row]
 	s.Status = status
 	now := timestamppb.Now()
 	switch status {
@@ -578,10 +753,18 @@ func (j *job) setStep(i int, status v1.ActionsStatus, conclusion v1.ActionsConcl
 		s.FinishedAt = now
 		s.Conclusion = conclusion
 	}
-	j.mu.Unlock()
 }
 
-// Appends a synthetic step row for post actions
+// Sets a row's display name after expression evaluation
+func (j *job) nameStep(row int, name string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if row >= 0 && row < len(j.steps) && name != "" {
+		j.steps[row].Name = name
+	}
+}
+
+// Appends a step table row and returns its index
 func (j *job) addStep(name string) int {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -590,6 +773,22 @@ func (j *job) addStep(name string) int {
 	return len(j.steps) - 1
 }
 
+// Inserts queued rows at an index and renumbers the table
+func (j *job) insertRows(at int, names []string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	rows := make([]*v1.JobStep, 0, len(names))
+	for _, name := range names {
+		rows = append(rows, &v1.JobStep{Name: name, Status: v1.ActionsStatus_ACTIONS_STATUS_QUEUED})
+	}
+	j.steps = slices.Insert(j.steps, at, rows...)
+	for i, s := range j.steps {
+		s.Number = int32(i + 1)
+	}
+	j.stepCount = int32(len(j.steps))
+}
+
+// Cleanup runs after cancel and timeout, shutdown skips it
 func (j *job) runPost(ctx context.Context) {
 	j.mu.Lock()
 	post := j.post
@@ -597,27 +796,35 @@ func (j *job) runPost(ctx context.Context) {
 	j.mu.Unlock()
 	for i := len(post) - 1; i >= 0; i-- {
 		p := post[i]
-		if j.stopped() {
+		if j.hardCancel.Load() {
 			return
 		}
-		idx := j.addStep("Post " + p.name)
-		j.setStep(idx, v1.ActionsStatus_ACTIONS_STATUS_RUNNING, 0)
+		row := j.addStep("Post " + p.name)
+		j.setStep(row, v1.ActionsStatus_ACTIONS_STATUS_RUNNING, 0)
 		j.log.Line("##[group]Post %s", p.name)
-		sctx, cancel := j.stepContext(ctx, 0)
-		err := p.run(sctx)
+		cw := j.newCommandWriter(j.log, j.rowNumber(row), map[string]string{}, map[string]string{})
+		sctx, cancel := j.stepContext(ctx, postStepMinutes, true)
+		err := p.run(sctx, cw)
 		cancel()
-		j.log.Line("##[endgroup]")
-		if err != nil {
-			j.log.Line("##[warning]Post %s: %v", p.name, err)
-			j.setStep(idx, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_FAILURE)
-			continue
+		cw.Flush()
+		conclusion := v1.ActionsConclusion_ACTIONS_CONCLUSION_SUCCESS
+		switch {
+		case errors.Is(err, errSkipped):
+			conclusion = v1.ActionsConclusion_ACTIONS_CONCLUSION_SKIPPED
+		case err != nil:
+			conclusion = v1.ActionsConclusion_ACTIONS_CONCLUSION_FAILURE
+			j.log.Line("##[error]Post %s: %v", p.name, err)
+			j.annotate(Annotation{Level: "error", Message: fmt.Sprintf("Post %s: %v", p.name, err), Step: j.rowNumber(row)})
+			j.markFailed()
 		}
-		j.setStep(idx, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, v1.ActionsConclusion_ACTIONS_CONCLUSION_SUCCESS)
+		j.log.Line("##[endgroup]")
+		j.setStep(row, v1.ActionsStatus_ACTIONS_STATUS_COMPLETED, conclusion)
 	}
 	j.report(ctx)
 }
 
-func (j *job) stepContext(ctx context.Context, minutes int32) (context.Context, context.CancelFunc) {
+// Step context the cancel watcher can reach
+func (j *job) stepContext(ctx context.Context, minutes int32, wasStopped bool) (context.Context, context.CancelFunc) {
 	var sctx context.Context
 	var cancel context.CancelFunc
 	if minutes > 0 {
@@ -628,6 +835,10 @@ func (j *job) stepContext(ctx context.Context, minutes int32) (context.Context, 
 	j.mu.Lock()
 	j.cancelStep = cancel
 	j.mu.Unlock()
+	// A cancel that landed between steps must not be lost
+	if !wasStopped && j.stopped() {
+		cancel()
+	}
 	return sctx, func() {
 		j.mu.Lock()
 		j.cancelStep = nil
@@ -639,4 +850,165 @@ func (j *job) stepContext(ctx context.Context, minutes int32) (context.Context, 
 // True once the job must stop scheduling steps
 func (j *job) stopped() bool {
 	return j.cancelled.Load() || j.timedOut.Load()
+}
+
+// State an action's pre, main, and post scripts share
+func (j *job) stateFor(key string) map[string]string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return maps.Clone(j.stepState[key])
+}
+
+func (j *job) mergeState(key string, values map[string]string) {
+	if len(values) == 0 {
+		return
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	st := j.stepState[key]
+	if st == nil {
+		st = map[string]string{}
+		j.stepState[key] = st
+	}
+	maps.Copy(st, values)
+}
+
+func runnerDebug(on bool) string {
+	if on {
+		return "1"
+	}
+	return ""
+}
+
+// Path of a host location relative to the job dir
+func (j *job) rel(hostPath string) (string, error) {
+	rel, err := filepath.Rel(j.dir, hostPath)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%s is outside the job directory", hostPath)
+	}
+	return rel, nil
+}
+
+func (j *job) fsRoot() (*os.Root, error) {
+	if j.root == nil {
+		return nil, fmt.Errorf("job directory is not open")
+	}
+	return j.root, nil
+}
+
+// Job dir file operations go through the root
+
+func (j *job) writeFile(hostPath string, data []byte, perm os.FileMode) error {
+	root, err := j.fsRoot()
+	if err != nil {
+		return err
+	}
+	rel, err := j.rel(hostPath)
+	if err != nil {
+		return err
+	}
+	if err := root.WriteFile(rel, data, perm); err != nil {
+		return err
+	}
+	return root.Chmod(rel, perm)
+}
+
+func (j *job) readFile(hostPath string) ([]byte, error) {
+	root, err := j.fsRoot()
+	if err != nil {
+		return nil, err
+	}
+	rel, err := j.rel(hostPath)
+	if err != nil {
+		return nil, err
+	}
+	return root.ReadFile(rel)
+}
+
+func (j *job) mkdirAll(hostPath string) error {
+	root, err := j.fsRoot()
+	if err != nil {
+		return err
+	}
+	rel, err := j.rel(hostPath)
+	if err != nil {
+		return err
+	}
+	if err := root.MkdirAll(rel, 0o777); err != nil {
+		return err
+	}
+	return root.Chmod(rel, 0o777)
+}
+
+func (j *job) removeAll(hostPath string) error {
+	root, err := j.fsRoot()
+	if err != nil {
+		return err
+	}
+	rel, err := j.rel(hostPath)
+	if err != nil {
+		return err
+	}
+	return root.RemoveAll(rel)
+}
+
+func (j *job) remove(hostPath string) error {
+	root, err := j.fsRoot()
+	if err != nil {
+		return err
+	}
+	rel, err := j.rel(hostPath)
+	if err != nil {
+		return err
+	}
+	return root.Remove(rel)
+}
+
+func (j *job) openFile(hostPath string, flag int, perm os.FileMode) (*os.File, error) {
+	root, err := j.fsRoot()
+	if err != nil {
+		return nil, err
+	}
+	rel, err := j.rel(hostPath)
+	if err != nil {
+		return nil, err
+	}
+	return root.OpenFile(rel, flag, perm)
+}
+
+func (j *job) open(hostPath string) (*os.File, error) {
+	return j.openFile(hostPath, os.O_RDONLY, 0)
+}
+
+func (j *job) stat(hostPath string) (os.FileInfo, error) {
+	root, err := j.fsRoot()
+	if err != nil {
+		return nil, err
+	}
+	rel, err := j.rel(hostPath)
+	if err != nil {
+		return nil, err
+	}
+	return root.Stat(rel)
+}
+
+func (j *job) lstat(hostPath string) (os.FileInfo, error) {
+	root, err := j.fsRoot()
+	if err != nil {
+		return nil, err
+	}
+	rel, err := j.rel(hostPath)
+	if err != nil {
+		return nil, err
+	}
+	return root.Lstat(rel)
+}
+
+func (j *job) readDir(hostPath string) ([]os.DirEntry, error) {
+	f, err := j.open(hostPath)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.ReadDir(-1)
 }

@@ -190,6 +190,9 @@ func newRunnerStatusCmd() *cobra.Command {
 			if cfg.BuildKitImage != "" {
 				fmt.Printf("BuildKit:    %s\n", cfg.BuildKitImage)
 			}
+			if len(cfg.BuildKitDNS) > 0 {
+				fmt.Printf("BuildKit DNS: %s\n", strings.Join(cfg.BuildKitDNS, ","))
+			}
 			if cfg.RegistryCA != "" {
 				fmt.Printf("Registry CA: %s\n", cfg.RegistryCA)
 			}

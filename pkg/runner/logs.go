@@ -59,14 +59,23 @@ func (l *logStream) Start(ctx context.Context) {
 	}()
 }
 
-// Hides a value in every line written from now on
+// Masks a value, multi line values line by line
 func (l *logStream) AddMask(v string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.addMask(v)
+	if strings.ContainsAny(v, "\r\n") {
+		for _, line := range strings.FieldsFunc(v, func(r rune) bool { return r == '\n' || r == '\r' }) {
+			l.addMask(line)
+		}
+	}
+}
+
+func (l *logStream) addMask(v string) {
 	v = strings.TrimSpace(v)
 	if len(v) < 3 {
 		return
 	}
-	l.mu.Lock()
-	defer l.mu.Unlock()
 	for _, m := range l.masks {
 		if m == v {
 			return
