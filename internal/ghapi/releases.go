@@ -7,6 +7,7 @@ import (
 
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/forge"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/pages"
@@ -216,7 +217,7 @@ func (q *request) assetByPath(repo *db.GitRepository) (*db.ArtifactRepository, *
 		return nil, nil, nil, false
 	}
 	id := q.param("id")
-	rows, _, err := q.h.store.ListArtifacts(q.ctx, pkg.ID, "", 0, 0)
+	rows, _, err := q.h.store.ListArtifacts(q.ctx, pkg.ID, "", stores.KindRegular, 0, 0)
 	if err != nil {
 		q.failErr(err)
 		return nil, nil, nil, false

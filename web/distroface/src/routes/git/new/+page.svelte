@@ -32,17 +32,17 @@
 		{
 			value: 'standard',
 			label: 'Standard repository',
-			description: 'Empty or initialized, populated by pushes'
+			description: 'An empty git repository'
 		},
 		{
 			value: 'mirror',
 			label: 'Mirror',
-			description: 'Keeps refs in sync with an upstream git url'
+			description: 'A synced copy of an upstream git repository'
 		},
 		{
 			value: 'import',
 			label: 'Import a repository',
-			description: 'One time copy of an existing repository, a normal repository afterwards'
+			description: 'One time sync of an upstream git repository'
 		},
 		{
 			value: 'template',
@@ -235,7 +235,7 @@
 {:else}
 	<FormPage
 		title="Create a new repository"
-		description="A repository holds your source history. Create an empty one, import or mirror an upstream, or start from a template."
+		description="Create an empty one, import/mirror an upstream, or start from a template."
 		backHref={exitHref}
 		backLabel={exitLabel}
 	>

@@ -196,6 +196,8 @@ message ListArtifactsRequest {
   // version filters to a single version when set.
   string version = 3;
   string namespace = 4;
+  // workflow lists run uploads instead of package contents.
+  bool workflow = 5;
 }
 
 // ListArtifactsResponse is the paginated list of artifacts.
@@ -209,6 +211,8 @@ message ListArtifactVersionsRequest {
   PageRequest page = 1;
   string repo_name = 2;
   string namespace = 3;
+  // workflow lists run uploads instead of package contents.
+  bool workflow = 4;
 }
 
 // ArtifactVersionGroup is a version string with its artifacts.
@@ -217,6 +221,8 @@ message ArtifactVersionGroup {
   repeated Artifact artifacts = 2;
   // True when the source repository has a release with this tag
   bool has_release = 3;
+  // Run that produced a workflow version, empty for package contents
+  string run_id = 4;
 }
 
 // ListArtifactVersionsResponse groups a repository's artifacts by version.
@@ -236,6 +242,8 @@ message SearchArtifactsRequest {
   map<string, string> properties = 3;
   // namespace limits the search to one namespace when set.
   string namespace = 4;
+  // workflow searches run uploads instead of package contents.
+  bool workflow = 5;
 }
 
 // SearchArtifactsResponse is the paginated search result.

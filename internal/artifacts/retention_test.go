@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	storage "github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	v1proto "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"google.golang.org/protobuf/proto"
 )
@@ -27,7 +28,7 @@ func TestRetentionMaxTotalSize(t *testing.T) {
 
 	ctx := context.Background()
 	repo := e.repoByName("cap")
-	list, _, err := e.store.ListArtifacts(ctx, repo.ID, "", 0, 0)
+	list, _, err := e.store.ListArtifacts(ctx, repo.ID, "", stores.KindRegular, 0, 0)
 	if err != nil {
 		t.Fatalf("ListArtifacts: %v", err)
 	}

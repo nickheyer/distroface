@@ -317,7 +317,7 @@ func (s *ArtifactService) ListArtifacts(ctx context.Context, req *v1.ListArtifac
 	}
 
 	limit, offset := pages.Parse(msg.Page)
-	list, total, err := s.store.ListArtifacts(ctx, repo.ID, msg.Version, limit, offset)
+	list, total, err := s.store.ListArtifacts(ctx, repo.ID, msg.Version, kindOf(msg.Workflow), limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -337,12 +337,13 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *v1.List
 
 	limit, offset := pages.Parse(req.Page)
 	byVersion, desc := versionOrder(req.Page)
-	order, total, err := s.store.ListArtifactVersionPage(ctx, repo.ID, byVersion, desc, limit, offset)
+	kind := kindOf(req.Workflow)
+	order, total, err := s.store.ListArtifactVersionPage(ctx, repo.ID, kind, byVersion, desc, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	list, err := s.store.ListArtifactsByVersions(ctx, repo.ID, order)
+	list, err := s.store.ListArtifactsByVersions(ctx, repo.ID, kind, order)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -352,23 +353,35 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *v1.List
 		grouped[a.Version] = append(grouped[a.Version], a)
 	}
 	var releases map[string]bool
-	if repo.GitRepoID != nil {
+	if repo.GitRepoID != nil && !req.Workflow {
 		releases, _ = s.store.GitReleaseTags(ctx, *repo.GitRepoID)
 	}
 
 	versions := make([]*v1.ArtifactVersionGroup, len(order))
 	for i, ver := range order {
-		versions[i] = &v1.ArtifactVersionGroup{
+		group := &v1.ArtifactVersionGroup{
 			Version:    ver,
 			Artifacts:  artifactsToProto(grouped[ver]),
 			HasRelease: releases[ver],
 		}
+		if rows := grouped[ver]; req.Workflow && len(rows) > 0 {
+			group.RunId = rows[0].Properties["actions.run"]
+		}
+		versions[i] = group
 	}
 
 	return &v1.ListArtifactVersionsResponse{
 		Versions: versions,
 		Page:     pages.Info(offset, limit, total),
 	}, nil
+}
+
+// Listings show package contents unless the caller asks for run uploads
+func kindOf(workflow bool) stores.KindFilter {
+	if workflow {
+		return stores.KindWorkflow
+	}
+	return stores.KindRegular
 }
 
 // Version groups default to natural version order newest first
@@ -397,6 +410,7 @@ func (s *ArtifactService) SearchArtifacts(ctx context.Context, req *v1.SearchArt
 	}
 
 	criteria := stores.ArtifactSearchCriteria{
+		Kind:       kindOf(msg.Workflow),
 		Query:      q,
 		Properties: msg.Properties,
 		OrderBy:    pages.OrderBy(msg.Page, stores.ArtifactSortColumns, "created_at DESC"),
@@ -753,6 +767,8 @@ func (s *ArtifactService) repoToProto(ctx context.Context, repo *storage.Artifac
 	if st, ok := stats[repo.ID]; ok {
 		out.ArtifactCount = st.Count
 		out.TotalSize = st.Size
+		out.WorkflowArtifactCount = st.WorkflowCount
+		out.WorkflowTotalSize = st.WorkflowSize
 	}
 	if repo.GitRepoID != nil {
 		if g, err := s.store.GetGitRepositoryByID(ctx, *repo.GitRepoID); err == nil && g != nil {
@@ -770,6 +786,7 @@ func artifactToProto(a *storage.Artifact) *v1.Artifact {
 		Path:       a.Path,
 		UploadId:   a.UploadID,
 		Version:    a.Version,
+		Kind:       a.Kind,
 		Size:       a.Size,
 		MimeType:   a.MimeType,
 		Metadata:   a.Metadata,

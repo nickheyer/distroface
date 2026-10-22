@@ -79,6 +79,8 @@ service RunnerService {
   rpc UploadTaskArtifact(UploadTaskArtifactRequest) returns (UploadTaskArtifactResponse) {}
   // FinishTaskArtifact completes an artifact upload.
   rpc FinishTaskArtifact(FinishTaskArtifactRequest) returns (FinishTaskArtifactResponse) {}
+  // ListTaskArtifacts lists what the job's run has uploaded so far.
+  rpc ListTaskArtifacts(ListTaskArtifactsRequest) returns (ListTaskArtifactsResponse) {}
 }
 
 // Lifecycle state of a run, job, or step
@@ -188,7 +190,7 @@ message JobLogChunk {
   bool done = 4;
 }
 
-// RunArtifact is a file a run uploaded.
+// RunArtifact is a named upload of a run, stored as one zip.
 message RunArtifact {
   string id = 1;
   string name = 2;
@@ -196,6 +198,10 @@ message RunArtifact {
   string download_url = 4;
   google.protobuf.Timestamp expires_at = 5;
   google.protobuf.Timestamp created_at = 6;
+  // Files inside the zip, zero when unknown
+  int32 file_count = 7;
+  string job_id = 8;
+  string job_name = 9;
 }
 
 // RunImage is a container image tag a run pushed with its job token.
@@ -681,12 +687,13 @@ message CompleteTaskRequest {
 // CompleteTaskResponse is empty on success.
 message CompleteTaskResponse {}
 
-// UploadTaskArtifactRequest starts an upload.
+// UploadTaskArtifactRequest starts an upload of one zipped artifact.
 message UploadTaskArtifactRequest {
+  reserved 3;
   string job_id = 1;
   string artifact_name = 2;
-  // Relative path within the artifact
-  string path = 3;
+  // Replace an artifact of the same name in this run
+  bool overwrite = 4;
 }
 
 // UploadTaskArtifactResponse contains the upload session and data plane url.
@@ -697,13 +704,28 @@ message UploadTaskArtifactResponse {
 
 // FinishTaskArtifactRequest completes an upload.
 message FinishTaskArtifactRequest {
+  reserved 3;
   string job_id = 1;
   string artifact_name = 2;
-  string path = 3;
   string upload_id = 4;
+  // Files packed into the zip
+  int32 file_count = 5;
+  // Requested expiry, capped by the repository setting
+  int32 retention_days = 6;
+  bool overwrite = 7;
 }
 
 // FinishTaskArtifactResponse contains the stored artifact.
 message FinishTaskArtifactResponse {
   RunArtifact artifact = 1;
+}
+
+// ListTaskArtifactsRequest names the job whose run to list.
+message ListTaskArtifactsRequest {
+  string job_id = 1;
+}
+
+// ListTaskArtifactsResponse contains the run's artifacts.
+message ListTaskArtifactsResponse {
+  repeated RunArtifact artifacts = 1;
 }

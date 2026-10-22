@@ -398,6 +398,9 @@ message ArtifactRepository {
   bool mirror_syncing = 17;
   // Full name of the linked git repository, empty when standalone
   string source_repository = 18;
+  // Workflow run uploads, counted apart from the package contents
+  int64 workflow_artifact_count = 19;
+  int64 workflow_total_size = 20;
 }
 
 // Artifact is a single stored artifact (file) within an artifact repository.
@@ -420,6 +423,8 @@ message Artifact {
   string digest = 11;
   google.protobuf.Timestamp created_at = 12;
   google.protobuf.Timestamp updated_at = 13;
+  // Empty for package contents, "workflow" for files a run uploaded
+  string kind = 14;
 }
 
 // ImageConfig contains parsed metadata from an OCI/Docker image config blob.

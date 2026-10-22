@@ -240,17 +240,7 @@ func (m *Manager) retentionLoop(ctx context.Context) {
 // Expires artifacts and prunes logs past the configured days
 func (m *Manager) applyRetention(ctx context.Context) {
 	m.pruneCaches(ctx)
-	if expired, err := m.store.ListExpiredActionsArtifacts(ctx, 500); err == nil {
-		for _, a := range expired {
-			if art, _ := m.store.GetArtifact(ctx, a.ArtifactID); art != nil {
-				if err := m.artifacts.DeleteArtifact(ctx, art); err != nil {
-					m.log.Warn("actions: expire artifact %s: %v", a.ArtifactID, err)
-					continue
-				}
-			}
-			_ = m.store.DeleteActionsArtifact(ctx, a.ID)
-		}
-	}
+	m.expireArtifacts(ctx)
 	repos, err := m.store.ListAllGitRepositories(ctx)
 	if err != nil {
 		return

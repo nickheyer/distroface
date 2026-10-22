@@ -146,7 +146,7 @@ func (s *RunnerService) UploadTaskArtifact(ctx context.Context, req *v1.UploadTa
 	if err != nil {
 		return nil, err
 	}
-	uploadID, pkg, err := s.actions.BeginArtifactUpload(ctx, runner, req.JobId, req.ArtifactName)
+	uploadID, pkg, err := s.actions.BeginArtifactUpload(ctx, runner, req.JobId, req.ArtifactName, req.Overwrite)
 	if err != nil {
 		return nil, mapActionsErr(err)
 	}
@@ -158,7 +158,7 @@ func (s *RunnerService) FinishTaskArtifact(ctx context.Context, req *v1.FinishTa
 	if err != nil {
 		return nil, err
 	}
-	row, art, pkg, err := s.actions.FinishArtifactUpload(ctx, runner, req.JobId, req.ArtifactName, req.Path, req.UploadId)
+	art, err := s.actions.FinishArtifactUpload(ctx, runner, req.JobId, req.ArtifactName, req.UploadId, req.FileCount, req.RetentionDays, req.Overwrite)
 	if err != nil {
 		var cerr *connect.Error
 		if errors.As(err, &cerr) {
@@ -169,5 +169,21 @@ func (s *RunnerService) FinishTaskArtifact(ctx context.Context, req *v1.FinishTa
 		}
 		return nil, mapActionsErr(err)
 	}
-	return &v1.FinishTaskArtifactResponse{Artifact: actionsArtifactProto(row, art, pkg)}, nil
+	return &v1.FinishTaskArtifactResponse{Artifact: actionsArtifactProto(art, nil)}, nil
+}
+
+func (s *RunnerService) ListTaskArtifacts(ctx context.Context, req *v1.ListTaskArtifactsRequest) (*v1.ListTaskArtifactsResponse, error) {
+	runner, err := s.runner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	groups, err := s.actions.TaskArtifacts(ctx, runner, req.JobId)
+	if err != nil {
+		return nil, mapActionsErr(err)
+	}
+	out := make([]*v1.RunArtifact, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, actionsArtifactProto(g, nil))
+	}
+	return &v1.ListTaskArtifactsResponse{Artifacts: out}, nil
 }

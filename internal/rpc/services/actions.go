@@ -254,23 +254,19 @@ func (s *ActionsService) ListRunArtifacts(ctx context.Context, req *v1.ListRunAr
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.store.ListActionsArtifacts(ctx, run.ID)
+	groups, err := s.actions.RunArtifacts(ctx, run)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
-	pkgs := map[int64]*storage.ArtifactRepository{}
-	out := make([]*v1.RunArtifact, 0, len(rows))
-	for _, row := range rows {
-		art, _ := s.store.GetArtifact(ctx, row.ArtifactID)
-		var pkg *storage.ArtifactRepository
-		if art != nil {
-			pkg = pkgs[art.RepoID]
-			if pkg == nil {
-				pkg, _ = s.store.GetArtifactRepositoryByID(ctx, art.RepoID)
-				pkgs[art.RepoID] = pkg
-			}
+	jobNames := map[string]string{}
+	if jobs, err := s.store.ListActionsJobs(ctx, run.ID); err == nil {
+		for _, j := range jobs {
+			jobNames[j.ID] = j.Name
 		}
-		out = append(out, actionsArtifactProto(row, art, pkg))
+	}
+	out := make([]*v1.RunArtifact, 0, len(groups))
+	for _, g := range groups {
+		out = append(out, actionsArtifactProto(g, jobNames))
 	}
 	return &v1.ListRunArtifactsResponse{Artifacts: out}, nil
 }
@@ -820,16 +816,14 @@ func actionsRunnerProto(r *storage.ActionsRunner, scope *v1.ActionsScope) *v1.Ru
 	return out
 }
 
-func actionsArtifactProto(row *storage.ActionsArtifact, art *storage.Artifact, pkg *storage.ArtifactRepository) *v1.RunArtifact {
-	out := &v1.RunArtifact{Id: row.ID, Name: row.Name, CreatedAt: timestamppb.New(row.CreatedAt)}
+func actionsArtifactProto(a *actions.RunArtifact, jobNames map[string]string) *v1.RunArtifact {
+	row := a.Row
+	out := &v1.RunArtifact{
+		Id: row.ID, Name: row.Name, Size: a.Size, FileCount: a.FileCount, JobId: row.JobID, JobName: jobNames[row.JobID],
+		DownloadUrl: a.DownloadPath(), CreatedAt: timestamppb.New(row.CreatedAt),
+	}
 	if row.ExpiresAt != nil {
 		out.ExpiresAt = timestamppb.New(*row.ExpiresAt)
-	}
-	if art != nil {
-		out.Size = art.Size
-		if pkg != nil {
-			out.DownloadUrl = actions.ArtifactDownloadPath(pkg, art)
-		}
 	}
 	return out
 }

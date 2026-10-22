@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"os"
@@ -248,26 +249,112 @@ func TestRefSpecs(t *testing.T) {
 
 func TestArtifactSelector(t *testing.T) {
 	named := artifactSelector{name: "dfcli-dist"}
-	if p, ok := named.target("dfcli-dist/dist/a.tar.gz"); !ok || p != "dist/a.tar.gz" {
-		t.Errorf("named: %q %v", p, ok)
+	if !named.matches("dfcli-dist") || named.matches("other") {
+		t.Error("named must match exactly one artifact")
 	}
-	if _, ok := named.target("other/x"); ok {
-		t.Error("named must skip other artifacts")
+	if named.dir("dfcli-dist") != "" {
+		t.Error("named downloads unpack into the destination itself")
 	}
 	pattern := artifactSelector{pattern: "digest-*"}
-	if p, ok := pattern.target("digest-linux-amd64/sha"); !ok || p != "digest-linux-amd64/sha" {
-		t.Errorf("pattern: %q %v", p, ok)
-	}
-	if _, ok := pattern.target("binary-linux/x"); ok {
+	if !pattern.matches("digest-linux-amd64") || pattern.matches("binary-linux") {
 		t.Error("pattern must filter")
 	}
+	if pattern.dir("digest-linux-amd64") != "digest-linux-amd64" {
+		t.Error("pattern downloads keep one directory per artifact")
+	}
 	merged := artifactSelector{pattern: "binary-*", merge: true}
-	if p, ok := merged.target("binary-linux-amd64/distroface_1.0.0_linux_amd64.tar.gz"); !ok || p != "distroface_1.0.0_linux_amd64.tar.gz" {
-		t.Errorf("merged: %q %v", p, ok)
+	if merged.dir("binary-linux-amd64") != "" {
+		t.Error("merge-multiple flattens into the destination")
 	}
 	all := artifactSelector{}
-	if p, ok := all.target("proto-gen/proto-gen.tar.gz"); !ok || p != "proto-gen/proto-gen.tar.gz" {
-		t.Errorf("all: %q %v", p, ok)
+	if !all.matches("proto-gen") || all.dir("proto-gen") != "proto-gen" {
+		t.Error("no inputs downloads everything into named directories")
+	}
+}
+
+// Packs files relative to their common root and unpacks them intact
+func TestArtifactZipRoundTrip(t *testing.T) {
+	src := t.TempDir()
+	write := func(rel, body string, mode os.FileMode) string {
+		p := filepath.Join(src, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), mode); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	files := []string{
+		write("dist/bin/tool", "#!/bin/sh\n", 0o755),
+		write("dist/index.html", "<html>", 0o644),
+		write("dist/sub/a.txt", "a", 0o644),
+	}
+	j := &job{}
+	var buf bytes.Buffer
+	total, err := j.writeArtifactZip(&buf, commonDir(files), files, 0)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if total != int64(len("#!/bin/sh\n")+len("<html>")+1) {
+		t.Errorf("total %d", total)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, 0, len(zr.File))
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	if strings.Join(names, ",") != "bin/tool,index.html,sub/a.txt" {
+		t.Errorf("entries %v", names)
+	}
+	dest := t.TempDir()
+	n, err := j.extractArtifactZip(zr, dest, "")
+	if err != nil || n != 3 {
+		t.Fatalf("extract: %d %v", n, err)
+	}
+	if body, _ := os.ReadFile(filepath.Join(dest, "sub", "a.txt")); string(body) != "a" {
+		t.Errorf("sub/a.txt = %q", body)
+	}
+	if info, err := os.Stat(filepath.Join(dest, "bin", "tool")); err != nil || info.Mode().Perm()&0o100 == 0 {
+		t.Errorf("exec bit lost: %v %v", info, err)
+	}
+}
+
+// Pre zip uploads arrive nested under version and name, and escapes are clipped
+func TestExtractArtifactZipLegacyAndEscapes(t *testing.T) {
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range map[string]string{
+		"actions-3/frontend-build/index.html": "legacy",
+		"../../etc/evil":                      "nope",
+		"/abs/path.txt":                       "abs",
+	} {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(body))
+	}
+	_ = zw.Close()
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	j := &job{}
+	if n, err := j.extractArtifactZip(zr, dest, "actions-3/frontend-build/"); err != nil || n != 3 {
+		t.Fatalf("extract: %d %v", n, err)
+	}
+	for _, want := range []string{"index.html", filepath.Join("etc", "evil"), filepath.Join("abs", "path.txt")} {
+		if _, err := os.Stat(filepath.Join(dest, want)); err != nil {
+			t.Errorf("missing %s: %v", want, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(dest)), "etc", "evil")); err == nil {
+		t.Error("entry escaped the destination")
 	}
 }
 

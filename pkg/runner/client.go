@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -92,8 +91,9 @@ func (c *Client) CompleteTask(ctx context.Context, jobID string, conclusion v1.A
 }
 
 // Streams one file through an upload session
-func (c *Client) UploadArtifact(ctx context.Context, jobID, jobToken, name, relPath string, body io.Reader) (*v1.RunArtifact, error) {
-	begin, err := c.rpc.UploadTaskArtifact(ctx, &v1.UploadTaskArtifactRequest{JobId: jobID, ArtifactName: name, Path: relPath})
+// Uploads one zipped artifact for the job's run
+func (c *Client) UploadArtifact(ctx context.Context, jobID, jobToken, name string, body io.Reader, fileCount, retentionDays int32, overwrite bool) (*v1.RunArtifact, error) {
+	begin, err := c.rpc.UploadTaskArtifact(ctx, &v1.UploadTaskArtifactRequest{JobId: jobID, ArtifactName: name, Overwrite: overwrite})
 	if err != nil {
 		return nil, rpcErr(err)
 	}
@@ -106,31 +106,34 @@ func (c *Client) UploadArtifact(ctx context.Context, jobID, jobToken, name, relP
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("upload %s: %w", relPath, err)
+		return nil, fmt.Errorf("upload %s: %w", name, err)
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("upload %s: server returned %d", relPath, resp.StatusCode)
+		return nil, fmt.Errorf("upload %s: server returned %d", name, resp.StatusCode)
 	}
-	fin, err := c.rpc.FinishTaskArtifact(ctx, &v1.FinishTaskArtifactRequest{JobId: jobID, ArtifactName: name, Path: relPath, UploadId: begin.UploadId})
+	fin, err := c.rpc.FinishTaskArtifact(ctx, &v1.FinishTaskArtifactRequest{
+		JobId: jobID, ArtifactName: name, UploadId: begin.UploadId, FileCount: fileCount, RetentionDays: retentionDays, Overwrite: overwrite,
+	})
 	if err != nil {
 		return nil, rpcErr(err)
 	}
 	return fin.Artifact, nil
 }
 
-// Zip of every run file under an artifact name
-func (c *Client) DownloadArtifacts(ctx context.Context, jobToken, namespace, repo, version, prefix string) (io.ReadCloser, error) {
-	q := url.Values{}
-	q.Set("version", version)
-	if prefix != "" {
-		q.Set("path", prefix)
+// Artifacts the job's run has uploaded so far
+func (c *Client) ListTaskArtifacts(ctx context.Context, jobID string) ([]*v1.RunArtifact, error) {
+	resp, err := c.rpc.ListTaskArtifacts(ctx, &v1.ListTaskArtifactsRequest{JobId: jobID})
+	if err != nil {
+		return nil, rpcErr(err)
 	}
-	q.Set("num", "100000")
-	q.Set("format", "zip")
-	u := fmt.Sprintf("%s/api/v1/artifacts/_ns/%s/%s/query?%s", c.BaseURL, url.PathEscape(namespace), url.PathEscape(repo), q.Encode())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	return resp.Artifacts, nil
+}
+
+// Streams an artifact zip from its data plane path
+func (c *Client) DownloadArtifact(ctx context.Context, jobToken, downloadPath string) (io.ReadCloser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+downloadPath, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -141,19 +144,13 @@ func (c *Client) DownloadArtifacts(ctx context.Context, jobToken, namespace, rep
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusNotFound {
-		resp.Body.Close()
-		return nil, errNoArtifacts
-	}
 	if resp.StatusCode >= 400 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, fmt.Errorf("download artifacts: server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
+		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	return resp.Body, nil
 }
-
-var errNoArtifacts = errors.New("no artifacts found")
 
 // Connect errors already carry the code and stay matchable
 func rpcErr(err error) error {

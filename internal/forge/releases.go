@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/webhook"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -72,7 +73,7 @@ func (m *Manager) ReleaseAssets(ctx context.Context, repo *db.GitRepository, rel
 	if err != nil || pkg == nil {
 		return nil, pkg, err
 	}
-	rows, _, err := m.store.ListArtifacts(ctx, pkg.ID, rel.Tag, 0, 0)
+	rows, _, err := m.store.ListArtifacts(ctx, pkg.ID, rel.Tag, stores.KindRegular, 0, 0)
 	if err != nil {
 		return nil, pkg, err
 	}

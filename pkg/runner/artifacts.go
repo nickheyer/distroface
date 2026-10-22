@@ -2,6 +2,7 @@ package runner
 
 import (
 	"archive/zip"
+	"compress/flate"
 	"context"
 	"errors"
 	"fmt"
@@ -10,12 +11,15 @@ import (
 	"path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/google/uuid"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
+// Zips the matched files and uploads them as one artifact
 func (j *job) uploadArtifact(ctx context.Context, with map[string]string, out io.Writer) error {
 	name := strings.TrimSpace(with["name"])
 	if name == "" {
@@ -36,7 +40,43 @@ func (j *job) uploadArtifact(ctx context.Context, with map[string]string, out io
 		}
 		return nil
 	}
-	root := commonDir(files)
+	zipPath := filepath.Join(j.tempDir, "upload-"+uuid.NewString()[:8]+".zip")
+	zf, err := j.openFile(zipPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = j.remove(zipPath) }()
+	defer zf.Close()
+	total, err := j.writeArtifactZip(zf, commonDir(files), files, intInput(with["compression-level"], 6))
+	if err != nil {
+		return err
+	}
+	packed, err := zf.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	if _, err := zf.Seek(0, io.SeekStart); err != nil {
+		return err
+	}
+	retention := intInput(with["retention-days"], 0)
+	if _, err := j.r.client.UploadArtifact(ctx, j.task.JobId, j.task.Token, name, zf, int32(len(files)), int32(retention), boolInput(with["overwrite"])); err != nil {
+		return fmt.Errorf("upload %s: %w", name, err)
+	}
+	fmt.Fprintf(out, "Uploaded %d file(s), %d bytes (%d zipped), to artifact %q\n", len(files), total, packed, name)
+	return nil
+}
+
+// Entries are named relative to root, level 0 stores without deflate
+func (j *job) writeArtifactZip(w io.Writer, root string, files []string, level int) (int64, error) {
+	zw := zip.NewWriter(w)
+	method := uint16(zip.Deflate)
+	if level <= 0 {
+		method = zip.Store
+	} else if level != flate.DefaultCompression {
+		zw.RegisterCompressor(zip.Deflate, func(out io.Writer) (io.WriteCloser, error) {
+			return flate.NewWriter(out, min(level, flate.BestCompression))
+		})
+	}
 	var total int64
 	for _, f := range files {
 		rel, err := filepath.Rel(root, f)
@@ -45,20 +85,25 @@ func (j *job) uploadArtifact(ctx context.Context, with map[string]string, out io
 		}
 		fh, err := j.openUpload(f)
 		if err != nil {
-			return err
+			return 0, err
 		}
-		info, _ := fh.Stat()
-		_, err = j.r.client.UploadArtifact(ctx, j.task.JobId, j.task.Token, name, filepath.ToSlash(rel), fh)
+		hdr := &zip.FileHeader{Name: filepath.ToSlash(rel), Method: method}
+		if info, err := fh.Stat(); err == nil {
+			hdr.Modified = info.ModTime()
+			hdr.SetMode(info.Mode().Perm())
+		}
+		entry, err := zw.CreateHeader(hdr)
+		if err == nil {
+			var n int64
+			n, err = io.Copy(entry, fh)
+			total += n
+		}
 		fh.Close()
 		if err != nil {
-			return fmt.Errorf("upload %s: %w", rel, err)
-		}
-		if info != nil {
-			total += info.Size()
+			return 0, fmt.Errorf("pack %s: %w", rel, err)
 		}
 	}
-	fmt.Fprintf(out, "Uploaded %d file(s), %d bytes, to artifact %q\n", len(files), total, name)
-	return nil
+	return total, zw.Close()
 }
 
 // Job dir files open through the root, others as is
@@ -163,34 +208,31 @@ func dropHidden(files []string) []string {
 	return kept
 }
 
-// Decides where one artifact file lands for the download inputs
+// Picks run artifacts for the download inputs
 type artifactSelector struct {
 	name    string
 	pattern string
 	merge   bool
 }
 
-// Target path of a zip entry, false when unwanted
-func (s artifactSelector) target(entry string) (string, bool) {
-	artifact, rest, found := strings.Cut(entry, "/")
-	if !found || rest == "" {
-		return "", false
-	}
+// Whether an artifact of this name is wanted
+func (s artifactSelector) matches(name string) bool {
 	switch {
 	case s.name != "":
-		if artifact != sanitizeArtifactName(s.name) {
-			return "", false
-		}
-		return rest, true
+		return name == s.name
 	case s.pattern != "":
-		if ok, _ := doublestar.Match(s.pattern, artifact); !ok {
-			return "", false
-		}
+		ok, _ := doublestar.Match(s.pattern, name)
+		return ok
 	}
-	if s.merge {
-		return rest, true
+	return true
+}
+
+// Subdirectory an artifact unpacks into, empty for the destination itself
+func (s artifactSelector) dir(name string) string {
+	if s.name != "" || s.merge {
+		return ""
 	}
-	return artifact + "/" + rest, true
+	return name
 }
 
 func (j *job) downloadArtifact(ctx context.Context, with map[string]string, out io.Writer) error {
@@ -202,87 +244,112 @@ func (j *job) downloadArtifact(ctx context.Context, with map[string]string, out 
 			return err
 		}
 	}
-	ns, repo, _ := strings.Cut(j.task.RepoFullName, "/")
-	version := "actions-" + stringify(j.github["run_number"])
-	prefix := ""
-	if sel.name != "" {
-		prefix = sanitizeArtifactName(sel.name) + "/"
-	}
-	body, err := j.r.client.DownloadArtifacts(ctx, j.task.Token, ns, repo, version, prefix)
-	if errors.Is(err, errNoArtifacts) {
-		if sel.name != "" {
-			return fmt.Errorf("no artifact named %q was found for this run", sel.name)
-		}
-		fmt.Fprintln(out, "No artifacts were found for this run")
-		return nil
-	}
+	all, err := j.r.client.ListTaskArtifacts(ctx, j.task.JobId)
 	if err != nil {
 		return err
+	}
+	var picked []*v1.RunArtifact
+	for _, a := range all {
+		if sel.matches(a.Name) && a.DownloadUrl != "" {
+			picked = append(picked, a)
+		}
+	}
+	if len(picked) == 0 {
+		switch {
+		case sel.name != "":
+			return fmt.Errorf("no artifact named %q was found for this run", sel.name)
+		case sel.pattern != "":
+			fmt.Fprintf(out, "##[warning]No artifacts matched pattern %q\n", sel.pattern)
+		default:
+			fmt.Fprintln(out, "No artifacts were found for this run")
+		}
+		return nil
+	}
+	var count int
+	var size int64
+	for _, a := range picked {
+		target := dest
+		if dir := sel.dir(a.Name); dir != "" {
+			target = filepath.Join(dest, dir)
+		}
+		n, bytes, err := j.fetchArtifact(ctx, a, target)
+		if err != nil {
+			return fmt.Errorf("download %s: %w", a.Name, err)
+		}
+		count += n
+		size += bytes
+	}
+	fmt.Fprintf(out, "Downloaded %d file(s) of %d artifact(s), %d bytes, into %s\n", count, len(picked), size, j.pathOf(dest))
+	return nil
+}
+
+// Streams one artifact zip to a temp file and unpacks it
+func (j *job) fetchArtifact(ctx context.Context, a *v1.RunArtifact, dest string) (int, int64, error) {
+	body, err := j.r.client.DownloadArtifact(ctx, j.task.Token, a.DownloadUrl)
+	if err != nil {
+		return 0, 0, err
 	}
 	tmpPath := filepath.Join(j.tempDir, "artifact-"+uuid.NewString()[:8]+".zip")
 	tmp, err := j.openFile(tmpPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
 	if err != nil {
 		body.Close()
-		return err
+		return 0, 0, err
 	}
 	defer func() { _ = j.remove(tmpPath) }()
 	defer tmp.Close()
 	size, err := io.Copy(tmp, body)
 	_ = body.Close()
 	if err != nil {
-		return err
+		return 0, 0, err
 	}
 	zr, err := zip.NewReader(tmp, size)
 	if err != nil {
-		return fmt.Errorf("artifact archive: %w", err)
+		return 0, 0, fmt.Errorf("artifact archive: %w", err)
 	}
+	legacy := "actions-" + stringify(j.github["run_number"]) + "/" + sanitizeArtifactName(a.Name) + "/"
+	count, err := j.extractArtifactZip(zr, dest, legacy)
+	return count, size, err
+}
+
+// Unpacks entries under dest, pre zip uploads carried a version and name prefix
+func (j *job) extractArtifactZip(zr *zip.Reader, dest, legacyPrefix string) (int, error) {
 	count := 0
-	names := map[string]bool{}
 	for _, f := range zr.File {
-		if f.FileInfo().IsDir() || !strings.HasPrefix(f.Name, version+"/") {
+		if f.FileInfo().IsDir() {
 			continue
 		}
-		rel, ok := sel.target(strings.TrimPrefix(f.Name, version+"/"))
-		if !ok {
-			continue
-		}
-		names[strings.SplitN(strings.TrimPrefix(f.Name, version+"/"), "/", 2)[0]] = true
-		rel = path.Clean(rel)
-		if rel == "." || rel == ".." || strings.HasPrefix(rel, "../") {
+		rel := strings.TrimPrefix(f.Name, legacyPrefix)
+		rel = strings.TrimPrefix(path.Clean("/"+rel), "/")
+		if rel == "" {
 			continue
 		}
 		target := filepath.Join(dest, filepath.FromSlash(rel))
 		if err := j.mkdirInside(filepath.Dir(target)); err != nil {
-			return err
+			return count, err
 		}
 		w, err := j.createInside(target)
 		if err != nil {
-			return err
+			return count, err
 		}
 		rc, err := f.Open()
 		if err != nil {
 			w.Close()
-			return err
+			return count, err
 		}
 		_, err = io.Copy(w, rc)
 		_ = rc.Close()
+		if mode := f.Mode().Perm(); err == nil && mode&0o111 != 0 {
+			_ = w.Chmod(mode)
+		}
 		if cerr := w.Close(); err == nil {
 			err = cerr
 		}
 		if err != nil {
-			return err
+			return count, err
 		}
 		count++
 	}
-	if count == 0 && sel.name != "" {
-		return fmt.Errorf("no artifact named %q was found for this run", sel.name)
-	}
-	if count == 0 && sel.pattern != "" {
-		fmt.Fprintf(out, "##[warning]No artifacts matched pattern %q\n", sel.pattern)
-		return nil
-	}
-	fmt.Fprintf(out, "Downloaded %d file(s) of %d artifact(s), %d bytes, into %s\n", count, len(names), size, j.pathOf(dest))
-	return nil
+	return count, nil
 }
 
 // Mirrors artifacts.SanitizePath on the server
@@ -299,4 +366,13 @@ func sanitizeArtifactName(name string) string {
 		return "artifact"
 	}
 	return s
+}
+
+// Integer step input, falling back when blank or malformed
+func intInput(s string, def int) int {
+	n, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return def
+	}
+	return n
 }

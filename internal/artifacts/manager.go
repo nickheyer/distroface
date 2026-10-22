@@ -109,6 +109,15 @@ func SanitizePath(name string) string {
 
 // Finalizes upload, replaces existing same version path properties
 func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata string, properties map[string]string) (*storage.Artifact, error) {
+	return m.complete(ctx, repo, uploadID, version, artifactPath, metadata, properties, "", true)
+}
+
+// Workflow uploads expire on their own schedule, package retention skips them
+func (m *Manager) CompleteWorkflowUpload(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath string, properties map[string]string) (*storage.Artifact, error) {
+	return m.complete(ctx, repo, uploadID, version, artifactPath, "{}", properties, storage.ArtifactKindWorkflow, false)
+}
+
+func (m *Manager) complete(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata string, properties map[string]string, kind string, retain bool) (*storage.Artifact, error) {
 	if err := ValidateVersion(version); err != nil {
 		return nil, err
 	}
@@ -149,6 +158,7 @@ func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepo
 		Path:     artifactPath,
 		UploadID: uploadID,
 		Version:  version,
+		Kind:     kind,
 		Digest:   digest,
 		Size:     size,
 		MimeType: mimeType,
@@ -164,8 +174,10 @@ func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepo
 		m.gcBlob(ctx, replacedDigest)
 	}
 
-	if err := m.ApplyRetention(ctx, repo); err != nil {
-		m.log.Error("artifact retention for repo %d: %v", repo.ID, err)
+	if retain {
+		if err := m.ApplyRetention(ctx, repo); err != nil {
+			m.log.Error("artifact retention for repo %d: %v", repo.ID, err)
+		}
 	}
 
 	return artifact, nil
@@ -235,7 +247,7 @@ func (m *Manager) ApplyRetentionPolicy(ctx context.Context, repoID int64, p Rete
 		return nil
 	}
 
-	all, _, err := m.store.ListArtifacts(ctx, repoID, "", 0, 0)
+	all, _, err := m.store.ListArtifacts(ctx, repoID, "", stores.KindRegular, 0, 0)
 	if err != nil {
 		return err
 	}

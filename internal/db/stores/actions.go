@@ -571,6 +571,13 @@ func (s *Store) ListActionsArtifacts(ctx context.Context, runID string) ([]*db.A
 	return out, err
 }
 
+// Rows sharing one artifact name in a run, oldest first
+func (s *Store) ListActionsArtifactsByName(ctx context.Context, runID, name string) ([]*db.ActionsArtifact, error) {
+	var out []*db.ActionsArtifact
+	err := s.db.WithContext(ctx).Where("run_id = ? AND name = ?", runID, name).Order("created_at ASC").Find(&out).Error
+	return out, err
+}
+
 func (s *Store) ListExpiredActionsArtifacts(ctx context.Context, limit int) ([]*db.ActionsArtifact, error) {
 	var out []*db.ActionsArtifact
 	err := s.db.WithContext(ctx).Where("expires_at IS NOT NULL AND expires_at < ?", time.Now().UTC()).Limit(limit).Find(&out).Error

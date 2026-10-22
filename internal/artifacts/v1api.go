@@ -568,6 +568,17 @@ func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *aut
 	http.ServeContent(w, r, artifact.Name, info.ModTime(), f)
 }
 
+// Kind param widens a listing past package contents
+func v1Kind(v string) stores.KindFilter {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "workflow":
+		return stores.KindWorkflow
+	case "all", "any":
+		return stores.KindAny
+	}
+	return stores.KindRegular
+}
+
 // V1 name version path params as contains filters
 func v1SearchQuery(query url.Values) pages.Query {
 	var q pages.Query
@@ -604,6 +615,7 @@ func (a *V1API) handleQuery(w http.ResponseWriter, r *http.Request, user *auth.A
 	query := r.URL.Query()
 	criteria := stores.ArtifactSearchCriteria{
 		RepoID:     &repo.ID,
+		Kind:       v1Kind(query.Get("kind")),
 		Query:      v1SearchQuery(query),
 		Properties: map[string]string{},
 		OrderBy:    v1OrderBy(query.Get("sort"), query.Get("order")),
@@ -613,7 +625,7 @@ func (a *V1API) handleQuery(w http.ResponseWriter, r *http.Request, user *auth.A
 		criteria.Limit = n
 	}
 
-	skip := map[string]bool{"num": true, "format": true, "name": true, "version": true, "upload_id": true, "path": true, "sort": true, "order": true, "flat": true}
+	skip := map[string]bool{"num": true, "format": true, "name": true, "version": true, "upload_id": true, "path": true, "sort": true, "order": true, "flat": true, "kind": true}
 	for key, values := range query {
 		if skip[key] || len(values) == 0 {
 			continue
@@ -656,7 +668,7 @@ func (a *V1API) handleListVersions(w http.ResponseWriter, r *http.Request, user 
 		return
 	}
 
-	artifacts, _, err := a.store.ListArtifacts(r.Context(), repo.ID, "", 0, 0)
+	artifacts, _, err := a.store.ListArtifacts(r.Context(), repo.ID, "", v1Kind(r.URL.Query().Get("kind")), 0, 0)
 	if err != nil {
 		http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
 		return
@@ -693,6 +705,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 
 	query := r.URL.Query()
 	criteria := stores.ArtifactSearchCriteria{
+		Kind:       v1Kind(query.Get("kind")),
 		Query:      v1SearchQuery(query),
 		Properties: map[string]string{},
 		Limit:      9999, // V1 default
@@ -754,7 +767,7 @@ func (a *V1API) handleSearch(w http.ResponseWriter, r *http.Request, user *auth.
 		}
 	}
 
-	skip := map[string]bool{"username": true, "repo": true, "namespace": true, "num": true, "offset": true, "archive": true, "format": true, "name": true, "version": true, "path": true, "sort": true, "order": true}
+	skip := map[string]bool{"username": true, "repo": true, "namespace": true, "num": true, "offset": true, "archive": true, "format": true, "name": true, "version": true, "path": true, "sort": true, "order": true, "kind": true}
 	for key, values := range query {
 		if skip[key] || len(values) == 0 {
 			continue

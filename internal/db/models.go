@@ -227,13 +227,17 @@ type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v
 	UpdatedAt       time.Time           `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
+// Rows a workflow run uploaded, listed apart from package contents
+const ArtifactKindWorkflow = "workflow"
+
 type Artifact struct {
 	ID         string              `json:"id" gorm:"primaryKey"`
-	RepoID     int64               `json:"repo_id" gorm:"not null;index;uniqueIndex:idx_artifact_identity;column:repo_id"`
+	RepoID     int64               `json:"repo_id" gorm:"not null;index;uniqueIndex:idx_artifact_identity;index:idx_artifact_repo_kind,priority:1;column:repo_id"`
 	Name       string              `json:"name" gorm:"not null"`
 	Path       string              `json:"path" gorm:"not null;uniqueIndex:idx_artifact_identity"`
 	UploadID   string              `json:"upload_id" gorm:"not null;column:upload_id"`
 	Version    string              `json:"version" gorm:"not null;uniqueIndex:idx_artifact_identity"`
+	Kind       string              `json:"kind" gorm:"not null;default:'';index:idx_artifact_repo_kind,priority:2"` // Empty or ArtifactKindWorkflow
 	PropsHash  string              `json:"-" gorm:"not null;default:'';uniqueIndex:idx_artifact_identity;column:props_hash"` // Property set fingerprint, fourth identity component
 	Digest     string              `json:"digest" gorm:"not null;index"`                                                     // Full sha256 content address
 	Size       int64               `json:"size" gorm:"not null"`
@@ -1036,8 +1040,10 @@ type ActionsVariable struct {
 type ActionsArtifact struct {
 	ID         string `gorm:"primaryKey"`
 	RunID      string `gorm:"not null;index"`
+	JobID      string `gorm:"not null;default:''"`
 	ArtifactID string `gorm:"not null;index"`
 	Name       string `gorm:"not null"`
+	FileCount  int32  `gorm:"not null;default:0"` // Files inside the zip, zero on legacy per file rows
 	ExpiresAt  *time.Time
 	CreatedAt  time.Time   `gorm:"autoCreateTime"`
 	Run        *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
