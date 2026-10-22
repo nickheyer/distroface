@@ -42,6 +42,9 @@ var ErrArchived = errors.New("repository is archived")
 // Returned when a write targets a mirror
 var ErrMirror = errors.New("repository is a mirror")
 
+// Writes wait while an import still fills the repository
+var ErrImporting = errors.New("repository import is in progress")
+
 // Deletes and moves packages linked to a source repository
 type PackageManager interface {
 	CanManageImageRepo(ctx context.Context, user *auth.AuthenticatedUser, repo *db.Repository) bool
@@ -799,6 +802,9 @@ func (m *Manager) CommitToBranch(ctx context.Context, repo *db.GitRepository, us
 	if repo.Type == v1.GitRepoType_GIT_REPO_TYPE_MIRROR && !req.Options.Mirror && !req.Wiki {
 		return plumbing.ZeroHash, ErrMirror
 	}
+	if !req.Options.Mirror && !req.Wiki && m.importInProgress(ctx, repo) {
+		return plumbing.ZeroHash, ErrImporting
+	}
 	lock := m.engine.LockRepo(repo.ID)
 	defer lock.Unlock()
 	r, err := m.engine.OpenRepo(repo.Namespace, repo.Name, req.Wiki)
@@ -877,6 +883,9 @@ func (m *Manager) UpdateRef(ctx context.Context, repo *db.GitRepository, user *a
 	}
 	if repo.Type == v1.GitRepoType_GIT_REPO_TYPE_MIRROR && !opts.Mirror {
 		return ErrMirror
+	}
+	if !opts.Mirror && !opts.Wiki && m.importInProgress(ctx, repo) {
+		return ErrImporting
 	}
 	lock := m.engine.LockRepo(repo.ID)
 	defer lock.Unlock()

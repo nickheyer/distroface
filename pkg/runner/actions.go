@@ -60,14 +60,30 @@ type actionStep struct {
 	If               string         `yaml:"if"`
 	Env              map[string]any `yaml:"env"`
 	With             map[string]any `yaml:"with"`
-	ContinueOnError  bool           `yaml:"continue-on-error"`
+	ContinueOnError  any            `yaml:"continue-on-error"`
 }
 
 func (a actionStep) spec() stepSpec {
+	coe, coeExpr := boolOrExpr(a.ContinueOnError)
 	return stepSpec{
 		ID: a.ID, Name: a.Name, Uses: a.Uses, Run: a.Run, Shell: a.Shell, WorkingDirectory: a.WorkingDirectory, If: a.If,
-		Env: stringValues(a.Env), With: stringValues(a.With), ContinueOnError: a.ContinueOnError,
+		Env: stringValues(a.Env), With: stringValues(a.With), ContinueOnError: coe, ContinueOnErrorExpr: coeExpr,
 	}
+}
+
+// Yaml bool, bool string, or a deferred expression
+func boolOrExpr(v any) (bool, string) {
+	switch x := v.(type) {
+	case bool:
+		return x, ""
+	case string:
+		s := strings.TrimSpace(x)
+		if strings.Contains(s, "${{") {
+			return false, s
+		}
+		return strings.EqualFold(s, "true"), ""
+	}
+	return false, ""
 }
 
 func stringValues(m map[string]any) map[string]string {
@@ -485,8 +501,11 @@ func (j *job) prepareCall(act *actionDef, with, env map[string]string, ectx *exp
 	call := &actionCall{act: act, with: with, inputs: inputs, stateKey: stateKey, name: name}
 	call.env = make(map[string]string, len(env)+len(inputs)+4)
 	maps.Copy(call.env, env)
-	for k, v := range inputs {
-		call.env["INPUT_"+strings.ToUpper(strings.ReplaceAll(k, " ", "_"))] = stringify(v)
+	// Composite steps see inputs through the context alone
+	if act.isNode() || act.isDocker() {
+		for k, v := range inputs {
+			call.env["INPUT_"+strings.ToUpper(strings.ReplaceAll(k, " ", "_"))] = stringify(v)
+		}
 	}
 	call.env["GITHUB_ACTION_REPOSITORY"] = act.repo
 	call.env["GITHUB_ACTION_REF"] = act.version
@@ -587,13 +606,17 @@ func (j *job) runComposite(ctx context.Context, parent *stepScope, call *actionC
 		if name == "" {
 			name = defaultStepName(st)
 		}
+		continueOnError, err := st.continueOnError(ectx)
+		if err != nil {
+			return fmt.Errorf("composite step %d: %w", i+1, err)
+		}
 		fmt.Fprintf(out, "##[group]%s\n", name)
 		stepOut, err := sc.exec(ctx, stepRun{spec: st, ectx: ectx, name: name, action: j.nextActionName(st), key: sc.stateKey + "/" + strconv.Itoa(i)})
 		if err != nil {
 			fmt.Fprintf(out, "##[error]%v\n", err)
 		}
 		fmt.Fprint(out, "##[endgroup]\n")
-		outcome, conclusion := stepOutcome(err, st.ContinueOnError)
+		outcome, conclusion := stepOutcome(err, continueOnError)
 		sc.record(st.ID, outcome, conclusion, stepOut)
 		if conclusion == "failure" {
 			sc.status = "failure"
@@ -642,7 +665,7 @@ func (j *job) runNodeScript(ctx context.Context, call *actionCall, script string
 		env["STATE_"+k] = v
 	}
 	main := j.pathOf(filepath.Join(act.dir, filepath.FromSlash(script)))
-	code, err := j.exec.Exec(ctx, execSpec{Cmd: j.withPath(append(append([]string{}, node...), main)), Env: append(append([]string{}, nodeEnv...), envSlice(env)...), Dir: j.pathOf(j.workspace), Out: out})
+	code, err := j.exec.Exec(ctx, execSpec{Cmd: append(append([]string{}, node...), main), Env: append(append([]string{}, nodeEnv...), envSlice(env)...), Dir: j.pathOf(j.workspace), Out: out, Path: j.pathAdds()})
 	return exitErr(code, err)
 }
 

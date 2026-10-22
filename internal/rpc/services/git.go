@@ -141,7 +141,23 @@ func (s *GitService) CreateGitRepository(ctx context.Context, req *v1.CreateGitR
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "use ForkGitRepository to create a fork")
 	}
 	mirrorCfg := ""
-	if repoType == v1.GitRepoType_GIT_REPO_TYPE_MIRROR {
+	importing := strings.TrimSpace(req.GetImportSource().GetUpstream()) != ""
+	switch {
+	case importing && repoType != v1.GitRepoType_GIT_REPO_TYPE_STANDARD:
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "an import creates a standard repository")
+	case importing && req.Mirror != nil:
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "a repository is imported once or mirrored, not both")
+	case importing:
+		if s.mirrors == nil {
+			return nil, connect.Errorf(connect.CodeUnavailable, "importing is unavailable")
+		}
+		if err := s.mirrors.ValidateGitImport(ctx, req.ImportSource); err != nil {
+			return nil, mapMirrorErr(err)
+		}
+		if mirrorCfg, err = s.mirrors.EncodeImportSource(req.ImportSource); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		}
+	case repoType == v1.GitRepoType_GIT_REPO_TYPE_MIRROR:
 		if req.Mirror == nil || req.Mirror.Upstream == "" {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "mirror repositories need an upstream")
 		}
@@ -151,13 +167,10 @@ func (s *GitService) CreateGitRepository(ctx context.Context, req *v1.CreateGitR
 		if err := s.mirrors.ValidateGitMirror(ctx, req.Mirror); err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		if s.mirrors == nil {
-			return nil, connect.Errorf(connect.CodeUnavailable, "mirroring is not available")
-		}
 		if mirrorCfg, err = s.mirrors.EncodeConfig(req.Mirror); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
-	} else if req.Mirror != nil {
+	case req.Mirror != nil:
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "only mirror repositories take mirror settings")
 	}
 	for _, t := range req.Topics {
@@ -182,7 +195,7 @@ func (s *GitService) CreateGitRepository(ctx context.Context, req *v1.CreateGitR
 		ObjectFormat:  req.ObjectFormat,
 		Type:          repoType,
 		MirrorConfig:  mirrorCfg,
-		AutoInit:      req.AutoInit && repoType == v1.GitRepoType_GIT_REPO_TYPE_STANDARD,
+		AutoInit:      req.AutoInit && repoType == v1.GitRepoType_GIT_REPO_TYPE_STANDARD && !importing,
 		Gitignore:     req.GitignoreTemplate,
 		License:       req.License,
 		Topics:        req.Topics,
@@ -195,17 +208,20 @@ func (s *GitService) CreateGitRepository(ctx context.Context, req *v1.CreateGitR
 		repo.Type = v1.GitRepoType_GIT_REPO_TYPE_TEMPLATE
 		_ = s.store.UpdateGitRepositoryColumns(ctx, repo.ID, map[string]any{"type": repo.Type})
 	}
+	if importing {
+		src := req.ImportSource
+		opts := &mirror.ImportOptions{Metadata: src.GetMetadata(), Wiki: src.GetWiki(), LFS: src.GetLfs()}
+		if err := s.mirrors.StartGitImport(repo, opts); err != nil {
+			s.log.Error("import start for %s/%s: %v", repo.Namespace, repo.Name, err)
+		}
+	}
 	if repoType == v1.GitRepoType_GIT_REPO_TYPE_MIRROR && s.mirrors != nil {
 		if req.MirrorReleases || len(req.MirrorImages) > 0 {
 			if err := s.setupCompositeMirror(ctx, repo, req.MirrorReleases, req.MirrorImages); err != nil {
 				s.log.Error("composite mirror setup for %s/%s: %v", repo.Namespace, repo.Name, err)
 			}
 		}
-		if req.ImportMetadata {
-			if err := s.mirrors.StartGitImport(repo); err != nil {
-				s.log.Error("import start for %s/%s: %v", repo.Namespace, repo.Name, err)
-			}
-		} else if err := s.mirrors.SyncGitRepoNow(repo); err != nil {
+		if err := s.mirrors.SyncGitRepoNow(repo); err != nil {
 			s.log.Debug("initial mirror sync for %s/%s: %v", repo.Namespace, repo.Name, err)
 		}
 	}
@@ -874,6 +890,13 @@ func (s *GitService) SyncGitRepository(ctx context.Context, req *v1.SyncGitRepos
 	if err != nil {
 		return nil, err
 	}
+	// An unfinished import resumes, mirrors fetch
+	if imp, err := s.store.GetGitImport(ctx, repo.ID); err == nil && mirror.ImportPending(imp) {
+		if err := s.mirrors.StartGitImport(repo, nil); err != nil {
+			return nil, mapSyncErr(err)
+		}
+		return &v1.SyncGitRepositoryResponse{}, nil
+	}
 	if repo.Type != v1.GitRepoType_GIT_REPO_TYPE_MIRROR {
 		return nil, connect.Errorf(connect.CodeFailedPrecondition, "repository is not a mirror")
 	}
@@ -881,6 +904,17 @@ func (s *GitService) SyncGitRepository(ctx context.Context, req *v1.SyncGitRepos
 		return nil, mapSyncErr(err)
 	}
 	return &v1.SyncGitRepositoryResponse{}, nil
+}
+
+func (s *GitService) DismissGitImport(ctx context.Context, req *v1.DismissGitImportRequest) (*v1.DismissGitImportResponse, error) {
+	repo, err := s.mirrorRepo(ctx, req.Namespace, req.Name)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.mirrors.DismissGitImport(ctx, repo); err != nil {
+		return nil, mapSyncErr(err)
+	}
+	return &v1.DismissGitImportResponse{}, nil
 }
 
 func (s *GitService) StopGitRepositorySync(ctx context.Context, req *v1.StopGitRepositorySyncRequest) (*v1.StopGitRepositorySyncResponse, error) {

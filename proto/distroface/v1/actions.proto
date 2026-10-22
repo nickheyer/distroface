@@ -567,6 +567,13 @@ message FetchTaskRequest {
 }
 
 // One service container of a job
+// TaskCredentials is a registry login for image pulls
+message TaskCredentials {
+  string username = 1;
+  string password = 2;
+}
+
+// TaskService is one service container of a job
 message TaskService {
   string name = 1;
   string image = 2;
@@ -574,6 +581,7 @@ message TaskService {
   repeated string ports = 4;
   repeated string volumes = 5;
   string options = 6;
+  TaskCredentials credentials = 7;
 }
 
 // One step to execute
@@ -592,6 +600,9 @@ message TaskStep {
   string condition = 10;
   bool continue_on_error = 11;
   int32 timeout_minutes = 12;
+  // Expression forms the runner evaluates per step, empty when literal
+  string continue_on_error_expr = 13;
+  string timeout_minutes_expr = 14;
 }
 
 // Task is a job handed to a runner.
@@ -623,6 +634,7 @@ message Task {
   string default_shell = 19;
   // Resolved runs-on labels of the job
   repeated string runs_on = 20;
+  TaskCredentials container_credentials = 21;
 }
 
 // FetchTaskResponse contains a task or nothing.

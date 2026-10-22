@@ -820,6 +820,22 @@ func (s *Store) GetGitImport(ctx context.Context, repoID string) (*db.GitImport,
 	return &imp, err
 }
 
+// Import rows of several repositories keyed by repo id
+func (s *Store) GetGitImportsByRepoIDs(ctx context.Context, ids []string) (map[string]*db.GitImport, error) {
+	out := map[string]*db.GitImport{}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var rows []*db.GitImport
+	if err := s.db.WithContext(ctx).Where("repo_id IN ?", ids).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.RepoID] = r
+	}
+	return out, nil
+}
+
 func (s *Store) ListPendingGitImports(ctx context.Context) ([]*db.GitImport, error) {
 	var out []*db.GitImport
 	err := s.db.WithContext(ctx).Where("phase <> ?", "done").Find(&out).Error

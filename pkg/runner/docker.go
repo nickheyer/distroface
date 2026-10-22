@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -29,8 +30,17 @@ import (
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
-// Job dir as seen inside containers
-const containerWorkRoot = "/__w"
+// Container paths of the job dir and tool cache
+const (
+	containerWorkRoot  = "/__w"
+	containerToolCache = "/__t"
+)
+
+// PATH docker gives images that declare none
+const defaultContainerPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+// Env var marking an exec's process tree for signals
+const execMarker = "DFCLI_EXEC_ID"
 
 // Grace between terminate and kill of a cancelled step
 const (
@@ -38,10 +48,11 @@ const (
 	execKillGrace = 5 * time.Second
 )
 
-// Walks the pid file's process tree and signals leaves first
-const killTreeScript = `p=$(cat "$1" 2>/dev/null); [ -n "$p" ] || exit 0
+// Signals every process carrying the marker, descendants before parents
+const killTreeScript = `m="$1"; s="$2"
 kt() { for d in /proc/[0-9]*; do pp=; while read -r k v _; do [ "$k" = "PPid:" ] && { pp=$v; break; }; done 2>/dev/null < "$d/status"; [ "$pp" = "$1" ] && kt "${d#/proc/}" "$2"; done; kill -"$2" "$1" 2>/dev/null; }
-kt "$p" "$2"`
+for d in /proc/[0-9]*; do p=${d#/proc/}; [ "$p" = "$$" ] && continue; tr '\0' '\n' < "$d/environ" 2>/dev/null | grep -qxF "$m" && kt "$p" "$s"; done
+exit 0`
 
 // What the job context reports about containers
 type executorInfo struct {
@@ -73,6 +84,8 @@ type dockerExecutor struct {
 	// Host entries every container of the job receives
 	hosts  []string
 	labels map[string]string
+	// Host tool cache dir shared across jobs
+	toolCache string
 
 	networkID   string
 	networkName string
@@ -80,6 +93,8 @@ type dockerExecutor struct {
 	serviceIDs  []string
 	serviceInfo map[string]serviceInfo
 	user        string
+	// Container PATH that GITHUB_PATH entries go ahead of
+	path string
 	// Guards containerID between a shutdown kill and the teardown
 	idMu sync.Mutex
 }
@@ -113,11 +128,25 @@ func (d *dockerExecutor) Describe() string {
 }
 
 func (d *dockerExecutor) Path(hostPath string) string {
-	rel, err := filepath.Rel(d.jobDir, hostPath)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	if d.toolCache != "" {
+		if rel, ok := relInside(d.toolCache, hostPath); ok {
+			return path.Join(containerToolCache, filepath.ToSlash(rel))
+		}
+	}
+	rel, ok := relInside(d.jobDir, hostPath)
+	if !ok {
 		return filepath.ToSlash(hostPath)
 	}
 	return path.Join(containerWorkRoot, filepath.ToSlash(rel))
+}
+
+// Path under root, false when it escapes
+func relInside(root, target string) (string, bool) {
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return rel, true
 }
 
 func (d *dockerExecutor) Info() executorInfo {
@@ -168,6 +197,9 @@ func (d *dockerExecutor) Start(ctx context.Context) error {
 		ExtraHosts:  opts.hosts,
 		DNS:         opts.dns,
 	}
+	if d.toolCache != "" {
+		host.Binds = append(host.Binds, d.toolCache+":"+containerToolCache)
+	}
 	if d.externals != "" {
 		if err := os.MkdirAll(d.externals, 0o755); err == nil {
 			host.Binds = append(host.Binds, d.externals+":"+containerExternals+":ro")
@@ -187,8 +219,44 @@ func (d *dockerExecutor) Start(ctx context.Context) error {
 	if err := d.cli.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return fmt.Errorf("start job container: %w", err)
 	}
+	d.path = defaultContainerPath
+	if insp, err := d.cli.ContainerInspect(ctx, resp.ID); err == nil && insp.Config != nil {
+		if p := envValue(insp.Config.Env, "PATH"); p != "" {
+			d.path = p
+		}
+	}
 	d.log.Line("Started job container %s from %s", shortID(resp.ID), d.image)
 	return nil
+}
+
+// Value of a KEY=value entry, empty when absent
+func envValue(env []string, key string) string {
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && strings.EqualFold(k, key) {
+			return v
+		}
+	}
+	return ""
+}
+
+// Env with dirs ahead of the step or base PATH
+func prependPath(env, adds []string, base, sep string) []string {
+	if len(adds) == 0 {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && strings.EqualFold(k, "PATH") {
+			base = v
+			continue
+		}
+		out = append(out, kv)
+	}
+	value := strings.Join(adds, sep)
+	if base != "" {
+		value += sep + base
+	}
+	return append(out, "PATH="+value)
 }
 
 // Daemon socket on this host, empty when absent
@@ -357,23 +425,24 @@ type execSpec struct {
 	Out io.Writer
 	// Overrides the job user, root for cleanup
 	User string
+	// GITHUB_PATH entries placed ahead of PATH, newest first
+	Path []string
 }
 
+// Direct exec, dash would drop hyphenated env names
 func (d *dockerExecutor) Exec(ctx context.Context, spec execSpec) (int, error) {
 	id := d.container()
 	if id == "" {
 		return -1, fmt.Errorf("job container is not running")
 	}
-	pidName := "pid-" + uuid.NewString()[:8]
-	defer os.Remove(filepath.Join(d.jobDir, "_temp", pidName))
-	pidFile := path.Join(containerWorkRoot, "_temp", pidName)
-	cmd := append([]string{"/bin/sh", "-c", `echo $$ > "$0" && exec "$@"`, pidFile}, spec.Cmd...)
+	marker := execMarker + "=" + uuid.NewString()
+	env := append(prependPath(spec.Env, spec.Path, d.path, ":"), marker)
 	user := d.user
 	if spec.User != "" {
 		user = spec.User
 	}
 	created, err := d.cli.ContainerExecCreate(ctx, id, container.ExecOptions{
-		Cmd: cmd, Env: spec.Env, WorkingDir: spec.Dir, AttachStdout: true, AttachStderr: true, User: user,
+		Cmd: spec.Cmd, Env: env, WorkingDir: spec.Dir, AttachStdout: true, AttachStderr: true, User: user,
 	})
 	if err != nil {
 		return -1, fmt.Errorf("exec create: %w", err)
@@ -390,11 +459,11 @@ func (d *dockerExecutor) Exec(ctx context.Context, spec execSpec) (int, error) {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		d.signalTree(pidFile, "TERM")
+		d.signalTree(marker, "TERM")
 		select {
 		case <-done:
 		case <-time.After(execTermGrace):
-			d.signalTree(pidFile, "KILL")
+			d.signalTree(marker, "KILL")
 			select {
 			case <-done:
 			case <-time.After(execKillGrace):
@@ -423,14 +492,14 @@ func (d *dockerExecutor) Exec(ctx context.Context, spec execSpec) (int, error) {
 }
 
 // Signals the step's whole process tree inside the container
-func (d *dockerExecutor) signalTree(pidFile, sig string) {
+func (d *dockerExecutor) signalTree(marker, sig string) {
 	bg, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	id := d.container()
 	if id == "" {
 		return
 	}
-	created, err := d.cli.ContainerExecCreate(bg, id, container.ExecOptions{Cmd: []string{"/bin/sh", "-c", killTreeScript, "sh", pidFile, sig}, User: "0"})
+	created, err := d.cli.ContainerExecCreate(bg, id, container.ExecOptions{Cmd: []string{"/bin/sh", "-c", killTreeScript, "sh", marker, sig}, User: "0"})
 	if err != nil {
 		return
 	}
@@ -438,8 +507,21 @@ func (d *dockerExecutor) signalTree(pidFile, sig string) {
 }
 
 func (d *dockerExecutor) Has(ctx context.Context, bin string) bool {
-	code, err := d.Exec(ctx, execSpec{Cmd: []string{"/bin/sh", "-c", "command -v " + bin + " >/dev/null 2>&1"}, Out: io.Discard})
-	return err == nil && code == 0
+	return d.Which(ctx, bin) != ""
+}
+
+// Absolute path of a binary on the container's own PATH
+func (d *dockerExecutor) Which(ctx context.Context, bin string) string {
+	var buf bytes.Buffer
+	code, err := d.Exec(ctx, execSpec{Cmd: []string{"/bin/sh", "-c", `command -v -- "$1"`, "sh", bin}, Out: &buf})
+	if err != nil || code != 0 {
+		return ""
+	}
+	p := strings.TrimSpace(buf.String())
+	if !strings.HasPrefix(p, "/") {
+		return ""
+	}
+	return p
 }
 
 func (d *dockerExecutor) Kill() {

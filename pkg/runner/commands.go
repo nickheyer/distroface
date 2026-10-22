@@ -29,12 +29,17 @@ type commandWriter struct {
 	onMask       func(string)
 	onOutput     func(key, value string)
 	onState      func(key, value string)
-	debug        bool
-	echo         bool
-	disabled     string
-	stopToken    string
-	partial      []byte
-	depth        int
+	// Job matchers and the reader for add-matcher files
+	matchers *matcherSet
+	readFile func(string) ([]byte, error)
+	// Workspace prefix stripped from matched file paths
+	fileBase  string
+	debug     bool
+	echo      bool
+	disabled  string
+	stopToken string
+	partial   []byte
+	depth     int
 }
 
 func (w *commandWriter) Write(p []byte) (int, error) {
@@ -70,7 +75,7 @@ func (w *commandWriter) line(line string) {
 	text := strings.TrimRight(line, "\r")
 	cmd, props, value, ok := parseCommand(text)
 	if !ok {
-		io.WriteString(w.out, line+"\n")
+		w.plain(line, text)
 		return
 	}
 	if w.stopToken != "" {
@@ -78,7 +83,7 @@ func (w *commandWriter) line(line string) {
 			w.stopToken = ""
 			return
 		}
-		io.WriteString(w.out, line+"\n")
+		w.plain(line, text)
 		return
 	}
 	// Masks and the echo switch itself never echo
@@ -128,6 +133,14 @@ func (w *commandWriter) line(line string) {
 		if w.onState != nil {
 			w.onState(props["name"], value)
 		}
+	case "add-matcher":
+		w.addMatcher(value)
+	case "remove-matcher":
+		owner := strings.TrimSpace(props["owner"])
+		if owner != "" && w.matchers != nil {
+			w.matchers.remove(owner)
+			io.WriteString(w.out, "Removed matchers: "+quoteOwners([]string{owner})+"\n")
+		}
 	case "set-env", "add-path":
 		// Log injection reaches these, the files cannot be forged from output
 		w.disabled = cmd
@@ -143,6 +156,41 @@ func (w *commandWriter) line(line string) {
 	}
 }
 
+// Ordinary output, flagged when a problem matcher recognises it
+func (w *commandWriter) plain(line, text string) {
+	if a := w.matchers.match(text, w.fileBase); a != nil {
+		if w.onAnnotation != nil {
+			w.onAnnotation(*a)
+		}
+		io.WriteString(w.out, "##["+a.Level+"]"+line+"\n")
+		return
+	}
+	io.WriteString(w.out, line+"\n")
+}
+
+// Loads a matcher file and registers its owners
+func (w *commandWriter) addMatcher(file string) {
+	file = strings.TrimSpace(file)
+	if w.matchers == nil || w.readFile == nil || file == "" {
+		return
+	}
+	data, err := w.readFile(file)
+	var list []*problemMatcher
+	if err == nil {
+		list, err = parseMatchers(data)
+	}
+	if err != nil {
+		io.WriteString(w.out, "##[warning]Unable to process matcher file "+file+": "+err.Error()+"\n")
+		return
+	}
+	w.matchers.add(list)
+	owners := make([]string, 0, len(list))
+	for _, m := range list {
+		owners = append(owners, m.owner)
+	}
+	io.WriteString(w.out, "Added matchers: "+quoteOwners(owners)+". Problem matchers scan action output for known warning or error strings and report them inline.\n")
+}
+
 // Error once a disabled command was seen, nil otherwise
 func (w *commandWriter) failure() error {
 	if w.disabled == "" {
@@ -151,8 +199,11 @@ func (w *commandWriter) failure() error {
 	return errors.New("the `" + w.disabled + "` workflow command is disabled")
 }
 
-// Splits a workflow command into name, properties, and value
+// Splits a command, :: or legacy ##[ spelling
 func parseCommand(line string) (cmd string, props map[string]string, value string, ok bool) {
+	if strings.HasPrefix(line, "##[") {
+		return parseLegacyCommand(line)
+	}
 	if !strings.HasPrefix(line, "::") {
 		return "", nil, "", false
 	}
@@ -179,6 +230,30 @@ func parseCommand(line string) (cmd string, props map[string]string, value strin
 	return cmd, props, value, true
 }
 
+// ##[name key=value;key2=value2]data
+func parseLegacyCommand(line string) (cmd string, props map[string]string, value string, ok bool) {
+	end := strings.IndexByte(line, ']')
+	if end < 0 {
+		return "", nil, "", false
+	}
+	head := line[3:end]
+	value = unescapeLegacy(line[end+1:])
+	props = map[string]string{}
+	cmd, propText, _ := strings.Cut(head, " ")
+	cmd = strings.TrimSpace(cmd)
+	if cmd == "" {
+		return "", nil, "", false
+	}
+	for _, kv := range strings.Split(propText, ";") {
+		k, v, found := strings.Cut(kv, "=")
+		if !found {
+			continue
+		}
+		props[strings.TrimSpace(k)] = unescapeLegacy(v)
+	}
+	return cmd, props, value, true
+}
+
 func unescapeData(s string) string {
 	s = strings.ReplaceAll(s, "%0D", "\r")
 	s = strings.ReplaceAll(s, "%0A", "\n")
@@ -189,6 +264,13 @@ func unescapeProperty(s string) string {
 	s = strings.ReplaceAll(s, "%3A", ":")
 	s = strings.ReplaceAll(s, "%2C", ",")
 	return unescapeData(s)
+}
+
+func unescapeLegacy(s string) string {
+	s = strings.ReplaceAll(s, "%3B", ";")
+	s = strings.ReplaceAll(s, "%5D", "]")
+	s = strings.ReplaceAll(s, "%0D", "\r")
+	return strings.ReplaceAll(s, "%0A", "\n")
 }
 
 func atoi(s string) int {

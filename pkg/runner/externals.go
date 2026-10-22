@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -176,7 +177,7 @@ type nodeCmd struct {
 	env []string
 }
 
-// Node from the image first, the runner's own builds second
+// Image node when new enough, own builds otherwise
 func (j *job) nodeCommand(ctx context.Context, using string) ([]string, []string, error) {
 	ver := nodeVersionFor(using)
 	j.mu.Lock()
@@ -190,12 +191,26 @@ func (j *job) nodeCommand(ctx context.Context, using string) ([]string, []string
 		j.nodeCmds[ver] = &nodeCmd{cmd: cmd, env: env}
 		j.mu.Unlock()
 	}
-	if j.exec.Has(ctx, "node") {
-		remember([]string{"node"}, nil)
-		return []string{"node"}, nil, nil
+	// Absolute path so GITHUB_PATH changes cannot swap it
+	imageNode := j.exec.Which(ctx, "node")
+	imageMajor := 0
+	if imageNode != "" {
+		imageMajor = j.nodeMajor(ctx, imageNode)
+		if imageMajor >= ver {
+			remember([]string{imageNode}, nil)
+			return []string{imageNode}, nil, nil
+		}
+	}
+	useImageNode := func(reason string) ([]string, []string, error) {
+		j.log.Line("##[warning]Running node%d actions with the job image's node %d (%s)", ver, imageMajor, reason)
+		remember([]string{imageNode}, nil)
+		return []string{imageNode}, nil, nil
 	}
 	cli, err := j.dockerClient()
 	if err != nil {
+		if imageNode != "" {
+			return useImageNode(err.Error())
+		}
 		return nil, nil, fmt.Errorf("node is not in the job image and %w", err)
 	}
 	var errs []string
@@ -220,7 +235,23 @@ func (j *job) nodeCommand(ctx context.Context, using string) ([]string, []string
 		}
 		errs = append(errs, string(flavor)+": binary does not run in this image")
 	}
+	if imageNode != "" {
+		return useImageNode(strings.Join(errs, ", "))
+	}
 	return nil, nil, fmt.Errorf("no node %d runs in image %s, pick a container image that ships node (%s)", ver, j.imageName(), strings.Join(errs, ", "))
+}
+
+// Major version a node binary reports, zero when unknown
+func (j *job) nodeMajor(ctx context.Context, bin string) int {
+	var buf bytes.Buffer
+	code, err := j.exec.Exec(ctx, execSpec{Cmd: []string{bin, "--version"}, Out: &buf})
+	if err != nil || code != 0 {
+		return 0
+	}
+	v := strings.TrimPrefix(strings.TrimSpace(buf.String()), "v")
+	major, _, _ := strings.Cut(v, ".")
+	n, _ := strconv.Atoi(major)
+	return n
 }
 
 // Docker client of the job, opened on demand for host jobs

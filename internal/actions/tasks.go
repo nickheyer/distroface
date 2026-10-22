@@ -316,9 +316,16 @@ func (m *Manager) buildTask(ctx context.Context, repo *db.GitRepository, run *db
 	if def.Job.Defaults != nil {
 		task.DefaultShell = def.Job.Defaults.Shell
 	}
+	credentials := func(c *Credentials) *v1.TaskCredentials {
+		if c == nil {
+			return nil
+		}
+		return &v1.TaskCredentials{Username: interp(c.Username), Password: interp(c.Password)}
+	}
 	if c := def.Job.Container; c != nil {
 		task.ContainerImage = interp(c.Image)
 		task.ContainerOptions = interp(c.Options)
+		task.ContainerCredentials = credentials(c.Credentials)
 		for k, v := range interpMap(c.Env) {
 			task.Env[k] = v
 		}
@@ -331,6 +338,7 @@ func (m *Manager) buildTask(ctx context.Context, repo *db.GitRepository, run *db
 		task.Services = append(task.Services, &v1.TaskService{
 			Name: name, Image: interp(svc.Image), Env: interpMap(svc.Env),
 			Ports: svc.Ports, Volumes: svc.Volumes, Options: interp(svc.Options),
+			Credentials: credentials(svc.Credentials),
 		})
 	}
 	// Step fields stay raw, the runner evaluates them exactly once
@@ -341,6 +349,7 @@ func (m *Manager) buildTask(ctx context.Context, repo *db.GitRepository, run *db
 			WorkingDirectory: st.WorkingDirectory,
 			Env:              map[string]string{}, With: map[string]string{},
 			Condition: st.If, ContinueOnError: st.ContinueOnError, TimeoutMinutes: int32(st.TimeoutMinutes),
+			ContinueOnErrorExpr: st.ContinueOnErrorExpr, TimeoutMinutesExpr: st.TimeoutMinutesExpr,
 		}
 		if ts.Name == "" {
 			if st.Uses != "" {

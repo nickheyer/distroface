@@ -156,6 +156,24 @@ func (s *Store) CreateActionsRun(ctx context.Context, run *db.ActionsRun, jobs [
 	})
 }
 
+// Adds late expanded matrix legs to an existing run
+func (s *Store) CreateActionsJobs(ctx context.Context, jobs []*db.ActionsJob) error {
+	if len(jobs) == 0 {
+		return nil
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		for _, j := range jobs {
+			if j.ID == "" {
+				j.ID = uuid.New().String()
+			}
+			if err := tx.Create(j).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (s *Store) GetActionsRun(ctx context.Context, repoID, id string) (*db.ActionsRun, error) {
 	var run db.ActionsRun
 	err := s.db.WithContext(ctx).First(&run, "repo_id = ? AND id = ?", repoID, id).Error

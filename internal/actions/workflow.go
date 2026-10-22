@@ -153,6 +153,9 @@ type Job struct {
 	WorkflowEnv map[string]string `json:"workflow_env,omitempty"`
 	// Planning failure that fails the job with its reason
 	Error string `json:"error,omitempty"`
+	// Expression forms, resolved when the job is queued
+	ContinueOnErrorExpr string `json:"continue_on_error_expr,omitempty"`
+	TimeoutMinutesExpr  string `json:"timeout_minutes_expr,omitempty"`
 }
 
 type Strategy struct {
@@ -162,26 +165,37 @@ type Strategy struct {
 	Exclude     []map[string]any `json:"exclude,omitempty"`
 	// Key order of each include entry as written
 	IncludeOrder [][]string `json:"include_order,omitempty"`
-	// Whole matrix given as an expression, expanded when a run starts
+	// Whole matrix as an expression, expanded later
 	MatrixExpr  string `json:"matrix_expr,omitempty"`
 	FailFast    *bool  `json:"fail_fast,omitempty"`
 	MaxParallel int    `json:"max_parallel,omitempty"`
+	// Expression forms, resolved alongside the matrix
+	FailFastExpr    string `json:"fail_fast_expr,omitempty"`
+	MaxParallelExpr string `json:"max_parallel_expr,omitempty"`
 }
 
 type Container struct {
-	Image   string            `json:"image"`
-	Env     map[string]string `json:"env,omitempty"`
-	Ports   []string          `json:"ports,omitempty"`
-	Volumes []string          `json:"volumes,omitempty"`
-	Options string            `json:"options,omitempty"`
+	Image       string            `json:"image"`
+	Env         map[string]string `json:"env,omitempty"`
+	Ports       []string          `json:"ports,omitempty"`
+	Volumes     []string          `json:"volumes,omitempty"`
+	Options     string            `json:"options,omitempty"`
+	Credentials *Credentials      `json:"credentials,omitempty"`
+}
+
+// Registry login for a private container or service image
+type Credentials struct {
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
 }
 
 type Service struct {
-	Image   string            `json:"image"`
-	Env     map[string]string `json:"env,omitempty"`
-	Ports   []string          `json:"ports,omitempty"`
-	Volumes []string          `json:"volumes,omitempty"`
-	Options string            `json:"options,omitempty"`
+	Image       string            `json:"image"`
+	Env         map[string]string `json:"env,omitempty"`
+	Ports       []string          `json:"ports,omitempty"`
+	Volumes     []string          `json:"volumes,omitempty"`
+	Options     string            `json:"options,omitempty"`
+	Credentials *Credentials      `json:"credentials,omitempty"`
 }
 
 type Defaults struct {
@@ -201,6 +215,9 @@ type Step struct {
 	If               string            `json:"if,omitempty"`
 	ContinueOnError  bool              `json:"continue_on_error,omitempty"`
 	TimeoutMinutes   int               `json:"timeout_minutes,omitempty"`
+	// Expression forms the runner evaluates per step
+	ContinueOnErrorExpr string `json:"continue_on_error_expr,omitempty"`
+	TimeoutMinutesExpr  string `json:"timeout_minutes_expr,omitempty"`
 }
 
 // Events whose types filter defaults when unspecified
@@ -637,9 +654,9 @@ func parseJob(key string, n *yaml.Node) (*Job, error) {
 		case "env":
 			job.Env = parseStringMap(v)
 		case "timeout-minutes":
-			job.TimeoutMinutes = scalarInt(v)
+			job.TimeoutMinutes, job.TimeoutMinutesExpr = scalarIntOrExpr(v)
 		case "continue-on-error":
-			job.ContinueOnError = scalarBool(v)
+			job.ContinueOnError, job.ContinueOnErrorExpr = scalarBoolOrExpr(v)
 		case "container":
 			job.Container = parseContainer(v)
 		case "services":
@@ -650,7 +667,7 @@ func parseJob(key string, n *yaml.Node) (*Job, error) {
 					if c == nil {
 						continue
 					}
-					job.Services[name] = &Service{Image: c.Image, Env: c.Env, Ports: c.Ports, Volumes: c.Volumes, Options: c.Options}
+					job.Services[name] = &Service{Image: c.Image, Env: c.Env, Ports: c.Ports, Volumes: c.Volumes, Options: c.Options, Credentials: c.Credentials}
 					job.ServiceOrder = append(job.ServiceOrder, name)
 				}
 			}
@@ -741,6 +758,18 @@ func parseContainer(n *yaml.Node) *Container {
 				c.Volumes = stringList(v)
 			case "options":
 				c.Options = scalarString(v)
+			case "credentials":
+				if v.Kind == yaml.MappingNode {
+					c.Credentials = &Credentials{}
+					for ck, cv := range mapPairs(v) {
+						switch ck {
+						case "username":
+							c.Credentials.Username = scalarString(cv)
+						case "password":
+							c.Credentials.Password = scalarString(cv)
+						}
+					}
+				}
 			}
 		}
 		if c.Image == "" {
@@ -802,9 +831,9 @@ func parseSteps(n *yaml.Node) ([]*Step, error) {
 			case "if":
 				st.If = scalarString(v)
 			case "continue-on-error":
-				st.ContinueOnError = scalarBool(v)
+				st.ContinueOnError, st.ContinueOnErrorExpr = scalarBoolOrExpr(v)
 			case "timeout-minutes":
-				st.TimeoutMinutes = scalarInt(v)
+				st.TimeoutMinutes, st.TimeoutMinutesExpr = scalarIntOrExpr(v)
 			}
 		}
 		if st.Uses == "" && st.Run == "" {
@@ -826,10 +855,13 @@ func parseStrategy(n *yaml.Node) (*Strategy, error) {
 	for k, v := range mapPairs(n) {
 		switch k {
 		case "fail-fast":
-			b := scalarBool(v)
-			st.FailFast = &b
+			if b, e := scalarBoolOrExpr(v); e != "" {
+				st.FailFastExpr = e
+			} else {
+				st.FailFast = &b
+			}
 		case "max-parallel":
-			st.MaxParallel = scalarInt(v)
+			st.MaxParallel, st.MaxParallelExpr = scalarIntOrExpr(v)
 		case "matrix":
 			switch v.Kind {
 			case yaml.ScalarNode:
@@ -1085,6 +1117,31 @@ func scalarInt(n *yaml.Node) int {
 	}
 	i, _ := strconv.Atoi(strings.TrimSpace(n.Value))
 	return i
+}
+
+// Literal bool, or the expression written in its place
+func scalarBoolOrExpr(n *yaml.Node) (bool, string) {
+	if n == nil || n.Kind != yaml.ScalarNode {
+		return false, ""
+	}
+	s := strings.TrimSpace(n.Value)
+	if strings.Contains(s, "${{") {
+		return false, s
+	}
+	return strings.EqualFold(s, "true"), ""
+}
+
+// Literal int, or the expression written in its place
+func scalarIntOrExpr(n *yaml.Node) (int, string) {
+	if n == nil || n.Kind != yaml.ScalarNode {
+		return 0, ""
+	}
+	s := strings.TrimSpace(n.Value)
+	if strings.Contains(s, "${{") {
+		return 0, s
+	}
+	i, _ := strconv.Atoi(s)
+	return i, ""
 }
 
 func stringList(n *yaml.Node) []string {

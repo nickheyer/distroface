@@ -43,7 +43,7 @@ func (h *hostExecutor) Exec(ctx context.Context, spec execSpec) (int, error) {
 		return -1, errors.New("empty command")
 	}
 	cmd := exec.CommandContext(ctx, spec.Cmd[0], spec.Cmd[1:]...)
-	cmd.Env = mergeOSEnv(spec.Env)
+	cmd.Env = mergeOSEnv(prependPath(spec.Env, spec.Path, os.Getenv("PATH"), string(os.PathListSeparator)))
 	cmd.Dir = spec.Dir
 	cmd.Stdout = spec.Out
 	cmd.Stderr = spec.Out
@@ -72,8 +72,15 @@ func (h *hostExecutor) Exec(ctx context.Context, spec execSpec) (int, error) {
 }
 
 func (h *hostExecutor) Has(ctx context.Context, bin string) bool {
-	_, err := exec.LookPath(bin)
-	return err == nil
+	return h.Which(ctx, bin) != ""
+}
+
+func (h *hostExecutor) Which(ctx context.Context, bin string) string {
+	p, err := exec.LookPath(bin)
+	if err != nil {
+		return ""
+	}
+	return p
 }
 
 func (h *hostExecutor) Kill() {

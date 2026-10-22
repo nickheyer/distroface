@@ -23,6 +23,8 @@ type ExprContext struct {
 	Inputs  map[string]any
 	// Called workflow jobs, set while evaluating workflow_call outputs
 	Jobs map[string]any
+	// Job strategy once its matrix legs exist
+	Strategy map[string]any
 	// success, failure, cancelled, or empty for success
 	Status string
 }
@@ -47,7 +49,11 @@ func (c *ExprContext) Lookup(name string) (any, error) {
 		}
 		return expr.StringMap(c.Secrets), nil
 	case "needs":
-		return orMap(c.Needs), nil
+		// Nil until the needed jobs finish
+		if c.Needs == nil {
+			return nil, ErrDeferred
+		}
+		return c.Needs, nil
 	case "matrix":
 		return orMap(c.Matrix), nil
 	case "steps":
@@ -62,7 +68,12 @@ func (c *ExprContext) Lookup(name string) (any, error) {
 			return nil, ErrDeferred
 		}
 		return c.Jobs, nil
-	case "job", "runner", "strategy":
+	case "strategy":
+		if c.Strategy == nil {
+			return nil, ErrDeferred
+		}
+		return c.Strategy, nil
+	case "job", "runner":
 		return nil, ErrDeferred
 	}
 	return nil, fmt.Errorf("unknown context %q", name)

@@ -259,12 +259,25 @@ func clampGit(eff *v1.Settings, sys *v1.GitSettings, prov map[string]v1.Settings
 		return
 	}
 	if sys.GetMaxRepoSizeMb() > 0 && (g.GetMaxRepoSizeMb() <= 0 || g.GetMaxRepoSizeMb() > sys.GetMaxRepoSizeMb()) {
-		g.MaxRepoSizeMb = proto.Int64(sys.GetMaxRepoSizeMb())
+		g.MaxRepoSizeMb = new(sys.GetMaxRepoSizeMb())
 		prov["git.max_repo_size_mb"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
 	}
 	if !sys.GetLfsEnabled() && g.GetLfsEnabled() {
-		g.LfsEnabled = proto.Bool(false)
+		g.LfsEnabled = new(false)
 		prov["git.lfs_enabled"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	}
+	// RETENTION
+	a, sa := g.GetActions(), sys.GetActions()
+	if a == nil || sa == nil {
+		return
+	}
+	if limit := sa.GetArtifactRetentionDays(); limit > 0 && (a.GetArtifactRetentionDays() <= 0 || a.GetArtifactRetentionDays() > limit) {
+		a.ArtifactRetentionDays = new(limit)
+		prov["git.actions.artifact_retention_days"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	}
+	if limit := sa.GetLogRetentionDays(); limit > 0 && (a.GetLogRetentionDays() <= 0 || a.GetLogRetentionDays() > limit) {
+		a.LogRetentionDays = new(limit)
+		prov["git.actions.log_retention_days"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
 	}
 }
 

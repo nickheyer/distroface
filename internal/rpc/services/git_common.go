@@ -24,7 +24,7 @@ func mapGitErr(err error) error {
 		return err
 	case errors.Is(err, gitrepo.ErrInvalid), errors.Is(err, gitrepo.ErrInvalidName), errors.Is(err, gitrepo.ErrPathConflict):
 		return connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
-	case errors.Is(err, gitrepo.ErrArchived), errors.Is(err, gitrepo.ErrMirror), errors.Is(err, gitrepo.ErrNotFastForward):
+	case errors.Is(err, gitrepo.ErrArchived), errors.Is(err, gitrepo.ErrMirror), errors.Is(err, gitrepo.ErrImporting), errors.Is(err, gitrepo.ErrNotFastForward):
 		return connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 	case errors.Is(err, gitrepo.ErrRefChanged):
 		return connect.NewError(connect.CodeAborted, err.Error()).WithCause(err)

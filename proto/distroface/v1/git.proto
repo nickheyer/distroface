@@ -53,8 +53,10 @@ service GitService {
   rpc WatchGitRepository(WatchGitRepositoryRequest) returns (WatchGitRepositoryResponse) {}
   // SyncGitRepository starts an immediate mirror sync in the background.
   rpc SyncGitRepository(SyncGitRepositoryRequest) returns (SyncGitRepositoryResponse) {}
-  // StopGitRepositorySync cancels the running mirror sync, if any.
+  // StopGitRepositorySync cancels a running mirror sync or import
   rpc StopGitRepositorySync(StopGitRepositorySyncRequest) returns (StopGitRepositorySyncResponse) {}
+  // DismissGitImport stops a running import and forgets its record
+  rpc DismissGitImport(DismissGitImportRequest) returns (DismissGitImportResponse) {}
   // GenerateMirrorKey creates the ssh key pair used for ssh upstreams.
   rpc GenerateMirrorKey(GenerateMirrorKeyRequest) returns (GenerateMirrorKeyResponse) {}
   // ListPushMirrors returns the push mirrors of a repository.
@@ -359,6 +361,33 @@ message GitRepository {
   GitViewerAccess viewer = 43;
   google.protobuf.Timestamp created_at = 44;
   google.protobuf.Timestamp updated_at = 45;
+  // Set while an import runs, failed, or left notes
+  GitImportStatus import_status = 46;
+}
+
+// GitImportSource is an upstream copied once into a repository
+message GitImportSource {
+  // Clone url, or owner/repo for GitHub, GitLab, and Gitea
+  string upstream = 1;
+  // Basic auth pair for private https upstreams
+  string username = 2;
+  optional string auth_token = 3;
+  // Issues, pulls, labels, milestones, and releases from known forges
+  bool metadata = 4;
+  bool wiki = 5;
+  bool lfs = 6;
+}
+
+// GitImportStatus describes a one time import of a repository
+message GitImportStatus {
+  string upstream = 1;
+  // fetch, wiki, lfs, labels, milestones, issues, pulls, releases, done
+  string phase = 2;
+  bool running = 3;
+  string error = 4;
+  // What the import skipped or could not reach upstream
+  repeated string notes = 5;
+  google.protobuf.Timestamp updated_at = 6;
 }
 
 // Author or committer identity on a commit
@@ -685,10 +714,12 @@ message CreateGitRepositoryRequest {
   bool mirror_releases = 12;
   // Also create linked image mirrors for mirror type
   repeated string mirror_images = 13;
-  // Import issues, pulls, labels, and milestones for mirror type
-  bool import_metadata = 14;
+  // Deprecated, imports use import_source and never create mirrors
+  bool import_metadata = 14 [deprecated = true];
   string website = 15;
   repeated string topics = 16;
+  // One time upstream copy, standard type, exclusive with mirror
+  GitImportSource import_source = 17;
 }
 
 // CreateGitRepositoryResponse contains the created repository.
@@ -968,6 +999,15 @@ message StopGitRepositorySyncRequest {
 
 // StopGitRepositorySyncResponse is empty.
 message StopGitRepositorySyncResponse {}
+
+// DismissGitImportRequest identifies a repository with an import record
+message DismissGitImportRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// DismissGitImportResponse is empty
+message DismissGitImportResponse {}
 
 // GenerateMirrorKeyRequest identifies a repository.
 message GenerateMirrorKeyRequest {

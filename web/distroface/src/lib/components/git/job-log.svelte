@@ -75,6 +75,9 @@
 		rawUrl?: string;
 	} = $props();
 
+	let allLines: LogLine[] = [];
+	let allGroups: LogGroup[] = [];
+	let flushHandle = 0;
 	let lines = $state.raw<LogLine[]>([]);
 	let groups = $state.raw<LogGroup[]>([]);
 	let closed = $state<Record<number, boolean>>({});
@@ -110,23 +113,43 @@
 		return undefined;
 	}
 
+	// Bursts of chunks reach the DOM as one update
+	function scheduleFlush(now = false) {
+		if (now) {
+			if (flushHandle) cancelAnimationFrame(flushHandle);
+			flushHandle = 0;
+			flush();
+			return;
+		}
+		if (flushHandle) return;
+		flushHandle = requestAnimationFrame(() => {
+			flushHandle = 0;
+			flush();
+		});
+	}
+
+	function flush() {
+		lines = allLines.slice();
+		groups = allGroups.slice();
+	}
+
 	function ingest(data: Uint8Array, at: number | undefined, final: boolean) {
 		const text = partial + decoder.decode(data, { stream: !final });
 		const parts = text.split('\n');
 		partial = final ? '' : (parts.pop() ?? '');
 		if (final && parts.length > 0 && parts[parts.length - 1] === '') parts.pop();
-		if (parts.length === 0) return;
-		const added: LogLine[] = [];
-		const addedGroups: LogGroup[] = [];
-		let touched = false;
+		if (parts.length === 0) {
+			if (final) scheduleFlush(true);
+			return;
+		}
 		for (const p of parts) {
 			const line = p.endsWith('\r') ? p.slice(0, -1) : p;
 			const n = ++total;
 			const depth = openStack.length;
 			if (line.startsWith('##[group]')) {
 				const gname = line.slice(9);
-				const id = groups.length + addedGroups.length;
-				addedGroups.push({
+				const id = allGroups.length;
+				allGroups.push({
 					id,
 					name: gname,
 					start: n,
@@ -134,29 +157,26 @@
 					depth,
 					step: depth === 0 ? matchStep(gname) : undefined
 				});
-				added.push({ n, raw: gname, kind: 'group', depth, group: id, at });
+				allLines.push({ n, raw: gname, kind: 'group', depth, group: id, at });
 				openStack.push(id);
 			} else if (line === '##[endgroup]') {
 				const id = openStack.pop();
-				added.push({ n, raw: '', kind: 'endgroup', depth, group: id ?? -1, at });
-				if (id !== undefined) {
-					const g = id < groups.length ? groups[id] : addedGroups[id - groups.length];
-					if (g) {
-						g.end = n;
-						touched = true;
-					}
-				}
+				allLines.push({ n, raw: '', kind: 'endgroup', depth, group: id ?? -1, at });
+				if (id !== undefined && allGroups[id]) allGroups[id] = { ...allGroups[id], end: n };
 			} else {
 				const m = /^##\[(error|warning|notice|debug)\](.*)$/.exec(line);
-				if (m) added.push({ n, raw: m[2], kind: m[1] as LineKind, depth, group: -1, at });
-				else added.push({ n, raw: line, kind: 'text', depth, group: -1, at });
+				if (m) allLines.push({ n, raw: m[2], kind: m[1] as LineKind, depth, group: -1, at });
+				else allLines.push({ n, raw: line, kind: 'text', depth, group: -1, at });
 			}
 		}
-		lines = lines.concat(added);
-		if (addedGroups.length > 0 || touched) groups = groups.concat(addedGroups);
+		scheduleFlush(final);
 	}
 
 	function reset() {
+		if (flushHandle) cancelAnimationFrame(flushHandle);
+		flushHandle = 0;
+		allLines = [];
+		allGroups = [];
 		lines = [];
 		groups = [];
 		closed = {};
@@ -337,6 +357,9 @@
 		});
 	});
 
+	// Live jobs get a fixed pane, lines never resize the page
+	const live = $derived(follow && !finished);
+
 	function stepByNumber(n: number): JobStep | undefined {
 		return job.steps.find((s) => s.number === n);
 	}
@@ -381,30 +404,14 @@
 		`${ESC}\\[[0-9;?]*[ -/]*[@-~]|${ESC}\\][^${BEL}${ESC}]*(?:${BEL}|${ESC}\\\\)?`,
 		'g'
 	);
-	const BASE = [
-		'#6b7280',
-		'#f87171',
-		'#4ade80',
-		'#facc15',
-		'#60a5fa',
-		'#c084fc',
-		'#22d3ee',
-		'#e5e7eb'
-	];
-	const BRIGHT = [
-		'#9ca3af',
-		'#fca5a5',
-		'#86efac',
-		'#fde047',
-		'#93c5fd',
-		'#d8b4fe',
-		'#67e8f9',
-		'#ffffff'
-	];
+
+	// Sixteen named colors come from the theme style block
+	function ansiColor(n: number): string {
+		return `var(--ansi-${n})`;
+	}
 
 	function xterm(n: number): string {
-		if (n < 8) return BASE[n];
-		if (n < 16) return BRIGHT[n - 8];
+		if (n < 16) return ansiColor(n);
 		if (n < 232) {
 			const i = n - 16;
 			const v = (x: number) => (x === 0 ? 0 : 55 + x * 40);
@@ -429,11 +436,11 @@
 			else if (c === 22) s.bold = s.dim = false;
 			else if (c === 23) s.italic = false;
 			else if (c === 24) s.underline = false;
-			else if (c >= 30 && c <= 37) s.fg = BASE[c - 30];
-			else if (c >= 90 && c <= 97) s.fg = BRIGHT[c - 90];
+			else if (c >= 30 && c <= 37) s.fg = ansiColor(c - 30);
+			else if (c >= 90 && c <= 97) s.fg = ansiColor(c - 90 + 8);
 			else if (c === 39) s.fg = '';
-			else if (c >= 40 && c <= 47) s.bg = BASE[c - 40];
-			else if (c >= 100 && c <= 107) s.bg = BRIGHT[c - 100];
+			else if (c >= 40 && c <= 47) s.bg = ansiColor(c - 40);
+			else if (c >= 100 && c <= 107) s.bg = ansiColor(c - 100 + 8);
 			else if (c === 49) s.bg = '';
 			else if (c === 38 || c === 48) {
 				let color = '';
@@ -484,13 +491,13 @@
 	function kindClass(kind: LineKind): string {
 		switch (kind) {
 			case 'error':
-				return 'bg-red-500/10 text-red-300';
+				return 'bg-destructive/10 text-destructive';
 			case 'warning':
-				return 'bg-amber-500/10 text-amber-200';
+				return 'bg-warning/10 text-warning';
 			case 'notice':
-				return 'text-sky-300';
+				return 'text-info';
 			case 'debug':
-				return 'text-white/40';
+				return 'text-muted-foreground/70';
 			default:
 				return '';
 		}
@@ -512,16 +519,14 @@
 	}
 </script>
 
-<div class="overflow-hidden rounded-lg border bg-[#0d1117] text-[#e6edf3]">
-	<div
-		class="flex flex-wrap items-center gap-2 border-b border-white/10 bg-[#161b22] px-3 py-2 text-xs"
-	>
+<div class="job-log overflow-hidden rounded-lg border bg-card text-foreground">
+	<div class="flex flex-wrap items-center gap-2 border-b bg-muted/50 px-3 py-2 text-xs">
 		<div class="relative w-full sm:w-56">
-			<Search class="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-white/40" />
+			<Search class="absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
 			<Input
 				bind:value={query}
 				placeholder="Search log"
-				class="border-white/15 bg-white/5 pl-8 text-inherit placeholder:text-white/30"
+				class="h-8 pl-8"
 				aria-label="Search log"
 				onkeydown={(e) => {
 					if (e.key === 'Enter') {
@@ -532,13 +537,12 @@
 			/>
 		</div>
 		{#if needle}
-			<span class="text-white/50 tabular-nums"
+			<span class="text-muted-foreground tabular-nums"
 				>{matches.length ? matchIndex + 1 : 0} / {matches.length}</span
 			>
 			<Button
-				variant="ghost"
-				size="icon"
-				class="text-inherit hover:bg-white/10 hover:text-inherit"
+				variant="ghost-muted"
+				size="icon-sm"
 				onclick={() => jump(-1)}
 				disabled={!matches.length}
 				title="Previous match"
@@ -547,9 +551,8 @@
 				<ChevronUp />
 			</Button>
 			<Button
-				variant="ghost"
-				size="icon"
-				class="text-inherit hover:bg-white/10 hover:text-inherit"
+				variant="ghost-muted"
+				size="icon-sm"
 				onclick={() => jump(1)}
 				disabled={!matches.length}
 				title="Next match"
@@ -560,29 +563,30 @@
 		{/if}
 		<div class="ml-auto flex items-center gap-1">
 			{#if streaming && !finished}
-				<span class="mr-1 inline-flex items-center gap-1 text-white/50"
+				<span class="mr-1 inline-flex items-center gap-1 text-muted-foreground"
 					><Loader2 class="size-3 animate-spin" />Live</span
 				>
 			{/if}
-			<span class="mr-1 hidden text-white/40 tabular-nums sm:inline"
+			<span
+				class="mr-1 hidden min-w-30 text-right text-muted-foreground tabular-nums sm:inline"
 				>{lines.length.toLocaleString()} lines</span
 			>
 			<Button
-				variant="ghost"
-				class="text-inherit hover:bg-white/10 hover:text-inherit"
+				variant="ghost-muted"
+				size="sm"
 				onclick={() => setAll(true)}
 				disabled={groups.length === 0}>Expand all</Button
 			>
 			<Button
-				variant="ghost"
-				class="text-inherit hover:bg-white/10 hover:text-inherit"
+				variant="ghost-muted"
+				size="sm"
 				onclick={() => setAll(false)}
 				disabled={groups.length === 0}>Collapse all</Button
 			>
 			<Button
-				variant="ghost"
-				size="icon"
-				class={cn('text-inherit hover:bg-white/10 hover:text-inherit', showTimes && 'bg-white/15')}
+				variant="ghost-muted"
+				size="icon-sm"
+				class={cn(showTimes && 'bg-muted text-foreground')}
 				onclick={() => (showTimes = !showTimes)}
 				title="Toggle timestamps"
 				aria-label="Toggle timestamps"
@@ -592,9 +596,8 @@
 			</Button>
 			{#if rawUrl}
 				<Button
-					variant="ghost"
-					size="icon"
-					class="text-inherit hover:bg-white/10 hover:text-inherit"
+					variant="ghost-muted"
+					size="icon-sm"
 					href={rawUrl}
 					download=""
 					title="Download raw log"
@@ -604,9 +607,8 @@
 				</Button>
 			{:else if lines.length > 0}
 				<Button
-					variant="ghost"
-					size="icon"
-					class="text-inherit hover:bg-white/10 hover:text-inherit"
+					variant="ghost-muted"
+					size="icon-sm"
 					onclick={download}
 					title="Download raw log"
 					aria-label="Download raw log"
@@ -617,26 +619,32 @@
 		</div>
 	</div>
 
-	{#if error}
-		<div class="border-b border-white/10 bg-red-500/10 px-3 py-1.5 text-xs text-red-300">
-			Log stream interrupted: {error}{follow ? ', reconnecting' : ''}
-		</div>
-	{/if}
-	{#if truncated > 0}
-		<div class="border-b border-white/10 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200">
-			Showing the last {MAX_RENDER.toLocaleString()} of {visible.length.toLocaleString()} lines. Download
-			the raw log for everything.
-		</div>
-	{/if}
-
 	<div class="relative">
+		{#if error || truncated > 0}
+			<div class="absolute inset-x-0 top-0 z-10 space-y-px">
+				{#if error}
+					<div class="bg-destructive/10 px-3 py-1.5 text-xs text-destructive backdrop-blur-sm">
+						Log stream interrupted: {error}{follow ? ', reconnecting' : ''}
+					</div>
+				{/if}
+				{#if truncated > 0}
+					<div class="bg-warning/10 px-3 py-1.5 text-xs text-warning backdrop-blur-sm">
+						Showing the last {MAX_RENDER.toLocaleString()} of {visible.length.toLocaleString()} lines.
+						Download the raw log for everything.
+					</div>
+				{/if}
+			</div>
+		{/if}
 		<div
 			bind:this={container}
 			onscroll={onScroll}
-			class="relative max-h-[70vh] min-h-32 overflow-auto py-1 font-mono text-xs leading-5"
+			class={cn(
+				'log-pane relative overflow-auto py-1 font-mono text-xs leading-5',
+				live ? 'h-[70vh]' : 'max-h-[70vh] min-h-32'
+			)}
 		>
 			{#if rendered.length === 0}
-				<div class="px-4 py-6 text-sm text-white/50">
+				<div class="px-4 py-6 text-sm text-muted-foreground">
 					{streaming
 						? 'Waiting for output'
 						: finished
@@ -653,29 +661,29 @@
 					<div
 						id="{prefix}L{l.n}"
 						class={cn(
-							'flex items-center pr-3 hover:bg-white/5',
-							highlight === l.n && 'bg-sky-500/15',
-							matchSet.has(l.n) && 'bg-yellow-500/10'
+							'flex items-center pr-3 hover:bg-muted/40',
+							highlight === l.n && 'bg-primary/10',
+							matchSet.has(l.n) && 'bg-warning/15'
 						)}
 						style="padding-left: {l.depth * 16}px"
 					>
 						<a
 							href="#L{l.n}"
-							class="w-12 shrink-0 pr-2 text-right text-white/30 tabular-nums select-none hover:text-white/70"
+							class="w-12 shrink-0 pr-2 text-right text-muted-foreground/60 tabular-nums select-none hover:text-foreground"
 							onclick={(e) => selectLine(e, l.n)}>{l.n}</a
 						>
 						{#if showTimes}
-							<span class="w-20 shrink-0 text-white/30 tabular-nums">{timeOf(l)}</span>
+							<span class="w-20 shrink-0 text-muted-foreground/60 tabular-nums">{timeOf(l)}</span>
 						{/if}
 						<button
 							type="button"
-							class="flex min-w-0 flex-1 items-center gap-1.5 text-left font-medium text-white/90"
+							class="flex min-w-0 flex-1 items-center gap-1.5 text-left font-medium"
 							onclick={() => toggle(l.group)}
 							aria-expanded={open}
 						>
 							<ChevronRight
 								class={cn(
-									'size-3.5 shrink-0 text-white/50 transition-transform',
+									'size-3.5 shrink-0 text-muted-foreground transition-transform',
 									open && 'rotate-90'
 								)}
 							/>
@@ -684,7 +692,7 @@
 							{/if}
 							<span class="truncate">{l.raw}</span>
 							{#if ms !== undefined}
-								<span class="ml-auto pl-3 font-normal text-white/40 tabular-nums"
+								<span class="ml-auto pl-3 font-normal text-muted-foreground tabular-nums"
 									>{formatDuration(ms)}</span
 								>
 							{/if}
@@ -694,20 +702,20 @@
 					<div
 						id="{prefix}L{l.n}"
 						class={cn(
-							'flex items-start pr-3 hover:bg-white/5',
+							'flex items-start pr-3 hover:bg-muted/40',
 							kindClass(l.kind),
-							highlight === l.n && 'bg-sky-500/15',
-							matchSet.has(l.n) && 'bg-yellow-500/10'
+							highlight === l.n && 'bg-primary/10',
+							matchSet.has(l.n) && 'bg-warning/15'
 						)}
 						style="padding-left: {l.depth * 16}px"
 					>
 						<a
 							href="#L{l.n}"
-							class="w-12 shrink-0 pr-2 text-right text-white/30 tabular-nums select-none hover:text-white/70"
+							class="w-12 shrink-0 pr-2 text-right text-muted-foreground/60 tabular-nums select-none hover:text-foreground"
 							onclick={(e) => selectLine(e, l.n)}>{l.n}</a
 						>
 						{#if showTimes}
-							<span class="w-20 shrink-0 text-white/30 tabular-nums">{timeOf(l)}</span>
+							<span class="w-20 shrink-0 text-muted-foreground/60 tabular-nums">{timeOf(l)}</span>
 						{/if}
 						<span class="min-w-0 flex-1 break-all whitespace-pre-wrap"
 							>{#if l.kind !== 'text'}<span class="font-semibold">{kindPrefix(l.kind)}</span
@@ -726,3 +734,48 @@
 		{/if}
 	</div>
 </div>
+
+<style>
+	/* Named ansi colors per theme, the primer terminal palettes */
+	.job-log {
+		--ansi-0: #24292f;
+		--ansi-1: #cf222e;
+		--ansi-2: #116329;
+		--ansi-3: #7d4e00;
+		--ansi-4: #0969da;
+		--ansi-5: #8250df;
+		--ansi-6: #1b7c83;
+		--ansi-7: #6e7781;
+		--ansi-8: #57606a;
+		--ansi-9: #a40e26;
+		--ansi-10: #1a7f37;
+		--ansi-11: #633c01;
+		--ansi-12: #218bff;
+		--ansi-13: #a475f9;
+		--ansi-14: #3192aa;
+		--ansi-15: #8c959f;
+	}
+	:global(.dark) .job-log {
+		--ansi-0: #6b7280;
+		--ansi-1: #f87171;
+		--ansi-2: #4ade80;
+		--ansi-3: #facc15;
+		--ansi-4: #60a5fa;
+		--ansi-5: #c084fc;
+		--ansi-6: #22d3ee;
+		--ansi-7: #e5e7eb;
+		--ansi-8: #9ca3af;
+		--ansi-9: #fca5a5;
+		--ansi-10: #86efac;
+		--ansi-11: #fde047;
+		--ansi-12: #93c5fd;
+		--ansi-13: #d8b4fe;
+		--ansi-14: #67e8f9;
+		--ansi-15: #ffffff;
+	}
+	/* Pane scrolls alone, the page never follows */
+	.log-pane {
+		overflow-anchor: none;
+		overscroll-behavior: contain;
+	}
+</style>

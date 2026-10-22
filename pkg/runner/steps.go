@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"os"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -29,13 +30,45 @@ type stepSpec struct {
 	With             map[string]string
 	ContinueOnError  bool
 	TimeoutMinutes   int32
+	// Expression forms evaluated per step when set
+	ContinueOnErrorExpr string
+	TimeoutMinutesExpr  string
 }
 
 func taskStepSpec(st *v1.TaskStep) stepSpec {
 	return stepSpec{
 		ID: st.Id, Name: st.Name, Uses: st.Uses, Run: st.Run, Shell: st.Shell, WorkingDirectory: st.WorkingDirectory,
 		If: st.Condition, Env: st.Env, With: st.With, ContinueOnError: st.ContinueOnError, TimeoutMinutes: st.TimeoutMinutes,
+		ContinueOnErrorExpr: st.GetContinueOnErrorExpr(), TimeoutMinutesExpr: st.GetTimeoutMinutesExpr(),
 	}
+}
+
+// Literal or evaluated continue-on-error
+func (st stepSpec) continueOnError(ectx *exprContext) (bool, error) {
+	if strings.TrimSpace(st.ContinueOnErrorExpr) == "" {
+		return st.ContinueOnError, nil
+	}
+	v, err := evalExpr(st.ContinueOnErrorExpr, ectx)
+	if err != nil {
+		return false, fmt.Errorf("continue-on-error: %w", err)
+	}
+	return truthy(v), nil
+}
+
+// Literal or evaluated timeout-minutes, zero means the job limit
+func (st stepSpec) timeoutMinutes(ectx *exprContext) (int32, error) {
+	if strings.TrimSpace(st.TimeoutMinutesExpr) == "" {
+		return st.TimeoutMinutes, nil
+	}
+	v, err := evalExpr(st.TimeoutMinutesExpr, ectx)
+	if err != nil {
+		return 0, fmt.Errorf("timeout-minutes: %w", err)
+	}
+	n := toNumber(v)
+	if n != n || n < 0 {
+		return 0, fmt.Errorf("timeout-minutes: %q is not a number", stringify(v))
+	}
+	return int32(n), nil
 }
 
 // Display name the hosted runner gives a step without one
@@ -251,6 +284,19 @@ func (j *job) runStep(ctx context.Context, i int, ts *v1.TaskStep) {
 		name = defaultStepName(st)
 	}
 	j.nameStep(row, name)
+	continueOnError, err := st.continueOnError(ectx)
+	var limit int32
+	if err == nil {
+		limit, err = st.timeoutMinutes(ectx)
+	}
+	if err != nil {
+		j.log.Line("##[group]%s", name)
+		j.fail(row, "step %q: %v", name, err)
+		j.log.Line("##[endgroup]")
+		j.finishStep(row, st.ID, "failure", "failure", nil)
+		j.sync(ctx)
+		return
+	}
 	j.setStep(row, v1.ActionsStatus_ACTIONS_STATUS_RUNNING, 0)
 	j.sync(ctx)
 	if j.hardCancel.Load() || (!wasStopped && j.stopped()) {
@@ -259,7 +305,6 @@ func (j *job) runStep(ctx context.Context, i int, ts *v1.TaskStep) {
 	}
 	j.log.Line("##[group]%s", name)
 	started := time.Now()
-	limit := st.TimeoutMinutes
 	if wasStopped && (limit <= 0 || limit > postStepMinutes) {
 		limit = postStepMinutes
 	}
@@ -285,7 +330,7 @@ func (j *job) runStep(ctx context.Context, i int, ts *v1.TaskStep) {
 	}
 	j.log.Line("##[endgroup]")
 	conclusion := outcome
-	if outcome == "failure" && st.ContinueOnError {
+	if outcome == "failure" && continueOnError {
 		conclusion = "success"
 	}
 	if conclusion == "failure" {
@@ -391,9 +436,27 @@ func (j *job) newCommandWriter(out io.Writer, step int32, outputs, state map[str
 		onMask:   j.log.AddMask,
 		onOutput: func(k, v string) { outputs[k] = v },
 		onState:  func(k, v string) { state[k] = v },
+		matchers: j.matchers,
+		readFile: j.readExecFile,
+		fileBase: j.pathOf(j.workspace),
 		debug:    j.debugEnabled(),
 		echo:     j.debugEnabled(),
 	}
+}
+
+// Reads a file a step named in the executor view
+func (j *job) readExecFile(p string) ([]byte, error) {
+	host, err := j.hostPattern(p)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := j.rel(host); err == nil && j.root != nil {
+		return j.readFile(host)
+	}
+	if j.confined {
+		return nil, fmt.Errorf("path %q is outside the job directory", p)
+	}
+	return os.ReadFile(host)
 }
 
 // ACTIONS_STEP_DEBUG as a secret or variable turns debug output on
@@ -474,7 +537,7 @@ func (j *job) runScript(ctx context.Context, script, shell, dir string, env map[
 	for i := range cmd {
 		cmd[i] = strings.ReplaceAll(cmd[i], "{0}", target)
 	}
-	return j.exec.Exec(ctx, execSpec{Cmd: j.withPath(cmd), Env: envSlice(env), Dir: dir, Out: out})
+	return j.exec.Exec(ctx, execSpec{Cmd: cmd, Env: envSlice(env), Dir: dir, Out: out, Path: j.pathAdds()})
 }
 
 func (j *job) bashAvailable(ctx context.Context) bool {
@@ -491,17 +554,6 @@ func (j *job) bashAvailable(ctx context.Context) bool {
 		j.hasBash.Store(2)
 	}
 	return ok
-}
-
-// GITHUB_PATH additions are prepended through a tiny sh wrapper
-func (j *job) withPath(cmd []string) []string {
-	j.mu.Lock()
-	adds := append([]string(nil), j.path...)
-	j.mu.Unlock()
-	if len(adds) == 0 {
-		return cmd
-	}
-	return append([]string{"/bin/sh", "-c", `export PATH="$0:$PATH"; exec "$@"`, strings.Join(adds, ":")}, cmd...)
 }
 
 func (j *job) writeTemp(name, content string) (string, error) {

@@ -116,6 +116,47 @@ export function resolveRelative(base: string | undefined, href: string): string 
 	}
 }
 
+// Resolves each srcset url, data uris leave it untouched
+export function resolveSrcset(base: string | undefined, srcset: string): string {
+	if (!base || /(^|,)\s*data:/i.test(srcset)) return srcset;
+	return srcset
+		.split(',')
+		.map((candidate) => {
+			const parts = candidate.trim().split(/\s+/);
+			if (!parts[0]) return '';
+			parts[0] = resolveRelative(base, parts[0]);
+			return parts.join(' ');
+		})
+		.filter(Boolean)
+		.join(', ');
+}
+
+const URL_ATTRS = ['src', 'poster', 'href'] as const;
+
+// Relative paths in raw html resolve like markdown ones
+function resolveEmbedded(root: HTMLElement, opts: MarkdownOptions): void {
+	const mediaBase = opts.rawBase ?? opts.baseHref;
+	for (const el of root.querySelectorAll<HTMLElement>('[src],[srcset],[poster],[href]')) {
+		const link = el.tagName === 'A';
+		const base = link ? opts.baseHref : mediaBase;
+		for (const attr of URL_ATTRS) {
+			const value = el.getAttribute(attr);
+			if (value === null) continue;
+			const target = resolveRelative(base, value.trim());
+			if (target !== value) el.setAttribute(attr, target);
+		}
+		const srcset = el.getAttribute('srcset');
+		if (srcset !== null) {
+			const target = resolveSrcset(base, srcset);
+			if (target !== srcset) el.setAttribute('srcset', target);
+		}
+		if (link) {
+			const href = el.getAttribute('href') ?? '';
+			if (SCHEME.test(href) || href.startsWith('//')) el.setAttribute('rel', 'nofollow noopener');
+		}
+	}
+}
+
 export function slugify(text: string): string {
 	return text
 		.toLowerCase()
@@ -134,7 +175,18 @@ function codeLang(lang: string | undefined): string {
 
 const PURIFY_CONFIG = {
 	USE_PROFILES: { html: true },
-	FORBID_TAGS: ['style', 'form', 'script', 'iframe', 'object', 'embed'],
+	FORBID_TAGS: [
+		'style',
+		'form',
+		'script',
+		'iframe',
+		'object',
+		'embed',
+		'noscript',
+		'template',
+		'svg',
+		'math'
+	],
 	FORBID_ATTR: ['style'],
 	ADD_ATTR: ['align'],
 	ALLOW_UNKNOWN_PROTOCOLS: false
@@ -197,6 +249,9 @@ export async function renderMarkdown(source: string, opts: MarkdownOptions = {})
 	});
 
 	const html = await marked.parse(source ?? '');
-	if (typeof window === 'undefined') return html;
-	return DOMPurify.sanitize(html, PURIFY_CONFIG);
+	// Browser only, unsanitized html never leaves here
+	if (typeof window === 'undefined') return '';
+	const body = DOMPurify.sanitize(html, { ...PURIFY_CONFIG, RETURN_DOM: true }) as HTMLElement;
+	resolveEmbedded(body, opts);
+	return body.innerHTML;
 }

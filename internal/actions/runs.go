@@ -17,6 +17,7 @@ import (
 	"github.com/nickheyer/distroface/internal/forge"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/webhook"
+	"github.com/nickheyer/distroface/pkg/expr"
 )
 
 // Resolved job stored on the row, enough to build a task later
@@ -29,6 +30,8 @@ type jobDefinition struct {
 	ReadOnly bool `json:"read_only,omitempty"`
 	// Planning failure recorded at run creation, fails the job on advance
 	Error string `json:"error,omitempty"`
+	// Matrix awaits needs outputs, expanded on advance
+	Deferred bool `json:"deferred,omitempty"`
 }
 
 func decodeDefinition(j *db.ActionsJob) (*jobDefinition, error) {
@@ -164,7 +167,7 @@ func (m *Manager) expandCalls(ctx context.Context, repo *db.GitRepository, f *Wo
 	return ExpandCalls(wf, callLocation(repo, f.Path, commit), load, ectx)
 }
 
-// Expands matrices and writes one waiting job row per combination
+// Expands matrices into waiting rows, needs bound ones defer
 func (m *Manager) planJobs(wf *Workflow, base *ExprContext) []*db.ActionsJob {
 	var out []*db.ActionsJob
 	for _, key := range wf.JobOrder {
@@ -174,69 +177,188 @@ func (m *Manager) planJobs(wf *Workflow, base *ExprContext) []*db.ActionsJob {
 		if len(job.Calls) > 0 {
 			wenv = job.WorkflowEnv
 		}
-		readOnly := job.Permissions.ReadOnly()
+		def := jobDefinition{Job: job, WorkflowEnv: wenv, WorkflowName: wf.Name, ReadOnly: job.Permissions.ReadOnly()}
 		if job.Error != "" {
-			def := jobDefinition{Job: job, WorkflowEnv: wenv, WorkflowName: wf.Name, ReadOnly: readOnly, Error: job.Error}
-			out = append(out, plannedFailure(job, key, def))
+			def.Error = job.Error
+			out = append(out, placeholderRow(job, key, def))
 			continue
 		}
-		strategy := job.Strategy
-		var planErr error
-		if strategy != nil && strategy.MatrixExpr != "" {
-			if strategy, planErr = matrixFromExpr(strategy, base); planErr != nil {
-				strategy = nil
-			}
+		strategy, deferred, err := resolveStrategy(job.Strategy, base)
+		if err == nil && deferred {
+			def.Deferred = true
+			out = append(out, placeholderRow(job, key, def))
+			continue
 		}
-		combos, order, err := MatrixCombinations(strategy)
-		if planErr == nil {
-			planErr = err
+		var rows []*db.ActionsJob
+		if err == nil {
+			rows, err = m.matrixRows(job, def, strategy, base)
 		}
-		if planErr != nil {
+		if err != nil {
 			// One failed job carries the reason instead of a silent log line
-			def := jobDefinition{Job: job, WorkflowEnv: wenv, WorkflowName: wf.Name, ReadOnly: readOnly, Error: fmt.Sprintf("matrix: %v", planErr)}
-			out = append(out, plannedFailure(job, key, def))
+			def.Error = fmt.Sprintf("matrix: %v", err)
+			out = append(out, placeholderRow(job, key, def))
 			continue
 		}
-		maxParallel := 0
-		if job.Strategy != nil {
-			maxParallel = job.Strategy.MaxParallel
-		}
-		for _, combo := range combos {
-			ectx := *base
-			ectx.Matrix = callMatrix(job.Calls, combo)
-			ectx.Env = mergeEnv(wenv, job.Env)
-			name, err := Interpolate(job.Name, &ectx)
-			if err != nil || name == "" {
-				name = job.Name
-			}
-			if job.Name == job.Key || !strings.Contains(job.Name, "matrix") {
-				name += MatrixSuffix(combo, order)
-			}
-			def := jobDefinition{Job: job, WorkflowEnv: wenv, MatrixOrder: order, WorkflowName: wf.Name, ReadOnly: readOnly}
-			row := &db.ActionsJob{
-				ID: uuid.New().String(), Name: name, JobKey: key + MatrixSuffix(combo, order), MatrixGroup: key, MaxParallel: maxParallel,
-				RunsOn: mustJSON(m.resolveRunsOn(job.RunsOn, &ectx)), Needs: mustJSON(orEmpty(job.Needs)),
-				Matrix: mustJSON(orEmptyMap(combo)), Status: StatusWaiting, Attempt: 1,
-				Steps: "[]", Outputs: "{}", Annotations: "[]", Definition: mustJSON(def),
-			}
-			if job.Concurrency != nil {
-				if group, err := Interpolate(job.Concurrency.Group, &ectx); err == nil && !HasDeferred(group) {
-					row.Concurrency = strings.TrimSpace(group)
-				}
-			}
-			out = append(out, row)
-		}
+		out = append(out, rows...)
 	}
 	return out
 }
 
-// Row for a job that failed planning, it completes on the first advance
-func plannedFailure(job *Job, key string, def jobDefinition) *db.ActionsJob {
+// One row per combination with the resolved strategy
+func (m *Manager) matrixRows(job *Job, def jobDefinition, strategy *Strategy, base *ExprContext) ([]*db.ActionsJob, error) {
+	combos, order, err := MatrixCombinations(strategy)
+	if err != nil {
+		return nil, err
+	}
+	resolved := *job
+	resolved.Strategy = strategy
+	def.Job, def.MatrixOrder, def.Deferred = &resolved, order, false
+	maxParallel := 0
+	if strategy != nil {
+		maxParallel = strategy.MaxParallel
+	}
+	key := job.Key
+	var out []*db.ActionsJob
+	for _, combo := range combos {
+		ectx := *base
+		ectx.Matrix = callMatrix(job.Calls, combo)
+		ectx.Env = mergeEnv(def.WorkflowEnv, job.Env)
+		name, err := Interpolate(job.Name, &ectx)
+		if err != nil || name == "" {
+			name = job.Name
+		}
+		if job.Name == job.Key || !strings.Contains(job.Name, "matrix") {
+			name += MatrixSuffix(combo, order)
+		}
+		row := &db.ActionsJob{
+			ID: uuid.New().String(), Name: name, JobKey: key + MatrixSuffix(combo, order), MatrixGroup: key, MaxParallel: maxParallel,
+			RunsOn: mustJSON(m.resolveRunsOn(job.RunsOn, &ectx)), Needs: mustJSON(orEmpty(job.Needs)),
+			Matrix: mustJSON(orEmptyMap(combo)), Status: StatusWaiting, Attempt: 1,
+			Steps: "[]", Outputs: "{}", Annotations: "[]", Definition: mustJSON(def),
+		}
+		if job.Concurrency != nil {
+			if group, err := Interpolate(job.Concurrency.Group, &ectx); err == nil && !HasDeferred(group) {
+				row.Concurrency = strings.TrimSpace(group)
+			}
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+// Single row for a failed or deferred job
+func placeholderRow(job *Job, key string, def jobDefinition) *db.ActionsJob {
 	return &db.ActionsJob{
 		ID: uuid.New().String(), Name: job.Name, JobKey: key, MatrixGroup: key,
 		RunsOn: "[]", Needs: mustJSON(orEmpty(job.Needs)), Matrix: "{}", Status: StatusWaiting, Attempt: 1,
 		Steps: "[]", Outputs: "{}", Annotations: "[]", Definition: mustJSON(def),
 	}
+}
+
+// Strategy with expressions evaluated, deferred when contexts lack
+func resolveStrategy(st *Strategy, ectx *ExprContext) (*Strategy, bool, error) {
+	if st == nil {
+		return nil, false, nil
+	}
+	out := *st
+	if st.MatrixExpr != "" {
+		expanded, err := matrixFromExpr(st, ectx)
+		if errors.Is(err, ErrDeferred) {
+			return nil, true, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		out = *expanded
+	}
+	if st.FailFastExpr != "" {
+		v, err := Eval(st.FailFastExpr, ectx)
+		if errors.Is(err, ErrDeferred) {
+			return nil, true, nil
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("fail-fast: %w", err)
+		}
+		b := expr.Truthy(v)
+		out.FailFast, out.FailFastExpr = &b, ""
+	}
+	if st.MaxParallelExpr != "" {
+		v, err := Eval(st.MaxParallelExpr, ectx)
+		if errors.Is(err, ErrDeferred) {
+			return nil, true, nil
+		}
+		if err != nil {
+			return nil, false, fmt.Errorf("max-parallel: %w", err)
+		}
+		n := expr.ToNumber(v)
+		if n != n || n < 0 {
+			return nil, false, fmt.Errorf("max-parallel: %q is not a number", stringify(v))
+		}
+		out.MaxParallel, out.MaxParallelExpr = int(n), ""
+	}
+	out.MatrixExpr = ""
+	return &out, false, nil
+}
+
+// Expands a deferred placeholder into its matrix legs
+func (m *Manager) expandDeferred(ctx context.Context, run *db.ActionsRun, placeholder *db.ActionsJob, def *jobDefinition, ectx *ExprContext) ([]*db.ActionsJob, error) {
+	strategy, deferred, err := resolveStrategy(def.Job.Strategy, ectx)
+	if err != nil {
+		return nil, err
+	}
+	if deferred {
+		return nil, errors.New("expression uses a context that is unavailable at the job level")
+	}
+	rows, err := m.matrixRows(def.Job, *def, strategy, ectx)
+	if err != nil {
+		return nil, err
+	}
+	first := rows[0]
+	cols := map[string]any{
+		"name": first.Name, "job_key": first.JobKey, "runs_on": first.RunsOn, "matrix": first.Matrix,
+		"max_parallel": first.MaxParallel, "concurrency": first.Concurrency, "definition": first.Definition,
+	}
+	if err := m.store.UpdateActionsJobColumns(ctx, placeholder.ID, cols); err != nil {
+		return nil, err
+	}
+	// Legs sort right behind the placeholder
+	for i, row := range rows[1:] {
+		row.RunID = run.ID
+		row.CreatedAt = placeholder.CreatedAt.Add(time.Duration(i+1) * time.Microsecond)
+	}
+	if err := m.store.CreateActionsJobs(ctx, rows[1:]); err != nil {
+		return nil, err
+	}
+	return m.store.ListActionsJobs(ctx, run.ID)
+}
+
+// Evaluates job level continue-on-error and timeout-minutes, storing the results
+func (m *Manager) resolveJobSettings(ctx context.Context, j *db.ActionsJob, def *jobDefinition, ectx *ExprContext) error {
+	if def.Job.ContinueOnErrorExpr == "" && def.Job.TimeoutMinutesExpr == "" {
+		return nil
+	}
+	resolved := *def.Job
+	if e := resolved.ContinueOnErrorExpr; e != "" {
+		v, err := Eval(e, ectx)
+		if err != nil {
+			return fmt.Errorf("continue-on-error: %v", err)
+		}
+		resolved.ContinueOnError, resolved.ContinueOnErrorExpr = expr.Truthy(v), ""
+	}
+	if e := resolved.TimeoutMinutesExpr; e != "" {
+		v, err := Eval(e, ectx)
+		if err != nil {
+			return fmt.Errorf("timeout-minutes: %v", err)
+		}
+		n := expr.ToNumber(v)
+		if n != n || n < 0 {
+			return fmt.Errorf("timeout-minutes: %q is not a number", stringify(v))
+		}
+		resolved.TimeoutMinutes, resolved.TimeoutMinutesExpr = int(n), ""
+	}
+	def.Job = &resolved
+	j.Definition = mustJSON(def)
+	return m.store.UpdateActionsJobColumns(ctx, j.ID, map[string]any{"definition": j.Definition})
 }
 
 func orEmpty(s []string) []string {
@@ -263,7 +385,7 @@ func matrixFromExpr(st *Strategy, ectx *ExprContext) (*Strategy, error) {
 	if !ok {
 		return nil, fmt.Errorf("matrix expression must yield an object")
 	}
-	out := &Strategy{Matrix: map[string][]any{}, FailFast: st.FailFast, MaxParallel: st.MaxParallel}
+	out := &Strategy{Matrix: map[string][]any{}, FailFast: st.FailFast, MaxParallel: st.MaxParallel, FailFastExpr: st.FailFastExpr, MaxParallelExpr: st.MaxParallelExpr}
 	for k, val := range obj {
 		switch k {
 		case "include":
@@ -705,6 +827,17 @@ func (m *Manager) advanceRun(ctx context.Context, repo *db.GitRepository, run *d
 			}
 			ectx := m.jobContext(ctx, repo, run, wf, def, j, jobs, outputs, status)
 			ectx.Secrets = nil
+			if def.Deferred {
+				fresh, err := m.expandDeferred(ctx, run, j, def, ectx)
+				if err != nil {
+					m.failJob(ctx, repo, run, j, ConclusionFailure, fmt.Sprintf("matrix: %v", err))
+					changed = true
+					continue
+				}
+				// New rows exist, start the pass over
+				jobs, changed = fresh, true
+				break
+			}
 			ok, err := EvalBool(def.Job.If, ectx)
 			if err != nil {
 				if errors.Is(err, ErrDeferred) {
@@ -721,6 +854,18 @@ func (m *Manager) advanceRun(ctx context.Context, repo *db.GitRepository, run *d
 				m.writeCommitStatus(ctx, repo, run, j, ConclusionSkipped)
 				changed = true
 				continue
+			}
+			if err := m.resolveJobSettings(ctx, j, def, ectx); err != nil {
+				m.failJob(ctx, repo, run, j, ConclusionFailure, err.Error())
+				changed = true
+				continue
+			}
+			// Names over needs outputs resolve now
+			if HasDeferred(j.Name) {
+				if name, err := Interpolate(j.Name, ectx); err == nil && name != "" && !HasDeferred(name) {
+					j.Name = name
+					_ = m.store.UpdateActionsJobColumns(ctx, j.ID, map[string]any{"name": name})
+				}
 			}
 			runsOn := m.resolveRunsOn(def.Job.RunsOn, ectx)
 			if len(runsOn) == 0 {
@@ -774,7 +919,8 @@ func (m *Manager) jobContext(ctx context.Context, repo *db.GitRepository, run *d
 	ectx.GitHub["job"] = baseKey(j)
 	ectx.GitHub["run_attempt"] = float64(j.Attempt)
 	ectx.Matrix = callMatrix(def.Job.Calls, decodeMatrix(j))
-	ectx.Needs = needs
+	ectx.Needs = orMap(needs)
+	ectx.Strategy = strategyContext(def.Job.Strategy, j, jobs)
 	ectx.Status = status
 	ectx.Env = mergeEnv(def.WorkflowEnv, def.Job.Env)
 	if len(def.Job.Calls) > 0 {

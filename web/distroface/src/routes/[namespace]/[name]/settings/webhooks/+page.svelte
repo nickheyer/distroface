@@ -13,12 +13,6 @@
 
 {#if gitRepoStore.repo}
 	<div class="space-y-6">
-		<div>
-			<h2 class="section-title">Webhooks</h2>
-			<p class="section-subtitle">
-				HTTP callbacks for pushes, pull requests, issues, and releases.
-			</p>
-		</div>
 		{#key gitRepoStore.repo.id}
 			<WebhookManager
 				scope={WebhookScope.GIT_REPOSITORY}

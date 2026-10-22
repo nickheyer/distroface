@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -104,6 +105,7 @@ type gitRepoExtras struct {
 	pulls    map[string]int64
 	releases map[string]int32
 	parents  map[string]*storage.GitRepository
+	imports  map[string]*storage.GitImport
 }
 
 func gitLoadExtras(ctx context.Context, store *stores.Store, user *auth.AuthenticatedUser, repos []*storage.GitRepository) *gitRepoExtras {
@@ -126,6 +128,7 @@ func gitLoadExtras(ctx context.Context, store *stores.Store, user *auth.Authenti
 	}
 	ex.issues, ex.pulls, _ = store.CountOpenGitIssues(ctx, ids)
 	ex.releases, _ = store.CountGitReleases(ctx, ids)
+	ex.imports, _ = store.GetGitImportsByRepoIDs(ctx, ids)
 	if len(parentIDs) > 0 {
 		ex.parents, _ = store.GetGitRepositoriesByIDs(ctx, parentIDs)
 	}
@@ -200,6 +203,18 @@ func (s *GitService) gitRepoToProto(ctx context.Context, user *auth.Authenticate
 			out.MirrorSyncing = s.mirrors.IsSyncing("git:" + repo.ID)
 		}
 	}
+	// Finished imports without notes leave no trace on the repository
+	if imp := ex.imports[repo.ID]; imp != nil {
+		notes := mirror.ImportNotes(imp)
+		if mirror.ImportPending(imp) || len(notes) > 0 {
+			out.ImportStatus = &v1.GitImportStatus{
+				Upstream: redactUpstream(imp.Upstream), Phase: imp.Phase, Error: imp.LastError, Notes: notes, UpdatedAt: timestamppb.New(imp.UpdatedAt),
+			}
+			if s.mirrors != nil {
+				out.ImportStatus.Running = s.mirrors.ImportRunning(repo.ID)
+			}
+		}
+	}
 	if detail {
 		if s.mirrors != nil {
 			out.MirrorSshPublicKey = s.mirrors.GitMirrorPublicKey(repo)
@@ -218,6 +233,16 @@ func (s *GitService) gitRepoToProto(ctx context.Context, user *auth.Authenticate
 		}
 	}
 	return out
+}
+
+// Upstream url without any credentials typed into it
+func redactUpstream(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.User == nil {
+		return raw
+	}
+	u.User = nil
+	return u.String()
 }
 
 func (s *GitService) gitReposToProto(ctx context.Context, user *auth.AuthenticatedUser, repos []*storage.GitRepository) []*v1.GitRepository {

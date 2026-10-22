@@ -39,6 +39,8 @@ type executor interface {
 	Start(ctx context.Context) error
 	Exec(ctx context.Context, spec execSpec) (int, error)
 	Has(ctx context.Context, bin string) bool
+	// Absolute path of a binary, empty when missing
+	Which(ctx context.Context, bin string) string
 	Info() executorInfo
 	Kill()
 	Close(ctx context.Context) error
@@ -54,6 +56,8 @@ type job struct {
 	workspace  string
 	tempDir    string
 	actionsDir string
+	// Runner wide tool cache that outlives the job
+	toolCache string
 	// Job dir handle that refuses symlink escapes
 	root    *os.Root
 	exec    executor
@@ -74,7 +78,11 @@ type job struct {
 
 	nodeCmds    map[int]*nodeCmd
 	dockerAuths map[string]dockerAuth
-	prepared    map[string]*actionDef
+	// Pull only logins from container and service credentials
+	imageAuths map[string]dockerAuth
+	prepared   map[string]*actionDef
+	// Step registered problem matchers, kept job wide
+	matchers *matcherSet
 	// GITHUB_ACTION of each task step, numbered up front
 	stepActions []string
 	// Task steps whose action declares a pre phase, in step order
@@ -122,7 +130,9 @@ func newJob(r *Runner, task *v1.Task) *job {
 		outputs:     map[string]string{},
 		nodeCmds:    map[int]*nodeCmd{},
 		dockerAuths: map[string]dockerAuth{},
+		imageAuths:  map[string]dockerAuth{},
 		prepared:    map[string]*actionDef{},
+		matchers:    newMatcherSet(),
 	}
 	var ctxJSON struct {
 		GitHub   map[string]any    `json:"github"`
@@ -481,11 +491,17 @@ func (j *job) prepare() error {
 	j.workspace = filepath.Join(dir, name, name)
 	j.tempDir = filepath.Join(dir, "_temp")
 	j.actionsDir = filepath.Join(dir, "_actions")
-	for _, d := range []string{j.workspace, j.tempDir, j.actionsDir, filepath.Join(dir, "_tool"), j.homeDir(), j.workflowDir(), j.fileCommandsDir()} {
+	for _, d := range []string{j.workspace, j.tempDir, j.actionsDir, j.homeDir(), j.workflowDir(), j.fileCommandsDir()} {
 		if err := j.mkdirAll(d); err != nil {
 			return err
 		}
 	}
+	// Shared across jobs like a hosted runner's tool cache
+	j.toolCache = filepath.Join(root, "_tool")
+	if err := os.MkdirAll(j.toolCache, 0o777); err != nil {
+		return fmt.Errorf("tool cache %s: %w", j.toolCache, err)
+	}
+	_ = os.Chmod(j.toolCache, 0o777)
 	if ev, ok := j.github["event"]; ok {
 		raw, _ := json.MarshalIndent(ev, "", "  ")
 		if err := j.writeFile(j.eventPath(), raw, 0o666); err != nil {
@@ -501,11 +517,15 @@ func (j *job) prepare() error {
 	switch {
 	case j.task.ContainerImage != "":
 		image, host = j.task.ContainerImage, false
+		j.addImageAuth(image, j.task.ContainerCredentials)
 	case !ok:
 		image = j.r.cfg.FallbackImage()
 		if len(labels) > 0 {
 			j.log.Line("##[warning]No image mapped for runs-on %s, using %s", strings.Join(labels, ","), image)
 		}
+	}
+	for _, svc := range j.task.Services {
+		j.addImageAuth(svc.Image, svc.Credentials)
 	}
 	if host {
 		if len(j.task.Services) > 0 {
@@ -530,11 +550,30 @@ func (j *job) prepare() error {
 		cli: cli, jobID: j.task.JobId, jobDir: dir, image: image, options: j.task.ContainerOptions,
 		services: j.task.Services, log: j.log, auth: j.pullAuth,
 		externals:  j.r.ext.root,
+		toolCache:  j.toolCache,
 		privileged: j.r.cfg.PrivilegedJobs,
 		hosts:      j.hosts,
 		labels:     j.r.labels(j.task.JobId),
 	})
 	return nil
+}
+
+// Pull only, never written to the docker config
+func (j *job) addImageAuth(image string, c *v1.TaskCredentials) {
+	if c == nil || (c.Username == "" && c.Password == "") {
+		return
+	}
+	j.log.AddMask(c.Password)
+	j.mu.Lock()
+	j.imageAuths[dockerAuthKey(tagHost(image))] = dockerAuth{Username: c.Username, Password: c.Password}
+	j.mu.Unlock()
+}
+
+// GITHUB_PATH entries so far, newest first
+func (j *job) pathAdds() []string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return append([]string(nil), j.path...)
 }
 
 func (j *job) setExecutor(ex executor) {
@@ -645,7 +684,7 @@ func (j *job) exprContext() *exprContext {
 	return &exprContext{
 		github: j.github, env: env, vars: j.task.Variables, secrets: j.task.Secrets, needs: j.needs, matrix: j.matrix,
 		steps: stepsCopy, inputs: j.inputs, job: jobCtx, strategy: j.strategy, status: status, workspace: j.workspace, workspaceFS: wsFS,
-		runner: map[string]any{"os": runnerOS(), "arch": runnerArch(), "name": j.r.cfg.Name, "temp": j.pathOf(j.tempDir), "tool_cache": j.pathOf(filepath.Join(j.dir, "_tool")), "workspace": ws, "debug": runnerDebug(j.debugEnabled())},
+		runner: map[string]any{"os": runnerOS(), "arch": runnerArch(), "name": j.r.cfg.Name, "temp": j.pathOf(j.tempDir), "tool_cache": j.pathOf(j.toolCache), "workspace": ws, "debug": runnerDebug(j.debugEnabled())},
 	}
 }
 
@@ -712,7 +751,7 @@ func (j *job) baseEnv() map[string]string {
 		"GITHUB_ACTION": "", "GITHUB_ACTION_PATH": "", "GITHUB_ACTION_REPOSITORY": "", "GITHUB_ACTION_REF": "",
 		"GITHUB_RETENTION_DAYS": "", "GITHUB_ACTIONS_RUNNER": "dfcli",
 		"RUNNER_OS": runnerOS(), "RUNNER_ARCH": runnerArch(), "RUNNER_NAME": j.r.cfg.Name, "RUNNER_TEMP": j.pathOf(j.tempDir),
-		"RUNNER_TOOL_CACHE": j.pathOf(filepath.Join(j.dir, "_tool")), "RUNNER_WORKSPACE": j.pathOf(filepath.Dir(j.workspace)),
+		"RUNNER_TOOL_CACHE": j.pathOf(j.toolCache), "RUNNER_WORKSPACE": j.pathOf(filepath.Dir(j.workspace)),
 		"RUNNER_ENVIRONMENT":    "self-hosted",
 		"DISTROFACE_SERVER_URL": j.task.ServerUrl, "DISTROFACE_REPOSITORY": j.task.RepoFullName,
 	}

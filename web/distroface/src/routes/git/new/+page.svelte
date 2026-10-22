@@ -17,6 +17,7 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
+	import PasswordInput from '$lib/components/password-input.svelte';
 	import RepoNameFields from '$lib/components/repo-name-fields.svelte';
 	import MirrorConfigFields, {
 		emptyMirrorForm,
@@ -40,8 +41,8 @@
 		},
 		{
 			value: 'import',
-			label: 'Import from another forge',
-			description: 'Mirror plus issues, pulls, labels, and milestones'
+			label: 'Import a repository',
+			description: 'One time copy of an existing repository, a normal repository afterwards'
 		},
 		{
 			value: 'template',
@@ -100,23 +101,34 @@
 	let newMirrorReleases = $state(false);
 	let newMirrorPackages = $state(false);
 	let newMirrorImages = $state('');
-	let newImportMetadata = $state(true);
+	let newImport = $state({
+		upstream: '',
+		username: '',
+		authToken: '',
+		metadata: true,
+		wiki: true,
+		lfs: true
+	});
 	let newTemplate = $state('');
 	let newIncludeLabels = $state(true);
 	let creating = $state(false);
 
 	const ownNamespace = $derived(authStore.user?.username ?? '');
-	const usesMirror = $derived(createKind === 'mirror' || createKind === 'import');
+	const usesMirror = $derived(createKind === 'mirror');
+	const usesImport = $derived(createKind === 'import');
 	const derivedName = $derived(
 		usesMirror
 			? upstreamRepoName(newMirror.upstream, 'git')
-			: createKind === 'template'
-				? upstreamRepoName(newTemplate, 'git')
-				: ''
+			: usesImport
+				? upstreamRepoName(newImport.upstream, 'git')
+				: createKind === 'template'
+					? upstreamRepoName(newTemplate, 'git')
+					: ''
 	);
 	const canSubmit = $derived(
 		nameValid &&
 			(!usesMirror || !!newMirror.upstream.trim()) &&
+			(!usesImport || !!newImport.upstream.trim()) &&
 			(createKind !== 'template' || !!newTemplate)
 	);
 	// Org pages link here with their namespace, every exit returns there
@@ -167,9 +179,19 @@
 					defaultBranch: newDefaultBranch.trim(),
 					type: usesMirror ? GitRepoType.MIRROR : GitRepoType.STANDARD,
 					mirror: usesMirror ? mirrorInit(newMirror) : undefined,
-					autoInit: !usesMirror && newAutoInit,
-					gitignoreTemplate: !usesMirror && newAutoInit ? newGitignore : '',
-					license: !usesMirror && newAutoInit ? newLicense : '',
+					importSource: usesImport
+						? {
+								upstream: newImport.upstream.trim(),
+								username: newImport.username.trim(),
+								...(newImport.authToken ? { authToken: newImport.authToken } : {}),
+								metadata: newImport.metadata,
+								wiki: newImport.wiki,
+								lfs: newImport.lfs
+							}
+						: undefined,
+					autoInit: createKind === 'standard' && newAutoInit,
+					gitignoreTemplate: createKind === 'standard' && newAutoInit ? newGitignore : '',
+					license: createKind === 'standard' && newAutoInit ? newLicense : '',
 					mirrorReleases: usesMirror && newMirrorReleases,
 					mirrorImages:
 						usesMirror && newMirrorPackages
@@ -177,8 +199,7 @@
 									.split(/\n+/)
 									.map((s) => s.trim())
 									.filter(Boolean)
-							: [],
-					importMetadata: createKind === 'import' && newImportMetadata
+							: []
 				});
 				created = resp.repository;
 			}
@@ -214,7 +235,7 @@
 {:else}
 	<FormPage
 		title="Create a new repository"
-		description="A repository holds your source history. Create an empty one, mirror an upstream, or start from a template."
+		description="A repository holds your source history. Create an empty one, import or mirror an upstream, or start from a template."
 		backHref={exitHref}
 		backLabel={exitLabel}
 	>
@@ -245,6 +266,58 @@
 
 			{#if usesMirror}
 				<MirrorConfigFields form={newMirror} kind="git" part="source" idPrefix="git-repo-mirror" />
+			{:else if usesImport}
+				<FormField
+					label="Repository to import"
+					id="git-repo-import-upstream"
+					required
+					help="Any https or ssh clone URL, owner/repo works for GitHub, GitLab, and Gitea"
+				>
+					<Input
+						id="git-repo-import-upstream"
+						name="git-repo-import-upstream"
+						bind:value={newImport.upstream}
+						placeholder="https://example.com/owner/project.git"
+						autocomplete="off"
+						data-1p-ignore
+						data-lpignore="true"
+						data-bwignore
+					/>
+				</FormField>
+				<FormField
+					label="Username"
+					id="git-repo-import-username"
+					help="Only for private https upstreams"
+					span="half"
+				>
+					<Input
+						id="git-repo-import-username"
+						name="git-repo-import-username"
+						bind:value={newImport.username}
+						placeholder="username"
+						autocomplete="off"
+						data-1p-ignore
+						data-lpignore="true"
+						data-bwignore
+					/>
+				</FormField>
+				<FormField
+					label="Access token"
+					id="git-repo-import-token"
+					help="Sent as basic auth, forgotten once the import ends"
+					span="half"
+				>
+					<PasswordInput
+						id="git-repo-import-token"
+						name="git-repo-import-token"
+						bind:value={newImport.authToken}
+						placeholder="Token"
+						autocomplete="new-password"
+						data-1p-ignore
+						data-lpignore="true"
+						data-bwignore
+					/>
+				</FormField>
 			{:else if createKind === 'template'}
 				<FormField label="Template repository" id="git-repo-template" required>
 					<AsyncSelect
@@ -419,15 +492,35 @@
 						/>
 					</FormField>
 				{/if}
-				{#if createKind === 'import'}
-					<FormField
-						label="Import metadata"
-						layout="toggle"
-						help="Issues, pull requests, labels, and milestones from the upstream forge"
-					>
-						<Switch bind:checked={newImportMetadata} />
-					</FormField>
-				{/if}
+			</FormSection>
+		{/if}
+
+		{#if usesImport}
+			<FormSection
+				title="What to import"
+				description="Branches and tags always come over. Once the import finishes the repository is yours to push to."
+			>
+				<FormField
+					label="Issues, pull requests, labels, milestones, and releases"
+					layout="toggle"
+					help="Needs a GitHub, GitLab, Gitea, or Forgejo upstream, skipped anywhere else"
+				>
+					<Switch bind:checked={newImport.metadata} />
+				</FormField>
+				<FormField
+					label="Wiki"
+					layout="toggle"
+					help="Fetches the upstream wiki repository when there is one"
+				>
+					<Switch bind:checked={newImport.wiki} />
+				</FormField>
+				<FormField
+					label="LFS objects"
+					layout="toggle"
+					help="Downloads the objects behind LFS pointers through the upstream batch api"
+				>
+					<Switch bind:checked={newImport.lfs} />
+				</FormField>
 			</FormSection>
 		{/if}
 
@@ -442,7 +535,7 @@
 		{#snippet footer()}
 			<Button onclick={createRepo} disabled={creating || !canSubmit}>
 				{#if creating}<Loader2 class="animate-spin" />{/if}
-				{creating ? (usesMirror ? 'Validating' : 'Creating') : 'Create repository'}
+				{creating ? (usesMirror || usesImport ? 'Validating' : 'Creating') : 'Create repository'}
 			</Button>
 			<Button variant="ghost-muted" href={exitHref}>Cancel</Button>
 		{/snippet}

@@ -13,6 +13,7 @@
 	import { resolve } from '$app/paths';
 	import { Badge } from '$lib/components/ui/badge';
 	import MirrorBadge from '$lib/components/mirror-badge.svelte';
+	import { importLabel, importTitle } from '$lib/git-import';
 	import { GitRepoType, Visibility } from '$lib/proto/distroface/v1/types_pb';
 	import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
@@ -73,6 +74,15 @@
 			<Badge variant="outline" title={repo.forkOf}><GitFork />Fork</Badge>
 		{:else if repo.type === GitRepoType.TEMPLATE}
 			<Badge variant="done"><LayoutTemplate />Template</Badge>
+		{/if}
+		{#if repo.importStatus}
+			<MirrorBadge
+				label={importLabel(repo.importStatus)}
+				syncingLabel="Importing"
+				error={repo.importStatus.error}
+				title={importTitle(repo.importStatus, mirrorSyncStore.message('import', repo.id))}
+				syncing={repo.importStatus.running || mirrorSyncStore.syncing('import', repo.id)}
+			/>
 		{/if}
 	</div>
 	{#if repo.description}

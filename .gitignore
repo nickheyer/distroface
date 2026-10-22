@@ -15,6 +15,7 @@ data/
 config.yaml
 **/schemav1.yaml
 
+
 # User-specific files
 *.rsuser
 *.suo
@@ -34,8 +35,6 @@ mono_crash.*
 # Build results
 [Dd]ebug/
 [Dd]ebugPublic/
-[Rr]elease/
-[Rr]eleases/
 x64/
 x86/
 [Ww][Ii][Nn]32/

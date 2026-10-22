@@ -39,6 +39,8 @@
 		scopeId,
 		newHref,
 		editHref,
+    hideHeaderText = false,
+    hideCreateButton = false,
 		emptyDescription = 'Add a webhook to get notified of push, pull, and delete events.',
 		createDescription = 'Receive HTTP POST notifications for events.'
 	}: {
@@ -46,6 +48,8 @@
 		scopeId: string;
 		newHref: string;
 		editHref: (id: string) => string;
+    hideHeaderText?: boolean;
+    hideCreateButton?: boolean;
 		emptyDescription?: string;
 		createDescription?: string;
 	} = $props();
@@ -161,14 +165,18 @@
 
 <div class="space-y-4">
 	<div class="section-header">
-		<div class="min-w-0">
-			<h2 class="section-title">Webhooks</h2>
-			<p class="section-subtitle">{createDescription}</p>
-		</div>
-		<Button class="shrink-0" href={newHref}>
-			<Plus />
-			Add webhook
-		</Button>
+    {#if !hideHeaderText}
+      <div class="min-w-0">
+        <h2 class="section-title">Webhooks</h2>
+        <p class="section-subtitle">{createDescription}</p>
+      </div>
+    {/if}
+    {#if !hideCreateButton}
+      <Button class="shrink-0" href={newHref}>
+        <Plus />
+        Add webhook
+      </Button>
+    {/if}
 	</div>
 
 	<div class="max-w-md">

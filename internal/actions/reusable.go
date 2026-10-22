@@ -147,6 +147,9 @@ func callerCombos(job *Job, ectx *ExprContext) ([]map[string]any, []string, erro
 		}
 		var err error
 		if st, err = matrixFromExpr(st, ectx); err != nil {
+			if errors.Is(err, ErrDeferred) {
+				return nil, nil, errors.New("a matrix over needs outputs cannot drive a reusable workflow call")
+			}
 			return nil, nil, err
 		}
 	}

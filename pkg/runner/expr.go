@@ -112,6 +112,15 @@ func interpolateMap(m map[string]string, c *exprContext) (map[string]string, err
 
 func stringify(v any) string { return expr.Stringify(v) }
 
+func truthy(v any) bool { return expr.Truthy(v) }
+
+func toNumber(v any) float64 { return expr.ToNumber(v) }
+
+// Evaluates one expression, wrapper optional
+func evalExpr(src string, c *exprContext) (any, error) {
+	return expr.Eval(src, c)
+}
+
 // Sha256 over sorted per file digests, empty without matches
 func hashFiles(fsys fs.FS, root string, patterns []string) string {
 	if fsys == nil {

@@ -21,8 +21,11 @@
 		BellRing,
 		Bell,
 		BellOff,
-		ChevronDown
+		ChevronDown,
+		RefreshCw
 	} from '@lucide/svelte';
+	import { toast } from 'svelte-sonner';
+	import { importLabel, importTitle } from '$lib/git-import';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import {
@@ -41,6 +44,7 @@
 	import { GitUnit, WatchMode } from '$lib/proto/distroface/v1/git_pb';
 	import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 	import type { Component } from 'svelte';
+	import { Cancel } from '../ui/alert-dialog';
 
 	let { repo }: { repo: GitRepository } = $props();
 
@@ -62,7 +66,48 @@
 	const isPrivate = $derived(repo.visibility === Visibility.PRIVATE);
 	const isMirror = $derived(repo.type === GitRepoType.MIRROR);
 	const syncing = $derived(repo.mirrorSyncing || mirrorSyncStore.syncing('git', repo.id));
+	const importRunning = $derived(
+		!!repo.importStatus && (repo.importStatus.running || mirrorSyncStore.syncing('import', repo.id))
+	);
 	const actionsEnabled = $derived(configStore.actionsEnabled && repo.units?.actions === true);
+
+	// A finished import changes the repository, reload it
+	$effect(() => {
+		const seq = mirrorSyncStore.finishedSeq;
+		const ev = mirrorSyncStore.lastFinished;
+		if (seq > 0 && ev?.kind === 'import' && ev.repoId === repo.id) {
+			void gitRepoStore.load(namespace, name, true);
+		}
+	});
+
+	let importPending = $state(false);
+	async function retryImport() {
+		if (importPending) return;
+		importPending = true;
+		try {
+			await rpcClient.git.syncGitRepository({ namespace, name });
+			toast.success('Import resumed');
+			await gitRepoStore.load(namespace, name, true);
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			importPending = false;
+		}
+	}
+
+	async function dismissImport() {
+		if (importPending) return;
+		importPending = true;
+		try {
+			await rpcClient.git.dismissGitImport({ namespace, name });
+			toast.success('Import dismissed');
+			await gitRepoStore.load(namespace, name, true);
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			importPending = false;
+		}
+	}
 
 	type Tab = {
 		key: string;
@@ -269,6 +314,35 @@
 					<Badge variant="done" class="shrink-0">
 						<LayoutTemplate />Template
 					</Badge>
+				{/if}
+				{#if repo.importStatus}
+					<MirrorBadge
+						label={importLabel(repo.importStatus)}
+						syncingLabel="Importing"
+						error={repo.importStatus.error}
+						title={importTitle(repo.importStatus, mirrorSyncStore.message('import', repo.id))}
+						syncing={importRunning}
+					/>
+					{#if gitRepoStore.canAdmin && !importRunning}
+						{#if repo.importStatus.phase !== 'done'}
+							<Button
+								variant="ghost-muted"
+								size="sm"
+								onclick={retryImport}
+								disabled={importPending}
+							>
+								<RefreshCw />Retry import
+							</Button>
+              <Button
+                variant="ghost-muted"
+                size="sm"
+                onclick={dismissImport}
+                disabled={importPending}
+              >
+                <Cancel />Cancel
+              </Button>
+						{/if}
+					{/if}
 				{/if}
 			</div>
 

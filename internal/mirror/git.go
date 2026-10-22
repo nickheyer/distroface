@@ -16,6 +16,7 @@ import (
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"golang.org/x/crypto/ssh"
+	"google.golang.org/protobuf/proto"
 )
 
 // Returned before the git manager is wired
@@ -173,8 +174,52 @@ func (m *Monitor) GitMirrorPublicKey(repo *db.GitRepository) string {
 	return parseGitMirrorState(repo.MirrorState).SSHPublicKey
 }
 
-// Starts or resumes a forge import for the repository
-func (m *Monitor) StartGitImport(repo *db.GitRepository) error {
+// What a one time import copies besides branches and tags
+type ImportOptions struct {
+	Metadata bool `json:"metadata"`
+	Wiki     bool `json:"wiki"`
+	LFS      bool `json:"lfs"`
+}
+
+// Import sources ride in the mirror config column meanwhile
+func importConfig(src *v1.GitImportSource) *v1.MirrorConfig {
+	cfg := &v1.MirrorConfig{Upstream: strings.TrimSpace(src.GetUpstream()), Username: strings.TrimSpace(src.GetUsername())}
+	if src.AuthToken != nil {
+		cfg.AuthToken = proto.String(src.GetAuthToken())
+	}
+	return cfg
+}
+
+// Confirms an import upstream is reachable before the repository exists
+func (m *Monitor) ValidateGitImport(ctx context.Context, src *v1.GitImportSource) error {
+	return m.ValidateGitMirror(ctx, importConfig(src))
+}
+
+// EncodeImportSource stores an import source with its token sealed
+func (m *Monitor) EncodeImportSource(src *v1.GitImportSource) (string, error) {
+	return m.EncodeConfig(importConfig(src))
+}
+
+// Whether an import row still has phases left
+func ImportPending(imp *db.GitImport) bool {
+	return imp != nil && imp.Phase != importDone
+}
+
+// Notes an import recorded, skipped pieces and upstream gaps
+func ImportNotes(imp *db.GitImport) []string {
+	if imp == nil {
+		return nil
+	}
+	return parseImportState(imp.State).Notes
+}
+
+// Whether the importer is working on the repository right now
+func (m *Monitor) ImportRunning(repoID string) bool {
+	return m.IsSyncing(importKey(repoID))
+}
+
+// Starts an import, nil options resume the recorded one
+func (m *Monitor) StartGitImport(repo *db.GitRepository, opts *ImportOptions) error {
 	if m.git == nil {
 		return ErrGitUnavailable
 	}
@@ -191,17 +236,24 @@ func (m *Monitor) StartGitImport(repo *db.GitRepository) error {
 	if err != nil {
 		return err
 	}
-	if imp == nil {
-		imp = &db.GitImport{RepoID: repo.ID, Source: up.Forge, Upstream: cfg.GetUpstream(), State: "{}"}
-		if err := m.store.SaveGitImport(ctx, imp); err != nil {
-			return err
-		}
-	} else if imp.Phase == importDone {
+	switch {
+	case imp == nil && opts == nil:
+		return fmt.Errorf("%w: repository has no import to resume", ErrInvalid)
+	case imp == nil:
+		st := parseImportState("{}")
+		st.Options = *opts
+		imp = &db.GitImport{RepoID: repo.ID, Source: up.Forge, Upstream: cfg.GetUpstream(), State: st.encode()}
+	case imp.Phase == importDone:
 		return nil
 	}
-	// Sweep resumes the row once mirroring is enabled
+	// The sweep resumes the row once an admin enables mirroring
 	if !m.mirroringEnabled(ctx) {
-		return nil
+		imp.LastError = "mirroring is disabled on this instance, the import starts once an admin enables it"
+		return m.store.SaveGitImport(ctx, imp)
+	}
+	imp.LastError = ""
+	if err := m.store.SaveGitImport(ctx, imp); err != nil {
+		return err
 	}
 	m.refreshLimits(ctx)
 	key := importKey(repo.ID)
@@ -212,6 +264,34 @@ func (m *Monitor) StartGitImport(repo *db.GitRepository) error {
 		defer m.done(key)
 		m.execImport(ctx, repo, imp)
 	}()
+	return nil
+}
+
+// Stops and forgets an import, the repository keeps what arrived
+func (m *Monitor) DismissGitImport(ctx context.Context, repo *db.GitRepository) error {
+	if err := m.stopSync(importKey(repo.ID)); err != nil && !errors.Is(err, ErrNoActiveSync) {
+		return err
+	}
+	if err := m.store.DeleteGitImport(ctx, repo.ID); err != nil {
+		return err
+	}
+	if repo.Type == v1.GitRepoType_GIT_REPO_TYPE_MIRROR {
+		return nil
+	}
+	return m.clearImportSource(ctx, repo)
+}
+
+// Drops the upstream and credentials once nothing needs them
+func (m *Monitor) clearImportSource(ctx context.Context, repo *db.GitRepository) error {
+	cols := map[string]any{
+		"type": v1.GitRepoType_GIT_REPO_TYPE_STANDARD, "mirror_config": "", "mirror_state": "", "mirror_last_error": "",
+		"updated_at": time.Now().UTC(),
+	}
+	if err := m.store.UpdateGitRepositoryColumns(ctx, repo.ID, cols); err != nil {
+		return err
+	}
+	repo.Type = v1.GitRepoType_GIT_REPO_TYPE_STANDARD
+	repo.MirrorConfig, repo.MirrorState, repo.MirrorLastError = "", "", ""
 	return nil
 }
 

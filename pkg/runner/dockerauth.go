@@ -102,7 +102,7 @@ func (j *job) removeDockerAuth(key string) {
 	_ = j.writeDockerConfig()
 }
 
-// Encoded pull auth for a reference from held logins
+// Encoded pull auth for a reference, image credentials before logins
 func (j *job) pullAuth(ref string) string {
 	host := tagHost(ref)
 	key := host
@@ -110,7 +110,10 @@ func (j *job) pullAuth(ref string) string {
 		key = dockerHubAuthKey
 	}
 	j.mu.Lock()
-	a, ok := j.dockerAuths[key]
+	a, ok := j.imageAuths[key]
+	if !ok {
+		a, ok = j.dockerAuths[key]
+	}
 	j.mu.Unlock()
 	if !ok {
 		return ""

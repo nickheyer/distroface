@@ -23,9 +23,25 @@ var scopedMailPaths = []string{
 	"mail.password", "mail.from_address", "mail.from_name", "mail.reply_to", "mail.skip_tls_verify",
 }
 
+// Workflow settings - repo or org scope
+var scopedActionsPaths = []string{
+	"git.actions.default_runs_on",
+	"git.actions.run_on_mirror",
+	"git.actions.artifact_retention_days",
+	"git.actions.log_retention_days",
+}
+
+func concat(lists ...[]string) []string {
+	var out []string
+	for _, l := range lists {
+		out = append(out, l...)
+	}
+	return out
+}
+
 // Paths each non system scope may store, prefixes cover subtrees
 var scopeAllowed = map[v1.SettingsScopeType][]string{
-	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG: append([]string{
+	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG: concat([]string{
 		"acme.email",
 		"acme.directory_url",
 		"artifacts.max_file_size_mb",
@@ -39,14 +55,14 @@ var scopeAllowed = map[v1.SettingsScopeType][]string{
 		"git.default_branch",
 		"git.max_repo_size_mb",
 		"git.actions.enabled",
-	}, scopedMailPaths...),
+	}, scopedMailPaths, scopedActionsPaths),
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: {
 		"acme.email",
 		"acme.directory_url",
 		"tls.mtls_mode",
 		"auth.anonymous_access",
 	},
-	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO: scopedMailPaths,
+	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO: concat(scopedMailPaths, scopedActionsPaths),
 }
 
 // Reports whether a mail leaf path may only come from the system tier

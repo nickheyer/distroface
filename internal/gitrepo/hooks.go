@@ -122,6 +122,12 @@ func hasSkipCI(options []string) bool {
 	return false
 }
 
+// Pending import row with no error, the importer is busy
+func (m *Manager) importInProgress(ctx context.Context, repo *db.GitRepository) bool {
+	imp, err := m.store.GetGitImport(ctx, repo.ID)
+	return err == nil && imp != nil && imp.Phase != "done" && imp.LastError == ""
+}
+
 // Policy gate run with the new objects already unpacked
 func (m *Manager) preReceive(ctx context.Context, repo *db.GitRepository, actor *auth.AuthenticatedUser, opts HookOptions, info *transport.PreReceiveInfo) error {
 	say := func(format string, args ...any) {
@@ -134,6 +140,10 @@ func (m *Manager) preReceive(ctx context.Context, repo *db.GitRepository, actor 
 	if repo.Type == v1.GitRepoType_GIT_REPO_TYPE_MIRROR && !opts.Mirror {
 		say("repository is a mirror, push to the upstream instead")
 		return fmt.Errorf("repository is a mirror")
+	}
+	if !opts.Mirror && !opts.Wiki && m.importInProgress(ctx, repo) {
+		say("repository import is still running, push again once it finishes")
+		return ErrImporting
 	}
 	for _, c := range info.Commands {
 		name := c.Name.String()

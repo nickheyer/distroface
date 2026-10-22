@@ -52,9 +52,13 @@ const (
 	commentKindMerged   = "merged"
 )
 
+// A dismissed import must not return through a late save
+var errImportDismissed = errors.New("import was dismissed")
+
 // Resumable cursor persisted in git_imports.state
 type importState struct {
 	SyncState
+	Options    ImportOptions     `json:"options"`
 	Forge      string            `json:"forge,omitempty"`
 	Cursor     map[string]int    `json:"cursor,omitempty"`
 	Labels     map[string]string `json:"labels,omitempty"`
@@ -113,6 +117,41 @@ func nextImportPhase(phase string) string {
 		}
 	}
 	return importDone
+}
+
+// Progress line the UI shows for a phase
+func importProgress(phase string) string {
+	switch phase {
+	case importPhaseFetch:
+		return "fetching branches and tags"
+	case importPhaseWiki:
+		return "fetching the wiki"
+	case importPhaseLFS:
+		return "downloading lfs objects"
+	case importPhaseLabels:
+		return "importing labels"
+	case importPhaseMilestones:
+		return "importing milestones"
+	case importPhaseIssues:
+		return "importing issues"
+	case importPhasePulls:
+		return "importing pull requests"
+	case importPhaseReleases:
+		return "importing releases"
+	}
+	return "importing " + phase
+}
+
+// Saves the cursor unless the import was dismissed meanwhile
+func (m *Monitor) saveImport(ctx context.Context, imp *db.GitImport) error {
+	cur, err := m.store.GetGitImport(ctx, imp.RepoID)
+	if err != nil {
+		return err
+	}
+	if cur == nil {
+		return errImportDismissed
+	}
+	return m.store.SaveGitImport(ctx, imp)
 }
 
 // Metadata shapes shared by the forge importers
@@ -300,6 +339,14 @@ func (m *Monitor) execImport(ctx context.Context, repo *db.GitRepository, imp *d
 		OwnerID:   repo.OwnerID,
 	}
 	state := parseImportState(imp.State)
+	// Empty error marks the row busy, pushes wait on it
+	imp.LastError = ""
+	if err := m.saveImport(ctx, imp); err != nil {
+		if !errors.Is(err, errImportDismissed) {
+			m.log.Error("import state update for %s: %v", repo.ID, err)
+		}
+		return
+	}
 	runCtx, cancel := context.WithTimeout(ctx, currentLimits().SyncTimeout)
 	m.armCancel(key, cancel)
 	m.beginSync(key, ev)
@@ -313,16 +360,21 @@ func (m *Monitor) execImport(ctx context.Context, repo *db.GitRepository, imp *d
 
 	var msg string
 	state.SyncState, msg = nextState(state.SyncState, syncErr)
-	if errors.Is(syncErr, ErrSyncStopped) {
+	switch {
+	case errors.Is(syncErr, errImportDismissed):
+		m.log.Info("import for %s/%s dismissed", repo.Namespace, repo.Name)
+		m.endSync(key, ev, nil)
+		return
+	case errors.Is(syncErr, ErrSyncStopped):
 		m.log.Info("import for %s/%s stopped by user", repo.Namespace, repo.Name)
-	} else if syncErr != nil {
+	case syncErr != nil:
 		m.log.Error("import for %s/%s: %v", repo.Namespace, repo.Name, syncErr)
-	} else {
+	default:
 		m.log.Info("import for %s/%s finished: %v", repo.Namespace, repo.Name, state.Counts)
 	}
 	imp.State = state.encode()
 	imp.LastError = msg
-	if err := m.store.SaveGitImport(statusCtx(ctx), imp); err != nil {
+	if err := m.saveImport(statusCtx(ctx), imp); err != nil && !errors.Is(err, errImportDismissed) {
 		m.log.Error("import state update for %s: %v", repo.ID, err)
 	}
 	m.endSync(key, ev, syncErr)
@@ -344,41 +396,60 @@ func (m *Monitor) runImport(ctx context.Context, repo *db.GitRepository, imp *db
 	if st.Forge == "" {
 		st.Forge = up.Forge
 	}
-	if st.Forge == "" {
-		if st.Forge, err = m.detectForge(ctx, up); err != nil {
-			return err
+	// Any git host imports, metadata needs a forge api
+	var drv forgeDriver
+	if st.Options.Metadata {
+		if st.Forge == "" {
+			if forge, err := m.detectForge(ctx, up); err == nil {
+				st.Forge = forge
+			} else {
+				st.note("metadata not imported, %s is not a GitHub, GitLab, or Gitea host", up.Host)
+			}
+		}
+		if drv = forgeDriverFor(st.Forge); drv == nil && st.Forge != "" {
+			st.note("metadata not imported, %s is not a supported forge", st.Forge)
 		}
 	}
 	imp.Source = st.Forge
 	up.Forge = st.Forge
-	drv := forgeDriverFor(st.Forge)
-	if drv == nil {
-		return fmt.Errorf("%w: unsupported import source %q", ErrInvalid, st.Forge)
-	}
 	f := forgeCtx{client: m.client, up: up, token: cfg.GetAuthToken()}
 	if imp.Phase == "" {
 		imp.Phase = importPhaseFetch
 	}
 	for imp.Phase != importDone {
-		progress("importing " + imp.Phase)
+		progress(importProgress(imp.Phase))
 		var err error
 		switch imp.Phase {
 		case importPhaseFetch:
 			err = m.importFetch(ctx, repo, cfg)
 		case importPhaseWiki:
-			err = m.importWiki(ctx, repo, cfg, up, st)
+			if st.Options.Wiki {
+				err = m.importWiki(ctx, repo, cfg, up, st)
+			}
 		case importPhaseLFS:
-			err = m.importLFS(ctx, repo, cfg, up, st, progress)
+			if st.Options.LFS {
+				err = m.importLFS(ctx, repo, cfg, up, st, progress)
+			}
 		case importPhaseLabels:
-			err = m.importLabels(ctx, repo, drv, f, st)
+			if drv != nil {
+				err = m.importLabels(ctx, repo, drv, f, st)
+			}
 		case importPhaseMilestones:
-			err = m.importMilestones(ctx, repo, drv, f, st)
+			if drv != nil {
+				err = m.importMilestones(ctx, repo, drv, f, st)
+			}
 		case importPhaseIssues:
-			err = m.importIssues(ctx, repo, drv, f, st, progress)
+			if drv != nil {
+				err = m.importIssues(ctx, repo, drv, f, st, progress)
+			}
 		case importPhasePulls:
-			err = m.importPulls(ctx, repo, cfg, up, drv, f, st, progress)
+			if drv != nil {
+				err = m.importPulls(ctx, repo, cfg, up, drv, f, st, progress)
+			}
 		case importPhaseReleases:
-			err = m.importReleases(ctx, repo, drv, f, st)
+			if drv != nil {
+				err = m.importReleases(ctx, repo, drv, f, st)
+			}
 		default:
 			err = fmt.Errorf("unknown import phase %q", imp.Phase)
 		}
@@ -387,7 +458,7 @@ func (m *Monitor) runImport(ctx context.Context, repo *db.GitRepository, imp *db
 		}
 		imp.Phase = nextImportPhase(imp.Phase)
 		imp.State = st.encode()
-		if err := m.store.SaveGitImport(ctx, imp); err != nil {
+		if err := m.saveImport(ctx, imp); err != nil {
 			return err
 		}
 	}
@@ -691,13 +762,17 @@ func (m *Monitor) importLFS(ctx context.Context, repo *db.GitRepository, cfg *v1
 		pending = append(pending, gitrepo.LFSPointer{OID: oid, Size: size})
 	}
 	user, pass := gitBasicAuth(up.Forge, cfg.GetUsername(), cfg.GetAuthToken())
-	var errs []error
-	done := 0
+	done, failed := 0, 0
 	for start := 0; start < len(pending); start += lfsBatchSize {
 		end := min(start+lfsBatchSize, len(pending))
 		actions, err := m.lfsBatch(ctx, up.lfsBatchURL(), user, pass, pending[start:end])
 		if err != nil {
-			return err
+			if _, limited := RetryAfter(err); limited || ctx.Err() != nil {
+				return err
+			}
+			// No lfs api upstream, pointers stay and the import continues
+			st.note("lfs objects not imported, the upstream batch api answered: %v", err)
+			return nil
 		}
 		for _, p := range pending[start:end] {
 			if ctx.Err() != nil {
@@ -712,7 +787,10 @@ func (m *Monitor) importLFS(ctx context.Context, repo *db.GitRepository, cfg *v1
 				if _, limited := RetryAfter(err); limited {
 					return err
 				}
-				errs = append(errs, fmt.Errorf("lfs %s: %w", p.OID[:12], err))
+				failed++
+				if failed <= 5 {
+					st.note("lfs object %s not imported: %v", p.OID[:12], err)
+				}
 				continue
 			}
 			done++
@@ -722,7 +800,10 @@ func (m *Monitor) importLFS(ctx context.Context, repo *db.GitRepository, cfg *v1
 			}
 		}
 	}
-	return errors.Join(errs...)
+	if failed > 5 {
+		st.note("%d lfs objects were not imported", failed)
+	}
+	return nil
 }
 
 func (m *Monitor) importLabels(ctx context.Context, repo *db.GitRepository, drv forgeDriver, f forgeCtx, st *importState) error {
@@ -1204,23 +1285,12 @@ func (m *Monitor) importReleases(ctx context.Context, repo *db.GitRepository, dr
 	return nil
 }
 
-// Settles counters and makes the repository standard
+// Settles counters and drops the upstream, a plain repository remains
 func (m *Monitor) finishImport(ctx context.Context, repo *db.GitRepository, st *importState) error {
 	if err := m.ensureIssueCounter(ctx, repo, st.MaxNumber); err != nil {
 		return err
 	}
-	cols := map[string]any{
-		"type":              v1.GitRepoType_GIT_REPO_TYPE_STANDARD,
-		"mirror_config":     "",
-		"mirror_last_error": "",
-		"updated_at":        time.Now().UTC(),
-	}
-	if err := m.store.UpdateGitRepositoryColumns(ctx, repo.ID, cols); err != nil {
-		return err
-	}
-	repo.Type = v1.GitRepoType_GIT_REPO_TYPE_STANDARD
-	repo.MirrorConfig = ""
-	return nil
+	return m.clearImportSource(ctx, repo)
 }
 
 // Mirrors upstream release notes onto the linked git repo

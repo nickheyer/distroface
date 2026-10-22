@@ -3,6 +3,8 @@ package runner
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -59,16 +61,59 @@ func (l *logStream) Start(ctx context.Context) {
 	}()
 }
 
-// Masks a value, multi line values line by line
+// Masks a value, its encodings, and each line
 func (l *logStream) AddMask(v string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.addMask(v)
+	l.addValue(v)
 	if strings.ContainsAny(v, "\r\n") {
 		for _, line := range strings.FieldsFunc(v, func(r rune) bool { return r == '\n' || r == '\r' }) {
-			l.addMask(line)
+			l.addValue(line)
 		}
 	}
+}
+
+func (l *logStream) addValue(v string) {
+	l.addMask(v)
+	for _, variant := range maskVariants(v) {
+		l.addMask(variant)
+	}
+}
+
+// Encodings the hosted runner also masks
+func maskVariants(v string) []string {
+	var out []string
+	add := func(s string) {
+		if s != "" && s != v {
+			out = append(out, s)
+		}
+	}
+	if b, err := json.Marshal(v); err == nil && len(b) >= 2 {
+		add(string(b[1 : len(b)-1]))
+	}
+	add(uriEscape(v))
+	if len(v) >= 2 && v[0] == '"' && v[len(v)-1] == '"' {
+		add(v[1 : len(v)-1])
+	}
+	for shift := 0; shift < 3 && shift < len(v); shift++ {
+		add(base64.StdEncoding.EncodeToString([]byte(v[shift:])))
+	}
+	return out
+}
+
+// Percent encodes everything but unreserved characters
+func uriEscape(s string) string {
+	var sb strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.', c == '~':
+			sb.WriteByte(c)
+		default:
+			sb.WriteString(fmt.Sprintf("%%%02X", c))
+		}
+	}
+	return sb.String()
 }
 
 func (l *logStream) addMask(v string) {

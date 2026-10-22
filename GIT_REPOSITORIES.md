@@ -1484,15 +1484,26 @@ a token or the generated ssh key.
 
 ### 20.3 Imports
 
-"New repository from another forge" runs the mirror fetch once, then imports metadata
-through a `forgeDriver` interface beside `releaseDriver` with github, gitlab, and gitea
-implementations: labels, milestones, issues with comments, pull requests (as closed or open
-PRs whose head refs are fetched from the upstream `refs/pull/<n>/head` or
-`refs/merge-requests/<n>/head`), reviews where the API exposes them, releases with assets
-(the existing drivers), wiki (a second fetch of the upstream wiki repo), LFS objects (the
-upstream batch API, downloaded into the blob store). The importer is resumable through
-`git_imports.state` and runs as a monitor job with `SyncEvent.kind=import` so the UI shows
-progress. Upstream authors are never mapped to local accounts: every imported issue,
+"Import a repository" creates a standard repository and fills it once. It is never a
+mirror: nothing syncs afterwards, pushes land like on any other repository, and no mirror
+settings or badge exist for it. The source is any https or ssh clone url (owner/repo
+shorthand works for GitHub, GitLab, and Gitea), its credentials stay sealed for the
+duration of the import and are dropped with the upstream url when it ends. Branches and
+tags always come over. Optionally the importer fetches the upstream wiki repository,
+downloads LFS objects through the upstream batch api into the blob store, and, when the
+host is a GitHub, GitLab, Gitea, or Forgejo instance, imports metadata through a
+`forgeDriver` interface beside `releaseDriver`: labels, milestones, issues with comments,
+pull requests (as closed or open PRs whose head refs are fetched from the upstream
+`refs/pull/<n>/head` or `refs/merge-requests/<n>/head`), reviews where the API exposes
+them, and releases. A host without a recognised forge api still imports, the metadata
+step is recorded as a note. The importer is resumable through `git_imports.state` and
+runs as a monitor job with `SyncEvent.kind=import` so the UI shows progress. While a phase
+runs, pushes and web edits answer "repository import is in progress" so the fetch cannot
+clobber them. A failed import leaves the repository writable with what arrived and the
+header offers retry (`SyncGitRepository` resumes the recorded import) and dismiss
+(`DismissGitImport` stops it and forgets the record). `GitRepository.import_status`
+carries upstream, phase, error, and notes until the import finished without notes.
+Upstream authors are never mapped to local accounts: every imported issue,
 comment, review, and release carries the upstream login in its "imported" marker and no
 local author, so a hostile upstream cannot speak as a local user, and imported reviews are
 flagged `imported` and never count toward required reviews. Comments and reviews are
@@ -1521,11 +1532,18 @@ Server side:
   `matrix`, `steps` contexts (the expression grammar is a small recursive descent
   evaluator with the standard functions `contains`, `startsWith`, `endsWith`, `format`,
   `join`, `toJSON`, `fromJSON`, `hashFiles` is resolved by the runner), `env` at every level,
-  `timeout-minutes`, `continue-on-error`, `services`, `container`, `outputs`, `concurrency`
+  `timeout-minutes`, `continue-on-error`, `services`, `container` (with `credentials` for
+  private images, used for the pull alone), `outputs`, `concurrency`
   groups with cancel in progress at the workflow and at the job level, `strategy.fail-fast`
   (default on, a failed matrix job cancels its queued and running siblings unless it is
   `continue-on-error`) and `strategy.max-parallel` (enforced in the atomic claim, so no
-  runner race admits one job too many), workflow and job level `defaults.run`, and
+  runner race admits one job too many), and workflow and job level `defaults.run`.
+  `continue-on-error`, `timeout-minutes`, `fail-fast` and
+  `max-parallel` accept expressions like on GitHub: job level ones resolve when the job is
+  queued, step level ones on the runner against the full step contexts. A matrix written
+  as `${{ fromJSON(needs.<job>.outputs.<name>) }}` stays one waiting row until the needed
+  jobs finish and then expands into its legs in place, and job names over `needs` outputs
+  resolve at the same moment. The parser also handles
   `permissions` at both levels: a job whose effective permissions grant neither
   `contents: write` nor `packages: write` (and no `write-all`) gets a read only job token.
   Reusable workflows work the GitHub way: a job with `uses:` plus `with:` and `secrets:`
@@ -1599,10 +1617,18 @@ Runner (`dfcli runner register --server ... --token ...` and `dfcli runner start
   `--health-interval`, `--health-timeout`, `--health-retries` and `--health-start-period`,
   the `job.container` and `job.services.<name>` contexts carry ids, network and
   ports, and the `strategy` context carries `fail-fast`, `max-parallel`, `job-index` and
-  `job-total` of the matrix leg. Node for JavaScript actions does not depend on the job
-  image: the runner extracts node 20 and node 24 (glibc and musl builds) from the official
+  `job-total` of the matrix leg. `RUNNER_TOOL_CACHE` is `<work dir>/_tool`, bound at `/__t`
+  in every job container and kept across jobs, so `setup-node`, `setup-go` and friends
+  download a version once per runner the way a self hosted GitHub runner does. Steps and
+  actions are started directly by the docker exec api with `PATH` assembled by the runner
+  from the image and `$GITHUB_PATH`, never through a shell, because dash silently drops
+  environment names such as `INPUT_NODE-VERSION` and would starve every action of its
+  hyphenated inputs. Node for JavaScript actions is pinned to the absolute path of the
+  image's node when its major version satisfies `runs.using`, so a later `setup-node`
+  cannot swap the action runtime, and otherwise comes from the runner: it extracts node 20
+  and node 24 (glibc and musl builds) from the official
   node images into `<work dir>/_externals` once and binds them read only at `/__e` in every
-  job container, probing which build runs when the image has no `node` on its path. Every
+  job container, probing which build runs in the image. Every
   job gets `DOCKER_CONFIG` pointing at a config.json pre logged in to the instance registry
   with the job token and `DISTROFACE_REGISTRY` holding the registry host, so docker, crane,
   skopeo and BuildKit inside a job authenticate with zero secrets. Jobs never get the
@@ -1656,7 +1682,12 @@ Runner (`dfcli runner register --server ... --token ...` and `dfcli runner start
 - Step outputs via `$GITHUB_OUTPUT`, env via `$GITHUB_ENV`, path via `$GITHUB_PATH`, step
   summary via `$GITHUB_STEP_SUMMARY`, log groups `::group::`, masking `::add-mask::`,
   annotations `::error::` and `::warning::` shown in the UI, `::stop-commands::` and
-  `::echo::on` to print commands verbatim before acting on them. `::set-env::` and
+  `::echo::on` to print commands verbatim before acting on them. The older `##[name]data`
+  spelling is accepted for every command, as on the hosted runner. `::add-matcher::` and
+  `::remove-matcher::` register problem matchers (the json files `setup-node`, `setup-go`
+  and the like ship), and matched output lines become annotations with file, line and
+  column for the rest of the job. Masked values are also masked in their json escaped,
+  url encoded and base64 forms. `::set-env::` and
   `::add-path::` are disabled and fail the step, since any logged text could issue them.
   `::debug::` lines appear only when the `ACTIONS_STEP_DEBUG` secret or variable is
   `true`, which also sets `runner.debug` and turns command echo on. A `run` step without `shell` uses `bash -e`
@@ -1862,7 +1893,7 @@ URLs.
 
 | Route | Content |
 | --- | --- |
-| `/`, `/git/new` | repositories explore, `QueryFilterBar`, kind and topic filters, create page with type select (standard, mirror, import, from template) and `MirrorConfigFields kind="git"` |
+| `/`, `/git/new` | repositories explore, `QueryFilterBar`, kind and topic filters, create page with type select (standard, mirror, import, from template), `MirrorConfigFields kind="git"` for mirrors and plain source plus what to import fields for imports |
 | `/[ns]/[name]` | code tab: header with badges and topics, description, clone box (HTTP and SSH with copy, port aware), branch and tag picker, latest commit bar, tree table, README, sidebar with latest release, packages, languages, contributors |
 | `.../tree/[ref]/[...path]`, `.../blob/[ref]/[...path]`, `.../blame/[ref]/[...path]` | browser, viewer with shiki, line anchors, LFS notice, blame runs, edit and delete buttons for writers |
 | `.../edit/[ref]/[...path]`, `.../new/[ref]/[...path]`, `.../upload/[ref]/[...path]` | CodeMirror editor, commit form with "commit to new branch and open a PR" |
@@ -1876,7 +1907,7 @@ URLs.
 | `.../actions`, `.../actions/runs/[id]`, `.../actions/runs/[id]/jobs/[jobId]` | workflow list, runs with status, job log viewer streaming, artifacts, rerun and cancel |
 | `.../packages`, `.../packages/link` | linked image and artifact repos linking to their pages, link page and unlink for admins |
 | `.../activity`, `.../forks` | activity graph and contributor list, fork network |
-| `.../settings` | general (description, website, topics, visibility, default branch, units and external urls, merge methods), branches (protections), tags, collaborators, deploy keys, deploy tokens, webhooks (`WebhookManager scope=GIT_REPOSITORY`), LFS, mirror, push mirrors, email, actions (secrets, variables, runners), danger zone (archive, transfer, rename, delete with linked) |
+| `.../settings` | general (description, website, topics, visibility, default branch, units and external urls, merge methods), branches (protections), tags, collaborators, deploy keys, deploy tokens, webhooks (`WebhookManager scope=GIT_REPOSITORY`), LFS, mirror, push mirrors, email, actions (runners plus repository overrides for default runs-on, the mirror trigger, and artifact and log retention, inherited from the organization or instance and capped by the instance), secrets (secrets and variables), danger zone (archive, transfer, rename, delete with linked) |
 | `/images`, `/images/[ns]/[...name]` | moved image pages, plus a Source repository line and Release badges on tags |
 | `/artifacts/[ns]/[repo]` | gains a Source repository line and Release badges on versions |
 | `/orgs/[name]/repos`, `/orgs/[name]/teams`, `/orgs/[name]/teams/[team]`, `/orgs/[name]/labels`, `/orgs/[name]/projects`, `/orgs/[name]/runners` | org pages reusing the repo components, team page with members, repositories, unit grid |
