@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -186,8 +187,9 @@ func (m *Manager) cacheLookup(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = m.store.UpdateActionsCacheColumns(ctx, hit.ID, map[string]any{"last_used_at": time.Now().UTC()})
 	exp := time.Now().Add(cacheURLTTL).Unix()
-	location := fmt.Sprintf("%s/api/actions/cache/_apis/artifactcache/artifacts/%d?exp=%d&sig=%s",
-		strings.TrimRight(m.git.BaseURL(ctx), "/"), hit.ID, exp, cacheSignature(m.cacheKey(), hit.ID, exp))
+	// The toolkit fetches archives without the bearer, the link carries the job instead
+	location := fmt.Sprintf("%s/api/actions/cache/_apis/artifactcache/artifacts/%d?job=%s&exp=%d&sig=%s",
+		strings.TrimRight(m.git.BaseURL(ctx), "/"), hit.ID, url.QueryEscape(sc.job.ID), exp, cacheSignature(m.cacheKey(), hit.ID, sc.job.ID, exp))
 	cacheJSON(w, http.StatusOK, map[string]any{"result": "hit", "archiveLocation": location, "cacheKey": hit.Key})
 }
 
@@ -195,18 +197,18 @@ func (m *Manager) cacheKey() []byte {
 	return m.auth.DerivedKey("actions-cache")
 }
 
-// Hmac over the entry id and expiry, hex encoded
-func cacheSignature(key []byte, id, exp int64) string {
+// Hmac over the entry id, the job, and expiry, hex encoded
+func cacheSignature(key []byte, id int64, jobID string, exp int64) string {
 	mac := hmac.New(sha256.New, key)
-	fmt.Fprintf(mac, "%d:%d", id, exp)
+	fmt.Fprintf(mac, "%d:%s:%d", id, jobID, exp)
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func verifyCacheSignature(key []byte, id, exp int64, sig string, now time.Time) bool {
-	if exp <= now.Unix() {
+func verifyCacheSignature(key []byte, id int64, jobID string, exp int64, sig string, now time.Time) bool {
+	if jobID == "" || exp <= now.Unix() {
 		return false
 	}
-	want, err := hex.DecodeString(cacheSignature(key, id, exp))
+	want, err := hex.DecodeString(cacheSignature(key, id, jobID, exp))
 	if err != nil {
 		return false
 	}
@@ -405,20 +407,11 @@ func (m *Manager) cacheCommit(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Streams a staged file into the blob store, answering its digest
+// Moves a staged file into the blob store, one hashing pass, answering its digest
 func (m *Manager) stageCacheBlob(path string) (string, int64, error) {
 	blobs := m.artifacts.Blobs()
-	f, err := os.Open(path)
+	uploadID, err := blobs.AdoptUpload(path)
 	if err != nil {
-		return "", 0, err
-	}
-	defer f.Close()
-	uploadID, err := blobs.InitiateUpload()
-	if err != nil {
-		return "", 0, err
-	}
-	if _, err := blobs.AppendChunk(uploadID, f); err != nil {
-		_ = blobs.CancelUpload(uploadID)
 		return "", 0, err
 	}
 	digest, size, _, err := blobs.CompleteUpload(uploadID)
@@ -435,12 +428,25 @@ func (m *Manager) cacheDownload(w http.ResponseWriter, r *http.Request) {
 		cacheError(w, http.StatusBadRequest, "invalid cache id")
 		return
 	}
-	exp, err := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
-	if err != nil || !verifyCacheSignature(m.cacheKey(), id, exp, r.URL.Query().Get("sig"), time.Now()) {
+	q := r.URL.Query()
+	exp, err := strconv.ParseInt(q.Get("exp"), 10, 64)
+	if err != nil || !verifyCacheSignature(m.cacheKey(), id, q.Get("job"), exp, q.Get("sig"), time.Now()) {
 		cacheError(w, http.StatusForbidden, "download link is invalid or expired")
 		return
 	}
-	row, err := m.store.GetActionsCache(r.Context(), id)
+	// The link dies with the job and never leaves the job's repository
+	ctx := r.Context()
+	job, err := m.store.GetActionsJob(ctx, q.Get("job"))
+	if err != nil || job == nil || job.Status != StatusRunning {
+		cacheError(w, http.StatusForbidden, "job is not running")
+		return
+	}
+	run, err := m.store.GetActionsRunByID(ctx, job.RunID)
+	if err != nil || run == nil {
+		cacheError(w, http.StatusForbidden, "run not found")
+		return
+	}
+	row, err := m.store.GetActionsCacheInRepo(ctx, run.RepoID, id)
 	if err != nil || row == nil || row.State != stores.ActionsCacheComplete || row.Digest == "" {
 		cacheError(w, http.StatusNotFound, "cache entry not found")
 		return

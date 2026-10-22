@@ -112,3 +112,34 @@ func TestAuthorizeSearchUsersIsAccountTier(t *testing.T) {
 		t.Fatalf("admin listing still needs users/read, got %v", err)
 	}
 }
+
+func TestPortalWriteProcedure(t *testing.T) {
+	writes := []string{
+		distrofacev1connect.GitServiceStarGitRepositoryProcedure,
+		distrofacev1connect.GitServiceWatchGitRepositoryProcedure,
+		distrofacev1connect.IssueServiceSubscribeIssueProcedure,
+		distrofacev1connect.GitServiceRejectTransferProcedure,
+		distrofacev1connect.ActionsServiceDispatchWorkflowProcedure,
+		distrofacev1connect.ActionsServiceSetSecretProcedure,
+		distrofacev1connect.GitServiceUpdateGitRepositoryProcedure,
+		distrofacev1connect.ArtifactServiceInitiateArtifactUploadProcedure,
+	}
+	for _, p := range writes {
+		if !portalWriteProcedure(p) {
+			t.Errorf("%s must count as a portal write", p)
+		}
+	}
+	reads := []string{
+		distrofacev1connect.GitServiceListPushMirrorsProcedure,
+		distrofacev1connect.GitServiceGetGitRepositoryProcedure,
+		distrofacev1connect.ActionsServiceListSecretsProcedure,
+		distrofacev1connect.ActionsServiceListWorkflowRunsProcedure,
+		distrofacev1connect.UserServiceUpdateUserProcedure,
+		distrofacev1connect.SettingsServiceUpdateSettingsProcedure,
+	}
+	for _, p := range reads {
+		if portalWriteProcedure(p) {
+			t.Errorf("%s must pass a read only portal", p)
+		}
+	}
+}

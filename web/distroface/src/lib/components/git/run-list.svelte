@@ -6,6 +6,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
+	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import CommitBadge from '$lib/components/git/commit-badge.svelte';
 	import RunStatusIcon from '$lib/components/git/run-status-icon.svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
@@ -50,6 +51,13 @@
 	});
 
 	let busy = $state<Record<string, boolean>>({});
+	let cancelOpen = $state(false);
+	let cancelTarget = $state<WorkflowRun | null>(null);
+
+	function openCancel(run: WorkflowRun) {
+		cancelTarget = run;
+		cancelOpen = true;
+	}
 
 	async function cancel(run: WorkflowRun) {
 		if (busy[run.id]) return;
@@ -57,6 +65,7 @@
 		try {
 			await rpcClient.actions.cancelRun({ namespace, name, id: run.id });
 			toast.success(`Run #${run.number} cancelled`);
+			cancelOpen = false;
 			onChanged?.();
 		} catch {
 			// Error interceptor already toasted
@@ -202,7 +211,7 @@
 									class="hover:text-destructive"
 									title="Cancel run"
 									aria-label="Cancel run"
-									onclick={() => cancel(run)}
+									onclick={() => openCancel(run)}
 									disabled={!!busy[run.id]}
 								>
 									{#if busy[run.id]}
@@ -234,3 +243,18 @@
 		{/each}
 	</div>
 {/if}
+
+<ConfirmDialog
+	bind:open={cancelOpen}
+	title="Cancel run"
+	confirmLabel="Cancel run"
+	cancelLabel="Keep running"
+	onConfirm={() => cancelTarget && cancel(cancelTarget)}
+	loading={!!cancelTarget && !!busy[cancelTarget.id]}
+	icon={Ban}
+>
+	{#snippet description()}
+		Running jobs in run #{cancelTarget?.number} are stopped and queued jobs are dropped. Finished jobs
+		keep their results.
+	{/snippet}
+</ConfirmDialog>

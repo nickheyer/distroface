@@ -146,6 +146,10 @@ func (m *Manager) IssueViews(ctx context.Context, viewer *auth.AuthenticatedUser
 	}
 	users, _ := m.store.GetUsersByIDs(ctx, keys(userIDs))
 	boards := m.visibleBoards(ctx, viewer, repos, issues, placements)
+	var subscriptions map[string]bool
+	if viewerID != "" {
+		subscriptions, _ = m.store.GetGitIssueSubscriptionsForUser(ctx, ids, viewerID)
+	}
 	out := make([]*IssueView, 0, len(issues))
 	for _, is := range issues {
 		v := &IssueView{
@@ -173,8 +177,8 @@ func (m *Manager) IssueViews(ctx context.Context, viewer *auth.AuthenticatedUser
 			v.HeadRepo = repos[v.Pull.HeadRepoID]
 		}
 		if viewerID != "" {
-			if sub, _ := m.store.GetGitIssueSubscription(ctx, is.ID, viewerID); sub != nil {
-				v.Subscribed = *sub
+			if sub, ok := subscriptions[is.ID]; ok {
+				v.Subscribed = sub
 			} else {
 				v.Subscribed = is.AuthorID == viewerID || containsUser(v.Assignees, viewerID)
 			}

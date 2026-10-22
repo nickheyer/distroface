@@ -6,13 +6,26 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
 // Parsed schedules of one repository at a default branch commit
 type scheduleEntry struct {
-	sha   plumbing.Hash
-	items []scheduledWorkflow
+	sha     plumbing.Hash
+	branch  string
+	checked time.Time
+	items   []scheduledWorkflow
+}
+
+// Ref events invalidate entries, this bounds staleness without them
+const scheduleRecheck = 10 * time.Minute
+
+// Ref movement drops the cached entry so the next tick reopens the repo
+func (m *Manager) forgetSchedules(repoID string) {
+	m.schedMu.Lock()
+	delete(m.schedCache, repoID)
+	m.schedMu.Unlock()
 }
 
 type scheduledWorkflow struct {
@@ -50,57 +63,44 @@ func (m *Manager) runSchedules(ctx context.Context, now time.Time) {
 		if ctx.Err() != nil {
 			return
 		}
-		if repo.IsArchived || !m.Enabled(ctx, repo) {
+		if repo.IsArchived {
+			continue
+		}
+		// Most repositories schedule nothing, a fresh entry says so without opening them
+		m.schedMu.Lock()
+		entry := m.schedCache[repo.ID]
+		m.schedMu.Unlock()
+		if entry != nil && entry.branch == repo.DefaultBranch && now.Sub(entry.checked) < scheduleRecheck && len(entry.items) == 0 {
+			continue
+		}
+		if !m.Enabled(ctx, repo) {
 			continue
 		}
 		if repo.Type == v1.GitRepoType_GIT_REPO_TYPE_MIRROR && !m.Settings(ctx, repo).GetRunOnMirror() {
 			continue
 		}
-		m.runRepoSchedules(ctx, repo, now)
+		m.runRepoSchedules(ctx, repo, entry, now)
 	}
 }
 
-func (m *Manager) runRepoSchedules(ctx context.Context, repo *db.GitRepository, now time.Time) {
-	r, err := m.openRepo(repo)
-	if err != nil {
-		return
-	}
-	defer r.Close()
-	head := r.BranchHash(repo.DefaultBranch)
-	if head.IsZero() {
-		return
-	}
-	m.schedMu.Lock()
-	entry := m.schedCache[repo.ID]
-	m.schedMu.Unlock()
-	if entry == nil || entry.sha != head {
-		entry = &scheduleEntry{sha: head}
-		for _, f := range loadWorkflowFiles(ctx, r, head) {
-			if f.Err != nil || f.Workflow == nil {
-				continue
-			}
-			spec, ok := f.Workflow.On["schedule"]
-			if !ok || len(spec.Crons) == 0 {
-				continue
-			}
-			sw := scheduledWorkflow{file: f}
-			for _, c := range spec.Crons {
-				if parsed, err := ParseCron(c); err == nil {
-					sw.crons = append(sw.crons, parsed)
-					sw.specs = append(sw.specs, c)
-				}
-			}
-			if len(sw.crons) > 0 {
-				entry.items = append(entry.items, sw)
-			}
+func (m *Manager) runRepoSchedules(ctx context.Context, repo *db.GitRepository, entry *scheduleEntry, now time.Time) {
+	fresh := entry != nil && entry.branch == repo.DefaultBranch && now.Sub(entry.checked) < scheduleRecheck
+	if !fresh {
+		r, err := m.openRepo(repo)
+		if err != nil {
+			return
 		}
-		m.schedMu.Lock()
-		m.schedCache[repo.ID] = entry
-		m.schedMu.Unlock()
+		defer r.Close()
+		head := r.BranchHash(repo.DefaultBranch)
+		if head.IsZero() {
+			return
+		}
+		entry = m.refreshSchedules(ctx, repo, r, head, now)
 	}
 	if len(entry.items) == 0 {
 		return
 	}
+	head := entry.sha
 	disabled, _ := m.store.GetDisabledWorkflows(ctx, repo.ID)
 	for _, sw := range entry.items {
 		if disabled[sw.file.Path] {
@@ -120,6 +120,40 @@ func (m *Manager) runRepoSchedules(ctx context.Context, repo *db.GitRepository, 
 			break
 		}
 	}
+}
+
+// Reparses workflow files when the default branch moved, otherwise stamps the entry
+func (m *Manager) refreshSchedules(ctx context.Context, repo *db.GitRepository, r *gitrepo.Repo, head plumbing.Hash, now time.Time) *scheduleEntry {
+	m.schedMu.Lock()
+	entry := m.schedCache[repo.ID]
+	m.schedMu.Unlock()
+	if entry == nil || entry.sha != head || entry.branch != repo.DefaultBranch {
+		entry = &scheduleEntry{sha: head, branch: repo.DefaultBranch}
+		for _, f := range loadWorkflowFiles(ctx, r, head) {
+			if f.Err != nil || f.Workflow == nil {
+				continue
+			}
+			spec, ok := f.Workflow.On["schedule"]
+			if !ok || len(spec.Crons) == 0 {
+				continue
+			}
+			sw := scheduledWorkflow{file: f}
+			for _, c := range spec.Crons {
+				if parsed, err := ParseCron(c); err == nil {
+					sw.crons = append(sw.crons, parsed)
+					sw.specs = append(sw.specs, c)
+				}
+			}
+			if len(sw.crons) > 0 {
+				entry.items = append(entry.items, sw)
+			}
+		}
+	}
+	entry.checked = now
+	m.schedMu.Lock()
+	m.schedCache[repo.ID] = entry
+	m.schedMu.Unlock()
+	return entry
 }
 
 // ── Reaper ───────────────────────────────────────────────────────────────
@@ -212,6 +246,9 @@ func (m *Manager) reapJobs(ctx context.Context) {
 			}
 			m.advanceRun(ctx, repo, run)
 		}
+	}
+	if len(targets) > 0 {
+		m.notifyRunners()
 	}
 	_ = m.store.PruneActionsRunnerTokens(ctx)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nickheyer/distroface/internal/artifacts"
@@ -48,6 +49,7 @@ var (
 const (
 	runnerOnlineWindow         = 2 * time.Minute
 	runnerStaleWindow          = 10 * time.Minute
+	droppedJobGrace            = 2 * time.Minute
 	jobTokenDays         int32 = 1
 	maxTaskWait                = 30 * time.Second
 	defaultJobTimeout          = 360
@@ -70,9 +72,14 @@ type Manager struct {
 
 	wakeMu sync.Mutex
 	wake   chan struct{}
+	// Bumps whenever queued work may have changed
+	queueGen atomic.Uint64
 
 	schedMu    sync.Mutex
 	schedCache map[string]*scheduleEntry
+
+	statusMu  sync.Mutex
+	jobStatus map[string]jobStatusEntry
 }
 
 func NewManager(store *stores.Store, git *gitrepo.Manager, fm *forge.Manager, am *artifacts.Manager, authMgr *auth.Manager, res *settings.Resolver, log *logger.Logger) *Manager {
@@ -81,6 +88,7 @@ func NewManager(store *stores.Store, git *gitrepo.Manager, fm *forge.Manager, am
 		cancelRequested: map[string]struct{}{},
 		wake:            make(chan struct{}),
 		schedCache:      map[string]*scheduleEntry{},
+		jobStatus:       map[string]jobStatusEntry{},
 	}
 }
 
@@ -93,6 +101,9 @@ func (m *Manager) Start(ctx context.Context) {
 
 // Enqueues workflow runs for push and tag events
 func (m *Manager) OnRefUpdate(ctx context.Context, ev gitrepo.RefEvent) {
+	if ev.Repo != nil && !ev.Wiki {
+		m.forgetSchedules(ev.Repo.ID)
+	}
 	m.onRefUpdate(ctx, ev)
 }
 
@@ -116,10 +127,16 @@ func (m *Manager) Enabled(ctx context.Context, repo *db.GitRepository) bool {
 
 // Wakes every long polling runner after new work appears
 func (m *Manager) notifyRunners() {
+	m.queueGen.Add(1)
 	m.wakeMu.Lock()
 	close(m.wake)
 	m.wake = make(chan struct{})
 	m.wakeMu.Unlock()
+}
+
+// Queue generation, unchanged means a rescan finds the same
+func (m *Manager) queueGeneration() uint64 {
+	return m.queueGen.Load()
 }
 
 func (m *Manager) wakeChan() <-chan struct{} {

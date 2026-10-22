@@ -572,7 +572,16 @@ func (s *GitRefService) SetTagProtection(ctx context.Context, req *v1.SetTagProt
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "a tag pattern is required")
 	}
 	p := &storage.GitTagProtection{ID: in.Id, RepoID: repo.ID, Pattern: in.Pattern, BlockDeletion: in.BlockDeletion, AllowedPushers: gitrepo.EncodeIDs(in.AllowedPushers)}
-	if p.ID == "" {
+	if p.ID != "" {
+		existing, err := s.store.GetGitTagProtection(ctx, repo.ID, p.ID)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		}
+		if existing == nil {
+			return nil, connect.Errorf(connect.CodeNotFound, "protection not found")
+		}
+		p.CreatedAt = existing.CreatedAt
+	} else {
 		p.ID = uuid.New().String()
 	}
 	if err := s.store.SaveGitTagProtection(ctx, p); err != nil {

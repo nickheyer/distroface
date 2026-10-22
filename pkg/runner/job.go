@@ -107,6 +107,9 @@ type job struct {
 	hardCancel atomic.Bool
 	cancelStep context.CancelFunc
 	stepCount  int32
+	// Fingerprint of the last step table the server accepted
+	reportMu   sync.Mutex
+	lastReport string
 }
 
 // Action cleanup, run in reverse order after the steps
@@ -268,17 +271,44 @@ func (j *job) sync(ctx context.Context) {
 	}
 }
 
-// Sends the step table, answers the cancel flag
+// Sends the step table when it changed, answers the cancel flag
 func (j *job) report(ctx context.Context) bool {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()
 	steps, ann := j.snapshot()
+	key := reportKey(steps, ann)
+	j.reportMu.Lock()
+	unchanged := key == j.lastReport
+	j.reportMu.Unlock()
+	if unchanged {
+		steps, ann = nil, ""
+	}
 	cancelled, err := j.r.client.UpdateTask(rctx, j.task.JobId, steps, "", ann)
 	if err != nil {
 		j.r.out.Printf("job %s: update: %v", shortID(j.task.JobId), err)
 		return false
 	}
+	if !unchanged {
+		j.reportMu.Lock()
+		j.lastReport = key
+		j.reportMu.Unlock()
+	}
 	return cancelled
+}
+
+// Stable encoding of a snapshot, equal keys mean nothing to resend
+func reportKey(steps []*v1.JobStep, ann string) string {
+	var sb strings.Builder
+	opts := proto.MarshalOptions{Deterministic: true}
+	for _, s := range steps {
+		b, _ := opts.Marshal(s)
+		sb.WriteByte(byte(len(b) >> 8))
+		sb.WriteByte(byte(len(b)))
+		sb.Write(b)
+	}
+	sb.WriteByte(0)
+	sb.WriteString(ann)
+	return sb.String()
 }
 
 func (j *job) snapshot() ([]*v1.JobStep, string) {

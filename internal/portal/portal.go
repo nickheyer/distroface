@@ -24,6 +24,7 @@ type Portal struct {
 	Isolated        bool
 	HidePrimaryLink bool
 	SSHPort         int
+	PublicHost      string // Pinned link host, empty derives one per request
 	rules           *pathMapper
 	backendProxy    http.Handler
 }

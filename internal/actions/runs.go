@@ -144,10 +144,10 @@ func (m *Manager) createRun(ctx context.Context, repo *db.GitRepository, f *Work
 			m.cancelRun(ctx, repo, other)
 		}
 	}
+	// Queued jobs wake the runners from inside advanceRun
 	if run.Status != StatusWaiting {
 		m.advanceRun(ctx, repo, run)
 	}
-	m.notifyRunners()
 	return run, nil
 }
 
@@ -585,12 +585,14 @@ func needRows(need string, jobs []*db.ActionsJob, defs defCache) []*db.ActionsJo
 	return out
 }
 
-// Aggregated state of the jobs a job needs
-func needsState(needs []string, jobs []*db.ActionsJob) (done bool, status string, outputs map[string]any) {
+// Aggregated state of the jobs a job needs, defs shared across a pass
+func needsState(needs []string, jobs []*db.ActionsJob, defs defCache) (done bool, status string, outputs map[string]any) {
 	done = true
 	status = ConclusionSuccess
 	outputs = map[string]any{}
-	defs := defCache{}
+	if defs == nil {
+		defs = defCache{}
+	}
 	for _, need := range needs {
 		rows := needRows(need, jobs, defs)
 		result := ConclusionSuccess
@@ -602,7 +604,7 @@ func needsState(needs []string, jobs []*db.ActionsJob) (done bool, status string
 				done = false
 				continue
 			}
-			c := effectiveConclusion(j)
+			c := effectiveConclusionWith(j, defs)
 			if c != ConclusionSuccess && rankConclusion(c) > rankConclusion(result) {
 				result = c
 			}
@@ -731,7 +733,7 @@ func resolveCalls(calls []*CallFrame, ectx *ExprContext, jobs []*db.ActionsJob, 
 		fctx.Env = fr.Env
 		fctx.Secrets = nil
 		fctx.Steps = nil
-		_, _, fctx.Needs = needsState(fr.Needs, jobs)
+		_, _, fctx.Needs = needsState(fr.Needs, jobs, nil)
 		raw := map[string]string{}
 		for k, v := range fr.Inputs {
 			s, err := Interpolate(v, &fctx)
@@ -778,12 +780,23 @@ func rankConclusion(c string) int {
 
 // Jobs marked continue-on-error count as success downstream
 func effectiveConclusion(j *db.ActionsJob) string {
+	return effectiveConclusionWith(j, nil)
+}
+
+// Same with a shared decode cache for aggregation passes
+func effectiveConclusionWith(j *db.ActionsJob, defs defCache) string {
 	c := j.Conclusion
 	if c == ConclusionNeutral {
 		return ConclusionSuccess
 	}
 	if c == ConclusionFailure || c == ConclusionTimedOut {
-		if def, err := decodeDefinition(j); err == nil && def.Job.ContinueOnError {
+		var def *jobDefinition
+		if defs != nil {
+			def = defs.get(j)
+		} else if d, err := decodeDefinition(j); err == nil {
+			def = d
+		}
+		if def != nil && def.Job != nil && def.Job.ContinueOnError {
 			return ConclusionSuccess
 		}
 	}
@@ -804,6 +817,7 @@ func (m *Manager) advanceRun(ctx context.Context, repo *db.GitRepository, run *d
 		wf, _ = ParseWorkflow([]byte(run.Workflow))
 	}
 	queued := false
+	defs := defCache{}
 	for changed := true; changed; {
 		changed = false
 		for _, j := range jobs {
@@ -821,7 +835,7 @@ func (m *Manager) advanceRun(ctx context.Context, repo *db.GitRepository, run *d
 				changed = true
 				continue
 			}
-			done, status, outputs := needsState(def.Job.Needs, jobs)
+			done, status, outputs := needsState(def.Job.Needs, jobs, defs)
 			if !done {
 				continue
 			}
@@ -860,6 +874,7 @@ func (m *Manager) advanceRun(ctx context.Context, repo *db.GitRepository, run *d
 				changed = true
 				continue
 			}
+			defs[j.ID] = def
 			// Names over needs outputs resolve now
 			if HasDeferred(j.Name) {
 				if name, err := Interpolate(j.Name, ectx); err == nil && name != "" && !HasDeferred(name) {

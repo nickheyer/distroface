@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -105,6 +106,31 @@ func (r *Repo) Merge3(ctx context.Context, base, ours, theirs plumbing.Hash, wri
 
 // Bases of bases are merged this deep before the first base stands in
 const virtualBaseDepth = 8
+
+// Blobs past this size conflict instead of merging
+const MaxMergeBlobBytes = 16 << 20
+
+// Leading bytes read to decide whether a blob is text
+const mergeProbeBytes = 8 << 10
+
+// Probes the head of a blob for text
+func (r *Repo) blobLooksText(h plumbing.Hash) (bool, error) {
+	blob, err := r.Repo.BlobObject(h)
+	if err != nil {
+		return false, err
+	}
+	rd, err := blob.Reader()
+	if err != nil {
+		return false, err
+	}
+	defer rd.Close()
+	head := make([]byte, mergeProbeBytes)
+	n, err := io.ReadFull(rd, head)
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
+		return false, err
+	}
+	return isText(head[:n]), nil
+}
 
 // Three way merge of two commits over every merge base, criss-cross histories merge their bases first
 func (r *Repo) MergeCommits(ctx context.Context, ours, theirs plumbing.Hash, write bool) (*MergeResult, error) {
@@ -403,6 +429,23 @@ func (r *Repo) mergePath(p string, base *object.TreeEntry, o, t sideChange) (*Tr
 			return &TreeEdit{Path: p, Mode: o.entry.Mode, Content: hashReader(o.entry.Hash)}, nil, nil
 		}
 		return nil, conflict("mode"), nil
+	}
+	// Size and a probe decide before full reads
+	sides := []plumbing.Hash{o.entry.Hash, t.entry.Hash}
+	if base != nil {
+		sides = append(sides, base.Hash)
+	}
+	for _, h := range sides {
+		if size, err := r.Storer.EncodedObjectSize(h); err == nil && size > MaxMergeBlobBytes {
+			return nil, conflict("binary"), nil
+		}
+		text, err := r.blobLooksText(h)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !text {
+			return nil, conflict("binary"), nil
+		}
 	}
 	var baseContent []byte
 	if base != nil {

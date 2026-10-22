@@ -214,7 +214,7 @@ type issueBody struct {
 
 func (q *request) createIssue() {
 	repo, ok := q.repo()
-	if !ok || !q.writable(repo, db.GitUnitIssues, rbac.ActionRead) {
+	if !ok || !q.writableLoose(repo, db.GitUnitIssues) {
 		return
 	}
 	var in issueBody

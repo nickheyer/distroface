@@ -234,7 +234,12 @@ func (s *Store) ListGitForks(ctx context.Context, parentID string, limit, offset
 		return nil, 0, err
 	}
 	var repos []*db.GitRepository
-	err := q.Order("created_at DESC").Limit(limit).Offset(offset).Find(&repos).Error
+	q = q.Order("created_at DESC")
+	// Zero means every row, gorm would emit LIMIT 0
+	if limit > 0 {
+		q = q.Limit(limit).Offset(offset)
+	}
+	err := q.Find(&repos).Error
 	return repos, total, err
 }
 
@@ -500,6 +505,22 @@ func (s *Store) GetGitCollaborator(ctx context.Context, repoID, userID string) (
 	return &c, err
 }
 
+// Accepted collaborators among the users, keyed by user id
+func (s *Store) AcceptedGitCollaborators(ctx context.Context, repoID string, userIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	var rows []db.GitCollaborator
+	if err := s.db.WithContext(ctx).Where("repo_id = ? AND accepted = ? AND user_id IN ?", repoID, true, userIDs).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, c := range rows {
+		out[c.UserID] = c.Permission
+	}
+	return out, nil
+}
+
 func (s *Store) ListGitCollaborators(ctx context.Context, repoID string, limit, offset int) ([]*db.GitCollaborator, int64, error) {
 	q := s.db.WithContext(ctx).Model(&db.GitCollaborator{}).Where("repo_id = ?", repoID)
 	var total int64
@@ -542,6 +563,15 @@ func (s *Store) GetGitBranchProtection(ctx context.Context, repoID, id string) (
 
 func (s *Store) DeleteGitBranchProtection(ctx context.Context, repoID, id string) error {
 	return s.db.WithContext(ctx).Where("repo_id = ? AND id = ?", repoID, id).Delete(&db.GitBranchProtection{}).Error
+}
+
+func (s *Store) GetGitTagProtection(ctx context.Context, repoID, id string) (*db.GitTagProtection, error) {
+	var p db.GitTagProtection
+	err := s.db.WithContext(ctx).First(&p, "repo_id = ? AND id = ?", repoID, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &p, err
 }
 
 func (s *Store) SaveGitTagProtection(ctx context.Context, p *db.GitTagProtection) error {
@@ -587,7 +617,11 @@ func (s *Store) ListGitCommitStatuses(ctx context.Context, repoID, sha string, l
 
 // Newest status per context
 func (s *Store) LatestGitCommitStatuses(ctx context.Context, repoID, sha string) ([]*db.GitCommitStatus, error) {
-	all, _, err := s.ListGitCommitStatuses(ctx, repoID, sha, 0, 0)
+	var all []*db.GitCommitStatus
+	err := s.db.WithContext(ctx).
+		Where("repo_id = ? AND sha = ?", repoID, sha).
+		Where("created_at = (SELECT MAX(s2.created_at) FROM git_commit_statuses s2 WHERE s2.repo_id = git_commit_statuses.repo_id AND s2.sha = git_commit_statuses.sha AND s2.context = git_commit_statuses.context)").
+		Order("created_at DESC").Find(&all).Error
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +644,11 @@ func (s *Store) LatestGitCommitStatusesBulk(ctx context.Context, repoID string, 
 		return out, nil
 	}
 	var all []*db.GitCommitStatus
-	if err := s.db.WithContext(ctx).Where("repo_id = ? AND sha IN ?", repoID, shas).Order("created_at DESC").Find(&all).Error; err != nil {
+	err := s.db.WithContext(ctx).
+		Where("repo_id = ? AND sha IN ?", repoID, shas).
+		Where("created_at = (SELECT MAX(s2.created_at) FROM git_commit_statuses s2 WHERE s2.repo_id = git_commit_statuses.repo_id AND s2.sha = git_commit_statuses.sha AND s2.context = git_commit_statuses.context)").
+		Order("created_at DESC").Find(&all).Error
+	if err != nil {
 		return nil, err
 	}
 	seen := map[string]bool{}
@@ -652,6 +690,24 @@ func (s *Store) ListLFSLinkRepoIDs(ctx context.Context, oid string, limit int) (
 	var ids []string
 	err := s.db.WithContext(ctx).Model(&db.GitLFSLink{}).Where("oid = ?", oid).Limit(limit).Pluck("repo_id", &ids).Error
 	return ids, err
+}
+
+// Linked objects among the given oids, keyed by oid
+func (s *Store) GetLFSObjects(ctx context.Context, repoID string, oids []string) (map[string]*db.LFSObject, error) {
+	out := make(map[string]*db.LFSObject, len(oids))
+	if len(oids) == 0 {
+		return out, nil
+	}
+	var rows []*db.LFSObject
+	err := s.db.WithContext(ctx).Joins("JOIN git_lfs_links ON git_lfs_links.oid = lfs_objects.oid AND git_lfs_links.repo_id = ?", repoID).
+		Where("lfs_objects.oid IN ?", oids).Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.OID] = r
+	}
+	return out, nil
 }
 
 func (s *Store) GetLFSObject(ctx context.Context, repoID, oid string) (*db.LFSObject, error) {

@@ -509,3 +509,64 @@ func TestJobRootRefusesEscape(t *testing.T) {
 		t.Fatal("upload must not read through an escaping symlink")
 	}
 }
+
+// Sequential replacement the masker used before the single pass
+func sequentialMask(masks []string, s string) string {
+	for _, m := range masks {
+		s = strings.ReplaceAll(s, m, "***")
+	}
+	return s
+}
+
+func TestMaskPrefixSecrets(t *testing.T) {
+	line := "token secret and secretlong and sec end\n"
+
+	// Longer secret first, the single pass matches the old sequential output
+	l := newLogStream(nil, "job")
+	l.AddMask("secretlong")
+	l.AddMask("secret")
+	_, _ = l.Write([]byte(line))
+	got := string(l.take(false))
+	want := sequentialMask([]string{"secretlong", "secret"}, line)
+	if got != want || got != "token *** and *** and sec end\n" {
+		t.Fatalf("long first: got %q, sequential %q", got, want)
+	}
+
+	// Shorter secret first used to leak the tail, the longest mask now wins
+	l = newLogStream(nil, "job")
+	l.AddMask("secret")
+	l.AddMask("secretlong")
+	_, _ = l.Write([]byte(line))
+	got = string(l.take(false))
+	if old := sequentialMask([]string{"secret", "secretlong"}, line); old != "token *** and ***long and sec end\n" {
+		t.Fatalf("sequential reference changed: %q", old)
+	}
+	if got != "token *** and *** and sec end\n" {
+		t.Fatalf("short first: got %q", got)
+	}
+
+	// Later masks still apply to lines written after the replacer was built
+	l.AddMask("sec end")
+	_, _ = l.Write([]byte(line))
+	if got := string(l.take(false)); got != "token *** and *** and ***\n" {
+		t.Fatalf("after rebuild: got %q", got)
+	}
+}
+
+func TestReportKey(t *testing.T) {
+	a := []*v1.JobStep{{Number: 1, Name: "Set up job", Status: v1.ActionsStatus_ACTIONS_STATUS_COMPLETED}}
+	b := []*v1.JobStep{{Number: 1, Name: "Set up job", Status: v1.ActionsStatus_ACTIONS_STATUS_COMPLETED}}
+	if reportKey(a, "[]") != reportKey(b, "[]") {
+		t.Fatal("equal snapshots must share a key")
+	}
+	b[0].Status = v1.ActionsStatus_ACTIONS_STATUS_RUNNING
+	if reportKey(a, "[]") == reportKey(b, "[]") {
+		t.Fatal("a status change must change the key")
+	}
+	if reportKey(a, "[]") == reportKey(a, `[{"level":"error"}]`) {
+		t.Fatal("new annotations must change the key")
+	}
+	if reportKey(nil, "") == reportKey(a, "") {
+		t.Fatal("an empty table must differ from a filled one")
+	}
+}

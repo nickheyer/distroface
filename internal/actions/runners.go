@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -88,11 +90,11 @@ func (m *Manager) Register(ctx context.Context, registration, name string, label
 		ScopeKind: tok.ScopeKind, ScopeID: tok.ScopeID, Name: name,
 		Labels: mustJSON(normalizeLabels(labels)), TokenHash: hashToken(plain), Version: version, LastSeen: nowPtr(),
 	}
-	if err := m.store.CreateActionsRunner(ctx, runner); err != nil {
+	if err := m.store.RegisterActionsRunner(ctx, tok.ID, runner); err != nil {
+		if errors.Is(err, stores.ErrRunnerTokenUsed) {
+			return nil, "", fmt.Errorf("%w: registration token is invalid or expired", ErrDenied)
+		}
 		return nil, "", err
-	}
-	if err := m.store.UseActionsRunnerToken(ctx, tok.ID); err != nil {
-		m.log.Warn("actions: mark registration token used: %v", err)
 	}
 	return runner, plain, nil
 }
@@ -111,12 +113,46 @@ func normalizeLabels(labels []string) []string {
 	return out
 }
 
-// Heartbeat marks the runner seen and records its load
-func (m *Manager) Heartbeat(ctx context.Context, runner *db.ActionsRunner, version string, running []string) error {
+// Marks the runner seen and fails jobs it dropped
+func (m *Manager) Heartbeat(ctx context.Context, runner *db.ActionsRunner, version string, running []string, reportsJobs bool) error {
 	if version == "" {
 		version = runner.Version
 	}
-	return m.store.TouchActionsRunner(ctx, runner.ID, version, len(running))
+	if err := m.store.TouchActionsRunner(ctx, runner.ID, version, len(running)); err != nil {
+		return err
+	}
+	if reportsJobs {
+		m.failDroppedJobs(ctx, runner, running)
+	}
+	return nil
+}
+
+// Unreported running jobs fail now instead of at timeout
+func (m *Manager) failDroppedJobs(ctx context.Context, runner *db.ActionsRunner, running []string) {
+	jobs, err := m.store.ListActionsJobsByRunner(ctx, runner.ID, StatusRunning)
+	if err != nil || len(jobs) == 0 {
+		return
+	}
+	reported := make(map[string]bool, len(running))
+	for _, id := range running {
+		reported[id] = true
+	}
+	cutoff := time.Now().UTC().Add(-droppedJobGrace)
+	for _, j := range jobs {
+		if reported[j.ID] || j.StartedAt == nil || j.StartedAt.After(cutoff) {
+			continue
+		}
+		run, _ := m.store.GetActionsRunByID(ctx, j.RunID)
+		if run == nil {
+			continue
+		}
+		repo, _ := m.store.GetGitRepositoryByID(ctx, run.RepoID)
+		if repo == nil {
+			continue
+		}
+		m.failJob(ctx, repo, run, j, ConclusionFailure, "runner stopped executing the job")
+		m.advanceRun(ctx, repo, run)
+	}
 }
 
 // RunnerStatus renders online, busy, or offline
@@ -143,6 +179,10 @@ func (m *Manager) UpdateRunner(ctx context.Context, runner *db.ActionsRunner, na
 
 // DeleteRunner removes a runner and fails anything it was executing
 func (m *Manager) DeleteRunner(ctx context.Context, runner *db.ActionsRunner) error {
+	// Row goes first so an in flight poll cannot claim afterwards
+	if err := m.store.DeleteActionsRunner(ctx, runner.ID); err != nil {
+		return err
+	}
 	jobs, _ := m.store.ListActionsJobsByRunner(ctx, runner.ID, StatusRunning)
 	for _, j := range jobs {
 		run, _ := m.store.GetActionsRunByID(ctx, j.RunID)
@@ -156,7 +196,7 @@ func (m *Manager) DeleteRunner(ctx context.Context, runner *db.ActionsRunner) er
 		m.failJob(ctx, repo, run, j, ConclusionFailure, "runner was removed")
 		m.advanceRun(ctx, repo, run)
 	}
-	return m.store.DeleteActionsRunner(ctx, runner.ID)
+	return nil
 }
 
 // RunnerLabels decodes the stored label list

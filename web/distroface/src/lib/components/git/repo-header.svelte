@@ -39,6 +39,7 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
+	import { portalStore } from '$lib/stores/portal.svelte';
 	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
 	import { GitRepoType, Visibility } from '$lib/proto/distroface/v1/types_pb';
 	import { GitUnit, WatchMode } from '$lib/proto/distroface/v1/git_pb';
@@ -220,6 +221,9 @@
 		return seg;
 	});
 
+	// Read only portals refuse stars and watches, show the counts instead
+	const readOnlyPortal = $derived(portalStore.isPortal && !portalStore.allowPush);
+
 	let starPending = $state(false);
 	async function toggleStar() {
 		if (starPending) return;
@@ -333,14 +337,14 @@
 							>
 								<RefreshCw />Retry import
 							</Button>
-              <Button
-                variant="ghost-muted"
-                size="sm"
-                onclick={dismissImport}
-                disabled={importPending}
-              >
-                <Cancel />Cancel
-              </Button>
+							<Button
+								variant="ghost-muted"
+								size="sm"
+								onclick={dismissImport}
+								disabled={importPending}
+							>
+								<Cancel />Cancel
+							</Button>
 						{/if}
 					{/if}
 				{/if}
@@ -370,7 +374,7 @@
 		</div>
 
 		<div class="flex w-full shrink-0 items-center gap-2 sm:w-auto">
-			{#if authStore.isAuthenticated}
+			{#if authStore.isAuthenticated && !readOnlyPortal}
 				<DropdownMenu>
 					<DropdownMenuTrigger>
 						{#snippet child({ props })}

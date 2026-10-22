@@ -561,6 +561,8 @@ message HeartbeatRequest {
   string version = 1;
   // Jobs currently executing
   repeated string running_job_ids = 2;
+  // True when running_job_ids is authoritative, one off checks leave it unset
+  bool reports_jobs = 3;
 }
 
 // HeartbeatResponse is empty on success.

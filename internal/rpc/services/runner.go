@@ -77,7 +77,7 @@ func (s *RunnerService) Heartbeat(ctx context.Context, req *v1.HeartbeatRequest)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.actions.Heartbeat(ctx, runner, req.Version, req.RunningJobIds); err != nil {
+	if err := s.actions.Heartbeat(ctx, runner, req.Version, req.RunningJobIds, req.ReportsJobs); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	return &v1.HeartbeatResponse{}, nil

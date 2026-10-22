@@ -146,11 +146,36 @@ func (s *ActionsService) ListWorkflowRuns(ctx context.Context, req *v1.ListWorkf
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	names := s.actionsTriggerNames(ctx, runs)
 	out := make([]*v1.WorkflowRun, 0, len(runs))
 	for _, r := range runs {
-		out = append(out, s.actionsRunProto(ctx, repo, r, false))
+		out = append(out, s.actionsRunProtoNamed(ctx, repo, r, false, names))
 	}
 	return &v1.ListWorkflowRunsResponse{Runs: out, Page: pages.Info(offset, limit, total)}, nil
+}
+
+// Usernames of the users who triggered a page of runs, one query
+func (s *ActionsService) actionsTriggerNames(ctx context.Context, runs []*storage.ActionsRun) map[string]string {
+	ids := make([]string, 0, len(runs))
+	seen := map[string]bool{}
+	for _, r := range runs {
+		if r.TriggerUserID != "" && !seen[r.TriggerUserID] {
+			seen[r.TriggerUserID] = true
+			ids = append(ids, r.TriggerUserID)
+		}
+	}
+	names := make(map[string]string, len(ids))
+	if len(ids) == 0 {
+		return names
+	}
+	users, err := s.store.GetUsersByIDs(ctx, ids)
+	if err != nil {
+		return names
+	}
+	for id, u := range users {
+		names[id] = u.Username
+	}
+	return names
 }
 
 func (s *ActionsService) GetWorkflowRun(ctx context.Context, req *v1.GetWorkflowRunRequest) (*v1.GetWorkflowRunResponse, error) {
@@ -331,7 +356,7 @@ func (s *ActionsService) ListRunImages(ctx context.Context, req *v1.ListRunImage
 // ── Secrets and variables ────────────────────────────────────────────────
 
 func (s *ActionsService) ListSecrets(ctx context.Context, req *v1.ListSecretsRequest) (*v1.ListSecretsResponse, error) {
-	sc, err := s.actionsScope(ctx, req.Scope)
+	sc, err := s.actionsScope(ctx, req.Scope, false)
 	if err != nil {
 		return nil, err
 	}
@@ -348,7 +373,7 @@ func (s *ActionsService) ListSecrets(ctx context.Context, req *v1.ListSecretsReq
 }
 
 func (s *ActionsService) SetSecret(ctx context.Context, req *v1.SetSecretRequest) (*v1.SetSecretResponse, error) {
-	sc, err := s.actionsScope(ctx, req.Scope)
+	sc, err := s.actionsScope(ctx, req.Scope, true)
 	if err != nil {
 		return nil, err
 	}
@@ -370,7 +395,7 @@ func (s *ActionsService) SetSecret(ctx context.Context, req *v1.SetSecretRequest
 }
 
 func (s *ActionsService) DeleteSecret(ctx context.Context, req *v1.DeleteSecretRequest) (*v1.DeleteSecretResponse, error) {
-	sc, err := s.actionsScope(ctx, req.Scope)
+	sc, err := s.actionsScope(ctx, req.Scope, true)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +406,7 @@ func (s *ActionsService) DeleteSecret(ctx context.Context, req *v1.DeleteSecretR
 }
 
 func (s *ActionsService) ListVariables(ctx context.Context, req *v1.ListVariablesRequest) (*v1.ListVariablesResponse, error) {
-	sc, err := s.actionsScope(ctx, req.Scope)
+	sc, err := s.actionsScope(ctx, req.Scope, false)
 	if err != nil {
 		return nil, err
 	}
@@ -398,7 +423,7 @@ func (s *ActionsService) ListVariables(ctx context.Context, req *v1.ListVariable
 }
 
 func (s *ActionsService) SetVariable(ctx context.Context, req *v1.SetVariableRequest) (*v1.SetVariableResponse, error) {
-	sc, err := s.actionsScope(ctx, req.Scope)
+	sc, err := s.actionsScope(ctx, req.Scope, true)
 	if err != nil {
 		return nil, err
 	}
@@ -413,7 +438,7 @@ func (s *ActionsService) SetVariable(ctx context.Context, req *v1.SetVariableReq
 }
 
 func (s *ActionsService) DeleteVariable(ctx context.Context, req *v1.DeleteVariableRequest) (*v1.DeleteVariableResponse, error) {
-	sc, err := s.actionsScope(ctx, req.Scope)
+	sc, err := s.actionsScope(ctx, req.Scope, true)
 	if err != nil {
 		return nil, err
 	}
@@ -426,7 +451,7 @@ func (s *ActionsService) DeleteVariable(ctx context.Context, req *v1.DeleteVaria
 // ── Runners ──────────────────────────────────────────────────────────────
 
 func (s *ActionsService) ListRunners(ctx context.Context, req *v1.ListRunnersRequest) (*v1.ListRunnersResponse, error) {
-	sc, err := s.actionsScope(ctx, req.Scope)
+	sc, err := s.actionsScope(ctx, req.Scope, false)
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +479,7 @@ func (s *ActionsService) ListRunners(ctx context.Context, req *v1.ListRunnersReq
 }
 
 func (s *ActionsService) CreateRunnerToken(ctx context.Context, req *v1.CreateRunnerTokenRequest) (*v1.CreateRunnerTokenResponse, error) {
-	sc, err := s.actionsScope(ctx, req.Scope)
+	sc, err := s.actionsScope(ctx, req.Scope, true)
 	if err != nil {
 		return nil, err
 	}
@@ -492,25 +517,38 @@ func (s *ActionsService) UpdateRunner(ctx context.Context, req *v1.UpdateRunnerR
 // ── Access helpers ───────────────────────────────────────────────────────
 
 // Loads a repository and requires a level on the actions unit
+// Repository at a level, anything above read is a mutation here
 func (s *ActionsService) actionsRepo(ctx context.Context, ns, name string, need gitrepo.Level) (*storage.GitRepository, *auth.AuthenticatedUser, error) {
+	return s.actionsRepoAt(ctx, ns, name, need, need > gitrepo.LevelRead)
+}
+
+// Admin reads such as secret listings hold a level without mutating
+func (s *ActionsService) actionsRepoAt(ctx context.Context, ns, name string, need gitrepo.Level, mutate bool) (*storage.GitRepository, *auth.AuthenticatedUser, error) {
 	user := auth.UserFromContext(ctx)
 	repo, err := visibleGitRepo(ctx, s.store, s.manager.Access(), user, ns, name)
 	if err != nil {
 		return nil, nil, err
 	}
-	if need > gitrepo.LevelRead {
-		if user == nil || user.IsAnonymous() {
-			return nil, nil, connect.NewError(connect.CodeUnauthenticated, "")
-		}
+	if need > gitrepo.LevelRead && (user == nil || user.IsAnonymous()) {
+		return nil, nil, connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	if mutate {
 		if err := portalAllowsGitWrite(ctx); err != nil {
 			return nil, nil, err
 		}
 	}
-	if s.manager.Access().Level(ctx, user, repo, storage.GitUnitActions) < need {
-		if !gitrepo.UnitEnabled(repo, storage.GitUnitActions) {
-			return nil, nil, connect.Errorf(connect.CodeFailedPrecondition, "actions are disabled on this repository")
+	levels := s.manager.Access().Levels(ctx, user, repo)
+	if !gitrepo.UnitEnabled(repo, storage.GitUnitActions) && !levels.IsOwner && !levels.CanAdmin {
+		return nil, nil, connect.Errorf(connect.CodeFailedPrecondition, "actions are disabled on this repository")
+	}
+	if levels.Unit(storage.GitUnitActions) < need {
+		if need <= gitrepo.LevelRead {
+			return nil, nil, connect.Errorf(connect.CodeNotFound, "repository not found")
 		}
 		return nil, nil, connect.Errorf(connect.CodePermissionDenied, "access denied")
+	}
+	if need > gitrepo.LevelRead && repo.IsArchived {
+		return nil, nil, connect.Errorf(connect.CodeFailedPrecondition, "repository is archived")
 	}
 	return repo, user, nil
 }
@@ -597,11 +635,16 @@ func (r *actionsScopeRef) servingScope(run *storage.ActionsRunner) *v1.ActionsSc
 	return &v1.ActionsScope{Kind: storage.ActionsScopeSystem}
 }
 
-// Requires administration of the scope the request names
-func (s *ActionsService) actionsScope(ctx context.Context, scope *v1.ActionsScope) (*actionsScopeRef, error) {
+// Requires administration of the scope the request names, mutations pass the portal gate
+func (s *ActionsService) actionsScope(ctx context.Context, scope *v1.ActionsScope, mutate bool) (*actionsScopeRef, error) {
 	user := auth.UserFromContext(ctx)
 	if user == nil || user.IsAnonymous() {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	if mutate {
+		if err := portalAllowsGitWrite(ctx); err != nil {
+			return nil, err
+		}
 	}
 	kind := strings.ToLower(strings.TrimSpace(scope.GetKind()))
 	id := strings.TrimSpace(scope.GetId())
@@ -643,7 +686,7 @@ func (s *ActionsService) actionsScope(ctx context.Context, scope *v1.ActionsScop
 		if !ok || ns == "" || name == "" {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "repository scope id must be namespace/name")
 		}
-		repo, _, err := s.actionsRepo(ctx, ns, name, gitrepo.LevelAdmin)
+		repo, _, err := s.actionsRepoAt(ctx, ns, name, gitrepo.LevelAdmin, mutate)
 		if err != nil {
 			return nil, err
 		}
@@ -653,7 +696,7 @@ func (s *ActionsService) actionsScope(ctx context.Context, scope *v1.ActionsScop
 }
 
 func (s *ActionsService) actionsScopedRunner(ctx context.Context, scope *v1.ActionsScope, id string) (*actionsScopeRef, *storage.ActionsRunner, error) {
-	sc, err := s.actionsScope(ctx, scope)
+	sc, err := s.actionsScope(ctx, scope, true)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -738,6 +781,11 @@ func (s *ActionsService) actionsWorkflowFiles(ctx context.Context, repo *storage
 // ── Proto mapping ────────────────────────────────────────────────────────
 
 func (s *ActionsService) actionsRunProto(ctx context.Context, repo *storage.GitRepository, run *storage.ActionsRun, withJobs bool) *v1.WorkflowRun {
+	return s.actionsRunProtoNamed(ctx, repo, run, withJobs, nil)
+}
+
+// Trigger names from a page wide lookup, a nil map falls back per run
+func (s *ActionsService) actionsRunProtoNamed(ctx context.Context, repo *storage.GitRepository, run *storage.ActionsRun, withJobs bool, names map[string]string) *v1.WorkflowRun {
 	out := &v1.WorkflowRun{
 		Id: run.ID, RepoFullName: repo.Namespace + "/" + repo.Name, Number: run.Number,
 		WorkflowPath: run.WorkflowPath, WorkflowName: run.WorkflowName, Event: run.Event, Ref: run.Ref, Sha: run.SHA,
@@ -748,7 +796,9 @@ func (s *ActionsService) actionsRunProto(ctx context.Context, repo *storage.GitR
 		Notes:     actions.StringList(run.Notes),
 	}
 	if run.TriggerUserID != "" {
-		if u, _ := s.store.GetUserByID(ctx, run.TriggerUserID); u != nil {
+		if names != nil {
+			out.TriggerUser = names[run.TriggerUserID]
+		} else if u, _ := s.store.GetUserByID(ctx, run.TriggerUserID); u != nil {
 			out.TriggerUser = u.Username
 		}
 	}

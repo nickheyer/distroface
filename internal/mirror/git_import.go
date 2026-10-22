@@ -1150,6 +1150,7 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 				BaseBranch:     pr.BaseBranch,
 				Draft:          pr.Draft,
 				MergeableState: "unknown",
+				ConflictState:  "unknown",
 				MergedAt:       pr.MergedAt,
 				MergeCommitSHA: pr.MergeSHA,
 				HeadDeleted:    pr.State != db.IssueStateOpen && !pr.Merged && headSHA == "",

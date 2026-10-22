@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -28,12 +29,14 @@ type logStream struct {
 	buf     bytes.Buffer
 	partial []byte
 	masks   []string
-	index   int
-	failed  error
-	dead    bool
-	wake    chan struct{}
-	done    chan struct{}
-	stopped chan struct{}
+	// Rebuilt lazily after the mask set changes
+	replacer *strings.Replacer
+	index    int
+	failed   error
+	dead     bool
+	wake     chan struct{}
+	done     chan struct{}
+	stopped  chan struct{}
 }
 
 func newLogStream(client *Client, jobID string) *logStream {
@@ -127,13 +130,25 @@ func (l *logStream) addMask(v string) {
 		}
 	}
 	l.masks = append(l.masks, v)
+	l.replacer = nil
 }
 
+// One pass over the line, longest mask wins where they overlap
 func (l *logStream) mask(s string) string {
-	for _, m := range l.masks {
-		s = strings.ReplaceAll(s, m, "***")
+	if len(l.masks) == 0 {
+		return s
 	}
-	return s
+	if l.replacer == nil {
+		ordered := make([]string, len(l.masks))
+		copy(ordered, l.masks)
+		sort.SliceStable(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
+		pairs := make([]string, 0, 2*len(ordered))
+		for _, m := range ordered {
+			pairs = append(pairs, m, "***")
+		}
+		l.replacer = strings.NewReplacer(pairs...)
+	}
+	return l.replacer.Replace(s)
 }
 
 // Masks complete lines, partial lines wait for their newline

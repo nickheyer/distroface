@@ -223,3 +223,31 @@ func TestSeedSystemOnce(t *testing.T) {
 		t.Fatal("seed overwrote existing row")
 	}
 }
+
+func TestEffectiveCachedCopiesStayApart(t *testing.T) {
+	r := NewResolver(newMemStore(), nil)
+	ctx := t.Context()
+	sys := v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM
+
+	first, _, err := r.Effective(ctx, sys, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A caller editing its copy must not poison later readers
+	first.Acme = &v1.ACMESettings{Email: proto.String("edited@x.com")}
+	second := r.System(ctx)
+	if second.GetAcme().GetEmail() == "edited@x.com" {
+		t.Fatal("cached settings leaked a caller's edit")
+	}
+	if _, ok := r.effective[scopeKey{sys, ""}]; !ok {
+		t.Fatal("system scope should be cached after a read")
+	}
+
+	patch := &v1.Settings{Acme: &v1.ACMESettings{Email: proto.String("sys@x.com")}}
+	if _, err := r.Update(ctx, sys, "", patch, []string{"acme.email"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.System(ctx).GetAcme().GetEmail(); got != "sys@x.com" {
+		t.Fatalf("write must drop the cache, got %q", got)
+	}
+}

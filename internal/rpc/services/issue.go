@@ -45,13 +45,30 @@ func (s *IssueService) repo(ctx context.Context, user *auth.AuthenticatedUser, n
 	return repo, nil
 }
 
+// Loads a visible repository with its levels in one pass
+func (s *IssueService) repoLevels(ctx context.Context, user *auth.AuthenticatedUser, namespace, name string) (*storage.GitRepository, gitrepo.Levels, error) {
+	repo, err := namedGitRepo(ctx, s.store, user, namespace, name)
+	if err != nil {
+		return nil, gitrepo.Levels{}, err
+	}
+	levels := s.forge.Git().Access().Levels(ctx, user, repo)
+	if !levelsCanSee(repo, levels) {
+		return nil, gitrepo.Levels{}, connect.Errorf(connect.CodeNotFound, "repository not found")
+	}
+	return repo, levels, nil
+}
+
 // Actor over the unit an issue lives in
 func (s *IssueService) actor(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.GitRepository, isPull bool) (forge.Actor, error) {
+	return actorFromLevels(user, repo, s.forge.Git().Access().Levels(ctx, user, repo), isPull)
+}
+
+// Actor from levels already computed for the repository
+func actorFromLevels(user *auth.AuthenticatedUser, repo *storage.GitRepository, levels gitrepo.Levels, isPull bool) (forge.Actor, error) {
 	unit := storage.GitUnitIssues
 	if isPull {
 		unit = storage.GitUnitPulls
 	}
-	levels := s.forge.Git().Access().Levels(ctx, user, repo)
 	level := levels.Unit(unit)
 	if !gitrepo.UnitEnabled(repo, unit) && !levels.IsOwner && !levels.CanAdmin {
 		return forge.Actor{}, connect.Errorf(connect.CodeFailedPrecondition, "the %s feature is disabled on this repository", unit)
@@ -62,10 +79,27 @@ func (s *IssueService) actor(ctx context.Context, user *auth.AuthenticatedUser, 
 	return forge.Actor{User: user, CanWrite: level >= gitrepo.LevelWrite, CanAdmin: levels.CanAdmin || levels.IsOwner}, nil
 }
 
+// Read on issues or pulls, labels and milestones serve both
+func (s *IssueService) trackerReadable(ctx context.Context, user *auth.AuthenticatedUser, repo *storage.GitRepository) error {
+	levels := s.forge.Git().Access().Levels(ctx, user, repo)
+	if levels.IsOwner || levels.CanAdmin {
+		return nil
+	}
+	issues := gitrepo.UnitEnabled(repo, storage.GitUnitIssues)
+	pulls := gitrepo.UnitEnabled(repo, storage.GitUnitPulls)
+	if !issues && !pulls {
+		return connect.Errorf(connect.CodeFailedPrecondition, "issues and pull requests are disabled on this repository")
+	}
+	if (issues && levels.Unit(storage.GitUnitIssues) >= gitrepo.LevelRead) || (pulls && levels.Unit(storage.GitUnitPulls) >= gitrepo.LevelRead) {
+		return nil
+	}
+	return connect.Errorf(connect.CodeNotFound, "repository not found")
+}
+
 // Loads a repository, an issue, and the caller's actor
 func (s *IssueService) issue(ctx context.Context, namespace, name string, number int64) (*auth.AuthenticatedUser, *storage.GitRepository, *storage.GitIssue, forge.Actor, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.repo(ctx, user, namespace, name)
+	repo, levels, err := s.repoLevels(ctx, user, namespace, name)
 	if err != nil {
 		return nil, nil, nil, forge.Actor{}, err
 	}
@@ -73,7 +107,7 @@ func (s *IssueService) issue(ctx context.Context, namespace, name string, number
 	if err != nil {
 		return nil, nil, nil, forge.Actor{}, mapForgeErr(err)
 	}
-	actor, err := s.actor(ctx, user, repo, issue.IsPull)
+	actor, err := actorFromLevels(user, repo, levels, issue.IsPull)
 	if err != nil {
 		return nil, nil, nil, forge.Actor{}, err
 	}
@@ -157,7 +191,7 @@ func (s *IssueService) GetIssue(ctx context.Context, req *v1.GetIssueRequest) (*
 
 func (s *IssueService) ListIssues(ctx context.Context, req *v1.ListIssuesRequest) (*v1.ListIssuesResponse, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := s.repo(ctx, user, req.Namespace, req.Name)
+	repo, levels, err := s.repoLevels(ctx, user, req.Namespace, req.Name)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +216,7 @@ func (s *IssueService) ListIssues(ctx context.Context, req *v1.ListIssuesRequest
 	if !gitrepo.UnitEnabled(repo, unit) {
 		return &v1.ListIssuesResponse{Page: pages.Info(offset, limit, 0)}, nil
 	}
-	if s.forge.Git().Access().Levels(ctx, user, repo).Unit(unit) < gitrepo.LevelRead {
+	if levels.Unit(unit) < gitrepo.LevelRead {
 		return nil, connect.Errorf(connect.CodeNotFound, "repository not found")
 	}
 	issues, total, err := s.forge.ListIssues(ctx, opts)
@@ -197,6 +231,7 @@ func (s *IssueService) ListIssues(ctx context.Context, req *v1.ListIssuesRequest
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	users := newGitUserCache(s.store)
+	users.prime(ctx, issueViewUserIDs(views))
 	out := &v1.ListIssuesResponse{Page: pages.Info(offset, limit, total), OpenCount: open, ClosedCount: closed}
 	for _, v := range views {
 		out.Issues = append(out.Issues, s.issueToProto(ctx, users, viewerID(user), v))
@@ -230,6 +265,7 @@ func (s *IssueService) SearchIssues(ctx context.Context, req *v1.SearchIssuesReq
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	users := newGitUserCache(s.store)
+	users.prime(ctx, issueViewUserIDs(views))
 	out := &v1.SearchIssuesResponse{Page: pages.Info(offset, limit, total)}
 	for _, v := range views {
 		out.Issues = append(out.Issues, s.issueToProto(ctx, users, viewerID(user), v))
@@ -567,6 +603,8 @@ func (s *IssueService) labelScope(ctx context.Context, namespace, name, orgID st
 			if s.forge.Git().Access().Level(ctx, user, repo, storage.GitUnitIssues) < gitrepo.LevelWrite {
 				return nil, "", connect.Errorf(connect.CodePermissionDenied, "write access to issues required")
 			}
+		} else if err := s.trackerReadable(ctx, user, repo); err != nil {
+			return nil, "", err
 		}
 		return repo, "", nil
 	}
@@ -660,6 +698,9 @@ func (s *IssueService) ListMilestones(ctx context.Context, req *v1.ListMilestone
 	user := auth.UserFromContext(ctx)
 	repo, err := s.repo(ctx, user, req.Namespace, req.Name)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.trackerReadable(ctx, user, repo); err != nil {
 		return nil, err
 	}
 	limit, offset := pages.Parse(req.Page)

@@ -34,7 +34,7 @@ var gitPath = regexp.MustCompile(`^/([^/]+)/([^/]+?)(\.wiki)?(\.git)?/(info/refs
 const LFSAudience = "distroface-git"
 
 // Chunk size for streamed pack responses
-const flushChunk = 4096
+const flushChunk = 64 << 10
 
 // HTTP serves smart http, lfs, raw, and archive routes ahead of the spa
 type HTTP struct {
@@ -618,7 +618,13 @@ func (h *HTTP) actionsArtifact(w http.ResponseWriter, r *http.Request, req *gitR
 		http.NotFound(w, r)
 		return
 	}
-	http.Redirect(w, r, fmt.Sprintf("/api/v1/artifacts/_ns/%s/%s/%s/%s", req.repo.Namespace, req.repo.Name, art.Version, art.Path), http.StatusFound)
+	// Only files inside a package linked to this repository
+	pkg, err := h.manager.Store().GetArtifactRepositoryByID(r.Context(), art.RepoID)
+	if err != nil || pkg == nil || pkg.GitRepoID == nil || *pkg.GitRepoID != req.repo.ID {
+		http.NotFound(w, r)
+		return
+	}
+	http.Redirect(w, r, fmt.Sprintf("/api/v1/artifacts/_ns/%s/%s/%s/%s", pkg.Namespace, pkg.Name, art.Version, art.Path), http.StatusFound)
 }
 
 // Flushes after every write so pack data streams, records when the status committed

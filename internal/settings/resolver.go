@@ -33,9 +33,16 @@ type Resolver struct {
 
 	mu        sync.RWMutex
 	rows      map[scopeKey]*v1.Settings
+	effective map[scopeKey]effectiveEntry
 	portalOrg map[string]string
 	repoOrg   map[string]string
 	subs      []func()
+}
+
+// Merged result of one scope, handed out as clones
+type effectiveEntry struct {
+	settings *v1.Settings
+	prov     []*v1.FieldProvenance
 }
 
 func NewResolver(store Store, fileOverrides *v1.Settings) *Resolver {
@@ -43,6 +50,7 @@ func NewResolver(store Store, fileOverrides *v1.Settings) *Resolver {
 		store:     store,
 		overrides: fileOverrides,
 		rows:      map[scopeKey]*v1.Settings{},
+		effective: map[scopeKey]effectiveEntry{},
 		portalOrg: map[string]string{},
 		repoOrg:   map[string]string{},
 	}
@@ -68,6 +76,7 @@ func (r *Resolver) Subscribe(fn func()) {
 func (r *Resolver) Invalidate() {
 	r.mu.Lock()
 	r.rows = map[scopeKey]*v1.Settings{}
+	r.effective = map[scopeKey]effectiveEntry{}
 	r.portalOrg = map[string]string{}
 	r.repoOrg = map[string]string{}
 	r.mu.Unlock()
@@ -78,7 +87,13 @@ func (r *Resolver) ForgetRepo(repoID string) {
 	r.mu.Lock()
 	delete(r.repoOrg, repoID)
 	delete(r.rows, scopeKey{v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, repoID})
+	delete(r.effective, scopeKey{v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, repoID})
 	r.mu.Unlock()
+}
+
+// RepoOrgID is the cached org behind a repository, empty for user namespaces
+func (r *Resolver) RepoOrgID(ctx context.Context, repoID string) (string, error) {
+	return r.orgForRepo(ctx, repoID)
 }
 
 func (r *Resolver) notify() {
@@ -180,8 +195,37 @@ type tierRow struct {
 	tier v1.SettingsTier
 }
 
-// Effective resolves the full chain for a scope with provenance
+// Effective resolves the full chain for a scope with provenance, merged once per write
 func (r *Resolver) Effective(ctx context.Context, scope v1.SettingsScopeType, scopeID string) (*v1.Settings, []*v1.FieldProvenance, error) {
+	key := scopeKey{scope, scopeID}
+	r.mu.RLock()
+	cached, ok := r.effective[key]
+	r.mu.RUnlock()
+	if ok {
+		return cached.clone()
+	}
+	eff, prov, err := r.merge(ctx, scope, scopeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	entry := effectiveEntry{settings: eff, prov: prov}
+	r.mu.Lock()
+	r.effective[key] = entry
+	r.mu.Unlock()
+	return entry.clone()
+}
+
+// Callers may edit what they get, the cached copy stays pristine
+func (e effectiveEntry) clone() (*v1.Settings, []*v1.FieldProvenance, error) {
+	prov := make([]*v1.FieldProvenance, len(e.prov))
+	for i, p := range e.prov {
+		prov[i] = proto.Clone(p).(*v1.FieldProvenance)
+	}
+	return proto.Clone(e.settings).(*v1.Settings), prov, nil
+}
+
+// Merges stored tiers over defaults under file pins
+func (r *Resolver) merge(ctx context.Context, scope v1.SettingsScopeType, scopeID string) (*v1.Settings, []*v1.FieldProvenance, error) {
 	chain := []tierRow{}
 
 	system, err := r.Stored(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
@@ -360,6 +404,8 @@ func (r *Resolver) save(ctx context.Context, scope v1.SettingsScopeType, scopeID
 	}
 	r.mu.Lock()
 	r.rows[scopeKey{scope, scopeID}] = row
+	// Any tier may feed lower scopes, merged results start over
+	r.effective = map[scopeKey]effectiveEntry{}
 	r.mu.Unlock()
 	return nil
 }

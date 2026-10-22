@@ -59,7 +59,8 @@ func (m *Manager) Mergeability(ctx context.Context, repo *db.GitRepository, acto
 		return out, nil
 	}
 	mergeBase, _ := r.MergeBase(baseTip, head)
-	if pr.MergeableState == MergeableUnknown || pr.MergeableState == MergeableChecking || pr.MergeableState == MergeableBlocked {
+	// Simulate once per head and base pair, rules reread always
+	if pr.ConflictState != MergeableClean && pr.ConflictState != MergeableConflict {
 		res, err := r.MergeCommits(ctx, baseTip, head, false)
 		if err != nil {
 			return nil, err
@@ -73,10 +74,10 @@ func (m *Manager) Mergeability(ctx context.Context, repo *db.GitRepository, acto
 			state = MergeableConflict
 		}
 		raw, _ := jsonMarshal(out.Conflicts)
-		pr.MergeableState, pr.ConflictPaths = state, string(raw)
-		_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"mergeable_state": state, "conflict_paths": string(raw)})
+		pr.ConflictState, pr.ConflictPaths = state, string(raw)
+		_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"conflict_state": state, "conflict_paths": string(raw)})
 	}
-	if pr.MergeableState == MergeableConflict {
+	if pr.ConflictState == MergeableConflict {
 		out.Blockers = append(out.Blockers, Blocker{"conflict", "the branches have conflicts"})
 	}
 	protections, _ := m.store.ListGitBranchProtections(ctx, repo.ID)
@@ -90,13 +91,13 @@ func (m *Manager) Mergeability(ctx context.Context, repo *db.GitRepository, acto
 	}
 	state := MergeableClean
 	switch {
-	case pr.MergeableState == MergeableConflict:
+	case pr.ConflictState == MergeableConflict:
 		state = MergeableConflict
 	case len(out.Blockers) > 0:
 		state = MergeableBlocked
 	}
 	out.State = state
-	if state != pr.MergeableState && pr.MergeableState != MergeableConflict {
+	if state != pr.MergeableState {
 		_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"mergeable_state": state})
 		pr.MergeableState = state
 	}
@@ -263,10 +264,6 @@ func (m *Manager) Merge(ctx context.Context, repo *db.GitRepository, actor Actor
 	}
 	headRepo, _ := m.store.GetGitRepositoryByID(ctx, pr.HeadRepoID)
 	head := plumbing.NewHash(pr.HeadSHA)
-	mergeBase := plumbing.ZeroHash
-	if pr.MergeBaseSHA != "" {
-		mergeBase = plumbing.NewHash(pr.MergeBaseSHA)
-	}
 	committer := m.git.Signature(ctx, actor.User)
 	headRef := pr.HeadBranch
 	if headRepo != nil && headRepo.ID != repo.ID {
@@ -325,6 +322,11 @@ func (m *Manager) Merge(ctx context.Context, repo *db.GitRepository, actor Actor
 			}
 			return r.WriteCommit(ctx, gitrepo.CommitSpec{Tree: res.Tree, Parents: []plumbing.Hash{baseTip}, Message: message, Author: author, Committer: committer, Signer: m.git.Signer(ctx)})
 		case MergeMethodRebase, MergeMethodRebaseMerge:
+			// The stored base may lag, replay from the live one
+			mergeBase, err := r.MergeBase(baseTip, head)
+			if err != nil {
+				return plumbing.ZeroHash, err
+			}
 			rebased, err := m.replayCommits(ctx, r, committer, mergeBase, head, baseTip)
 			if err != nil {
 				return plumbing.ZeroHash, err
@@ -414,6 +416,8 @@ func (m *Manager) replayCommits(ctx context.Context, r *gitrepo.Repo, committer 
 	if truncated {
 		return plumbing.ZeroHash, fmt.Errorf("%w: the pull request has more than 1000 commits, rebase it locally or merge instead", ErrInvalid)
 	}
+	// Replay order must follow parent links, not commit dates
+	commits = gitrepo.TopoOrder(commits)
 	cur := onto
 	for i := len(commits) - 1; i >= 0; i-- {
 		c := commits[i]

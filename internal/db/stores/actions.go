@@ -110,8 +110,25 @@ func (s *Store) GetActionsRunnerToken(ctx context.Context, hash string) (*db.Act
 	return &t, err
 }
 
-func (s *Store) UseActionsRunnerToken(ctx context.Context, id string) error {
-	return s.db.WithContext(ctx).Model(&db.ActionsRunnerToken{}).Where("id = ?", id).Update("used_at", time.Now().UTC()).Error
+// Registration token already spent, expired, or gone
+var ErrRunnerTokenUsed = errors.New("registration token already used")
+
+// Spends the token and creates the runner in one transaction
+func (s *Store) RegisterActionsRunner(ctx context.Context, tokenID string, r *db.ActionsRunner) error {
+	if r.ID == "" {
+		r.ID = uuid.New().String()
+	}
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		now := time.Now().UTC()
+		res := tx.Model(&db.ActionsRunnerToken{}).Where("id = ? AND used_at IS NULL AND expires_at > ?", tokenID, now).Update("used_at", now)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrRunnerTokenUsed
+		}
+		return tx.Create(r).Error
+	})
 }
 
 // ── Workflow state ───────────────────────────────────────────────────────
@@ -309,25 +326,57 @@ func (s *Store) UpdateActionsJobColumns(ctx context.Context, id string, cols map
 	return s.db.WithContext(ctx).Model(&db.ActionsJob{}).Where("id = ?", id).Updates(cols).Error
 }
 
-// Claims one queued job matching the labels for a runner, atomically
-func (s *Store) ClaimActionsJob(ctx context.Context, runnerID string, candidates []string) (*db.ActionsJob, error) {
+// Writes only while the runner still owns the running job
+func (s *Store) UpdateActionsJobOwned(ctx context.Context, id, runnerID string, cols map[string]any) (bool, error) {
+	res := s.db.WithContext(ctx).Model(&db.ActionsJob{}).Where("id = ? AND runner_id = ? AND status = ?", id, runnerID, "running").Updates(cols)
+	return res.RowsAffected > 0, res.Error
+}
+
+// One queued job a runner may take and the groups it must respect
+type ClaimCandidate struct {
+	ID       string
+	RepoID   string
+	RunGroup string
+	JobGroup string
+}
+
+// Claims one queued job for a runner, atomically against other pollers
+func (s *Store) ClaimActionsJob(ctx context.Context, runnerID string, candidates []ClaimCandidate) (*db.ActionsJob, error) {
 	if len(candidates) == 0 {
 		return nil, nil
+	}
+	ids := make([]string, 0, len(candidates))
+	byID := make(map[string]ClaimCandidate, len(candidates))
+	for _, c := range candidates {
+		ids = append(ids, c.ID)
+		byID[c.ID] = c
 	}
 	var claimed *db.ActionsJob
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var jobs []db.ActionsJob
-		if err := tx.Where("id IN ? AND status = ?", candidates, "queued").Order("created_at ASC").Find(&jobs).Error; err != nil {
+		if err := tx.Where("id IN ? AND status = ?", ids, "queued").Order("created_at ASC").Find(&jobs).Error; err != nil {
 			return err
 		}
 		now := time.Now().UTC()
 		for i := range jobs {
 			job := jobs[i]
-			// Matrix jobs past max-parallel stay queued until a sibling finishes
-			res := tx.Model(&db.ActionsJob{}).
-				Where("id = ? AND status = ? AND (max_parallel = 0 OR (SELECT COUNT(*) FROM actions_jobs r WHERE r.run_id = ? AND r.matrix_group = ? AND r.status = ?) < max_parallel)",
-					job.ID, "queued", job.RunID, job.MatrixGroup, "running").
-				Updates(map[string]any{"status": "running", "runner_id": runnerID, "started_at": now})
+			c := byID[job.ID]
+			// Deleted runners take nothing, matrix jobs past max-parallel stay queued
+			q := tx.Model(&db.ActionsJob{}).
+				Where("id = ? AND status = ? AND EXISTS (SELECT 1 FROM actions_runners WHERE id = ?) AND (max_parallel = 0 OR (SELECT COUNT(*) FROM actions_jobs r WHERE r.run_id = ? AND r.matrix_group = ? AND r.status = ?) < max_parallel)",
+					job.ID, "queued", runnerID, job.RunID, job.MatrixGroup, "running")
+			// Group exclusion in the same statement beats racing pollers
+			if c.RunGroup != "" {
+				q = q.Where("NOT EXISTS (SELECT 1 FROM actions_jobs g JOIN actions_runs gr ON gr.id = g.run_id WHERE gr.repo_id = ? AND gr.concurrency = ? AND gr.id <> ? AND g.status = ?)",
+					c.RepoID, c.RunGroup, job.RunID, "running")
+				q = q.Where("NOT EXISTS (SELECT 1 FROM actions_runs gr WHERE gr.repo_id = ? AND gr.concurrency = ? AND gr.id <> ? AND gr.status = ?)",
+					c.RepoID, c.RunGroup, job.RunID, "running")
+			}
+			if c.JobGroup != "" {
+				q = q.Where("NOT EXISTS (SELECT 1 FROM actions_jobs g JOIN actions_runs gr ON gr.id = g.run_id WHERE gr.repo_id = ? AND g.concurrency = ? AND g.id <> ? AND g.status = ?)",
+					c.RepoID, c.JobGroup, job.ID, "running")
+			}
+			res := q.Updates(map[string]any{"status": "running", "runner_id": runnerID, "started_at": now})
 			if res.Error != nil {
 				return res.Error
 			}
@@ -343,6 +392,38 @@ func (s *Store) ClaimActionsJob(ctx context.Context, runnerID string, candidates
 		return nil
 	})
 	return claimed, err
+}
+
+// One running run or job with its concurrency group
+type LiveGroup struct {
+	RepoID string
+	Group  string
+	ID     string
+}
+
+// Running runs in any of the groups, across repositories
+func (s *Store) RunningRunsInGroups(ctx context.Context, groups []string) ([]LiveGroup, error) {
+	if len(groups) == 0 {
+		return nil, nil
+	}
+	var out []LiveGroup
+	err := s.db.WithContext(ctx).Model(&db.ActionsRun{}).
+		Select("repo_id AS repo_id, concurrency AS \"group\", id AS id").
+		Where("status = ? AND concurrency IN ?", "running", groups).Scan(&out).Error
+	return out, err
+}
+
+// Running jobs in any of the job level groups
+func (s *Store) RunningJobsInGroups(ctx context.Context, groups []string) ([]LiveGroup, error) {
+	if len(groups) == 0 {
+		return nil, nil
+	}
+	var out []LiveGroup
+	err := s.db.WithContext(ctx).Model(&db.ActionsJob{}).
+		Select("actions_runs.repo_id AS repo_id, actions_jobs.concurrency AS \"group\", actions_jobs.id AS id").
+		Joins("JOIN actions_runs ON actions_runs.id = actions_jobs.run_id").
+		Where("actions_jobs.status = ? AND actions_jobs.concurrency IN ?", "running", groups).Scan(&out).Error
+	return out, err
 }
 
 // Live jobs of a job level concurrency group in one repository
@@ -369,11 +450,14 @@ func (s *Store) ListQueuedActionsJobs(ctx context.Context, limit int) ([]*db.Act
 	return out, err
 }
 
-// Queued jobs inside one runner scope, oldest first, paged
-func (s *Store) ListQueuedActionsJobsInScope(ctx context.Context, scopeKind, scopeID string, limit, offset int) ([]*db.ActionsJob, error) {
+// Queued jobs in one runner scope minus excluded ids
+func (s *Store) ListQueuedActionsJobsInScope(ctx context.Context, scopeKind, scopeID string, exclude []string, limit, offset int) ([]*db.ActionsJob, error) {
 	q := s.db.WithContext(ctx).Model(&db.ActionsJob{}).
 		Joins("JOIN actions_runs ON actions_runs.id = actions_jobs.run_id").
 		Where("actions_jobs.status = ?", "queued")
+	if len(exclude) > 0 {
+		q = q.Where("actions_jobs.id NOT IN ?", exclude)
+	}
 	switch scopeKind {
 	case db.ActionsScopeOrg:
 		q = q.Joins("JOIN git_repositories ON git_repositories.id = actions_runs.repo_id").
@@ -415,11 +499,14 @@ var ErrJobLogCapped = errors.New("job log cap reached")
 // Append refused because another chunk already took the index
 var ErrJobLogConflict = errors.New("job log index taken")
 
+// Append refused because the runner no longer owns a running job
+var ErrJobLogNotOwned = errors.New("job log not owned")
+
 // Appends a chunk, counting its bytes against the cap in the same transaction
-func (s *Store) AppendActionsJobLog(ctx context.Context, jobID string, index int, data []byte, maxBytes int64) error {
+func (s *Store) AppendActionsJobLog(ctx context.Context, jobID, runnerID string, index int, data []byte, maxBytes int64) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		res := tx.Model(&db.ActionsJob{}).
-			Where("id = ? AND log_chunks <= ? AND log_bytes + ? <= ?", jobID, index, len(data), maxBytes).
+			Where("id = ? AND runner_id = ? AND status = ? AND log_chunks <= ? AND log_bytes + ? <= ?", jobID, runnerID, "running", index, len(data), maxBytes).
 			Updates(map[string]any{"log_chunks": index + 1, "log_bytes": gorm.Expr("log_bytes + ?", len(data))})
 		if res.Error != nil {
 			return res.Error
@@ -428,6 +515,9 @@ func (s *Store) AppendActionsJobLog(ctx context.Context, jobID string, index int
 			var job db.ActionsJob
 			if err := tx.First(&job, "id = ?", jobID).Error; err != nil {
 				return err
+			}
+			if job.RunnerID != runnerID || job.Status != "running" {
+				return ErrJobLogNotOwned
 			}
 			if job.LogBytes+int64(len(data)) > maxBytes {
 				return ErrJobLogCapped

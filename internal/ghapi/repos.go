@@ -285,7 +285,7 @@ func (q *request) createStatus() {
 		q.fail(http.StatusUnprocessableEntity, "No commit found for SHA: %s", q.r.PathValue("sha"))
 		return
 	}
-	branches, _ := r.RefsAt(h)
+	branches := r.BranchesAt(h)
 	r.Close()
 	st := &db.GitCommitStatus{
 		ID: uuid.New().String(), RepoID: repo.ID, SHA: h.String(), Context: strings.TrimSpace(in.Context), State: in.State,

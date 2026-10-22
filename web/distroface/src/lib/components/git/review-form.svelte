@@ -5,6 +5,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { RadioGroup, RadioGroupItem } from '$lib/components/ui/radio-group';
 	import CommentBox from './comment-box.svelte';
+	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { ReviewState } from '$lib/proto/distroface/v1/pull_pb';
 	import type { Review } from '$lib/proto/distroface/v1/pull_pb';
@@ -39,6 +40,7 @@
 	let choice = $state<Choice>('comment');
 	let submitting = $state(false);
 	let discarding = $state(false);
+	let discardOpen = $state(false);
 
 	$effect(() => {
 		if (open && pendingReview?.body && !body) body = pendingReview.body;
@@ -112,6 +114,7 @@
 				await rpcClient.pull.deleteReviewComment({ namespace, name, number, id: c.id });
 			}
 			toast.success('Pending comments discarded');
+			discardOpen = false;
 			body = '';
 			open = false;
 			onSubmitted?.();
@@ -125,7 +128,7 @@
 
 {#snippet option(value: Choice, label: string, help: string, off = false)}
 	<label
-		class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 has-[[data-state=checked]]:border-primary/40 has-[[data-state=checked]]:bg-primary/5 {off
+		class="flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 has-data-[state=checked]:border-primary/40 has-data-[state=checked]:bg-primary/5 {off
 			? 'cursor-not-allowed opacity-50'
 			: ''}"
 	>
@@ -187,7 +190,11 @@
 		</div>
 		<div class="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-4 py-2.5">
 			{#if pendingReview}
-				<Button variant="outline-destructive" onclick={discard} disabled={discarding || submitting}>
+				<Button
+					variant="outline-destructive"
+					onclick={() => (discardOpen = true)}
+					disabled={discarding || submitting}
+				>
 					{#if discarding}<Loader2 class="animate-spin" />{/if}
 					Discard pending
 				</Button>
@@ -199,3 +206,17 @@
 		</div>
 	</PopoverContent>
 </Popover>
+
+<ConfirmDialog
+	bind:open={discardOpen}
+	title="Discard pending review"
+	confirmLabel="Discard review"
+	cancelLabel="Keep review"
+	onConfirm={discard}
+	loading={discarding}
+>
+	{#snippet description()}
+		Every pending comment in this review is deleted along with the draft summary. This cannot be
+		undone.
+	{/snippet}
+</ConfirmDialog>

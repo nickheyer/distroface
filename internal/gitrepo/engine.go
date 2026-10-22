@@ -49,6 +49,7 @@ type Engine struct {
 	transfer *limiter
 	keysDir  string
 	repos    string
+	sizes    *sizeCache
 	// Repositories whose directory is moving right now
 	renaming sync.Map
 }
@@ -84,6 +85,7 @@ func NewEngine(storagePath, dataDir string) (*Engine, error) {
 		locks:    newLockTable(),
 		transfer: newLimiter(func() int { return 32 }),
 		keysDir:  keys,
+		sizes:    newSizeCache(),
 	}, nil
 }
 
@@ -190,6 +192,7 @@ func (e *Engine) Delete(namespace, name string) error {
 		return ErrInvalidName
 	}
 	for _, wiki := range []bool{false, true} {
+		e.sizes.forget(e.AbsPath(namespace, name, wiki))
 		if err := os.RemoveAll(e.AbsPath(namespace, name, wiki)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
@@ -211,6 +214,7 @@ func (e *Engine) Rename(oldNamespace, oldName, newNamespace, newName string) err
 	}
 	for _, wiki := range []bool{false, true} {
 		from := e.AbsPath(oldNamespace, oldName, wiki)
+		e.sizes.forget(from)
 		if _, err := os.Stat(from); err != nil {
 			continue
 		}
@@ -221,27 +225,14 @@ func (e *Engine) Rename(oldNamespace, oldName, newNamespace, newName string) err
 	return nil
 }
 
-// Bytes used by the object store of a repository
+// Object store bytes of a repository, every file stated
 func (e *Engine) Size(namespace, name string, wiki bool) (int64, error) {
-	var total int64
-	err := filepath.WalkDir(filepath.Join(e.AbsPath(namespace, name, wiki), "objects"), func(_ string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
-			}
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		total += info.Size()
-		return nil
-	})
-	return total, err
+	return e.sizes.measure(filepath.Join(e.AbsPath(namespace, name, wiki), "objects"), true)
+}
+
+// Same count after a write, untouched loose dirs trusted
+func (e *Engine) RefreshSize(namespace, name string, wiki bool) (int64, error) {
+	return e.sizes.measure(filepath.Join(e.AbsPath(namespace, name, wiki), "objects"), false)
 }
 
 // Shared lock table keyed by repository id

@@ -82,6 +82,24 @@ func bareHost(host string) string {
 	return host
 }
 
+// Host links carry, a pinned public host first, catch-alls never echo the request
+func trustedOrigin(r *http.Request, p *Portal, primary string) string {
+	if p == nil {
+		return r.Host
+	}
+	if p.PublicHost != "" {
+		return p.PublicHost
+	}
+	if !p.CatchAll || primary == "" {
+		return r.Host
+	}
+	host := bareHost(primary)
+	if port := listenerPort(r); port > 0 {
+		return net.JoinHostPort(host, strconv.Itoa(port))
+	}
+	return host
+}
+
 func (res *Resolver) ensureLoaded() {
 	res.mu.RLock()
 	loaded := res.loaded
@@ -160,6 +178,7 @@ func (res *Resolver) reloadLocked() {
 			CatchAll:        p.Hostname == "",
 			HidePrimaryLink: p.HidePrimaryLink,
 			SSHPort:         p.SSHPort,
+			PublicHost:      p.PublicHost,
 		}
 		if res.settings != nil {
 			entry.Isolated = res.settings.Org(context.Background(), p.OrgID).GetPortals().GetIsolated()

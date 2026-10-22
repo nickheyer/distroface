@@ -36,6 +36,7 @@
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
+	import { portalStore } from '$lib/stores/portal.svelte';
 	import {
 		IssueState,
 		type Issue,
@@ -358,7 +359,8 @@
 		}
 	}
 
-	// Subscription and moderation
+	// Subscription and moderation, read only portals refuse subscriptions
+	const readOnlyPortal = $derived(portalStore.isPortal && !portalStore.allowPush);
 	let subBusy = $state(false);
 	async function toggleSubscribe() {
 		subBusy = true;
@@ -830,7 +832,7 @@
 		</section>
 	{/if}
 
-	{#if signedIn}
+	{#if signedIn && !readOnlyPortal}
 		<section class="space-y-2 lg:border-t lg:pt-5">
 			{@render heading('Notifications')}
 			<Button variant="outline" class="w-full" onclick={toggleSubscribe} disabled={subBusy}>

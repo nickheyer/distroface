@@ -146,6 +146,28 @@ func (ts *TokenService) VerifyTokenSubject(raw string) (string, error) {
 	return claims.Subject, nil
 }
 
+// Job id behind a registry token, false for other subjects or bad signatures
+func (ts *TokenService) JobFromToken(raw string) (string, bool) {
+	tok, err := josejwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})
+	if err != nil {
+		return "", false
+	}
+	// Cheap unverified peek keeps ordinary tokens off the signature path
+	var peek ClaimSet
+	if err := tok.UnsafeClaimsWithoutVerification(&peek); err != nil {
+		return "", false
+	}
+	if _, _, ok := ParseJobSubject(peek.Subject); !ok {
+		return "", false
+	}
+	var claims ClaimSet
+	if err := tok.Claims(ts.privateKey.Public(), &claims); err != nil {
+		return "", false
+	}
+	jobID, _, ok := ParseJobSubject(claims.Subject)
+	return jobID, ok
+}
+
 // Verifies a token for one audience and returns its subject and access
 func (ts *TokenService) VerifyAccess(raw, audience string) (string, []*ResourceActions, error) {
 	tok, err := josejwt.ParseSigned(raw, []jose.SignatureAlgorithm{jose.ES256})

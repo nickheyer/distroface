@@ -932,3 +932,54 @@ func TestResolverAnonymousTiers(t *testing.T) {
 	}
 	_ = inherit
 }
+
+func TestTrustedOrigin(t *testing.T) {
+	hostPortal := &Portal{}
+	catchAll := &Portal{CatchAll: true}
+	pinned := &Portal{CatchAll: true, PublicHost: "portal.example.com"}
+	pinnedPort := &Portal{PublicHost: "portal.example.com:8443"}
+	cases := []struct {
+		name    string
+		portal  *Portal
+		host    string
+		port    int
+		primary string
+		want    string
+	}{
+		{"no portal echoes the request", nil, "evil.example.com:9", 8080, "reg.example.com", "evil.example.com:9"},
+		{"hostname portal echoes the request", hostPortal, "acme.example.com", 8080, "reg.example.com", "acme.example.com"},
+		{"catch-all pins to the primary and listener", catchAll, "evil.example.com", 8443, "reg.example.com", "reg.example.com:8443"},
+		{"catch-all drops the primary port", catchAll, "evil.example.com", 8443, "reg.example.com:8080", "reg.example.com:8443"},
+		{"catch-all without a listener port", catchAll, "evil.example.com", 0, "reg.example.com", "reg.example.com"},
+		{"catch-all without a primary keeps the request", catchAll, "whatever.example.com", 8443, "", "whatever.example.com"},
+		{"public host wins on catch-alls", pinned, "evil.example.com", 8443, "reg.example.com", "portal.example.com"},
+		{"public host wins on hostname portals", pinnedPort, "acme.example.com:6666", 8080, "reg.example.com", "portal.example.com:8443"},
+	}
+	for _, c := range cases {
+		r := portalRequest(http.MethodGet, "/", c.host, c.port)
+		if got := trustedOrigin(r, c.portal, c.primary); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestNormalizePublicHost(t *testing.T) {
+	good := map[string]string{
+		"":                        "",
+		" Portal.Example.COM ":    "portal.example.com",
+		"portal.example.com:8443": "portal.example.com:8443",
+		"10.0.0.5:443":            "10.0.0.5:443",
+		"[2001:db8::1]:8443":      "[2001:db8::1]:8443",
+	}
+	for in, want := range good {
+		got, err := normalizePublicHost(in)
+		if err != nil || got != want {
+			t.Errorf("normalizePublicHost(%q) = %q, %v, want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"http://portal.example.com", "portal.example.com:0", "portal.example.com:70000", "portal example", "a/b"} {
+		if _, err := normalizePublicHost(bad); err == nil {
+			t.Errorf("normalizePublicHost(%q) accepted", bad)
+		}
+	}
+}

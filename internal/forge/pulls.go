@@ -207,7 +207,7 @@ func (m *Manager) CreatePull(ctx context.Context, repo *db.GitRepository, actor 
 	}
 	pr := &db.GitPullRequest{
 		IssueID: issue.ID, HeadRepoID: headRepo.ID, HeadBranch: headBranch, HeadSHA: headTip.String(), BaseBranch: base,
-		Draft: in.Draft, MergeableState: MergeableUnknown, ConflictPaths: "[]",
+		Draft: in.Draft, MergeableState: MergeableUnknown, ConflictState: MergeableUnknown, ConflictPaths: "[]",
 		AllowMaintainerEdits: headRepo.ID == repo.ID || (in.AllowMaintainerEdits && forkOwnedBy(headRepo, actor.User.ID)),
 	}
 	if err := m.store.CreateGitPullRequest(ctx, pr); err != nil {
@@ -235,19 +235,33 @@ func (m *Manager) CreatePull(ctx context.Context, repo *db.GitRepository, actor 
 	return issue, pr, nil
 }
 
-// Recomputes merge base, counts, and resets the merge state
+// Columns a moved head or base reset
+func staleMergeColumns(pr *db.GitPullRequest) map[string]any {
+	pr.MergeableState, pr.ConflictState, pr.ConflictPaths = MergeableUnknown, MergeableUnknown, "[]"
+	return map[string]any{"mergeable_state": MergeableUnknown, "conflict_state": MergeableUnknown, "conflict_paths": "[]"}
+}
+
+// Resets the merge state without recomputing anything
+func (m *Manager) markPullStale(ctx context.Context, pr *db.GitPullRequest) {
+	_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, staleMergeColumns(pr))
+}
+
+// Resets the merge state and recomputes stats right away
 func (m *Manager) refreshPullStats(ctx context.Context, repo *db.GitRepository, pr *db.GitPullRequest) {
+	m.markPullStale(ctx, pr)
 	r, err := m.git.Engine().OpenRepo(repo.Namespace, repo.Name, false)
 	if err != nil {
 		return
 	}
 	defer r.Close()
+	m.computePullStats(ctx, r, pr)
+}
+
+// Merge base and diff totals, merge state left alone
+func (m *Manager) computePullStats(ctx context.Context, r *gitrepo.Repo, pr *db.GitPullRequest) {
 	head := plumbing.NewHash(pr.HeadSHA)
 	baseTip := r.BranchHash(pr.BaseBranch)
-	cols := map[string]any{"mergeable_state": MergeableUnknown, "conflict_paths": "[]"}
-	pr.MergeableState, pr.ConflictPaths = MergeableUnknown, "[]"
 	if _, err := r.Commit(head); err != nil || baseTip.IsZero() {
-		_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, cols)
 		return
 	}
 	mergeBase, err := r.MergeBase(baseTip, head)
@@ -258,7 +272,7 @@ func (m *Manager) refreshPullStats(ctx context.Context, repo *db.GitRepository, 
 	if mergeBase.IsZero() {
 		pr.MergeBaseSHA = ""
 	}
-	cols["merge_base_sha"] = pr.MergeBaseSHA
+	cols := map[string]any{"merge_base_sha": pr.MergeBaseSHA}
 	commits, _ := r.CommitRange(ctx, mergeBase, head)
 	pr.CommitCount = len(commits)
 	cols["commit_count"] = pr.CommitCount
@@ -267,6 +281,69 @@ func (m *Manager) refreshPullStats(ctx context.Context, repo *db.GitRepository, 
 		cols["changed_files"], cols["additions"], cols["deletions"] = pr.ChangedFiles, pr.Additions, pr.Deletions
 	}
 	_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, cols)
+}
+
+// One drain of queued refreshes gives up after this
+const pullStatsTimeout = 10 * time.Minute
+
+// Queues stat refreshes on the repository worker
+func (m *Manager) queuePullStats(repo *db.GitRepository, issueIDs []string) {
+	if len(issueIDs) == 0 {
+		return
+	}
+	m.statsMu.Lock()
+	q := m.statsPending[repo.ID]
+	if q == nil {
+		q = map[string]bool{}
+		m.statsPending[repo.ID] = q
+	}
+	for _, id := range issueIDs {
+		q[id] = true
+	}
+	start := !m.statsRunning[repo.ID]
+	if start {
+		m.statsRunning[repo.ID] = true
+		m.pending.Add(1)
+	}
+	m.statsMu.Unlock()
+	if start {
+		go m.drainPullStats(repo)
+	}
+}
+
+// Refreshes queued pull requests until nothing is left
+func (m *Manager) drainPullStats(repo *db.GitRepository) {
+	defer m.pending.Done()
+	for {
+		m.statsMu.Lock()
+		q := m.statsPending[repo.ID]
+		delete(m.statsPending, repo.ID)
+		if len(q) == 0 {
+			delete(m.statsRunning, repo.ID)
+			m.statsMu.Unlock()
+			return
+		}
+		m.statsMu.Unlock()
+		ctx, cancel := context.WithTimeout(context.Background(), pullStatsTimeout)
+		// The row may have moved, reread its address
+		if fresh, _ := m.store.GetGitRepositoryByID(ctx, repo.ID); fresh != nil {
+			repo = fresh
+		}
+		if r, err := m.git.Engine().OpenRepo(repo.Namespace, repo.Name, false); err == nil {
+			for id := range q {
+				if ctx.Err() != nil {
+					break
+				}
+				if pr, _ := m.store.GetGitPullRequest(ctx, id); pr != nil && pr.MergedAt == nil {
+					m.computePullStats(ctx, r, pr)
+				}
+			}
+			r.Close()
+		} else {
+			m.log.Debug("pull stats open %s/%s: %v", repo.Namespace, repo.Name, err)
+		}
+		cancel()
+	}
 }
 
 // Loads the view rows of a pull request, computing mergeability when asked
@@ -289,6 +366,45 @@ func (m *Manager) PullView(ctx context.Context, actor Actor, repo *db.GitReposit
 		view.Merge, _ = m.Mergeability(ctx, repo, actor, issue, pr)
 	}
 	return view, nil
+}
+
+// Batch loads list views, no merge simulation
+func (m *Manager) PullViews(ctx context.Context, actor Actor, repo *db.GitRepository, issues []*db.GitIssue) ([]*PullView, error) {
+	views, err := m.IssueViews(ctx, actor.User, map[string]*db.GitRepository{repo.ID: repo}, issues)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(views))
+	shas := make([]string, 0, len(views))
+	for _, v := range views {
+		if v.Pull == nil {
+			continue
+		}
+		ids = append(ids, v.Issue.ID)
+		shas = append(shas, v.Pull.HeadSHA)
+	}
+	requests, _ := m.store.ListGitReviewRequestsByIssues(ctx, ids)
+	reviews, _ := m.store.ListGitReviewsByIssues(ctx, ids)
+	var reviewIDs []string
+	for _, list := range reviews {
+		for _, rv := range list {
+			reviewIDs = append(reviewIDs, rv.ID)
+		}
+	}
+	counts, _ := m.store.CountGitReviewComments(ctx, reviewIDs)
+	statuses, _ := m.store.LatestGitCommitStatusesBulk(ctx, repo.ID, shas)
+	allowed, def := m.allowedMethods(repo)
+	out := make([]*PullView, 0, len(views))
+	for _, v := range views {
+		if v.Pull == nil {
+			continue
+		}
+		out = append(out, &PullView{
+			IssueView: v, PR: v.Pull, Requests: requests[v.Issue.ID], Reviews: reviews[v.Issue.ID],
+			ReviewCount: counts, Statuses: statuses[v.Pull.HeadSHA], Allowed: allowed, Default: def,
+		})
+	}
+	return out, nil
 }
 
 // Methods the repository settings allow

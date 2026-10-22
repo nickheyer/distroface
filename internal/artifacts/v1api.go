@@ -453,7 +453,7 @@ func (a *V1API) handleInitiateUpload(w http.ResponseWriter, r *http.Request, use
 		return
 	}
 
-	uploadID, err := a.manager.Blobs().InitiateUpload()
+	uploadID, err := a.manager.Blobs().InitiateOwnedUpload(auth.UploadOwner(user))
 	if err != nil {
 		http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
 		return
@@ -469,9 +469,17 @@ func (a *V1API) handleInitiateUpload(w http.ResponseWriter, r *http.Request, use
 	w.WriteHeader(http.StatusAccepted)
 }
 
-// No permission gate per chunk, v1 quirk kept
-func (a *V1API) handleUploadChunk(w http.ResponseWriter, r *http.Request, _ *auth.AuthenticatedUser, vars map[string]string) {
+// The session owner gates each chunk instead of a repo lookup
+func (a *V1API) handleUploadChunk(w http.ResponseWriter, r *http.Request, user *auth.AuthenticatedUser, vars map[string]string) {
+	if err := a.manager.Blobs().VerifyUploadOwner(vars["uuid"], auth.UploadOwners(user)...); err != nil {
+		a.writeManagerErr(w, err)
+		return
+	}
 	if _, err := a.manager.Blobs().AppendChunk(vars["uuid"], r.Body); err != nil {
+		if errors.Is(err, ErrUploadNotFound) {
+			a.writeManagerErr(w, err)
+			return
+		}
 		http.Error(w, "UPLOAD FAILED", http.StatusInternalServerError)
 		return
 	}
@@ -493,6 +501,11 @@ func (a *V1API) handleCompleteUpload(w http.ResponseWriter, r *http.Request, use
 	}
 	if repo.IsPrivate && !a.access.HasRepoAccess(r.Context(), user, repo, rbac.ActionPush) {
 		http.Error(w, "Access denied", http.StatusForbidden)
+		return
+	}
+
+	if err := a.manager.Blobs().VerifyUploadOwner(vars["uuid"], auth.UploadOwners(user)...); err != nil {
+		a.writeManagerErr(w, err)
 		return
 	}
 
@@ -1096,6 +1109,8 @@ func (a *V1API) writeManagerErr(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrUploadNotFound):
 		http.Error(w, "Upload not found", http.StatusNotFound)
+	case errors.Is(err, ErrUploadDenied):
+		http.Error(w, "Access denied", http.StatusForbidden)
 	case errors.Is(err, ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:

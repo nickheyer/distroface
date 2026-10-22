@@ -120,6 +120,17 @@ func issueReactionGroups(ctx context.Context, users *gitUserCache, reactions []*
 	return out
 }
 
+// Reaction authors the list rows name
+func issueViewUserIDs(views []*forge.IssueView) []string {
+	var ids []string
+	for _, v := range views {
+		for _, r := range v.Reactions {
+			ids = append(ids, r.UserID)
+		}
+	}
+	return ids
+}
+
 // Converts an issue view
 func (s *IssueService) issueToProto(ctx context.Context, users *gitUserCache, viewerID string, v *forge.IssueView) *v1.Issue {
 	return issueViewProto(ctx, s.forge, users, viewerID, v)

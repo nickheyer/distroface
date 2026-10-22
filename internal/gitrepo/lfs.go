@@ -178,6 +178,14 @@ func (l *LFS) batch(w http.ResponseWriter, r *http.Request, repo *db.GitReposito
 	}
 	maxBytes := l.manager.gitSettings(ctx, repo).GetMaxLfsObjectMb() * 1024 * 1024
 	resp := lfsBatchResponse{Transfer: "basic", HashAlgo: "sha256"}
+	// One lookup covers the whole batch
+	oids := make([]string, 0, len(req.Objects))
+	for _, o := range req.Objects {
+		if oidPattern.MatchString(o.OID) {
+			oids = append(oids, o.OID)
+		}
+	}
+	known, lookupErr := l.manager.Store().GetLFSObjects(ctx, repo.ID, oids)
 	for _, o := range req.Objects {
 		obj := &lfsObjectResponse{OID: o.OID, Size: o.Size, Authenticated: true}
 		resp.Objects = append(resp.Objects, obj)
@@ -185,11 +193,11 @@ func (l *LFS) batch(w http.ResponseWriter, r *http.Request, repo *db.GitReposito
 			obj.Error = &lfsError{Code: 422, Message: "invalid oid"}
 			continue
 		}
-		existing, err := l.manager.Store().GetLFSObject(ctx, repo.ID, o.OID)
-		if err != nil {
+		if lookupErr != nil {
 			obj.Error = &lfsError{Code: 500, Message: "lookup failed"}
 			continue
 		}
+		existing := known[o.OID]
 		if upload {
 			if maxBytes > 0 && o.Size > maxBytes {
 				obj.Error = &lfsError{Code: 422, Message: fmt.Sprintf("object exceeds the %d MB limit", maxBytes/(1024*1024))}

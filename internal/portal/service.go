@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -215,7 +216,34 @@ func scrubProxyPortal(p *storage.RegistryPortal) {
 	p.AllowPush = false
 	p.RequireAuth = false
 	p.HidePrimaryLink = false
+	p.PublicHost = ""
 	p.Rules = "[]"
+}
+
+// Lowercased host with an optional port, empty stays empty
+func normalizePublicHost(raw string) (string, error) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return "", nil
+	}
+	host, port := raw, ""
+	if h, p, err := net.SplitHostPort(raw); err == nil {
+		host, port = h, p
+	}
+	if net.ParseIP(host) == nil && !hostnameRegex.MatchString(host) {
+		return "", connect.Errorf(connect.CodeInvalidArgument, "public host must be a hostname with an optional port")
+	}
+	if port != "" {
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", connect.Errorf(connect.CodeInvalidArgument, "public host port must be between 1 and 65535")
+		}
+		return net.JoinHostPort(host, port), nil
+	}
+	if net.ParseIP(host) != nil && strings.Contains(host, ":") {
+		return "[" + host + "]", nil
+	}
+	return host, nil
 }
 
 // Portal sources exclude the app only config pair and instance root
@@ -342,6 +370,10 @@ func (s *Service) CreatePortal(ctx context.Context, req *v1.CreatePortalRequest)
 			return nil, err
 		}
 	}
+	publicHost, err := normalizePublicHost(msg.PublicHost)
+	if err != nil {
+		return nil, err
+	}
 
 	portal := &storage.RegistryPortal{
 		OrgID:              org.ID,
@@ -359,6 +391,7 @@ func (s *Service) CreatePortal(ctx context.Context, req *v1.CreatePortalRequest)
 		BackendRewriteHost: msg.BackendRewriteHost,
 		BackendInsecure:    msg.BackendInsecure,
 		SSHPort:            int(msg.SshPort),
+		PublicHost:         publicHost,
 		Enabled:            true,
 	}
 	scrubProxyPortal(portal)
@@ -485,6 +518,13 @@ func (s *Service) UpdatePortal(ctx context.Context, req *v1.UpdatePortalRequest)
 	}
 	if msg.HidePrimaryLink != nil {
 		portal.HidePrimaryLink = *msg.HidePrimaryLink
+	}
+	if msg.PublicHost != nil {
+		publicHost, err := normalizePublicHost(*msg.PublicHost)
+		if err != nil {
+			return nil, err
+		}
+		portal.PublicHost = publicHost
 	}
 	if msg.Tls != nil {
 		portal.TLS = *msg.Tls
@@ -639,6 +679,7 @@ func portalToProto(p *storage.RegistryPortal) *v1.RegistryPortal {
 		BackendRewriteHost: p.BackendRewriteHost,
 		BackendInsecure:    p.BackendInsecure,
 		SshPort:            int32(p.SSHPort),
+		PublicHost:         p.PublicHost,
 		Enabled:            p.Enabled,
 		CreatedAt:          timestamppb.New(p.CreatedAt),
 		UpdatedAt:          timestamppb.New(p.UpdatedAt),

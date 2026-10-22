@@ -128,7 +128,11 @@ func EncodeUnits(u *v1.GitRepoUnits) string {
 
 // Reports whether a unit is switched on for the repository
 func UnitEnabled(repo *db.GitRepository, unit string) bool {
-	u := UnitsOf(repo)
+	return unitOn(UnitsOf(repo), unit)
+}
+
+// Same answer from units already decoded, loops decode once
+func unitOn(u *v1.GitRepoUnits, unit string) bool {
 	switch unit {
 	case db.GitUnitCode:
 		return true
@@ -244,6 +248,7 @@ func (a *Access) levels(ctx context.Context, user *auth.AuthenticatedUser, repo 
 		return out
 	}
 	anonymous := user == nil || user.IsAnonymous()
+	units := UnitsOf(repo)
 
 	// Public repositories admit anyone holding the read capability
 	if public && !repo.IsPrivate {
@@ -253,7 +258,7 @@ func (a *Access) levels(ctx context.Context, user *auth.AuthenticatedUser, repo 
 		}
 		if a.enforcer.HasPermission(roles, rbac.ResourceGit, rbac.ActionRead) {
 			for _, u := range AllUnits {
-				if UnitEnabled(repo, u) {
+				if unitOn(units, u) {
 					out.Units[u] = LevelRead
 				}
 			}
@@ -279,11 +284,11 @@ func (a *Access) levels(ctx context.Context, user *auth.AuthenticatedUser, repo 
 			}
 			return out
 		}
-		scoped := a.identityLevels(ctx, user, repo)
+		scoped := a.identityLevels(ctx, user, repo, units)
 		if scoped.IsOwner || scoped.CanAdmin {
 			// Owners and admins hold every unit, the scope caps them at write
 			for _, u := range AllUnits {
-				if UnitEnabled(repo, u) {
+				if unitOn(units, u) {
 					out.Units[u] = max(out.Units[u], level)
 				}
 			}
@@ -295,7 +300,7 @@ func (a *Access) levels(ctx context.Context, user *auth.AuthenticatedUser, repo 
 		return out
 	}
 
-	ident := a.identityLevels(ctx, user, repo)
+	ident := a.identityLevels(ctx, user, repo, units)
 	out.IsOwner = ident.IsOwner
 	out.CanAdmin = ident.CanAdmin
 	for u, l := range ident.Units {
@@ -305,7 +310,7 @@ func (a *Access) levels(ctx context.Context, user *auth.AuthenticatedUser, repo 
 }
 
 // Levels an account holds through ownership, membership, teams, collaborators, grants
-func (a *Access) identityLevels(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository) Levels {
+func (a *Access) identityLevels(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository, units *v1.GitRepoUnits) Levels {
 	out := Levels{Units: map[string]Level{}}
 	full := repo.Namespace + "/" + repo.Name
 
@@ -331,10 +336,10 @@ func (a *Access) identityLevels(ctx context.Context, user *auth.AuthenticatedUse
 					if t.AdminAccess {
 						out.CanAdmin = true
 					}
-					units := stores.DecodeTeamUnits(t.Units)
+					granted := stores.DecodeTeamUnits(t.Units)
 					for _, u := range AllUnits {
-						if UnitEnabled(repo, u) {
-							out.Units[u] = max(out.Units[u], LevelFromString(units[u]))
+						if unitOn(units, u) {
+							out.Units[u] = max(out.Units[u], LevelFromString(granted[u]))
 						}
 					}
 				}
@@ -347,7 +352,7 @@ func (a *Access) identityLevels(ctx context.Context, user *auth.AuthenticatedUse
 			out.CanAdmin = true
 		}
 		for _, u := range AllUnits {
-			if UnitEnabled(repo, u) {
+			if unitOn(units, u) {
 				out.Units[u] = max(out.Units[u], min(lvl, LevelWrite))
 			}
 		}
@@ -364,7 +369,7 @@ func (a *Access) identityLevels(ctx context.Context, user *auth.AuthenticatedUse
 				out.CanAdmin = true
 			}
 			for _, u := range AllUnits {
-				if UnitEnabled(repo, u) {
+				if unitOn(units, u) {
 					out.Units[u] = max(out.Units[u], min(lvl, LevelWrite))
 				}
 			}
@@ -396,7 +401,100 @@ func (a *Access) Can(ctx context.Context, user *auth.AuthenticatedUser, repo *db
 
 // Public repos or any read relationship
 func (a *Access) CanSee(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository) bool {
-	return repo != nil && a.Level(ctx, user, repo, db.GitUnitCode) >= LevelRead
+	if repo == nil {
+		return false
+	}
+	// Public repositories need no identity lookups for readers
+	if !repo.IsPrivate && (user == nil || !user.IsScoped()) {
+		roles := []string{"anonymous"}
+		if user != nil {
+			roles = user.Roles
+		}
+		if a.enforcer.HasPermission(roles, rbac.ResourceGit, rbac.ActionRead) {
+			return true
+		}
+	}
+	return a.Level(ctx, user, repo, db.GitUnitCode) >= LevelRead
+}
+
+// Visibility of many users, membership rows read once
+func (a *Access) CanSeeMany(ctx context.Context, users []*auth.AuthenticatedUser, repo *db.GitRepository) map[string]bool {
+	out := make(map[string]bool, len(users))
+	if repo == nil {
+		return out
+	}
+	var pending []*auth.AuthenticatedUser
+	for _, u := range users {
+		if u == nil {
+			continue
+		}
+		switch {
+		case u.IsScoped():
+			out[u.ID] = a.CanSee(ctx, u, repo)
+		case !repo.IsPrivate && a.enforcer.HasPermission(u.Roles, rbac.ResourceGit, rbac.ActionRead):
+			out[u.ID] = true
+		case u.IsAnonymous():
+			out[u.ID] = false
+		case (repo.OwnerID != "" && repo.OwnerID == u.ID) || repo.Namespace == u.Username:
+			out[u.ID] = true
+		case a.enforcer.HasPermission(u.Roles, rbac.ResourceGit, rbac.ActionManage):
+			out[u.ID] = true
+		case a.hasAnyScopedGrant(u, repo):
+			out[u.ID] = true
+		default:
+			out[u.ID] = false
+			pending = append(pending, u)
+		}
+	}
+	if len(pending) == 0 {
+		return out
+	}
+	ids := make([]string, 0, len(pending))
+	for _, u := range pending {
+		ids = append(ids, u.ID)
+	}
+	if repo.IsOrgNamespace {
+		if org, _ := a.store.GetOrganization(ctx, repo.Namespace); org != nil {
+			roles, _ := a.store.OrgMemberRoles(ctx, org.ID, ids)
+			teams, _ := a.store.TeamsCoveringRepo(ctx, org.ID, repo.ID)
+			var readTeams []string
+			defaultReads := false
+			for _, t := range teams {
+				if !t.AdminAccess && LevelFromString(stores.DecodeTeamUnits(t.Units)[db.GitUnitCode]) < LevelRead {
+					continue
+				}
+				if t.IsDefault {
+					defaultReads = true
+					continue
+				}
+				readTeams = append(readTeams, t.ID)
+			}
+			onTeams, _ := a.store.UsersOnTeams(ctx, readTeams, ids)
+			for id, role := range roles {
+				if role == db.OrgRoleOwner || role == db.OrgRoleAdmin || defaultReads || onTeams[id] {
+					out[id] = true
+				}
+			}
+		}
+	}
+	collaborators, _ := a.store.AcceptedGitCollaborators(ctx, repo.ID, ids)
+	for id, perm := range collaborators {
+		if LevelFromString(perm) >= LevelRead {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+// Any scoped rbac grant on the repository or its namespace
+func (a *Access) hasAnyScopedGrant(user *auth.AuthenticatedUser, repo *db.GitRepository) bool {
+	full := repo.Namespace + "/" + repo.Name
+	for _, action := range []string{rbac.ActionManage, rbac.ActionDelete, rbac.ActionUpdate, rbac.ActionPush, rbac.ActionRead, rbac.ActionPull} {
+		if a.enforcer.HasScopedGrant(user.Roles, rbac.ResourceGit, action, full, repo.Namespace) {
+			return true
+		}
+	}
+	return false
 }
 
 // Read on an enabled unit, public repos skip the identity lookups

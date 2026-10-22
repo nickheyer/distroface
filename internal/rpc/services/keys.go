@@ -44,10 +44,12 @@ func (s *KeyService) user(ctx context.Context) (*auth.AuthenticatedUser, error) 
 	return user, nil
 }
 
-// Repository a deploy key belongs to, admin level required
-func (s *KeyService) deployRepo(ctx context.Context, user *auth.AuthenticatedUser, namespace, name string) (*storage.GitRepository, error) {
-	if err := portalAllowsGitWrite(ctx); err != nil {
-		return nil, err
+// Repository a deploy key belongs to, admin level required, writes pass the portal gate
+func (s *KeyService) deployRepo(ctx context.Context, user *auth.AuthenticatedUser, namespace, name string, write bool) (*storage.GitRepository, error) {
+	if write {
+		if err := portalAllowsGitWrite(ctx); err != nil {
+			return nil, err
+		}
 	}
 	repo, err := visibleGitRepo(ctx, s.store, s.manager.Access(), user, namespace, name)
 	if err != nil {
@@ -149,7 +151,7 @@ func (s *KeyService) AddSSHKey(ctx context.Context, req *v1.AddSSHKeyRequest) (*
 	}
 	detail := fp
 	if req.Name != "" {
-		repo, err := s.deployRepo(ctx, user, req.Namespace, req.Name)
+		repo, err := s.deployRepo(ctx, user, req.Namespace, req.Name, true)
 		if err != nil {
 			return nil, err
 		}
@@ -176,7 +178,7 @@ func (s *KeyService) ListSSHKeys(ctx context.Context, req *v1.ListSSHKeysRequest
 	}
 	ownerType, ownerID := storage.SSHKeyOwnerUser, user.ID
 	if req.Name != "" {
-		repo, err := s.deployRepo(ctx, user, req.Namespace, req.Name)
+		repo, err := s.deployRepo(ctx, user, req.Namespace, req.Name, false)
 		if err != nil {
 			return nil, err
 		}
@@ -216,7 +218,7 @@ func (s *KeyService) DeleteSSHKey(ctx context.Context, req *v1.DeleteSSHKeyReque
 		if err != nil || repo == nil {
 			return nil, connect.Errorf(connect.CodeNotFound, "key not found")
 		}
-		if _, err := s.deployRepo(ctx, user, repo.Namespace, repo.Name); err != nil {
+		if _, err := s.deployRepo(ctx, user, repo.Namespace, repo.Name, true); err != nil {
 			return nil, err
 		}
 	}
@@ -249,6 +251,7 @@ func (s *KeyService) AddGPGKey(ctx context.Context, req *v1.AddGPGKeyRequest) (*
 	if err := s.store.CreateGPGKey(ctx, key); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	s.manager.Signing().InvalidateKeys()
 	s.audit(ctx, user, "GPGKey/add", key.KeyID)
 	return &v1.AddGPGKeyResponse{Key: gpgKeyToProto(key), Challenge: key.Challenge}, nil
 }
@@ -285,6 +288,7 @@ func (s *KeyService) DeleteGPGKey(ctx context.Context, req *v1.DeleteGPGKeyReque
 	if err := s.store.DeleteGPGKey(ctx, user.ID, key.ID); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	s.manager.Signing().InvalidateKeys()
 	s.audit(ctx, user, "GPGKey/delete", key.KeyID)
 	return &v1.DeleteGPGKeyResponse{}, nil
 }
@@ -317,5 +321,6 @@ func (s *KeyService) VerifyGPGKey(ctx context.Context, req *v1.VerifyGPGKeyReque
 	if err := s.store.UpdateGPGKey(ctx, key); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	s.manager.Signing().InvalidateKeys()
 	return &v1.VerifyGPGKeyResponse{Key: gpgKeyToProto(key)}, nil
 }

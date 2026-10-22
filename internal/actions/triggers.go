@@ -39,12 +39,35 @@ type triggerInput struct {
 	PullNumber    int64
 	NeedsApproval bool
 	FromFork      bool
-	Changed       []string
-	ChangedKnown  bool
 	OnlyPath      string
 	Mirror        bool
 	// Commit the workflow files were read from
 	FileCommit plumbing.Hash
+	// Paths a push touched, diffed only once a path filter asks
+	changed      func() ([]string, bool)
+	changedDone  bool
+	changedList  []string
+	changedKnown bool
+}
+
+// Changed paths and whether they are known, memoized per input
+func (in *triggerInput) changedPaths() ([]string, bool) {
+	if !in.changedDone {
+		in.changedDone = true
+		if in.changed != nil {
+			in.changedList, in.changedKnown = in.changed()
+		}
+	}
+	return in.changedList, in.changedKnown
+}
+
+// Path filters cost a tree diff, skip it when the workflow has none
+func (in *triggerInput) pathsAllowed(include, ignore []string) bool {
+	if len(include) == 0 && len(ignore) == 0 {
+		return true
+	}
+	changed, known := in.changedPaths()
+	return pathsAllowed(include, ignore, changed, known)
 }
 
 func (m *Manager) openRepo(repo *db.GitRepository) (*gitrepo.Repo, error) {
@@ -266,11 +289,10 @@ func (m *Manager) onRefUpdate(ctx context.Context, ev gitrepo.RefEvent) {
 		if hasSkipMarker(head.Message) {
 			continue
 		}
-		changed, known := changedPaths(ctx, r, u.Old, u.New)
 		in := &triggerInput{
 			Event: "push", Ref: u.Name.String(), SHA: u.New.String(), Actor: ev.Actor,
-			Payload: m.pushPayload(ctx, repo, r, u, head, ev.Actor),
-			Changed: changed, ChangedKnown: known, Mirror: ev.Mirror,
+			Payload: m.pushPayload(ctx, repo, r, u, head, ev.Actor), Mirror: ev.Mirror,
+			changed: func() ([]string, bool) { return changedPaths(ctx, r, u.Old, u.New) },
 		}
 		m.startRuns(ctx, repo, r, u.New, in)
 	}
@@ -554,7 +576,7 @@ func matchPush(spec *TriggerSpec, in *triggerInput) bool {
 	default:
 		return false
 	}
-	return pathsAllowed(spec.Paths, spec.PathsIgnore, in.Changed, in.ChangedKnown)
+	return in.pathsAllowed(spec.Paths, spec.PathsIgnore)
 }
 
 func matchPull(spec *TriggerSpec, in *triggerInput) bool {
@@ -569,7 +591,7 @@ func matchPull(spec *TriggerSpec, in *triggerInput) bool {
 	if base != "" && !refAllowed(spec.Branches, spec.BranchesIgnore, base) {
 		return false
 	}
-	return pathsAllowed(spec.Paths, spec.PathsIgnore, in.Changed, in.ChangedKnown)
+	return in.pathsAllowed(spec.Paths, spec.PathsIgnore)
 }
 
 func pullBaseBranch(payload map[string]any) string {

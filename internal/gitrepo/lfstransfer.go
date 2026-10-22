@@ -384,33 +384,63 @@ func writePktData(w io.Writer, r io.Reader) error {
 // Object data passed the configured cap
 var errLFSTooLarge = errors.New("lfs object too large")
 
-// Streams data packets into the upload, draining the rest once the cap is passed
+// Streams data packets into the upload in one append, draining the rest once the cap is passed
 func readPktData(rd *bufio.Reader, uploadID string, appendChunk func(string, io.Reader) (int64, error), maxBytes int64) error {
-	var total int64
-	over := false
-	for {
-		l, p, err := pktline.ReadLine(rd)
+	pr := &pktDataReader{rd: rd, max: maxBytes}
+	if _, err := appendChunk(uploadID, pr); err != nil {
+		return err
+	}
+	if pr.err != nil {
+		return pr.err
+	}
+	if pr.over {
+		return errLFSTooLarge
+	}
+	return nil
+}
+
+// Data pkt-lines up to the flush as one byte stream
+type pktDataReader struct {
+	rd    *bufio.Reader
+	buf   []byte
+	max   int64
+	total int64
+	over  bool
+	done  bool
+	err   error
+}
+
+func (p *pktDataReader) Read(out []byte) (int, error) {
+	for len(p.buf) == 0 {
+		if p.done {
+			if p.err != nil {
+				return 0, p.err
+			}
+			return 0, io.EOF
+		}
+		l, data, err := pktline.ReadLine(p.rd)
 		if err != nil {
-			return err
+			// A stream ending before its flush is a broken upload, never a clean end
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
+			p.done, p.err = true, err
+			return 0, err
 		}
 		if l == pktline.Flush {
-			if over {
-				return errLFSTooLarge
-			}
-			return nil
+			p.done = true
+			return 0, io.EOF
 		}
-		if over {
+		p.total += int64(len(data))
+		if p.over || (p.max > 0 && p.total > p.max) {
+			p.over = true
 			continue
 		}
-		total += int64(len(p))
-		if maxBytes > 0 && total > maxBytes {
-			over = true
-			continue
-		}
-		if _, err := appendChunk(uploadID, strings.NewReader(string(p))); err != nil {
-			return err
-		}
+		p.buf = data
 	}
+	n := copy(out, p.buf)
+	p.buf = p.buf[n:]
+	return n, nil
 }
 
 // Discards data packets up to the flush that ends them

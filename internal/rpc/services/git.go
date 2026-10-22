@@ -498,6 +498,9 @@ func (s *GitService) AcceptTransfer(ctx context.Context, req *v1.AcceptTransferR
 }
 
 func (s *GitService) RejectTransfer(ctx context.Context, req *v1.RejectTransferRequest) (*v1.RejectTransferResponse, error) {
+	if err := portalAllowsGitWrite(ctx); err != nil {
+		return nil, err
+	}
 	user, err := s.signedIn(ctx)
 	if err != nil {
 		return nil, err

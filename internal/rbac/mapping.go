@@ -44,6 +44,54 @@ var PublicProcedures = map[string]bool{
 	distrofacev1connect.RunnerServiceCompleteTaskProcedure:       true,
 	distrofacev1connect.RunnerServiceUploadTaskArtifactProcedure: true,
 	distrofacev1connect.RunnerServiceFinishTaskArtifactProcedure: true,
+	distrofacev1connect.RunnerServiceListTaskArtifactsProcedure:  true,
+}
+
+// Mutations outside the resource action heuristic that read only portals refuse
+var PortalWriteProcedures = map[string]bool{
+	// Stars, watches, and subscriptions change state through the portal host
+	distrofacev1connect.RepositoryServiceStarRepositoryProcedure:   true,
+	distrofacev1connect.RepositoryServiceUnstarRepositoryProcedure: true,
+	distrofacev1connect.GitServiceStarGitRepositoryProcedure:       true,
+	distrofacev1connect.GitServiceUnstarGitRepositoryProcedure:     true,
+	distrofacev1connect.GitServiceWatchGitRepositoryProcedure:      true,
+	distrofacev1connect.IssueServiceSubscribeIssueProcedure:        true,
+	distrofacev1connect.IssueServiceUnsubscribeIssueProcedure:      true,
+	// Ownership and membership changes
+	distrofacev1connect.GitServiceAcceptTransferProcedure:      true,
+	distrofacev1connect.GitServiceRejectTransferProcedure:      true,
+	distrofacev1connect.GitServiceAcceptCollaborationProcedure: true,
+	// Workflow controls are mapped as reads for rbac, they still mutate
+	distrofacev1connect.ActionsServiceEnableWorkflowProcedure:    true,
+	distrofacev1connect.ActionsServiceDisableWorkflowProcedure:   true,
+	distrofacev1connect.ActionsServiceDispatchWorkflowProcedure:  true,
+	distrofacev1connect.ActionsServiceCancelRunProcedure:         true,
+	distrofacev1connect.ActionsServiceRerunRunProcedure:          true,
+	distrofacev1connect.ActionsServiceApproveRunProcedure:        true,
+	distrofacev1connect.ActionsServiceSetSecretProcedure:         true,
+	distrofacev1connect.ActionsServiceDeleteSecretProcedure:      true,
+	distrofacev1connect.ActionsServiceSetVariableProcedure:       true,
+	distrofacev1connect.ActionsServiceDeleteVariableProcedure:    true,
+	distrofacev1connect.ActionsServiceCreateRunnerTokenProcedure: true,
+	distrofacev1connect.ActionsServiceDeleteRunnerProcedure:      true,
+	distrofacev1connect.ActionsServiceUpdateRunnerProcedure:      true,
+	// Boards
+	distrofacev1connect.ProjectServiceCreateProjectProcedure:          true,
+	distrofacev1connect.ProjectServiceUpdateProjectProcedure:          true,
+	distrofacev1connect.ProjectServiceDeleteProjectProcedure:          true,
+	distrofacev1connect.ProjectServiceCloseProjectProcedure:           true,
+	distrofacev1connect.ProjectServiceCreateColumnProcedure:           true,
+	distrofacev1connect.ProjectServiceUpdateColumnProcedure:           true,
+	distrofacev1connect.ProjectServiceDeleteColumnProcedure:           true,
+	distrofacev1connect.ProjectServiceMoveColumnProcedure:             true,
+	distrofacev1connect.ProjectServiceAddIssueToProjectProcedure:      true,
+	distrofacev1connect.ProjectServiceMoveIssueProcedure:              true,
+	distrofacev1connect.ProjectServiceRemoveIssueFromProjectProcedure: true,
+}
+
+// Reads that need a write grant for rbac, read only portals still serve them
+var PortalReadProcedures = map[string]bool{
+	distrofacev1connect.GitServiceListPushMirrorsProcedure: true,
 }
 
 // Any resolved identity including anonymous, no resource grant needed
@@ -291,6 +339,7 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.GitServiceListStarredGitRepositoriesProcedure: {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
 	distrofacev1connect.GitServiceSyncGitRepositoryProcedure:          {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 	distrofacev1connect.GitServiceStopGitRepositorySyncProcedure:      {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
+	distrofacev1connect.GitServiceDismissGitImportProcedure:           {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 	distrofacev1connect.GitServiceGenerateMirrorKeyProcedure:          {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 	distrofacev1connect.GitServiceListPushMirrorsProcedure:            {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 	distrofacev1connect.GitServiceCreatePushMirrorProcedure:           {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},

@@ -200,7 +200,7 @@ func New() (*App, error) {
 	})
 
 	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, authLimiter, auditRecorder, registryLog)
-	registryHandler := registry.PullRateLimit(registryApp, tokenService, pullLimiter, anonPullLimiter, registryLog)
+	registryHandler := registry.JobTokenGuard(registry.PullRateLimit(registryApp, tokenService, pullLimiter, anonPullLimiter, registryLog), tokenService, registryLog)
 
 	blobStore, err := artifacts.NewBlobStore(cfg.Artifacts.StoragePath)
 	if err != nil {
@@ -283,6 +283,7 @@ func New() (*App, error) {
 	forgeManager.SetTrigger(actionsManager.Trigger)
 	forgeManager.SetReleaseCreated(actionsManager.PinReleaseImages)
 	registry.SetImageRecorder(actionsManager)
+	registry.SetJobChecker(actionsManager)
 	mailService.SetInboundHandler(forgeManager.HandleInboundMail)
 	gitManager.Subscribe(forgeManager.OnRefUpdate, actionsManager.OnRefUpdate, mirrorMonitor.OnRefUpdate)
 	if err := actionsManager.ResealLegacy(ctx); err != nil {

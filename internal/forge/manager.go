@@ -29,12 +29,16 @@ type Manager struct {
 	releaseCreated ReleaseHook
 	// Key behind signed notification tokens, none means none are issued or accepted
 	tokenKey []byte
-	// In flight notification fan outs
+	// In flight notification fan outs and stat refreshes
 	pending sync.WaitGroup
+	// Pull request stat refreshes queued per repository, one worker each
+	statsMu      sync.Mutex
+	statsPending map[string]map[string]bool
+	statsRunning map[string]bool
 }
 
 func NewManager(store *stores.Store, git *gitrepo.Manager, mail *mailer.Service, res *settings.Resolver, log *logger.Logger) *Manager {
-	return &Manager{store: store, git: git, mail: mail, res: res, log: log}
+	return &Manager{store: store, git: git, mail: mail, res: res, log: log, statsPending: map[string]map[string]bool{}, statsRunning: map[string]bool{}}
 }
 
 // Installs the purpose bound key for signed notification tokens

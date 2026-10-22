@@ -274,6 +274,7 @@ func (m *Manager) allowedRecipients(ctx context.Context, n Notification, recipie
 		return nil
 	}
 	roles, _ := m.store.GetUserRoleNamesByIDs(ctx, ids)
+	var principals []*auth.AuthenticatedUser
 	for id := range recipients {
 		u := users[id]
 		if u == nil || !u.IsActive {
@@ -285,8 +286,12 @@ func (m *Manager) allowedRecipients(ctx context.Context, n Notification, recipie
 		}
 		p := m.principal(u)
 		p.Roles = roles[id]
-		if !m.git.Access().CanSee(ctx, p, n.Repo) {
-			delete(recipients, id)
+		principals = append(principals, p)
+	}
+	visible := m.git.Access().CanSeeMany(ctx, principals, n.Repo)
+	for _, p := range principals {
+		if !visible[p.ID] {
+			delete(recipients, p.ID)
 		}
 	}
 	return users

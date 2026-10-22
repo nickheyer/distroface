@@ -654,11 +654,25 @@ func TestV1AccessControl(t *testing.T) {
 		t.Fatalf("private repo leaked in listing: %s", rec.Body.String())
 	}
 
-	// V1 quirk, chunk PATCH has no permission gate
+	// Sessions belong to the principal that opened them
 	rec = e.do(http.MethodPost, "/api/v1/artifacts/secret/upload", owner, nil)
 	location := rec.Header().Get("Location")
-	if rec := e.do(http.MethodPatch, location, other, strings.NewReader("x")); rec.Code != http.StatusAccepted {
-		t.Fatalf("chunk PATCH permission quirk: got %d", rec.Code)
+	if rec := e.do(http.MethodPatch, location, other, strings.NewReader("x")); rec.Code != http.StatusForbidden {
+		t.Fatalf("chunk PATCH by another user: got %d", rec.Code)
+	}
+	qualified := strings.Replace(location, "/api/v1/artifacts/secret/", "/api/v1/artifacts/_ns/alice/secret/", 1)
+	if rec := e.doJSON(http.MethodPut, qualified+"?version=1.0.0&path=x.txt", other, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("complete PUT by another user: got %d", rec.Code)
+	}
+	if rec := e.do(http.MethodPatch, location, owner, strings.NewReader("x")); rec.Code != http.StatusAccepted {
+		t.Fatalf("chunk PATCH by the owner: got %d", rec.Code)
+	}
+	unknown := strings.TrimSuffix(location, rec.Header().Get("Upload-ID")) + "00000000-0000-4000-8000-000000000000"
+	if rec := e.do(http.MethodPatch, unknown, owner, strings.NewReader("x")); rec.Code != http.StatusNotFound {
+		t.Fatalf("chunk PATCH on an unknown session: got %d", rec.Code)
+	}
+	if rec := e.do(http.MethodPut, unknown+"?version=1.0.0&path=x.txt", owner, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("complete PUT on an unknown session: got %d", rec.Code)
 	}
 
 	// Owner retains full control

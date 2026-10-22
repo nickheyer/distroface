@@ -123,6 +123,38 @@ func (s *Store) ListGitReviewRequests(ctx context.Context, issueID string) ([]*d
 	return out, err
 }
 
+// Review requests of many issues keyed by issue id
+func (s *Store) ListGitReviewRequestsByIssues(ctx context.Context, issueIDs []string) (map[string][]*db.GitReviewRequest, error) {
+	out := map[string][]*db.GitReviewRequest{}
+	if len(issueIDs) == 0 {
+		return out, nil
+	}
+	var rows []*db.GitReviewRequest
+	if err := s.db.WithContext(ctx).Where("issue_id IN ?", issueIDs).Order("created_at ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.IssueID] = append(out[r.IssueID], r)
+	}
+	return out, nil
+}
+
+// Submitted reviews of many issues keyed by issue id
+func (s *Store) ListGitReviewsByIssues(ctx context.Context, issueIDs []string) (map[string][]*db.GitReview, error) {
+	out := map[string][]*db.GitReview{}
+	if len(issueIDs) == 0 {
+		return out, nil
+	}
+	var rows []*db.GitReview
+	if err := s.db.WithContext(ctx).Where("issue_id IN ? AND state <> ?", issueIDs, "pending").Order("created_at ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.IssueID] = append(out[r.IssueID], r)
+	}
+	return out, nil
+}
+
 func (s *Store) FulfillGitReviewRequest(ctx context.Context, issueID, userID string) error {
 	return s.db.WithContext(ctx).Model(&db.GitReviewRequest{}).Where("issue_id = ? AND user_id = ?", issueID, userID).Update("fulfilled", true).Error
 }

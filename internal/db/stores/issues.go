@@ -185,16 +185,24 @@ func (s *Store) ListGitIssues(ctx context.Context, opts IssueListOptions) ([]*db
 	return out, total, err
 }
 
-// Open and closed totals under the same filters minus state
+// Open and closed totals under the same filters
 func (s *Store) CountGitIssuesByState(ctx context.Context, opts IssueListOptions) (int64, int64, error) {
-	opts.State = db.IssueStateOpen
-	var open, closed int64
-	if err := s.issueQuery(ctx, opts).Count(&open).Error; err != nil {
+	opts.State = ""
+	var rows []struct {
+		State string
+		Count int64
+	}
+	if err := s.issueQuery(ctx, opts).Select("git_issues.state AS state, COUNT(*) AS count").Group("git_issues.state").Scan(&rows).Error; err != nil {
 		return 0, 0, err
 	}
-	opts.State = db.IssueStateClosed
-	if err := s.issueQuery(ctx, opts).Count(&closed).Error; err != nil {
-		return 0, 0, err
+	var open, closed int64
+	for _, r := range rows {
+		switch r.State {
+		case db.IssueStateOpen:
+			open = r.Count
+		case db.IssueStateClosed:
+			closed = r.Count
+		}
 	}
 	return open, closed, nil
 }
@@ -771,6 +779,22 @@ func (s *Store) GetGitIssueSubscriptions(ctx context.Context, issueID string, us
 	}
 	for _, r := range rows {
 		out[r.UserID] = r.Subscribed
+	}
+	return out, nil
+}
+
+// Explicit subscriptions of one user across many issues
+func (s *Store) GetGitIssueSubscriptionsForUser(ctx context.Context, issueIDs []string, userID string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(issueIDs) == 0 || userID == "" {
+		return out, nil
+	}
+	var rows []db.GitIssueSubscription
+	if err := s.db.WithContext(ctx).Where("issue_id IN ? AND user_id = ?", issueIDs, userID).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range rows {
+		out[r.IssueID] = r.Subscribed
 	}
 	return out, nil
 }

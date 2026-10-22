@@ -8,58 +8,72 @@ import (
 	"github.com/nickheyer/distroface/internal/gitrepo"
 )
 
-// Updates open pull requests whose head or base moved
+// Marks pull requests whose head or base moved, stats refresh later
 func (m *Manager) onPushPulls(ctx context.Context, ev gitrepo.RefEvent) {
 	repo := ev.Repo
 	actor := Actor{User: ev.Actor, CanWrite: true}
+	// Forks host heads of pull requests opened on their parent
+	var parent *db.GitRepository
+	if repo.ForkOfID != nil {
+		parent, _ = m.store.GetGitRepositoryByID(ctx, *repo.ForkOfID)
+	}
+	stale := map[*db.GitRepository][]string{}
+	retry := false
 	for _, u := range ev.Updates {
 		if !u.Name.IsBranch() {
 			continue
 		}
 		branch := u.Name.Short()
 		heads, _ := m.store.ListOpenPullsByHead(ctx, repo.ID, branch)
-		for _, pr := range heads {
-			m.headMoved(ctx, repo, actor, pr, u)
+		if len(heads) > 0 {
+			ids := make([]string, 0, len(heads))
+			for _, pr := range heads {
+				ids = append(ids, pr.IssueID)
+			}
+			issues := map[string]*db.GitIssue{}
+			if rows, _ := m.store.GetGitIssuesByIDs(ctx, ids); rows != nil {
+				for _, is := range rows {
+					issues[is.ID] = is
+				}
+			}
+			for _, pr := range heads {
+				issue := issues[pr.IssueID]
+				if issue == nil {
+					continue
+				}
+				base := repo
+				if issue.RepoID != repo.ID {
+					if parent == nil || issue.RepoID != parent.ID {
+						continue
+					}
+					base = parent
+				}
+				m.headMoved(ctx, base, actor, issue, pr, u)
+				if !u.New.IsZero() {
+					stale[base] = append(stale[base], pr.IssueID)
+				}
+			}
+		}
+		if u.New.IsZero() {
+			continue
 		}
 		bases, _ := m.store.ListOpenPullsByBase(ctx, repo.ID, branch)
 		for _, pr := range bases {
-			if u.New.IsZero() {
-				continue
-			}
-			_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"mergeable_state": MergeableUnknown})
-			pr.MergeableState = MergeableUnknown
-			m.refreshPullStats(ctx, repo, pr)
+			m.markPullStale(ctx, pr)
+			stale[repo] = append(stale[repo], pr.IssueID)
 		}
-		if !u.New.IsZero() {
-			go m.RetryAutoMerge(context.WithoutCancel(ctx), repo, "")
-		}
+		retry = true
 	}
-	// Forks hosting heads of pull requests on their parent
-	if repo.ForkOfID != nil {
-		parent, _ := m.store.GetGitRepositoryByID(ctx, *repo.ForkOfID)
-		if parent != nil {
-			for _, u := range ev.Updates {
-				if !u.Name.IsBranch() {
-					continue
-				}
-				heads, _ := m.store.ListOpenPullsByHead(ctx, repo.ID, u.Name.Short())
-				for _, pr := range heads {
-					issue, _ := m.store.GetGitIssueByID(ctx, pr.IssueID)
-					if issue != nil && issue.RepoID == parent.ID {
-						m.headMoved(ctx, parent, actor, pr, u)
-					}
-				}
-			}
-		}
+	for base, ids := range stale {
+		m.queuePullStats(base, ids)
+	}
+	if retry {
+		go m.RetryAutoMerge(context.WithoutCancel(ctx), repo, "")
 	}
 }
 
 // Records a head push on one pull request
-func (m *Manager) headMoved(ctx context.Context, repo *db.GitRepository, actor Actor, pr *db.GitPullRequest, u gitrepo.RefUpdate) {
-	issue, err := m.store.GetGitIssueByID(ctx, pr.IssueID)
-	if err != nil || issue == nil || issue.RepoID != repo.ID {
-		return
-	}
+func (m *Manager) headMoved(ctx context.Context, repo *db.GitRepository, actor Actor, issue *db.GitIssue, pr *db.GitPullRequest, u gitrepo.RefUpdate) {
 	if u.New.IsZero() {
 		pr.HeadDeleted = true
 		_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, map[string]any{"head_deleted": true})
@@ -68,7 +82,8 @@ func (m *Manager) headMoved(ctx context.Context, repo *db.GitRepository, actor A
 	}
 	oldSHA := pr.HeadSHA
 	pr.HeadSHA = u.New.String()
-	cols := map[string]any{"head_sha": pr.HeadSHA, "head_deleted": false, "mergeable_state": MergeableUnknown}
+	cols := staleMergeColumns(pr)
+	cols["head_sha"], cols["head_deleted"] = pr.HeadSHA, false
 	// New commits from anyone but the person who armed it disarm auto merge
 	if pr.AutoMergeMethod != "" && (actor.User == nil || actor.User.ID != pr.AutoMergeBy) {
 		pr.AutoMergeMethod, pr.AutoMergeBy = "", ""
@@ -76,11 +91,9 @@ func (m *Manager) headMoved(ctx context.Context, repo *db.GitRepository, actor A
 		_, _ = m.AddEvent(ctx, issue, actor.User, EventAutoMergeCancelled, map[string]string{"reason": "head_pushed"})
 	}
 	_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, cols)
-	pr.MergeableState = MergeableUnknown
 	if _, err := m.refreshPullRef(ctx, repo, pr, issue.Number, nil); err != nil {
 		m.log.Debug("pull ref refresh #%d: %v", issue.Number, err)
 	}
-	m.refreshPullStats(ctx, repo, pr)
 	kind := EventHeadPushed
 	if u.Forced {
 		kind = EventForcePushed
@@ -116,6 +129,20 @@ func (m *Manager) markOutdatedComments(ctx context.Context, r *gitrepo.Repo, iss
 	if oldSHA == "" || oldSHA == newSHA {
 		return
 	}
+	// Diff only when a comment could still go stale
+	comments, err := m.store.ListGitReviewComments(ctx, issue.ID, "", "")
+	if err != nil {
+		return
+	}
+	var live []*db.GitReviewComment
+	for _, c := range comments {
+		if c.OutdatedSHA == "" {
+			live = append(live, c)
+		}
+	}
+	if len(live) == 0 {
+		return
+	}
 	diff, err := r.Diff(ctx, plumbing.NewHash(oldSHA), plumbing.NewHash(newSHA), gitrepo.DiffOptions{})
 	if err != nil {
 		return
@@ -125,13 +152,9 @@ func (m *Manager) markOutdatedComments(ctx context.Context, r *gitrepo.Repo, iss
 		changed[f.OldPath] = true
 		changed[f.NewPath] = true
 	}
-	comments, err := m.store.ListGitReviewComments(ctx, issue.ID, "", "")
-	if err != nil {
-		return
-	}
 	var ids []string
-	for _, c := range comments {
-		if c.OutdatedSHA == "" && changed[c.Path] {
+	for _, c := range live {
+		if changed[c.Path] {
 			ids = append(ids, c.ID)
 		}
 	}

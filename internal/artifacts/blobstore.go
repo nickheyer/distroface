@@ -3,6 +3,7 @@ package artifacts
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +15,12 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// Session belongs to another principal
+var ErrUploadDenied = errors.New("upload session belongs to another principal")
+
+// Sidecar naming the principal allowed to touch a client facing session
+const uploadOwnerSuffix = ".owner"
 
 // Blobs live at blobs/sha256/<xx>/<hex> with _uploads staging
 type BlobStore struct {
@@ -44,13 +51,65 @@ func (b *BlobStore) InitiateUpload() (string, error) {
 	return id, f.Close()
 }
 
-// Appends bytes, creates missing session file like v1
+// Moves a staged file into a fresh session, same filesystem so no copy
+func (b *BlobStore) AdoptUpload(path string) (string, error) {
+	id, err := b.InitiateUpload()
+	if err != nil {
+		return "", err
+	}
+	if err := os.Rename(path, b.uploadPath(id)); err != nil {
+		_ = os.Remove(b.uploadPath(id))
+		return "", err
+	}
+	return id, nil
+}
+
+// Client facing session bound to one principal key
+func (b *BlobStore) InitiateOwnedUpload(owner string) (string, error) {
+	if owner == "" {
+		return "", fmt.Errorf("upload owner is required")
+	}
+	id, err := b.InitiateUpload()
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(b.uploadPath(id)+uploadOwnerSuffix, []byte(owner), 0600); err != nil {
+		_ = os.Remove(b.uploadPath(id))
+		return "", err
+	}
+	return id, nil
+}
+
+// Refuses sessions nobody owns or another principal opened
+func (b *BlobStore) VerifyUploadOwner(uploadID string, owners ...string) error {
+	if !uploadIDPattern.MatchString(uploadID) {
+		return ErrUploadNotFound
+	}
+	raw, err := os.ReadFile(b.uploadPath(uploadID) + uploadOwnerSuffix)
+	if err != nil {
+		return ErrUploadNotFound
+	}
+	if _, err := os.Stat(b.uploadPath(uploadID)); err != nil {
+		return ErrUploadNotFound
+	}
+	for _, o := range owners {
+		if o != "" && o == string(raw) {
+			return nil
+		}
+	}
+	return ErrUploadDenied
+}
+
+// Appends bytes to an open session
 func (b *BlobStore) AppendChunk(uploadID string, r io.Reader) (int64, error) {
 	if !uploadIDPattern.MatchString(uploadID) {
 		return 0, fmt.Errorf("invalid upload id")
 	}
-	f, err := os.OpenFile(b.uploadPath(uploadID), os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
+	f, err := os.OpenFile(b.uploadPath(uploadID), os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, ErrUploadNotFound
+		}
 		return 0, err
 	}
 	defer f.Close()
@@ -74,6 +133,7 @@ func (b *BlobStore) CompleteUpload(uploadID string) (digest string, size int64, 
 		return "", 0, "", fmt.Errorf("invalid upload id")
 	}
 	src := b.uploadPath(uploadID)
+	defer os.Remove(src + uploadOwnerSuffix)
 
 	f, err := os.Open(src)
 	if err != nil {
@@ -115,6 +175,7 @@ func (b *BlobStore) CancelUpload(uploadID string) error {
 	if !uploadIDPattern.MatchString(uploadID) {
 		return fmt.Errorf("invalid upload id")
 	}
+	_ = os.Remove(b.uploadPath(uploadID) + uploadOwnerSuffix)
 	err := os.Remove(b.uploadPath(uploadID))
 	if os.IsNotExist(err) {
 		return nil
@@ -159,15 +220,25 @@ func (b *BlobStore) CleanStaleUploads(maxAge time.Duration) (int, error) {
 	}
 	cutoff := time.Now().Add(-maxAge)
 	removed := 0
+	dir := filepath.Join(b.root, "_uploads")
 	for _, e := range entries {
+		name := e.Name()
+		// Sidecars follow their session, orphans go on their own
+		if strings.HasSuffix(name, uploadOwnerSuffix) {
+			if _, err := os.Stat(filepath.Join(dir, strings.TrimSuffix(name, uploadOwnerSuffix))); os.IsNotExist(err) {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
+			continue
+		}
 		info, err := e.Info()
 		if err != nil {
 			continue
 		}
 		if info.ModTime().Before(cutoff) {
-			if os.Remove(filepath.Join(b.root, "_uploads", e.Name())) == nil {
+			if os.Remove(filepath.Join(dir, name)) == nil {
 				removed++
 			}
+			_ = os.Remove(filepath.Join(dir, name+uploadOwnerSuffix))
 		}
 	}
 	return removed, nil

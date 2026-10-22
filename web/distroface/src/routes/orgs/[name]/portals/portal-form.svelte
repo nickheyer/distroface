@@ -48,6 +48,7 @@
 	let hostname = $derived(portal?.hostname ?? '');
 	let portText = $derived(portal && portal.port > 0 ? String(portal.port) : '');
 	let sshPortText = $derived(portal && portal.sshPort > 0 ? String(portal.sshPort) : '');
+	let publicHost = $derived(portal?.publicHost ?? '');
 	let mapUnqualified = $derived(portal?.mapUnqualified ?? true);
 	let allowPush = $derived(portal?.allowPush ?? true);
 	let showExitLink = $derived(!(portal?.hidePrimaryLink ?? false));
@@ -322,6 +323,7 @@
 						mapUnqualified: false,
 						allowPush: false,
 						hidePrimaryLink: false,
+						publicHost: '',
 						rules: [],
 						backendUrl: backendUrl.trim(),
 						backendRewriteHost,
@@ -331,6 +333,7 @@
 						mapUnqualified,
 						allowPush,
 						hidePrimaryLink: !showExitLink,
+						publicHost: publicHost.trim().toLowerCase(),
 						rules: cleanedRules,
 						backendUrl: '',
 						backendRewriteHost: false,
@@ -570,6 +573,23 @@
 			placeholder="none"
 		/>
 	</FormField>
+	{#if !isProxy}
+		<FormField
+			label="Public address"
+			id="portal-public-host"
+			help={hostname.trim() === ''
+				? "Host and optional port written into links and mail. Empty uses the primary hostname with this portal's port, set it when a proxy exposes the portal elsewhere"
+				: 'Host and optional port written into links and mail. Empty uses the address the request arrived on, set it when a proxy exposes the portal on another port'}
+		>
+			<Input
+				id="portal-public-host"
+				bind:value={publicHost}
+				class="font-mono"
+				placeholder={hostname.trim() || 'portal.example.com:443'}
+				autocomplete="off"
+			/>
+		</FormField>
+	{/if}
 </FormSection>
 
 {#if isProxy}

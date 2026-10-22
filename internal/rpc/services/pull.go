@@ -32,11 +32,15 @@ func NewPullRequestService(store *stores.Store, fm *forge.Manager, log *logger.L
 // Loads a visible repository with the pulls unit readable and the caller's actor
 func (s *PullRequestService) repo(ctx context.Context, namespace, name string) (*auth.AuthenticatedUser, *storage.GitRepository, forge.Actor, error) {
 	user := auth.UserFromContext(ctx)
-	repo, err := visibleGitRepo(ctx, s.store, s.forge.Git().Access(), user, namespace, name)
+	repo, err := namedGitRepo(ctx, s.store, user, namespace, name)
 	if err != nil {
 		return nil, nil, forge.Actor{}, err
 	}
+	// One identity pass answers visibility and the unit level
 	levels := s.forge.Git().Access().Levels(ctx, user, repo)
+	if !levelsCanSee(repo, levels) {
+		return nil, nil, forge.Actor{}, connect.Errorf(connect.CodeNotFound, "repository not found")
+	}
 	if !gitrepo.UnitEnabled(repo, storage.GitUnitPulls) && !levels.IsOwner && !levels.CanAdmin {
 		return nil, nil, forge.Actor{}, connect.Errorf(connect.CodeFailedPrecondition, "pull requests are disabled on this repository")
 	}
@@ -103,9 +107,46 @@ func prReviewCommentProto(ctx context.Context, users *gitUserCache, c *storage.G
 	return out
 }
 
-// Converts a pull request view
-func (s *PullRequestService) toProto(ctx context.Context, view *forge.PullView, viewerID string) *v1.PullRequest {
-	users := newGitUserCache(s.store)
+// User ids a pull view names beyond its issue rows
+func pullUserIDs(view *forge.PullView) []string {
+	ids := []string{view.PR.AutoMergeBy, view.PR.MergedBy, view.Issue.AuthorID, view.Issue.ClosedBy}
+	for _, rq := range view.Requests {
+		ids = append(ids, rq.UserID)
+	}
+	for _, rv := range view.Reviews {
+		ids = append(ids, rv.ReviewerID, rv.DismissedBy)
+	}
+	for _, r := range view.Reactions {
+		ids = append(ids, r.UserID)
+	}
+	return ids
+}
+
+// Names of every team asked to review, one query
+func (s *PullRequestService) teamNames(ctx context.Context, views []*forge.PullView) map[string]string {
+	seen := map[string]bool{}
+	var ids []string
+	for _, v := range views {
+		for _, rq := range v.Requests {
+			if rq.TeamID != "" && !seen[rq.TeamID] {
+				seen[rq.TeamID] = true
+				ids = append(ids, rq.TeamID)
+			}
+		}
+	}
+	out := map[string]string{}
+	if len(ids) == 0 {
+		return out
+	}
+	teams, _ := s.store.GetOrgTeamsByIDs(ctx, ids)
+	for _, t := range teams {
+		out[t.ID] = t.Name
+	}
+	return out
+}
+
+// Converts a pull request view with shared lookups
+func (s *PullRequestService) toProto(ctx context.Context, users *gitUserCache, teams map[string]string, view *forge.PullView, viewerID string) *v1.PullRequest {
 	pr := view.PR
 	out := &v1.PullRequest{
 		Issue:                issueViewProto(ctx, s.forge, users, viewerID, view.IssueView),
@@ -146,9 +187,7 @@ func (s *PullRequestService) toProto(ctx context.Context, view *forge.PullView, 
 			p.User = issueUserProto(users.user(ctx, rq.UserID))
 		}
 		if rq.TeamID != "" {
-			if teams, _ := s.store.GetOrgTeamsByIDs(ctx, []string{rq.TeamID}); len(teams) > 0 {
-				p.TeamName = teams[0].Name
-			}
+			p.TeamName = teams[rq.TeamID]
 		}
 		out.ReviewRequests = append(out.ReviewRequests, p)
 	}
@@ -171,7 +210,9 @@ func (s *PullRequestService) view(ctx context.Context, repo *storage.GitReposito
 	if err != nil {
 		return nil, mapForgeErr(err)
 	}
-	return s.toProto(ctx, view, viewerID(actor.User)), nil
+	users := newGitUserCache(s.store)
+	users.prime(ctx, pullUserIDs(view))
+	return s.toProto(ctx, users, s.teamNames(ctx, []*forge.PullView{view}), view, viewerID(actor.User)), nil
 }
 
 // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -234,16 +275,19 @@ func (s *PullRequestService) ListPullRequests(ctx context.Context, req *v1.ListP
 	countOpts.State = ""
 	open, closed, _ := s.store.CountGitIssuesByState(ctx, countOpts)
 	out := &v1.ListPullRequestsResponse{Page: pages.Info(offset, limit, total), OpenCount: open, ClosedCount: closed}
-	for _, issue := range issues {
-		pr, err := s.forge.Pull(ctx, issue)
-		if err != nil {
-			continue
-		}
-		view, err := s.forge.PullView(ctx, actor, repo, issue, pr, false)
-		if err != nil {
-			return nil, mapForgeErr(err)
-		}
-		out.PullRequests = append(out.PullRequests, s.toProto(ctx, view, viewerID(user)))
+	views, err := s.forge.PullViews(ctx, actor, repo, issues)
+	if err != nil {
+		return nil, mapForgeErr(err)
+	}
+	users := newGitUserCache(s.store)
+	var ids []string
+	for _, view := range views {
+		ids = append(ids, pullUserIDs(view)...)
+	}
+	users.prime(ctx, ids)
+	teams := s.teamNames(ctx, views)
+	for _, view := range views {
+		out.PullRequests = append(out.PullRequests, s.toProto(ctx, users, teams, view, viewerID(user)))
 	}
 	return out, nil
 }

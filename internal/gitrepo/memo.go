@@ -2,6 +2,7 @@ package gitrepo
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -76,22 +77,32 @@ func (m *Memo[V]) Forget(prefix string) {
 	}
 }
 
-// Drops expired entries, then the oldest while over capacity
+// Makes room once full, expired first then a tenth of the oldest
 func (m *Memo[V]) evictLocked() {
+	if m.max <= 0 || len(m.entries) < m.max {
+		return
+	}
 	now := time.Now()
 	for k, e := range m.entries {
 		if now.Sub(e.at) >= m.ttl {
 			delete(m.entries, k)
 		}
 	}
-	for m.max > 0 && len(m.entries) >= m.max {
-		oldestKey := ""
-		var oldest time.Time
-		for k, e := range m.entries {
-			if oldestKey == "" || e.at.Before(oldest) {
-				oldestKey, oldest = k, e.at
-			}
-		}
-		delete(m.entries, oldestKey)
+	if len(m.entries) < m.max {
+		return
+	}
+	// One sort per batch beats a full scan per insert
+	type aged struct {
+		key string
+		at  time.Time
+	}
+	ordered := make([]aged, 0, len(m.entries))
+	for k, e := range m.entries {
+		ordered = append(ordered, aged{k, e.at})
+	}
+	slices.SortFunc(ordered, func(a, b aged) int { return a.at.Compare(b.at) })
+	batch := max(m.max/10, 1)
+	for i := 0; i < batch && i < len(ordered); i++ {
+		delete(m.entries, ordered[i].key)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -186,43 +187,28 @@ func (r *Repo) AheadBehind(ctx context.Context, a, b plumbing.Hash, limit int) (
 	if err != nil {
 		return 0, 0, err
 	}
-	bases, err := ca.MergeBase(cb)
-	if err != nil {
-		return 0, 0, err
-	}
-	var base []plumbing.Hash
-	for _, c := range bases {
-		base = append(base, c.Hash)
-	}
-	count := func(from plumbing.Hash) (int32, error) {
-		n := int32(0)
-		iter := object.NewCommitPreorderIter(mustCommit(r, from), nil, base)
-		err := iter.ForEach(func(c *object.Commit) error {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			n++
-			if limit > 0 && int(n) >= limit {
-				return storer.ErrStop
-			}
-			return nil
-		})
-		return n, err
-	}
-	ahead, err := count(a)
-	if err != nil {
-		return 0, 0, err
-	}
-	behind, err := count(b)
-	return ahead, behind, err
+	// Ancestry between two commits never changes, the walk runs once per pair
+	key := a.String() + ":" + b.String() + ":" + strconv.Itoa(limit)
+	v, err := aheadBehinds.Get(ctx, key, func() ([2]int32, error) {
+		ahead, behind, err := r.aheadBehind(ctx, ca, cb, limit)
+		return [2]int32{ahead, behind}, err
+	})
+	return v[0], v[1], err
 }
 
-func mustCommit(r *Repo, h plumbing.Hash) *object.Commit {
-	c, err := r.Commit(h)
+var aheadBehinds = NewMemo[[2]int32](time.Hour, 4096)
+
+func (r *Repo) aheadBehind(ctx context.Context, ca, cb *object.Commit, limit int) (int32, int32, error) {
+	a, b := ca.Hash, cb.Hash
+	ahead, _, err := RevList(ctx, r.Storer, []plumbing.Hash{a}, []plumbing.Hash{b}, limit)
 	if err != nil {
-		return &object.Commit{Hash: h}
+		return 0, 0, err
 	}
-	return c
+	behind, _, err := RevList(ctx, r.Storer, []plumbing.Hash{b}, []plumbing.Hash{a}, limit)
+	if err != nil {
+		return 0, 0, err
+	}
+	return int32(len(ahead)), int32(len(behind)), nil
 }
 
 // Every merge base of two commits, empty when histories are unrelated
@@ -287,31 +273,14 @@ func (r *Repo) CommitsBetween(ctx context.Context, old, new plumbing.Hash, limit
 	if new.IsZero() {
 		return nil, false, nil
 	}
-	head, err := r.Commit(new)
-	if err != nil {
+	if _, err := r.Commit(new); err != nil {
 		return nil, false, err
 	}
-	var ignore []plumbing.Hash
+	var have []plumbing.Hash
 	if !old.IsZero() {
-		if _, err := r.Commit(old); err == nil {
-			ignore = []plumbing.Hash{old}
-		}
+		have = []plumbing.Hash{old}
 	}
-	var out []*object.Commit
-	truncated := false
-	iter := object.NewCommitPreorderIter(head, nil, ignore)
-	err = iter.ForEach(func(c *object.Commit) error {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if limit > 0 && len(out) >= limit {
-			truncated = true
-			return storer.ErrStop
-		}
-		out = append(out, c)
-		return nil
-	})
-	return out, truncated, err
+	return RevList(ctx, r.Storer, []plumbing.Hash{new}, have, limit)
 }
 
 var commitRanges = NewMemo[[]plumbing.Hash](time.Hour, 1024)
@@ -600,15 +569,20 @@ func (r *Repo) Readme(commit plumbing.Hash, dir string) (*Blob, error) {
 	return nil, ErrNotFound
 }
 
-// Last commit touching each of the given paths at a commit
+// Last commit touching each path, grouped by directory
 func (r *Repo) LastCommits(ctx context.Context, commit plumbing.Hash, paths []string, budget int) (map[string]*object.Commit, error) {
 	out := map[string]*object.Commit{}
 	if len(paths) == 0 {
 		return out, nil
 	}
-	pending := map[string]bool{}
+	groups := map[string]map[string]string{}
 	for _, p := range paths {
-		pending[p] = true
+		dir, name := path.Split(p)
+		dir = strings.TrimSuffix(dir, "/")
+		if groups[dir] == nil {
+			groups[dir] = map[string]string{}
+		}
+		groups[dir][name] = p
 	}
 	head, err := r.Commit(commit)
 	if err != nil {
@@ -623,7 +597,7 @@ func (r *Repo) LastCommits(ctx context.Context, commit plumbing.Hash, paths []st
 			return ctx.Err()
 		}
 		steps++
-		if len(pending) == 0 || (budget > 0 && steps > budget) {
+		if len(groups) == 0 || (budget > 0 && steps > budget) {
 			return storer.ErrStop
 		}
 		tree, err := c.Tree()
@@ -636,20 +610,50 @@ func (r *Repo) LastCommits(ctx context.Context, commit plumbing.Hash, paths []st
 				parentTree, _ = parent.Tree()
 			}
 		}
-		for p := range pending {
-			cur := entryHash(tree, p)
+		for dir, names := range groups {
+			cur := entryHash(tree, dir)
 			var prev plumbing.Hash
 			if parentTree != nil {
-				prev = entryHash(parentTree, p)
+				prev = entryHash(parentTree, dir)
 			}
-			if cur != prev {
+			if cur == prev {
+				continue
+			}
+			if p, ok := names[""]; ok {
+				// The directory itself was asked about
 				out[p] = c
-				delete(pending, p)
+				delete(names, "")
+			}
+			curEntries, prevEntries := r.treeEntries(cur), r.treeEntries(prev)
+			for name, p := range names {
+				if curEntries[name] != prevEntries[name] {
+					out[p] = c
+					delete(names, name)
+				}
+			}
+			if len(names) == 0 {
+				delete(groups, dir)
 			}
 		}
 		return nil
 	})
 	return out, err
+}
+
+// Entry hashes of a tree by name, nil when missing
+func (r *Repo) treeEntries(h plumbing.Hash) map[string]plumbing.Hash {
+	if h.IsZero() {
+		return nil
+	}
+	t, err := r.Repo.TreeObject(h)
+	if err != nil {
+		return nil
+	}
+	out := make(map[string]plumbing.Hash, len(t.Entries))
+	for _, e := range t.Entries {
+		out[e.Name] = e.Hash
+	}
+	return out
 }
 
 func entryHash(t *object.Tree, p string) plumbing.Hash {
@@ -696,6 +700,10 @@ func (r *Repo) Blame(ctx context.Context, commit plumbing.Hash, p string) ([]Bla
 	}
 	ctx, cancel := context.WithTimeout(ctx, blameTimeout)
 	defer cancel()
+	// Object reads fail after the timeout, stopping the walk
+	if c, err = object.GetCommit(ctxStorer{EncodedObjectStorer: r.Storer, ctx: ctx}, commit); err != nil {
+		return nil, err
+	}
 	type outcome struct {
 		res *git.BlameResult
 		err error
@@ -730,6 +738,19 @@ func (r *Repo) Blame(ctx context.Context, commit plumbing.Hash, p string) ([]Bla
 		runs = append(runs, BlameRun{Start: i + 1, End: i + 1, Commit: lc, Lines: []string{line.Text}})
 	}
 	return runs, nil
+}
+
+// Object reads that fail once the context ends
+type ctxStorer struct {
+	storer.EncodedObjectStorer
+	ctx context.Context
+}
+
+func (s ctxStorer) EncodedObject(t plumbing.ObjectType, h plumbing.Hash) (plumbing.EncodedObject, error) {
+	if err := s.ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.EncodedObjectStorer.EncodedObject(t, h)
 }
 
 // Greps one commit's tree
@@ -926,13 +947,8 @@ func isoWeekStart(year, week int) time.Time {
 
 // Branches and tags pointing at a commit
 func (r *Repo) RefsAt(commit plumbing.Hash) ([]string, []string) {
-	var branches, tags []string
-	bs, _ := r.Branches()
-	for name, h := range bs {
-		if h == commit {
-			branches = append(branches, name)
-		}
-	}
+	branches := r.BranchesAt(commit)
+	var tags []string
 	ts, _ := r.Tags()
 	for name, h := range ts {
 		peeled, err := r.peelToCommit(h)
@@ -940,9 +956,21 @@ func (r *Repo) RefsAt(commit plumbing.Hash) ([]string, []string) {
 			tags = append(tags, name)
 		}
 	}
-	sort.Strings(branches)
 	sort.Strings(tags)
 	return branches, tags
+}
+
+// Branch names at a commit, no tag peeling for callers that need only these
+func (r *Repo) BranchesAt(commit plumbing.Hash) []string {
+	var branches []string
+	bs, _ := r.Branches()
+	for name, h := range bs {
+		if h == commit {
+			branches = append(branches, name)
+		}
+	}
+	sort.Strings(branches)
+	return branches
 }
 
 // Annotated tag object when the ref points at one

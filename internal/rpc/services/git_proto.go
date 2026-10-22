@@ -48,6 +48,34 @@ func (c *gitUserCache) usernameByEmail(ctx context.Context, email string) string
 	return name
 }
 
+// Loads many users in one query ahead of lookups
+func (c *gitUserCache) prime(ctx context.Context, ids []string) {
+	var missing []string
+	for _, id := range ids {
+		if id == "" {
+			continue
+		}
+		if _, ok := c.byID[id]; ok {
+			continue
+		}
+		c.byID[id] = nil
+		missing = append(missing, id)
+	}
+	if len(missing) == 0 {
+		return
+	}
+	users, err := c.store.GetUsersByIDs(ctx, missing)
+	if err != nil {
+		for _, id := range missing {
+			delete(c.byID, id)
+		}
+		return
+	}
+	for id, u := range users {
+		c.byID[id] = u
+	}
+}
+
 func (c *gitUserCache) user(ctx context.Context, id string) *storage.User {
 	if id == "" {
 		return nil

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/distroface/internal/artifacts"
+	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
@@ -79,11 +80,15 @@ func (m *Manager) BeginArtifactUpload(ctx context.Context, runner *db.ActionsRun
 	if _, err := m.existingArtifact(ctx, run, name, overwrite); err != nil {
 		return "", nil, err
 	}
+	if job.TokenID == "" {
+		return "", nil, fmt.Errorf("%w: job has no token to upload with", ErrDenied)
+	}
 	pkg, err := m.ensurePackage(ctx, repo)
 	if err != nil {
 		return "", nil, err
 	}
-	uploadID, err := m.artifacts.Blobs().InitiateUpload()
+	// Chunks arrive on the data plane under the job token, bind the session to it
+	uploadID, err := m.artifacts.Blobs().InitiateOwnedUpload(auth.TokenUploadOwner(job.TokenID))
 	if err != nil {
 		return "", nil, err
 	}
@@ -96,12 +101,18 @@ func (m *Manager) FinishArtifactUpload(ctx context.Context, runner *db.ActionsRu
 	if err != nil {
 		return nil, err
 	}
+	if job.Status != StatusRunning {
+		return nil, fmt.Errorf("%w: job is not running", ErrConflict)
+	}
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("%w: artifact name is required", ErrInvalid)
 	}
 	if uploadID == "" {
 		return nil, fmt.Errorf("%w: upload id is required", ErrInvalid)
+	}
+	if err := m.artifacts.Blobs().VerifyUploadOwner(uploadID, auth.TokenUploadOwner(job.TokenID)); err != nil {
+		return nil, err
 	}
 	previous, err := m.existingArtifact(ctx, run, name, overwrite)
 	if err != nil {

@@ -7,7 +7,6 @@ import (
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/forge"
-	"github.com/nickheyer/distroface/internal/rbac"
 )
 
 func (q *request) pullView(repo *db.GitRepository, issue *db.GitIssue, withMerge bool) (obj, bool) {
@@ -98,7 +97,7 @@ func (q *request) getPull() {
 
 func (q *request) createPull() {
 	repo, ok := q.repo()
-	if !ok || !q.writable(repo, db.GitUnitPulls, rbac.ActionRead) {
+	if !ok || !q.writableLoose(repo, db.GitUnitPulls) {
 		return
 	}
 	var in struct {

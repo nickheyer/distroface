@@ -11,23 +11,29 @@ func TestCacheSignature(t *testing.T) {
 	key := []byte("test-key")
 	now := time.Unix(1_700_000_000, 0)
 	exp := now.Add(time.Hour).Unix()
-	sig := cacheSignature(key, 42, exp)
-	if !verifyCacheSignature(key, 42, exp, sig, now) {
+	sig := cacheSignature(key, 42, "job-a", exp)
+	if !verifyCacheSignature(key, 42, "job-a", exp, sig, now) {
 		t.Fatal("valid signature rejected")
 	}
-	if verifyCacheSignature(key, 43, exp, sig, now) {
+	if verifyCacheSignature(key, 43, "job-a", exp, sig, now) {
 		t.Error("signature accepted for another id")
 	}
-	if verifyCacheSignature(key, 42, exp+1, sig, now) {
+	if verifyCacheSignature(key, 42, "job-b", exp, sig, now) {
+		t.Error("signature accepted for another job")
+	}
+	if verifyCacheSignature(key, 42, "", exp, sig, now) {
+		t.Error("signature accepted without a job")
+	}
+	if verifyCacheSignature(key, 42, "job-a", exp+1, sig, now) {
 		t.Error("signature accepted for another expiry")
 	}
-	if verifyCacheSignature([]byte("other"), 42, exp, sig, now) {
+	if verifyCacheSignature([]byte("other"), 42, "job-a", exp, sig, now) {
 		t.Error("signature accepted under another key")
 	}
-	if verifyCacheSignature(key, 42, exp, sig, now.Add(2*time.Hour)) {
+	if verifyCacheSignature(key, 42, "job-a", exp, sig, now.Add(2*time.Hour)) {
 		t.Error("expired signature accepted")
 	}
-	if verifyCacheSignature(key, 42, exp, "zz", now) {
+	if verifyCacheSignature(key, 42, "job-a", exp, "zz", now) {
 		t.Error("malformed signature accepted")
 	}
 }

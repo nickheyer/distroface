@@ -160,14 +160,11 @@ func (m *Manager) preReceive(ctx context.Context, repo *db.GitRepository, actor 
 		return nil
 	}
 
-	// Quota against the objects already on disk
+	// Quota against the size the last write recorded
 	settings := m.gitSettings(ctx, repo)
-	if maxMB := settings.GetMaxRepoSizeMb(); maxMB > 0 {
-		size, err := m.engine.Size(repo.Namespace, repo.Name, false)
-		if err == nil && size > maxMB*1024*1024 {
-			say("repository exceeds its %d MB quota", maxMB)
-			return fmt.Errorf("repository size quota exceeded")
-		}
+	if maxMB := settings.GetMaxRepoSizeMb(); maxMB > 0 && repo.SizeBytes > maxMB*1024*1024 {
+		say("repository exceeds its %d MB quota", maxMB)
+		return fmt.Errorf("repository size quota exceeded")
 	}
 
 	protections, err := m.store.ListGitBranchProtections(ctx, repo.ID)
@@ -251,7 +248,7 @@ func (m *Manager) checkBranchRule(ctx context.Context, repo *db.GitRepository, a
 		}
 	}
 	if rule.RequireLinearHistory || (rule.RequireSignedCommits && !opts.BypassSignedCommits) {
-		commits, truncated, err := newCommits(st, c.Old, c.New, maxVerifiedCommits)
+		commits, truncated, err := newCommits(ctx, st, c.Old, c.New, maxVerifiedCommits)
 		if err != nil {
 			return err
 		}
@@ -314,9 +311,8 @@ func isAncestorIn(st storer.EncodedObjectStorer, ancestor, descendant plumbing.H
 
 // Commits reachable from new but not from old, or for a new branch from any
 // existing ref, like rev-list new --not old. Newest first, truncated past limit.
-func newCommits(st storage.Storer, old, new plumbing.Hash, limit int) ([]*object.Commit, bool, error) {
-	head, err := object.GetCommit(st, new)
-	if err != nil {
+func newCommits(ctx context.Context, st storage.Storer, old, new plumbing.Hash, limit int) ([]*object.Commit, bool, error) {
+	if _, err := object.GetCommit(st, new); err != nil {
 		return nil, false, err
 	}
 	var excludes []plumbing.Hash
@@ -330,31 +326,5 @@ func newCommits(st storage.Storer, old, new plumbing.Hash, limit int) ([]*object
 			return nil
 		})
 	}
-	seen := map[plumbing.Hash]bool{}
-	for _, h := range excludes {
-		c, err := object.GetCommit(st, h)
-		if err != nil {
-			if tag, terr := object.GetTag(st, h); terr == nil {
-				c, err = tag.Commit()
-			}
-			if err != nil {
-				continue
-			}
-		}
-		_ = object.NewCommitPreorderIter(c, seen, nil).ForEach(func(c *object.Commit) error {
-			seen[c.Hash] = true
-			return nil
-		})
-	}
-	var out []*object.Commit
-	truncated := false
-	err = object.NewCommitPreorderIter(head, seen, nil).ForEach(func(c *object.Commit) error {
-		if limit > 0 && len(out) >= limit {
-			truncated = true
-			return storer.ErrStop
-		}
-		out = append(out, c)
-		return nil
-	})
-	return out, truncated, err
+	return RevList(ctx, st, []plumbing.Hash{new}, excludes, limit)
 }

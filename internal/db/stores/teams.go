@@ -225,3 +225,29 @@ func (s *Store) GetOrgTeamsByIDs(ctx context.Context, ids []string) ([]*db.OrgTe
 	err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&out).Error
 	return out, err
 }
+
+// Teams of one org that cover a repository
+func (s *Store) TeamsCoveringRepo(ctx context.Context, orgID, repoID string) ([]*db.OrgTeam, error) {
+	var out []*db.OrgTeam
+	err := s.db.WithContext(ctx).
+		Where("org_id = ? AND (includes_all_repos = ? OR id IN (SELECT team_id FROM org_team_repos WHERE repo_id = ?))", orgID, true, repoID).
+		Find(&out).Error
+	return out, err
+}
+
+// Users among the ids that sit on any team
+func (s *Store) UsersOnTeams(ctx context.Context, teamIDs, userIDs []string) (map[string]bool, error) {
+	out := map[string]bool{}
+	if len(teamIDs) == 0 || len(userIDs) == 0 {
+		return out, nil
+	}
+	var ids []string
+	err := s.db.WithContext(ctx).Model(&db.OrgTeamMember{}).Where("team_id IN ? AND user_id IN ?", teamIDs, userIDs).Distinct().Pluck("user_id", &ids).Error
+	if err != nil {
+		return nil, err
+	}
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}

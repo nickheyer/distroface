@@ -450,15 +450,23 @@ func (s *Server) anonymousAllowed(ctx context.Context) bool {
 // Read-only portals refuse content mutations on the RPC surface too
 func portalAllowsProcedure(ctx context.Context, procedure string) error {
 	p := portal.FromContext(ctx)
-	if p == nil || p.AllowPush {
-		return nil
-	}
-	perm, ok := rbac.ProcedurePermissions[procedure]
-	if !ok || (perm.Resource != rbac.ResourceArtifacts && perm.Resource != rbac.ResourceRepositories && perm.Resource != rbac.ResourceGit) {
-		return nil
-	}
-	if perm.Action == rbac.ActionRead || perm.Action == rbac.ActionPull {
+	if p == nil || p.AllowPush || !portalWriteProcedure(procedure) {
 		return nil
 	}
 	return connect.Errorf(connect.CodePermissionDenied, "portal is read-only")
+}
+
+// Explicit lists first, then the resource action of the rbac mapping
+func portalWriteProcedure(procedure string) bool {
+	if rbac.PortalWriteProcedures[procedure] {
+		return true
+	}
+	if rbac.PortalReadProcedures[procedure] {
+		return false
+	}
+	perm, ok := rbac.ProcedurePermissions[procedure]
+	if !ok || (perm.Resource != rbac.ResourceArtifacts && perm.Resource != rbac.ResourceRepositories && perm.Resource != rbac.ResourceGit) {
+		return false
+	}
+	return perm.Action != rbac.ActionRead && perm.Action != rbac.ActionPull
 }

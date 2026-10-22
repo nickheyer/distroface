@@ -54,6 +54,7 @@ message RegistryPortal {
   bool backend_insecure = 22; // Skip tls verification for an https backend
   bool anonymous_access = 23; // Computed, signed out visitors admitted on this portal
   int32 ssh_port = 24; // Dedicated git ssh port, 0 serves canonical paths on the primary ssh port only
+  string public_host = 25; // Host[:port] written into links and mail, for portals a proxy exposes elsewhere
 }
 
 // Fields to create a portal, hostname or port required
@@ -73,6 +74,7 @@ message CreatePortalRequest {
   bool backend_rewrite_host = 13;
   bool backend_insecure = 14;
   int32 ssh_port = 15;
+  string public_host = 16;
 }
 
 // The newly created portal
@@ -141,6 +143,7 @@ message UpdatePortalRequest {
   optional bool backend_rewrite_host = 16;
   optional bool backend_insecure = 17;
   optional int32 ssh_port = 18;
+  optional string public_host = 19;
 }
 
 // The updated portal

@@ -192,6 +192,7 @@ type RegistryPortal struct { // Alternate org-owned registry host and/or proxy p
 	BackendRewriteHost bool          `json:"backend_rewrite_host" gorm:"not null;default:false;column:backend_rewrite_host"` // Send the backend's host instead of the client's
 	BackendInsecure    bool          `json:"backend_insecure" gorm:"not null;default:false;column:backend_insecure"`         // Skip tls verification for an https backend
 	SSHPort            int           `json:"ssh_port" gorm:"not null;default:0;column:ssh_port"`                             // Dedicated git ssh listener, 0 none
+	PublicHost         string        `json:"public_host" gorm:"not null;default:'';column:public_host"`                      // Host[:port] used in links when a proxy exposes the portal elsewhere
 	Enabled            bool          `json:"enabled" gorm:"not null"`
 	CreatedAt          time.Time     `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt          time.Time     `json:"updated_at" gorm:"autoUpdateTime"`
@@ -237,7 +238,7 @@ type Artifact struct {
 	Path       string              `json:"path" gorm:"not null;uniqueIndex:idx_artifact_identity"`
 	UploadID   string              `json:"upload_id" gorm:"not null;column:upload_id"`
 	Version    string              `json:"version" gorm:"not null;uniqueIndex:idx_artifact_identity"`
-	Kind       string              `json:"kind" gorm:"not null;default:'';index:idx_artifact_repo_kind,priority:2"` // Empty or ArtifactKindWorkflow
+	Kind       string              `json:"kind" gorm:"not null;default:'';index:idx_artifact_repo_kind,priority:2"`          // Empty or ArtifactKindWorkflow
 	PropsHash  string              `json:"-" gorm:"not null;default:'';uniqueIndex:idx_artifact_identity;column:props_hash"` // Property set fingerprint, fourth identity component
 	Digest     string              `json:"digest" gorm:"not null;index"`                                                     // Full sha256 content address
 	Size       int64               `json:"size" gorm:"not null"`
@@ -648,6 +649,7 @@ type GitPullRequest struct {
 	MergeBaseSHA         string `gorm:"column:merge_base_sha"`
 	Draft                bool   `gorm:"not null;default:false"`
 	MergeableState       string `gorm:"not null;default:'unknown'"`
+	ConflictState        string `gorm:"not null;default:'unknown'"` // Merge simulation result alone, unknown until run
 	ConflictPaths        string `gorm:"type:text;not null;default:'[]'"`
 	ChangedFiles         int    `gorm:"not null;default:0"`
 	Additions            int    `gorm:"not null;default:0"`
@@ -996,7 +998,7 @@ type ActionsJob struct {
 	Concurrency string `gorm:"not null;default:'';index"` // Job level concurrency group
 	Status      string `gorm:"not null;default:'waiting';index"`
 	Conclusion  string `gorm:"not null;default:''"`
-	RunnerID    string `gorm:"not null;default:''"`
+	RunnerID    string `gorm:"not null;default:'';index"`
 	Attempt     int    `gorm:"not null;default:1"`
 	Steps       string `gorm:"type:text;not null;default:'[]'"`
 	Outputs     string `gorm:"type:text;not null;default:'{}'"`
@@ -1038,13 +1040,13 @@ type ActionsVariable struct {
 }
 
 type ActionsArtifact struct {
-	ID         string `gorm:"primaryKey"`
-	RunID      string `gorm:"not null;index"`
-	JobID      string `gorm:"not null;default:''"`
-	ArtifactID string `gorm:"not null;index"`
-	Name       string `gorm:"not null"`
-	FileCount  int32  `gorm:"not null;default:0"` // Files inside the zip, zero on legacy per file rows
-	ExpiresAt  *time.Time
+	ID         string      `gorm:"primaryKey"`
+	RunID      string      `gorm:"not null;index"`
+	JobID      string      `gorm:"not null;default:''"`
+	ArtifactID string      `gorm:"not null;index"`
+	Name       string      `gorm:"not null"`
+	FileCount  int32       `gorm:"not null;default:0"` // Files inside the zip, zero on legacy per file rows
+	ExpiresAt  *time.Time  `gorm:"index"`
 	CreatedAt  time.Time   `gorm:"autoCreateTime"`
 	Run        *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
 }
@@ -1069,8 +1071,8 @@ type ActionsCache struct {
 	Ref        string         `gorm:"not null;default:''"` // Ref of the run that saved it
 	Digest     string         `gorm:"not null;default:'';index"`
 	Size       int64          `gorm:"not null;default:0"`
-	State      string         `gorm:"not null;default:'reserved'"` // reserved, complete
+	State      string         `gorm:"not null;default:'reserved';index:idx_cache_state_used,priority:1"` // reserved, complete
 	CreatedAt  time.Time      `gorm:"autoCreateTime"`
-	LastUsedAt time.Time      `gorm:"not null"`
+	LastUsedAt time.Time      `gorm:"not null;index:idx_cache_state_used,priority:2"`
 	Repo       *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
 }

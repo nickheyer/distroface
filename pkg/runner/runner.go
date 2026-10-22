@@ -241,7 +241,7 @@ func (r *Runner) heartbeat(ctx context.Context) {
 	defer t.Stop()
 	for {
 		hctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		if err := r.client.Heartbeat(hctx, r.version, r.runningIDs()); err != nil && ctx.Err() == nil {
+		if err := r.client.Heartbeat(hctx, r.version, r.runningIDs(), true); err != nil && ctx.Err() == nil {
 			r.out.Printf("heartbeat: %v", err)
 		}
 		cancel()
@@ -255,7 +255,7 @@ func (r *Runner) heartbeat(ctx context.Context) {
 
 // One heartbeat for status checks
 func (r *Runner) Heartbeat(ctx context.Context) error {
-	return r.client.Heartbeat(ctx, r.version, nil)
+	return r.client.Heartbeat(ctx, r.version, nil, false)
 }
 
 // Whether the configured daemon answers

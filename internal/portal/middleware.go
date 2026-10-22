@@ -40,8 +40,8 @@ const oidcLoginPath = "/api/v1/auth/oidc/login"
 // Serves the whole app per portal, resolves the portal into the request ctx
 func (res *Resolver) Middleware(primaryHost func() string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r = r.WithContext(WithRequestOrigin(r.Context(), r.Host, requestScheme(r)))
 		p := res.Resolve(r)
+		r = r.WithContext(WithRequestOrigin(r.Context(), trustedOrigin(r, p, primaryHost()), requestScheme(r)))
 		if p != nil {
 			r = r.WithContext(WithPortal(r.Context(), p))
 

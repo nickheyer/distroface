@@ -458,11 +458,13 @@ func (s *WebhookService) checkGitRepoPermission(ctx context.Context, user *auth.
 	if !s.git.Access().CanSee(ctx, user, repo) {
 		return connect.Errorf(connect.CodeNotFound, "repository not found")
 	}
-	if action != rbac.ActionRead && !levels.CanAdmin && !levels.IsOwner {
+	if !levels.CanAdmin && !levels.IsOwner {
 		return connect.Errorf(connect.CodePermissionDenied, "repository admin required")
 	}
-	if action == rbac.ActionRead && !levels.CanAdmin && !levels.IsOwner {
-		return connect.Errorf(connect.CodePermissionDenied, "repository admin required")
+	if action != rbac.ActionRead {
+		if err := portalAllowsGitWrite(ctx); err != nil {
+			return err
+		}
 	}
 	return nil
 }

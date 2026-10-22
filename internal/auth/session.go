@@ -53,6 +53,34 @@ func ParseJobSubject(subject string) (jobID, username string, ok bool) {
 	return jobID, username, true
 }
 
+// Principal key an upload session is opened under
+func UploadOwner(u *AuthenticatedUser) string {
+	if u == nil || u.ID == "" {
+		return ""
+	}
+	return "user:" + u.ID
+}
+
+// Keys a caller may present for a session, the api token row included
+func UploadOwners(u *AuthenticatedUser) []string {
+	if u == nil || u.ID == "" {
+		return nil
+	}
+	owners := []string{UploadOwner(u)}
+	if u.TokenID != "" {
+		owners = append(owners, TokenUploadOwner(u.TokenID))
+	}
+	return owners
+}
+
+// Principal key of a session opened for one api token row
+func TokenUploadOwner(tokenID string) string {
+	if tokenID == "" {
+		return ""
+	}
+	return "token:" + tokenID
+}
+
 // Signed out visitors carry the anonymous role only
 func (u *AuthenticatedUser) IsAnonymous() bool {
 	return u != nil && u.Provider == "anonymous"

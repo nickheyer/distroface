@@ -45,6 +45,18 @@ func gitRepoRef(ctx context.Context, user *auth.AuthenticatedUser, namespace, na
 
 // Loads a git repository the caller may see, 404 hides private repos and foreign portals
 func visibleGitRepo(ctx context.Context, store *stores.Store, access *gitrepo.Access, user *auth.AuthenticatedUser, namespace, name string) (*storage.GitRepository, error) {
+	repo, err := namedGitRepo(ctx, store, user, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if !access.CanSee(ctx, user, repo) {
+		return nil, connect.Errorf(connect.CodeNotFound, "repository not found")
+	}
+	return repo, nil
+}
+
+// Resolves the row without an access check, callers decide visibility
+func namedGitRepo(ctx context.Context, store *stores.Store, user *auth.AuthenticatedUser, namespace, name string) (*storage.GitRepository, error) {
 	if name == "" {
 		return nil, connect.Errorf(connect.CodeInvalidArgument, "repository name is required")
 	}
@@ -62,25 +74,38 @@ func visibleGitRepo(ctx context.Context, store *stores.Store, access *gitrepo.Ac
 	if repo == nil {
 		return nil, connect.Errorf(connect.CodeNotFound, "repository not found")
 	}
-	if !access.CanSee(ctx, user, repo) {
-		return nil, connect.Errorf(connect.CodeNotFound, "repository not found")
-	}
 	_ = moved
 	return repo, nil
 }
 
+// What CanSee answers, from levels already computed
+func levelsCanSee(repo *storage.GitRepository, levels gitrepo.Levels) bool {
+	if !gitrepo.UnitEnabled(repo, storage.GitUnitCode) && !levels.IsOwner && !levels.CanAdmin {
+		return false
+	}
+	return levels.Unit(storage.GitUnitCode) >= gitrepo.LevelRead
+}
+
 // Loads a repository and requires a level on one unit, read failures stay 404
 func gitRepoWithLevel(ctx context.Context, store *stores.Store, access *gitrepo.Access, user *auth.AuthenticatedUser, namespace, name, unit string, need gitrepo.Level) (*storage.GitRepository, error) {
-	repo, err := visibleGitRepo(ctx, store, access, user, namespace, name)
+	repo, err := namedGitRepo(ctx, store, user, namespace, name)
 	if err != nil {
 		return nil, err
+	}
+	// One identity pass answers visibility and the unit level
+	levels := access.Levels(ctx, user, repo)
+	if !levelsCanSee(repo, levels) {
+		return nil, connect.Errorf(connect.CodeNotFound, "repository not found")
 	}
 	if need > gitrepo.LevelRead && (user == nil || user.IsAnonymous()) {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "")
 	}
-	if access.Level(ctx, user, repo, unit) < need {
-		if need > gitrepo.LevelRead && !gitrepo.UnitEnabled(repo, unit) {
-			return nil, connect.Errorf(connect.CodeFailedPrecondition, "the %s feature is disabled on this repository", unit)
+	if !gitrepo.UnitEnabled(repo, unit) && !levels.IsOwner && !levels.CanAdmin {
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "the %s feature is disabled on this repository", unit)
+	}
+	if levels.Unit(unit) < need {
+		if need <= gitrepo.LevelRead {
+			return nil, connect.Errorf(connect.CodeNotFound, "repository not found")
 		}
 		return nil, connect.Errorf(connect.CodePermissionDenied, "access denied")
 	}

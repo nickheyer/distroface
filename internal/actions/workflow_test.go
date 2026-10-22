@@ -403,8 +403,8 @@ func TestMatchTrigger(t *testing.T) {
 		{"push other branch", triggerInput{Event: "push", Ref: "refs/heads/feature"}, false},
 		{"push ignored tag", triggerInput{Event: "push", Ref: "refs/tags/v0.1"}, false},
 		{"push tag", triggerInput{Event: "push", Ref: "refs/tags/v1.0"}, true},
-		{"push docs only", triggerInput{Event: "push", Ref: "refs/heads/main", Changed: []string{"docs/a.md"}, ChangedKnown: true}, false},
-		{"push code", triggerInput{Event: "push", Ref: "refs/heads/main", Changed: []string{"docs/a.md", "main.go"}, ChangedKnown: true}, true},
+		{"push docs only", triggerInput{Event: "push", Ref: "refs/heads/main", changed: knownPaths("docs/a.md")}, false},
+		{"push code", triggerInput{Event: "push", Ref: "refs/heads/main", changed: knownPaths("docs/a.md", "main.go")}, true},
 		{"pr opened", triggerInput{Event: "pull_request", Action: "opened", Payload: map[string]any{"pull_request": map[string]any{"base": map[string]any{"ref": "main"}}}}, true},
 		{"pr closed", triggerInput{Event: "pull_request", Action: "closed"}, false},
 		{"pr other base", triggerInput{Event: "pull_request", Action: "opened", Payload: map[string]any{"pull_request": map[string]any{"base": map[string]any{"ref": "dev"}}}}, false},
@@ -767,7 +767,7 @@ func TestNeedsStateCallOutputs(t *testing.T) {
 		inlinedRow("2", "call/build", `{"version":"1.2"}`, frame),
 		inlinedRow("3", "prep", `{"tag":"v1"}`),
 	}
-	done, status, outputs := needsState([]string{"call", "prep"}, rows)
+	done, status, outputs := needsState([]string{"call", "prep"}, rows, nil)
 	if !done || status != ConclusionSuccess {
 		t.Fatalf("done=%v status=%s", done, status)
 	}
@@ -780,18 +780,18 @@ func TestNeedsStateCallOutputs(t *testing.T) {
 		t.Errorf("plain outputs = %v", outputs["prep"])
 	}
 	rows[0].Conclusion = ConclusionFailure
-	if _, status, _ = needsState([]string{"call"}, rows); status != ConclusionFailure {
+	if _, status, _ = needsState([]string{"call"}, rows, nil); status != ConclusionFailure {
 		t.Errorf("worst conclusion wins, got %s", status)
 	}
 	rows[1].Status = StatusRunning
-	if done, _, _ = needsState([]string{"call"}, rows); done {
+	if done, _, _ = needsState([]string{"call"}, rows, nil); done {
 		t.Error("a running called job keeps the need pending")
 	}
 	// Nested calls evaluate inner outputs first
 	outer := &CallFrame{Caller: "outer", Prefix: "outer", Outputs: map[string]string{"ver": "${{ jobs.inner.outputs.v }}"}}
 	inner := &CallFrame{Caller: "outer/inner", Prefix: "outer/inner", Outputs: map[string]string{"v": "${{ jobs.x.outputs.raw }}"}}
 	nested := []*db.ActionsJob{inlinedRow("9", "outer/inner/x", `{"raw":"9"}`, outer, inner)}
-	_, _, outputs = needsState([]string{"outer", "outer/inner"}, nested)
+	_, _, outputs = needsState([]string{"outer", "outer/inner"}, nested, nil)
 	if outputs["outer"].(map[string]any)["outputs"].(map[string]any)["ver"] != "9" {
 		t.Errorf("nested outputs = %v", outputs["outer"])
 	}
@@ -851,5 +851,30 @@ func TestParseCallRef(t *testing.T) {
 		if _, _, _, err := parseCallRef(bad, "", "me/app", "abc"); err == nil {
 			t.Errorf("%q should be rejected", bad)
 		}
+	}
+}
+
+// Fixed changed path set for trigger tests
+func knownPaths(paths ...string) func() ([]string, bool) {
+	return func() ([]string, bool) { return paths, true }
+}
+
+func TestChangedPathsLazy(t *testing.T) {
+	calls := 0
+	in := &triggerInput{Event: "push", Ref: "refs/heads/main", changed: func() ([]string, bool) {
+		calls++
+		return []string{"main.go"}, true
+	}}
+	if !in.pathsAllowed(nil, nil) || calls != 0 {
+		t.Fatalf("no filter must skip the diff, calls=%d", calls)
+	}
+	if !in.pathsAllowed([]string{"*.go"}, nil) || calls != 1 {
+		t.Fatalf("filter must diff once, calls=%d", calls)
+	}
+	if in.pathsAllowed([]string{"docs/**"}, nil) || calls != 1 {
+		t.Fatalf("second filter must reuse the diff, calls=%d", calls)
+	}
+	if !(&triggerInput{Event: "pull_request"}).pathsAllowed([]string{"*.go"}, nil) {
+		t.Fatal("unknown changes must pass the filter")
 	}
 }

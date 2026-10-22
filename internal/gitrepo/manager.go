@@ -108,8 +108,8 @@ func (m *Manager) Subscribe(fns ...RefSubscriber) {
 // Effective git settings for a repository's tier
 func (m *Manager) gitSettings(ctx context.Context, repo *db.GitRepository) *v1.GitSettings {
 	if repo != nil && repo.IsOrgNamespace {
-		if org, err := m.store.GetOrganization(ctx, repo.Namespace); err == nil && org != nil {
-			return m.res.Org(ctx, org.ID).GetGit()
+		if orgID, err := m.res.RepoOrgID(ctx, repo.ID); err == nil && orgID != "" {
+			return m.res.Org(ctx, orgID).GetGit()
 		}
 	}
 	return m.res.System(ctx).GetGit()
@@ -151,8 +151,9 @@ func (m *Manager) BaseURL(ctx context.Context) string {
 			scheme = "https"
 		}
 	}
-	if s := portal.SchemeFromContext(ctx); s != "" {
-		scheme = s
+	// Forwarded scheme may upgrade, a spoofed header cannot downgrade
+	if portal.SchemeFromContext(ctx) == "https" {
+		scheme = "https"
 	}
 	return scheme + "://" + host
 }
@@ -607,11 +608,7 @@ func (m *Manager) pushBudget(ctx context.Context, repo *db.GitRepository, wiki b
 	if maxMB <= 0 {
 		return 0, nil
 	}
-	size, err := m.engine.Size(repo.Namespace, repo.Name, false)
-	if err != nil {
-		return 0, nil
-	}
-	return max(maxMB*1024*1024-size, 0) + pushSlackBytes, fmt.Errorf("%w: push exceeds the %d MB repository quota", ErrTooLarge, maxMB)
+	return max(maxMB*1024*1024-repo.SizeBytes, 0) + pushSlackBytes, fmt.Errorf("%w: push exceeds the %d MB repository quota", ErrTooLarge, maxMB)
 }
 
 // Moves the name linked packages first, the undo puts back whatever succeeded
@@ -985,7 +982,10 @@ func (m *Manager) AfterRefUpdate(ctx context.Context, ev RefEvent, lock *RepoLoc
 
 // Recomputes size and ref counts after a write
 func (m *Manager) refreshCounts(ctx context.Context, repo *db.GitRepository, r *Repo) {
-	size, _ := m.engine.Size(repo.Namespace, repo.Name, false)
+	size, err := m.engine.RefreshSize(repo.Namespace, repo.Name, false)
+	if err != nil {
+		size = repo.SizeBytes
+	}
 	branches, tags := r.RefCounts()
 	if err := m.store.RecordGitPush(ctx, repo.ID, size, branches, tags); err != nil {
 		m.log.Error("git counters %s/%s: %v", repo.Namespace, repo.Name, err)

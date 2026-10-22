@@ -260,7 +260,7 @@ func (s *ArtifactService) InitiateArtifactUpload(ctx context.Context, req *v1.In
 		return nil, err
 	}
 
-	uploadID, err := s.manager.Blobs().InitiateUpload()
+	uploadID, err := s.manager.Blobs().InitiateOwnedUpload(auth.UploadOwner(user))
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -279,6 +279,9 @@ func (s *ArtifactService) CompleteArtifactUpload(ctx context.Context, req *v1.Co
 		return nil, err
 	}
 
+	if err := s.manager.Blobs().VerifyUploadOwner(msg.UploadId, auth.UploadOwners(user)...); err != nil {
+		return nil, mapArtifactErr(err)
+	}
 	artifact, err := s.manager.CompleteUpload(ctx, repo, msg.UploadId, msg.Version, msg.Path, msg.Metadata, msg.Properties)
 	if err != nil {
 		return nil, mapArtifactErr(err)
@@ -706,6 +709,8 @@ func mapArtifactErr(err error) error {
 		return connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	case errors.Is(err, artifacts.ErrUploadNotFound):
 		return connect.NewError(connect.CodeNotFound, err.Error()).WithCause(err)
+	case errors.Is(err, artifacts.ErrUploadDenied):
+		return connect.NewError(connect.CodePermissionDenied, err.Error()).WithCause(err)
 	default:
 		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}

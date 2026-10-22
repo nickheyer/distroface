@@ -346,10 +346,8 @@ func (s *GitFileService) resolveHead(ctx context.Context, user *auth.Authenticat
 		}
 		// Objects must live in the base repository for a diff to be computed
 		if _, err := r.Commit(h); err != nil {
-			if maxMB := s.manager.GitSettings(ctx, repo).GetMaxRepoSizeMb(); maxMB > 0 {
-				if size, err := s.manager.Engine().Size(repo.Namespace, repo.Name, false); err == nil && size > maxMB*1024*1024 {
-					return plumbing.ZeroHash, connect.Errorf(connect.CodeResourceExhausted, "repository is over its size quota, compare across repositories is unavailable")
-				}
+			if maxMB := s.manager.GitSettings(ctx, repo).GetMaxRepoSizeMb(); maxMB > 0 && repo.SizeBytes > maxMB*1024*1024 {
+				return plumbing.ZeroHash, connect.Errorf(connect.CodeResourceExhausted, "repository is over its size quota, compare across repositories is unavailable")
 			}
 			staging := plumbing.ReferenceName("refs/distroface/compare/" + h.String())
 			if err := s.manager.FetchLocal(ctx, repo, other, false, "+"+plumbing.NewBranchReferenceName(head[i+1:]).String()+":"+staging.String()); err != nil {
@@ -987,7 +985,7 @@ func (s *GitFileService) resetMergeabilityForSHA(ctx context.Context, repo *stor
 	if err != nil {
 		return
 	}
-	branches, _ := r.RefsAt(plumbing.NewHash(sha))
+	branches := r.BranchesAt(plumbing.NewHash(sha))
 	r.Close()
 	for _, b := range branches {
 		prs, _ := s.store.ListOpenPullsByHead(ctx, repo.ID, b)

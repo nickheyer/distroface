@@ -14,6 +14,7 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
+	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import { orgRoleLabel } from '$lib/utils';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
 
@@ -24,6 +25,9 @@
 
 	let userId = $state('');
 	let transferring = $state(false);
+	let confirmOpen = $state(false);
+	let memberLabels = $state<Record<string, string>>({});
+	const newOwner = $derived(memberLabels[userId] ?? 'the selected member');
 
 	async function transfer() {
 		if (!userId || transferring) return;
@@ -33,6 +37,7 @@
 			() => false
 		);
 		transferring = false;
+		confirmOpen = false;
 		if (!ok) return;
 		toast.success('Ownership transferred');
 		await ctx.refresh();
@@ -77,6 +82,7 @@
 							page: { query: { text: query, filters: [] }, pageToken, pageSize: 20 },
 							orgId
 						});
+						for (const m of resp.members) memberLabels[m.userId] = m.username;
 						return {
 							items: resp.members
 								.filter((m) => m.userId !== authStore.user?.id)
@@ -92,7 +98,11 @@
 		</FormSection>
 
 		{#snippet footer()}
-			<Button variant="destructive" onclick={transfer} disabled={transferring || !userId}>
+			<Button
+				variant="destructive"
+				onclick={() => (confirmOpen = true)}
+				disabled={transferring || !userId}
+			>
 				{#if transferring}<Loader2 class="animate-spin" />{/if}
 				{transferring ? 'Transferring' : 'Transfer ownership'}
 			</Button>
@@ -100,3 +110,17 @@
 		{/snippet}
 	</FormPage>
 {/if}
+
+<ConfirmDialog
+	bind:open={confirmOpen}
+	title="Transfer ownership"
+	confirmLabel="Transfer ownership"
+	onConfirm={transfer}
+	loading={transferring}
+	icon={ArrowRightLeft}
+>
+	{#snippet description()}
+		<strong>{newOwner}</strong> becomes the owner of <strong>{orgName}</strong> and you become an admin.
+		Only the new owner can hand it back.
+	{/snippet}
+</ConfirmDialog>

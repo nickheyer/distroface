@@ -210,3 +210,19 @@ func (s *Store) IsOrgMember(ctx context.Context, orgName, userID string) (bool, 
 	}
 	return true, member.Role, nil
 }
+
+// Roles of the users in one org, absent for non members
+func (s *Store) OrgMemberRoles(ctx context.Context, orgID string, userIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	var rows []db.OrgMember
+	if err := s.db.WithContext(ctx).Where("org_id = ? AND user_id IN ?", orgID, userIDs).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, m := range rows {
+		out[m.UserID] = m.Role
+	}
+	return out, nil
+}

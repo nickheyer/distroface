@@ -42,16 +42,25 @@ func (m *Manager) AuthenticateRunner(ctx context.Context, token string) (*db.Act
 }
 
 // Loads a job and refuses ones not assigned to the runner
-func (m *Manager) runnerJob(ctx context.Context, runner *db.ActionsRunner, jobID string) (*db.ActionsJob, *db.ActionsRun, *db.GitRepository, error) {
+func (m *Manager) runnerOwnedJob(ctx context.Context, runner *db.ActionsRunner, jobID string) (*db.ActionsJob, error) {
 	job, err := m.store.GetActionsJob(ctx, jobID)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, err
 	}
 	if job == nil {
-		return nil, nil, nil, fmt.Errorf("%w: job not found", ErrNotFound)
+		return nil, fmt.Errorf("%w: job not found", ErrNotFound)
 	}
 	if job.RunnerID != runner.ID {
-		return nil, nil, nil, fmt.Errorf("%w: job is not assigned to this runner", ErrDenied)
+		return nil, fmt.Errorf("%w: job is not assigned to this runner", ErrDenied)
+	}
+	return job, nil
+}
+
+// The job with its run and repository for handlers that need them
+func (m *Manager) runnerJob(ctx context.Context, runner *db.ActionsRunner, jobID string) (*db.ActionsJob, *db.ActionsRun, *db.GitRepository, error) {
+	job, err := m.runnerOwnedJob(ctx, runner, jobID)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	run, err := m.store.GetActionsRunByID(ctx, job.RunID)
 	if err != nil {
@@ -72,31 +81,47 @@ func (m *Manager) runnerJob(ctx context.Context, runner *db.ActionsRunner, jobID
 
 // ── FetchTask ────────────────────────────────────────────────────────────
 
-// FetchTask long polls for a queued job the runner can serve
+// Pollers rescan an unchanged queue no more often than this
+const claimRescan = 10 * time.Second
+
+// FetchTask long polls, rescanning only once the queue moved
 func (m *Manager) FetchTask(ctx context.Context, runner *db.ActionsRunner, wait time.Duration) (*v1.Task, error) {
 	if wait <= 0 || wait > maxTaskWait {
 		wait = maxTaskWait
 	}
 	deadline := time.Now().Add(wait)
+	var scannedGen uint64
+	var scannedAt time.Time
+	rejected := map[string]bool{}
 	for {
-		task, err := m.tryClaim(ctx, runner)
-		if err != nil {
-			return nil, err
-		}
-		if task != nil {
-			return task, nil
+		// Taken before the scan so a wake during it is never missed
+		wake := m.wakeChan()
+		gen := m.queueGeneration()
+		if scannedAt.IsZero() || gen != scannedGen || time.Since(scannedAt) >= claimRescan {
+			if gen != scannedGen {
+				// Reruns resolve labels again, mismatches last one generation
+				clear(rejected)
+			}
+			task, err := m.tryClaim(ctx, runner, rejected)
+			if err != nil {
+				return nil, err
+			}
+			if task != nil {
+				return task, nil
+			}
+			scannedGen, scannedAt = gen, time.Now()
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return nil, nil
 		}
-		if remaining > 2*time.Second {
-			remaining = 2 * time.Second
+		if remaining > claimRescan {
+			remaining = claimRescan
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-m.wakeChan():
+		case <-wake:
 		case <-time.After(remaining):
 		}
 	}
@@ -106,17 +131,25 @@ func (m *Manager) FetchTask(ctx context.Context, runner *db.ActionsRunner, wait 
 const (
 	claimPageSize = 100
 	claimMaxPages = 20
+	// Mismatches excluded in sql up to this many
+	claimMaxExcluded = 500
 )
 
 // Claims the oldest queued job matching scope, labels, and concurrency
-func (m *Manager) tryClaim(ctx context.Context, runner *db.ActionsRunner) (*v1.Task, error) {
+func (m *Manager) tryClaim(ctx context.Context, runner *db.ActionsRunner, rejected map[string]bool) (*v1.Task, error) {
 	runnerLabels := decodeStrings(runner.Labels)
 	var job *db.ActionsJob
 	var run *db.ActionsRun
 	var repo *db.GitRepository
+	var exclude []string
+	if len(rejected) <= claimMaxExcluded {
+		for id := range rejected {
+			exclude = append(exclude, id)
+		}
+	}
 	// Scope is filtered in sql, labels in memory, so unservable jobs never block the queue
 	for page := 0; page < claimMaxPages && job == nil; page++ {
-		jobs, err := m.store.ListQueuedActionsJobsInScope(ctx, runner.ScopeKind, runner.ScopeID, claimPageSize, page*claimPageSize)
+		jobs, err := m.store.ListQueuedActionsJobsInScope(ctx, runner.ScopeKind, runner.ScopeID, exclude, claimPageSize, page*claimPageSize)
 		if err != nil {
 			return nil, err
 		}
@@ -132,26 +165,51 @@ func (m *Manager) tryClaim(ctx context.Context, runner *db.ActionsRunner) (*v1.T
 			return nil, err
 		}
 		repoIDs := make([]string, 0, len(runs))
+		var runGroups, jobGroups []string
 		for _, r := range runs {
 			repoIDs = append(repoIDs, r.RepoID)
+			if r.Concurrency != "" {
+				runGroups = append(runGroups, r.Concurrency)
+			}
+		}
+		for _, j := range jobs {
+			if j.Concurrency != "" {
+				jobGroups = append(jobGroups, j.Concurrency)
+			}
 		}
 		repos, err := m.store.GetGitRepositoriesByIDs(ctx, repoIDs)
 		if err != nil {
 			return nil, err
 		}
-		var candidates []string
+		// Two queries answer every group check on the page
+		busyRuns, err := m.store.RunningRunsInGroups(ctx, runGroups)
+		if err != nil {
+			return nil, err
+		}
+		busyJobs, err := m.store.RunningJobsInGroups(ctx, jobGroups)
+		if err != nil {
+			return nil, err
+		}
+		var candidates []stores.ClaimCandidate
 		for _, j := range jobs {
+			if rejected[j.ID] {
+				continue
+			}
 			r := runs[j.RunID]
-			if r == nil || repos[r.RepoID] == nil || !labelsSubset(decodeStrings(j.RunsOn), runnerLabels) {
+			if r == nil || repos[r.RepoID] == nil {
 				continue
 			}
-			if r.Concurrency != "" && m.groupBusy(ctx, r) {
+			if !labelsSubset(decodeStrings(j.RunsOn), runnerLabels) {
+				rejected[j.ID] = true
 				continue
 			}
-			if j.Concurrency != "" && m.jobGroupBusy(ctx, r.RepoID, j) {
+			if r.Concurrency != "" && groupBusy(busyRuns, r.RepoID, r.Concurrency, r.ID) {
 				continue
 			}
-			candidates = append(candidates, j.ID)
+			if j.Concurrency != "" && groupBusy(busyJobs, r.RepoID, j.Concurrency, j.ID) {
+				continue
+			}
+			candidates = append(candidates, stores.ClaimCandidate{ID: j.ID, RepoID: r.RepoID, RunGroup: r.Concurrency, JobGroup: j.Concurrency})
 		}
 		if len(candidates) == 0 {
 			if len(jobs) < claimPageSize {
@@ -206,28 +264,10 @@ func labelsSubset(want, have []string) bool {
 	return true
 }
 
-// Another run of the same concurrency group is executing
-// Another job of the same job level group is running in the repository
-func (m *Manager) jobGroupBusy(ctx context.Context, repoID string, j *db.ActionsJob) bool {
-	live, err := m.store.ListLiveJobsInGroup(ctx, repoID, j.Concurrency, j.ID)
-	if err != nil {
-		return false
-	}
-	for _, other := range live {
-		if other.Status == StatusRunning {
-			return true
-		}
-	}
-	return false
-}
-
-func (m *Manager) groupBusy(ctx context.Context, run *db.ActionsRun) bool {
-	live, err := m.store.ListLiveRunsInGroup(ctx, run.RepoID, run.Concurrency, run.ID)
-	if err != nil {
-		return false
-	}
-	for _, other := range live {
-		if other.Status == StatusRunning {
+// Another group member in the same repository is running
+func groupBusy(live []stores.LiveGroup, repoID, group, selfID string) bool {
+	for _, g := range live {
+		if g.RepoID == repoID && g.Group == group && g.ID != selfID {
 			return true
 		}
 	}
@@ -244,7 +284,7 @@ func (m *Manager) buildTask(ctx context.Context, repo *db.GitRepository, run *db
 	if err != nil {
 		return nil, err
 	}
-	_, status, needs := needsState(def.Job.Needs, jobs)
+	_, status, needs := needsState(def.Job.Needs, jobs, nil)
 	var wf *Workflow
 	if run.Workflow != "" {
 		wf, _ = ParseWorkflow([]byte(run.Workflow))
@@ -457,6 +497,7 @@ func (m *Manager) issueJobToken(ctx context.Context, repo *db.GitRepository, run
 }
 
 func (m *Manager) revokeJobToken(ctx context.Context, job *db.ActionsJob) {
+	m.forgetJobStatus(job.ID)
 	if job.TokenID == "" {
 		return
 	}
@@ -471,7 +512,7 @@ func (m *Manager) revokeJobToken(ctx context.Context, job *db.ActionsJob) {
 
 // UpdateTask records step states and tells the runner about cancellation
 func (m *Manager) UpdateTask(ctx context.Context, runner *db.ActionsRunner, jobID string, steps []*v1.JobStep, outputs, annotations string) (bool, error) {
-	job, _, _, err := m.runnerJob(ctx, runner, jobID)
+	job, err := m.runnerOwnedJob(ctx, runner, jobID)
 	if err != nil {
 		return false, err
 	}
@@ -489,8 +530,12 @@ func (m *Manager) UpdateTask(ctx context.Context, runner *db.ActionsRunner, jobI
 		cols["annotations"] = annotations
 	}
 	if len(cols) > 0 {
-		if err := m.store.UpdateActionsJobColumns(ctx, job.ID, cols); err != nil {
+		owned, err := m.store.UpdateActionsJobOwned(ctx, job.ID, runner.ID, cols)
+		if err != nil {
 			return false, err
+		}
+		if !owned {
+			return true, nil
 		}
 	}
 	return m.cancelPending(ctx, job), nil
@@ -498,7 +543,7 @@ func (m *Manager) UpdateTask(ctx context.Context, runner *db.ActionsRunner, jobI
 
 // AppendTaskLog stores one chunk and answers the next expected index
 func (m *Manager) AppendTaskLog(ctx context.Context, runner *db.ActionsRunner, jobID string, index int, data []byte) (int, error) {
-	job, _, _, err := m.runnerJob(ctx, runner, jobID)
+	job, err := m.runnerOwnedJob(ctx, runner, jobID)
 	if err != nil {
 		return 0, err
 	}
@@ -523,8 +568,10 @@ func (m *Manager) AppendTaskLog(ctx context.Context, runner *db.ActionsRunner, j
 	if job.LogBytes+int64(len(data)) > MaxJobLogBytes {
 		return job.LogChunks, fmt.Errorf("%w: job log exceeds %d MB", ErrTooLarge, MaxJobLogBytes>>20)
 	}
-	if err := m.store.AppendActionsJobLog(ctx, job.ID, index, data, MaxJobLogBytes); err != nil {
+	if err := m.store.AppendActionsJobLog(ctx, job.ID, runner.ID, index, data, MaxJobLogBytes); err != nil {
 		switch {
+		case errors.Is(err, stores.ErrJobLogNotOwned):
+			return job.LogChunks, fmt.Errorf("%w: job is not running", ErrConflict)
 		case errors.Is(err, stores.ErrJobLogCapped):
 			return job.LogChunks, fmt.Errorf("%w: job log exceeds %d MB", ErrTooLarge, MaxJobLogBytes>>20)
 		case errors.Is(err, stores.ErrJobLogConflict):
@@ -564,8 +611,12 @@ func (m *Manager) CompleteTask(ctx context.Context, runner *db.ActionsRunner, jo
 	if annotations != "" && json.Valid([]byte(annotations)) {
 		cols["annotations"] = annotations
 	}
-	if err := m.store.UpdateActionsJobColumns(ctx, job.ID, cols); err != nil {
+	owned, err := m.store.UpdateActionsJobOwned(ctx, job.ID, runner.ID, cols)
+	if err != nil {
 		return err
+	}
+	if !owned {
+		return fmt.Errorf("%w: job already finished", ErrConflict)
 	}
 	job.Status, job.Conclusion, job.FinishedAt = StatusCompleted, conclusion, &now
 	m.revokeJobToken(ctx, job)
@@ -579,6 +630,8 @@ func (m *Manager) CompleteTask(ctx context.Context, runner *db.ActionsRunner, jo
 		run = fresh
 	}
 	m.advanceRun(ctx, repo, run)
+	// A finished job may free a concurrency group
+	m.notifyRunners()
 	return nil
 }
 

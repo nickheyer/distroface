@@ -12,8 +12,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ProtonMail/go-crypto/openpgp"
@@ -41,10 +44,112 @@ type Signing struct {
 	mu       sync.Mutex
 	instance *openpgp.Entity
 	armored  string
+
+	// Stored keys parsed once, indexed by every key id
+	ringMu sync.Mutex
+	ring   *keyring
+	gen    atomic.Uint64
+	// Per object outcomes keyed by keyring generation
+	results *Memo[Verification]
+}
+
+// Stored keys reread this often without invalidation
+const keyringTTL = 5 * time.Minute
+
+// Verification outcomes outlive the keyring that produced them this long
+const verificationTTL = time.Minute
+
+type keyring struct {
+	loadedAt time.Time
+	byID     map[uint64][]*cachedKey
+	all      []*cachedKey
+}
+
+type cachedKey struct {
+	row    *db.GPGKey
+	ring   openpgp.EntityList
+	emails []string
 }
 
 func NewSigning(store *stores.Store, keysDir string) *Signing {
-	return &Signing{store: store, keysDir: keysDir}
+	return &Signing{store: store, keysDir: keysDir, results: NewMemo[Verification](verificationTTL, 8192)}
+}
+
+// Drops the parsed keys so the next check rereads them
+func (s *Signing) InvalidateKeys() {
+	s.ringMu.Lock()
+	s.ring = nil
+	s.ringMu.Unlock()
+	s.gen.Add(1)
+}
+
+// Parsed stored keys, reloaded after the ttl or an invalidation
+func (s *Signing) keys(ctx context.Context) (*keyring, error) {
+	s.ringMu.Lock()
+	defer s.ringMu.Unlock()
+	if s.ring != nil && time.Since(s.ring.loadedAt) < keyringTTL {
+		return s.ring, nil
+	}
+	rows, err := s.store.ListAllGPGKeys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	ring := &keyring{loadedAt: time.Now(), byID: map[uint64][]*cachedKey{}}
+	for _, k := range rows {
+		el, err := openpgp.ReadArmoredKeyRing(strings.NewReader(k.Armored))
+		if err != nil || len(el) == 0 {
+			continue
+		}
+		var emails []string
+		_ = json.Unmarshal([]byte(k.Emails), &emails)
+		ck := &cachedKey{row: k, ring: el, emails: emails}
+		ring.all = append(ring.all, ck)
+		for _, e := range el {
+			for _, id := range entityKeyIDs(e) {
+				ring.byID[id] = append(ring.byID[id], ck)
+			}
+		}
+	}
+	s.gen.Add(1)
+	s.ring = ring
+	return ring, nil
+}
+
+// Primary and subkey ids of an entity
+func entityKeyIDs(e *openpgp.Entity) []uint64 {
+	ids := []uint64{e.PrimaryKey.KeyId}
+	for _, sk := range e.Subkeys {
+		if sk.PublicKey != nil {
+			ids = append(ids, sk.PublicKey.KeyId)
+		}
+	}
+	return ids
+}
+
+// Key id an armored signature names, false when absent
+func signatureIssuer(armored string) (uint64, bool) {
+	block, err := armor.Decode(strings.NewReader(armored))
+	if err != nil {
+		return 0, false
+	}
+	p, err := packet.Read(block.Body)
+	if err != nil {
+		return 0, false
+	}
+	sig, ok := p.(*packet.Signature)
+	if !ok {
+		return 0, false
+	}
+	if sig.IssuerKeyId != nil {
+		return *sig.IssuerKeyId, true
+	}
+	if fp := sig.IssuerFingerprint; len(fp) >= 8 {
+		if sig.Version >= 6 {
+			return binary.BigEndian.Uint64(fp[:8]), true
+		}
+		return binary.BigEndian.Uint64(fp[len(fp)-8:]), true
+	}
+	return 0, false
 }
 
 // Loads or generates the instance OpenPGP key
@@ -135,13 +240,13 @@ func (s *Signing) VerifyCommit(ctx context.Context, c *object.Commit) Verificati
 	if c.Signature == "" {
 		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNSIGNED}
 	}
-	payload := &bytes.Buffer{}
-	encoded := &memObject{}
-	if err := c.EncodeWithoutSignature(encoded); err != nil {
-		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "could not encode commit"}
-	}
-	payload.Write(encoded.buf.Bytes())
-	return s.verify(ctx, payload.Bytes(), c.Signature, c.Committer.Email)
+	return s.cached(ctx, "c:"+c.Hash.String(), func() (Verification, bool) {
+		encoded := &memObject{}
+		if err := c.EncodeWithoutSignature(encoded); err != nil {
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "could not encode commit"}, true
+		}
+		return s.verify(ctx, encoded.buf.Bytes(), c.Signature, c.Committer.Email)
+	})
 }
 
 // Verifies a tag signature
@@ -149,57 +254,83 @@ func (s *Signing) VerifyTag(ctx context.Context, t *object.Tag) Verification {
 	if t.Signature == "" {
 		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNSIGNED}
 	}
-	encoded := &memObject{}
-	if err := t.EncodeWithoutSignature(encoded); err != nil {
-		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "could not encode tag"}
-	}
-	return s.verify(ctx, encoded.buf.Bytes(), t.Signature, t.Tagger.Email)
+	return s.cached(ctx, "t:"+t.Hash.String(), func() (Verification, bool) {
+		encoded := &memObject{}
+		if err := t.EncodeWithoutSignature(encoded); err != nil {
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "could not encode tag"}, true
+		}
+		return s.verify(ctx, encoded.buf.Bytes(), t.Signature, t.Tagger.Email)
+	})
 }
 
-func (s *Signing) verify(ctx context.Context, payload []byte, signature, email string) Verification {
-	if strings.Contains(signature, "SSH SIGNATURE") {
-		return s.verifySSH(ctx, payload, signature, email)
-	}
-	if entity, err := s.Instance(); err == nil {
-		if _, err := openpgp.CheckArmoredDetachedSignature(openpgp.EntityList{entity}, bytes.NewReader(payload), strings.NewReader(signature), nil); err == nil {
-			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_INSTANCE, Signer: "instance", KeyID: fmt.Sprintf("%X", entity.PrimaryKey.KeyId)}
+// Transient failures to even look keys up never cache
+var errVerifyTransient = errors.New("verification not cacheable")
+
+// Memoizes one object's outcome under the current keyring generation
+func (s *Signing) cached(ctx context.Context, key string, compute func() (Verification, bool)) Verification {
+	gen := strconv.FormatUint(s.gen.Load(), 10)
+	var fallback Verification
+	v, err := s.results.Get(ctx, gen+":"+key, func() (Verification, error) {
+		out, cacheable := compute()
+		if !cacheable {
+			fallback = out
+			return out, errVerifyTransient
 		}
-	}
-	keys, err := s.store.ListAllGPGKeys(ctx)
+		return out, nil
+	})
 	if err != nil {
-		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "key lookup failed"}
+		return fallback
 	}
-	for _, k := range keys {
-		ring, err := openpgp.ReadArmoredKeyRing(strings.NewReader(k.Armored))
-		if err != nil {
-			continue
+	return v
+}
+
+// Outcome plus whether it may be cached
+func (s *Signing) verify(ctx context.Context, payload []byte, signature, email string) (Verification, bool) {
+	if strings.Contains(signature, "SSH SIGNATURE") {
+		return s.verifySSH(ctx, payload, signature, email), true
+	}
+	issuer, known := signatureIssuer(signature)
+	if entity, err := s.Instance(); err == nil && (!known || slices.Contains(entityKeyIDs(entity), issuer)) {
+		if _, err := openpgp.CheckArmoredDetachedSignature(openpgp.EntityList{entity}, bytes.NewReader(payload), strings.NewReader(signature), nil); err == nil {
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_INSTANCE, Signer: "instance", KeyID: fmt.Sprintf("%X", entity.PrimaryKey.KeyId)}, true
 		}
-		signer, err := openpgp.CheckArmoredDetachedSignature(ring, bytes.NewReader(payload), strings.NewReader(signature), nil)
+	}
+	ring, err := s.keys(ctx)
+	if err != nil {
+		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "key lookup failed"}, false
+	}
+	candidates := ring.all
+	if known {
+		candidates = ring.byID[issuer]
+	}
+	for _, k := range candidates {
+		signer, err := openpgp.CheckArmoredDetachedSignature(k.ring, bytes.NewReader(payload), strings.NewReader(signature), nil)
 		if err != nil || signer == nil {
 			continue
 		}
-		if !k.Verified {
-			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "signing key not verified by its owner", KeyID: k.KeyID}
+		if !k.row.Verified {
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "signing key not verified by its owner", KeyID: k.row.KeyID}, true
 		}
-		if !emailMatches(k.Emails, email) {
-			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "committer email does not match the key", KeyID: k.KeyID}
+		if !emailMatches(k.emails, email) {
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "committer email does not match the key", KeyID: k.row.KeyID}, true
 		}
 		// A key may carry any uid, only the account's own address vouches for it
-		user, _ := s.store.GetUserByID(ctx, k.UserID)
+		user, err := s.store.GetUserByID(ctx, k.row.UserID)
+		if err != nil {
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "key lookup failed", KeyID: k.row.KeyID}, false
+		}
 		if user == nil {
-			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "key owner not found", KeyID: k.KeyID}
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "key owner not found", KeyID: k.row.KeyID}, true
 		}
 		if user.Email == nil || !strings.EqualFold(*user.Email, email) {
-			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "committer email does not match the key owner", KeyID: k.KeyID}
+			return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "committer email does not match the key owner", KeyID: k.row.KeyID}, true
 		}
-		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_VERIFIED, Signer: user.Username, KeyID: k.KeyID}
+		return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_VERIFIED, Signer: user.Username, KeyID: k.row.KeyID}, true
 	}
-	return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "no known key signed this object"}
+	return Verification{State: v1.GitVerificationState_GIT_VERIFICATION_STATE_UNVERIFIED, Reason: "no known key signed this object"}, true
 }
 
-func emailMatches(stored string, email string) bool {
-	var emails []string
-	_ = json.Unmarshal([]byte(stored), &emails)
+func emailMatches(emails []string, email string) bool {
 	for _, e := range emails {
 		if strings.EqualFold(e, email) {
 			return true

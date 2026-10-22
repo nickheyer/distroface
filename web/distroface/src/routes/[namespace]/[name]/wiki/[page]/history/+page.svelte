@@ -4,6 +4,7 @@
 	import {
 		History,
 		ChevronLeft,
+		ChevronRight,
 		Eye,
 		X,
 		GitCommit as GitCommitIcon,
@@ -13,11 +14,9 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import DataPagination from '$lib/components/data-pagination.svelte';
 	import Markdown from '$lib/components/git/markdown.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
-	import { Pager } from '$lib/pager.svelte';
 	import type { GitCommit } from '$lib/proto/distroface/v1/git_pb';
 	import type { WikiPage } from '$lib/proto/distroface/v1/wiki_pb';
 	import { relativeTime } from '$lib/utils';
@@ -31,7 +30,15 @@
 	let commits = $state<GitCommit[]>([]);
 	let loading = $state(true);
 	let loadedKey = $state('');
-	const pager = new Pager(25);
+	// Revisions walk a commit cursor, so pages stack instead of counting
+	const PAGE_SIZE = 25;
+	let tokens = $state<string[]>([]);
+	let nextToken = $state('');
+	const subtitle = $derived(
+		tokens.length === 0 && !nextToken
+			? `${commits.length} revision${commits.length === 1 ? '' : 's'}`
+			: `Page ${tokens.length + 1}`
+	);
 
 	let viewing = $state<WikiPage | undefined>();
 	let viewingSha = $state('');
@@ -45,28 +52,41 @@
 		const key = `${namespace}/${name}:${title}`;
 		if (key !== loadedKey) {
 			loadedKey = key;
-			pager.reset();
+			tokens = [];
+			nextToken = '';
 			viewing = undefined;
 			viewingSha = '';
 			void load();
 		}
 	});
 
-	async function load() {
+	async function load(token = '') {
 		loading = true;
 		try {
 			const resp = await rpcClient.wiki.listWikiRevisions(
-				{ namespace, name, title, page: pager.request() },
+				{ namespace, name, title, page: { pageSize: PAGE_SIZE, pageToken: token, orderBy: '' } },
 				silentCallOptions
 			);
 			commits = resp.commits;
-			pager.apply(resp.page);
+			nextToken = resp.page?.nextPageToken ?? '';
 		} catch {
 			commits = [];
-			pager.apply();
+			nextToken = '';
 		} finally {
 			loading = false;
 		}
+	}
+
+	function older() {
+		if (!nextToken) return;
+		tokens = [...tokens, nextToken];
+		load(nextToken);
+	}
+
+	function newer() {
+		if (tokens.length === 0) return;
+		tokens = tokens.slice(0, -1);
+		load(tokens[tokens.length - 1] ?? '');
 	}
 
 	// Page content as it stood at one commit
@@ -114,11 +134,7 @@
 	<div class="section-header">
 		<div class="min-w-0">
 			<h2 class="section-title truncate">History of {title}</h2>
-			<p class="section-subtitle">
-				{pager.totalCount || commits.length} revision{(pager.totalCount || commits.length) !== 1
-					? 's'
-					: ''}
-			</p>
+			<p class="section-subtitle">{subtitle}</p>
 		</div>
 		<Button
 			variant="outline"
@@ -183,7 +199,7 @@
 								<span class="truncate text-sm font-medium" title={c.message}
 									>{subject(c) || 'No message'}</span
 								>
-								{#if i === 0 && pager.page === 1}
+								{#if i === 0 && tokens.length === 0}
 									<Badge variant="outline">Latest</Badge>
 								{/if}
 							</div>
@@ -216,7 +232,21 @@
 					</li>
 				{/each}
 			</ul>
-			<DataPagination attached {pager} onChange={load} />
+			{#if tokens.length > 0 || nextToken}
+				<div class="flex items-center justify-end gap-1 border-t px-4 py-2">
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={tokens.length === 0 || loading}
+						onclick={newer}
+					>
+						<ChevronLeft />Newer
+					</Button>
+					<Button variant="outline" size="sm" disabled={!nextToken || loading} onclick={older}>
+						Older<ChevronRight />
+					</Button>
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>

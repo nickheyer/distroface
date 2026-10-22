@@ -55,8 +55,8 @@ func (c *Client) Register(ctx context.Context, registration, name string, labels
 	return resp.Runner, resp.RunnerToken, nil
 }
 
-func (c *Client) Heartbeat(ctx context.Context, version string, running []string) error {
-	_, err := c.rpc.Heartbeat(ctx, &v1.HeartbeatRequest{Version: version, RunningJobIds: running})
+func (c *Client) Heartbeat(ctx context.Context, version string, running []string, reportsJobs bool) error {
+	_, err := c.rpc.Heartbeat(ctx, &v1.HeartbeatRequest{Version: version, RunningJobIds: running, ReportsJobs: reportsJobs})
 	return rpcErr(err)
 }
 

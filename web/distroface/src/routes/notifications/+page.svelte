@@ -28,6 +28,7 @@
 		Search
 	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
+	import { portalStore } from '$lib/stores/portal.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { notificationStore } from '$lib/stores/notification.svelte';
 	import { toast } from 'svelte-sonner';
@@ -245,17 +246,23 @@
 							>
 						{/if}
 					</div>
-					<div class="flex items-center gap-2">
-						<Button size="sm" onclick={() => acceptTransfer(t)} disabled={transferBusy === t.id}
-							>Accept</Button
-						>
-						<Button
-							size="sm"
-							variant="outline"
-							onclick={() => rejectTransfer(t)}
-							disabled={transferBusy === t.id}>Decline</Button
-						>
-					</div>
+					{#if portalStore.isPortal && !portalStore.allowPush}
+						<p class="text-xs text-muted-foreground">
+							Answer from the primary host, this portal is read only
+						</p>
+					{:else}
+						<div class="flex items-center gap-2">
+							<Button size="sm" onclick={() => acceptTransfer(t)} disabled={transferBusy === t.id}
+								>Accept</Button
+							>
+							<Button
+								size="sm"
+								variant="outline"
+								onclick={() => rejectTransfer(t)}
+								disabled={transferBusy === t.id}>Decline</Button
+							>
+						</div>
+					{/if}
 				</div>
 			{/each}
 		</div>

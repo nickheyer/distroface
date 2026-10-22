@@ -58,3 +58,28 @@ func TestMemoEvictsOverCapacityAndForgets(t *testing.T) {
 		t.Fatalf("forget kept %v", m.entries)
 	}
 }
+
+func TestMemoBurstKeepsNewest(t *testing.T) {
+	m := NewMemo[int](time.Minute, 50)
+	for i := range 50 {
+		k := "old" + string(rune('A'+i%26)) + string(rune('a'+i/26))
+		_, _ = m.Get(context.Background(), k, func() (int, error) { return i, nil })
+	}
+	if len(m.entries) != 50 {
+		t.Fatalf("want 50 entries, got %d", len(m.entries))
+	}
+	for i := range 10 {
+		k := "new" + string(rune('a'+i))
+		_, _ = m.Get(context.Background(), k, func() (int, error) { return 100 + i, nil })
+	}
+	if len(m.entries) > 50 {
+		t.Fatalf("over capacity with %d entries", len(m.entries))
+	}
+	for i := range 10 {
+		k := "new" + string(rune('a'+i))
+		e, ok := m.entries[k]
+		if !ok || e.value != 100+i {
+			t.Fatalf("burst key %s lost, entries %d", k, len(m.entries))
+		}
+	}
+}
