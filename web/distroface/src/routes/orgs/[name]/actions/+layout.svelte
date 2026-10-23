@@ -4,12 +4,17 @@
 	import { resolve } from '$app/paths';
 	import { getContext } from 'svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import RunnerManager from '$lib/components/git/runner-manager.svelte';
+	import FormPage from '$lib/components/form-page.svelte';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
+
+	let { children } = $props();
 
 	const ctx = getContext<OrgContext>(ORG_CONTEXT_KEY);
 	const orgName = $derived(page.params.name ?? '');
-	const orgId = $derived(ctx.org?.id ?? '');
+	const tabs = $derived([
+		{ href: resolve('/orgs/[name]/actions', { name: orgName }), label: 'Settings' },
+		{ href: resolve('/orgs/[name]/actions/runners', { name: orgName }), label: 'Runners' }
+	]);
 
 	$effect(() => {
 		if (!ctx.loading && ctx.org && !ctx.canAdmin) {
@@ -19,13 +24,16 @@
 </script>
 
 {#if ctx.loading || !ctx.org}
-	<Skeleton class="h-48 w-full rounded-lg" />
+	<Skeleton class="h-72 w-full rounded-lg" />
 {:else if ctx.canAdmin}
-	{#key orgId}
-		<RunnerManager
-			scope={{ kind: 'org', id: orgId }}
-			canManage={ctx.canAdmin}
-			description="Executors shared by every repository in this organization."
-		/>
-	{/key}
+	<FormPage
+		level="section"
+		title="Actions"
+		description="Workflow policy and runners shared by every repository of this organization."
+		{tabs}
+	>
+		{#key ctx.org.id}
+			{@render children?.()}
+		{/key}
+	</FormPage>
 {/if}

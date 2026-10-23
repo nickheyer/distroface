@@ -25,7 +25,7 @@
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import RunStatusIcon from '$lib/components/git/run-status-icon.svelte';
 	import JobLog from '$lib/components/git/job-log.svelte';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import type { Job, JobStep, WorkflowRun } from '$lib/proto/distroface/v1/actions_pb';
 	import {
@@ -60,13 +60,14 @@
 	let log = $state<{ scrollToStep: (n: number) => void } | undefined>();
 
 	async function load(silent = false) {
+		const opts = silent ? backgroundCallOptions : silentCallOptions;
 		const mine = ++seq;
 		if (!silent) loading = true;
 		try {
 			const [j, r] = await Promise.all([
-				rpcClient.actions.getJob({ namespace, name, id: jobId }, silentCallOptions),
+				rpcClient.actions.getJob({ namespace, name, id: jobId }, opts),
 				rpcClient.actions
-					.getWorkflowRun({ namespace, name, id: runId }, silentCallOptions)
+					.getWorkflowRun({ namespace, name, id: runId }, opts)
 					.catch(() => undefined)
 			]);
 			if (mine !== seq) return;

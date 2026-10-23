@@ -5,6 +5,8 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import UnitInput from '$lib/components/unit-input.svelte';
+	import DurationInput, { isDurationUnit } from '$lib/components/duration-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
@@ -19,30 +21,36 @@
 		key: string;
 		path: string;
 		label: string;
-		help: string;
+		help?: string;
 		unit: string;
+		interval?: boolean;
 		min: number;
 		max: number;
+		// Zero stored means off, shown as a switched off limit
+		unset?: string;
 	};
 
 	const scheduleFields: NumField[] = [
 		{
 			key: 'defaultIntervalMinutes',
+			interval: true,
 			path: 'mirror.default_interval_minutes',
 			label: 'Default sync interval',
 			help: 'When a repository sets no interval',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 10080
 		},
 		{
 			key: 'minIntervalMinutes',
+			interval: true,
 			path: 'mirror.min_interval_minutes',
 			label: 'Minimum sync interval',
-			help: 'Floor for repository intervals, 0 disables',
-			unit: 'min',
-			min: 0,
-			max: 1440
+			help: 'Floor for repository intervals',
+			unit: 'minutes',
+			min: 1,
+			max: 1440,
+			unset: 'No floor'
 		}
 	];
 
@@ -70,7 +78,7 @@
 			path: 'mirror.sync_timeout_minutes',
 			label: 'Sync timeout',
 			help: 'Cancels a repository sync after this',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 720
 		},
@@ -78,17 +86,18 @@
 			key: 'maxSyncDepth',
 			path: 'mirror.max_sync_depth',
 			label: 'Max releases per sync',
-			help: 'Newest releases or tags per repository, 0 unlimited',
+			help: 'Newest releases or tags per repository',
 			unit: 'items',
-			min: 0,
-			max: 10000
+			min: 1,
+			max: 10000,
+			unset: 'All'
 		},
 		{
 			key: 'rateLimitCooldownMinutes',
 			path: 'mirror.rate_limit_cooldown_minutes',
 			label: 'Rate limit cooldown',
 			help: 'Pause when rate limited without a deadline',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 1440
 		},
@@ -97,7 +106,7 @@
 			path: 'mirror.max_cooldown_minutes',
 			label: 'Cooldown ceiling',
 			help: 'Longest honored cooldown or failure backoff',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 10080
 		},
@@ -106,7 +115,7 @@
 			path: 'mirror.failure_backoff_minutes',
 			label: 'Failure backoff',
 			help: 'Doubles with each consecutive failure',
-			unit: 'min',
+			unit: 'minutes',
 			min: 1,
 			max: 1440
 		}
@@ -176,7 +185,8 @@
 	}
 
 	function commitNum(f: NumField) {
-		const v = Math.min(Math.max(Math.round(values[f.key] ?? 0), f.min), f.max);
+		const raw = values[f.key];
+		const v = f.unset && !raw ? 0 : Math.min(Math.max(Math.round(Number(raw) || 0), f.min), f.max);
 		values[f.key] = v;
 		if (v === mirrorNum(eff, f.key)) return;
 		apply(acts[f.key], { mirror: { [f.key]: v } }, [f.path]);
@@ -200,19 +210,54 @@
 		tag={acts[f.key].tag}
 		error={acts[f.key].error}
 	>
-		<UnitInput
-			id={f.key}
-			unit={f.unit}
-			bind:value={values[f.key]}
-			min={f.min}
-			max={f.max}
-			class="w-32"
-			disabled={!canEdit || acts[f.key].busy || locked(f.path)}
-			onblur={() => commitNum(f)}
-			onkeydown={(e) => {
-				if (e.key === 'Enter') commitNum(f);
-			}}
-		/>
+		{#if f.unset}
+			<LimitInput
+				id={f.key}
+				label={f.label.toLowerCase()}
+				unit={f.unit}
+				interval={f.interval}
+				bind:value={values[f.key]}
+				unset={f.unset}
+				min={f.min}
+				max={f.max}
+				disabled={!canEdit || acts[f.key].busy || locked(f.path)}
+				onToggle={(on) => {
+					if (!on) commitNum(f);
+				}}
+				onblur={() => commitNum(f)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') commitNum(f);
+				}}
+			/>
+		{:else if isDurationUnit(f.unit)}
+			<DurationInput
+				id={f.key}
+				unit={f.unit}
+				interval={f.interval}
+				bind:value={values[f.key]}
+				min={f.min}
+				max={f.max}
+				disabled={!canEdit || acts[f.key].busy || locked(f.path)}
+				onblur={() => commitNum(f)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') commitNum(f);
+				}}
+			/>
+		{:else}
+			<UnitInput
+				id={f.key}
+				unit={f.unit}
+				bind:value={values[f.key]}
+				min={f.min}
+				max={f.max}
+				class="w-32"
+				disabled={!canEdit || acts[f.key].busy || locked(f.path)}
+				onblur={() => commitNum(f)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') commitNum(f);
+				}}
+			/>
+		{/if}
 	</FormField>
 {/snippet}
 

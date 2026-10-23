@@ -33,6 +33,7 @@ import { NotificationService } from '$lib/proto/distroface/v1/notification_pb';
 import { KeyService } from '$lib/proto/distroface/v1/keys_pb';
 import { MailService } from '$lib/proto/distroface/v1/mail_pb';
 import { ActionsService } from '$lib/proto/distroface/v1/actions_pb';
+import { AgentsService } from '$lib/proto/distroface/v1/agents_pb';
 import { toast } from 'svelte-sonner';
 import { networkStore } from '$lib/stores/network.svelte';
 
@@ -114,6 +115,7 @@ export class RpcClient {
 	public readonly key: Client<typeof KeyService>;
 	public readonly mail: Client<typeof MailService>;
 	public readonly actions: Client<typeof ActionsService>;
+	public readonly agents: Client<typeof AgentsService>;
 
 	constructor() {
 		this.health = createClient(HealthService, transport);
@@ -143,6 +145,7 @@ export class RpcClient {
 		this.key = createClient(KeyService, transport);
 		this.mail = createClient(MailService, transport);
 		this.actions = createClient(ActionsService, transport);
+		this.agents = createClient(AgentsService, transport);
 	}
 }
 

@@ -36,6 +36,8 @@ type DiffOptions struct {
 	// Changed line cap above which hunks are withheld, zero uses MaxDiffFileLines
 	MaxLines  int
 	WithHunks bool
+	// Stats and hunks for every file, no MaxDiffFiles cutoff
+	AllFiles bool
 }
 
 // Line counts and content flags of one blob pair, immutable per pair
@@ -85,7 +87,7 @@ func (r *Repo) DiffTrees(ctx context.Context, from, to *object.Tree, opts DiffOp
 			return nil, ctx.Err()
 		}
 		inPage := i >= opts.Offset && (opts.Limit <= 0 || len(out.Files) < opts.Limit)
-		withStats := i < MaxDiffFiles
+		withStats := opts.AllFiles || i < MaxDiffFiles
 		file, err := r.changeToFile(ctx, ch, maxLines, withHunks && inPage && withStats, withStats)
 		if err != nil {
 			return nil, err

@@ -23,6 +23,27 @@ var scopedMailPaths = []string{
 	"mail.password", "mail.from_address", "mail.from_name", "mail.reply_to", "mail.skip_tls_verify",
 }
 
+// Agent limits a repository may tighten and an org may set
+var scopedAgentsPaths = []string{
+	"git.agents.allow_commands",
+	"git.agents.commands_runs_on",
+	"git.agents.max_turns",
+	"git.agents.max_session_minutes",
+	"git.agents.max_sessions_per_day",
+	"git.agents.max_concurrent_sessions",
+	"git.agents.token_budget_per_session",
+	"git.agents.log_retention_days",
+	"git.agents.allow_file_agents",
+	"git.agents.command_timeout_minutes",
+}
+
+// Agent policy only an org or the instance decides
+var orgAgentsPaths = []string{
+	"git.agents.enabled",
+	"git.agents.allow_repo_providers",
+	"git.agents.allow_repo_agents",
+}
+
 // Workflow settings - repo or org scope
 var scopedActionsPaths = []string{
 	"git.actions.default_runs_on",
@@ -55,14 +76,14 @@ var scopeAllowed = map[v1.SettingsScopeType][]string{
 		"git.default_branch",
 		"git.max_repo_size_mb",
 		"git.actions.enabled",
-	}, scopedMailPaths, scopedActionsPaths),
+	}, scopedMailPaths, scopedActionsPaths, scopedAgentsPaths, orgAgentsPaths),
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: {
 		"acme.email",
 		"acme.directory_url",
 		"tls.mtls_mode",
 		"auth.anonymous_access",
 	},
-	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO: concat(scopedMailPaths, scopedActionsPaths),
+	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO: concat(scopedMailPaths, scopedActionsPaths, scopedAgentsPaths),
 }
 
 // Reports whether a mail leaf path may only come from the system tier

@@ -15,6 +15,7 @@ import (
 	"github.com/distribution/distribution/v3/registry/handlers"
 	"github.com/nickheyer/distroface/internal/actions"
 	"github.com/nickheyer/distroface/internal/admin"
+	"github.com/nickheyer/distroface/internal/agents"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -280,7 +281,13 @@ func New() (*App, error) {
 	forgeManager := forge.NewManager(store, gitManager, mailService, resolver, log)
 	forgeManager.SetTokenKey(authManager.DerivedKey("notifications"))
 	actionsManager := actions.NewManager(store, gitManager, forgeManager, artifactManager, authManager, resolver, log)
-	forgeManager.SetTrigger(actionsManager.Trigger)
+	agentsManager := agents.NewManager(store, gitManager, forgeManager, actionsManager, authManager, resolver, log)
+	// Forge events reach workflows first, then agents
+	forgeManager.SetTrigger(func(ctx context.Context, repo *db.GitRepository, event, action, ref, sha string, actor *auth.AuthenticatedUser, payload map[string]any) {
+		actionsManager.Trigger(ctx, repo, event, action, ref, sha, actor, payload)
+		agentsManager.Trigger(ctx, repo, event, action, ref, sha, actor, payload)
+	})
+	actionsManager.SetRunCompleted(agentsManager.OnRunCompleted)
 	forgeManager.SetReleaseCreated(actionsManager.PinReleaseImages)
 	registry.SetImageRecorder(actionsManager)
 	registry.SetJobChecker(actionsManager)
@@ -305,6 +312,7 @@ func New() (*App, error) {
 	gitManager.ScheduleMaintenance(ctx)
 	mailService.Start(ctx)
 	actionsManager.Start(ctx)
+	agentsManager.Start(ctx)
 	log.Info("Git engine ready (repos=%s)", gitEngine.ReposDir())
 
 	if err := seedLegacyACMEDomains(ctx, cfg.LegacyACMEDomains, store, log); err != nil {
@@ -340,6 +348,7 @@ func New() (*App, error) {
 		GitSSH:              gitSSH,
 		ForgeManager:        forgeManager,
 		ActionsManager:      actionsManager,
+		AgentsManager:       agentsManager,
 		MailService:         mailService,
 	})
 

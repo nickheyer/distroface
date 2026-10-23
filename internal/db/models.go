@@ -322,6 +322,7 @@ const (
 	GitUnitProjects = "projects"
 	GitUnitPackages = "packages"
 	GitUnitActions  = "actions"
+	GitUnitAgents   = "agents"
 )
 
 // Collaborator and team level names
@@ -352,6 +353,7 @@ type GitRepository struct {
 	MergeSettings   string         `json:"merge_settings" gorm:"type:text;not null;default:'{}'"` // Protojson GitMergeSettings
 	IssueCounter    int64          `json:"issue_counter" gorm:"not null;default:0"`
 	RunCounter      int64          `json:"run_counter" gorm:"not null;default:0"`
+	AgentCounter    int64          `json:"agent_counter" gorm:"not null;default:0;column:agent_counter"`
 	SizeBytes       int64          `json:"size_bytes" gorm:"not null;default:0"`
 	LFSSizeBytes    int64          `json:"lfs_size_bytes" gorm:"not null;default:0;column:lfs_size_bytes"`
 	BranchCount     int32          `json:"branch_count" gorm:"not null;default:0"`
@@ -1075,4 +1077,143 @@ type ActionsCache struct {
 	CreatedAt  time.Time      `gorm:"autoCreateTime"`
 	LastUsedAt time.Time      `gorm:"not null;index:idx_cache_state_used,priority:2"`
 	Repo       *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+// ── Agents ───────────────────────────────────────────────────────────────
+
+// Auth provider of agent bot accounts, they never sign in
+const AuthProviderAgent = "agent"
+
+type AgentProvider struct {
+	ID                string `gorm:"primaryKey"`
+	ScopeKind         string `gorm:"not null;index:idx_agent_provider_scope"`
+	ScopeID           string `gorm:"not null;default:'';index:idx_agent_provider_scope"`
+	Name              string `gorm:"not null"`
+	Kind              string `gorm:"not null"`
+	BaseURL           string `gorm:"not null;default:'';column:base_url"`
+	APIKey            []byte `gorm:"column:api_key"` // Sealed
+	Headers           []byte // Sealed json object
+	APIVersion        string `gorm:"not null;default:'';column:api_version"`
+	DefaultModel      string `gorm:"not null;default:''"`
+	Models            string `gorm:"type:text;not null;default:'[]'"`
+	MaxTokens         int    `gorm:"not null;default:0"`
+	ContextWindow     int    `gorm:"not null;default:0"`
+	TimeoutSeconds    int    `gorm:"not null;default:0"`
+	SkipTLSVerify     bool   `gorm:"not null;default:false;column:skip_tls_verify"`
+	ToolsSupported    bool   `gorm:"not null;default:true"`
+	RequestsPerMinute int    `gorm:"not null;default:0"`
+	TokensPerDay      int64  `gorm:"not null;default:0"`
+	Enabled           bool   `gorm:"not null;default:true"`
+	IsDefault         bool   `gorm:"not null;default:false"`
+	LastTestedAt      *time.Time
+	LastTestError     string    `gorm:"type:text;not null;default:''"`
+	CreatedBy         string    `gorm:"not null;default:''"`
+	CreatedAt         time.Time `gorm:"autoCreateTime"`
+	UpdatedAt         time.Time `gorm:"autoUpdateTime"`
+}
+
+type Agent struct {
+	ID               string    `gorm:"primaryKey"`
+	ScopeKind        string    `gorm:"not null;uniqueIndex:idx_agent_scope_slug"`
+	ScopeID          string    `gorm:"not null;default:'';uniqueIndex:idx_agent_scope_slug"`
+	Slug             string    `gorm:"not null;uniqueIndex:idx_agent_scope_slug"`
+	Name             string    `gorm:"not null"`
+	Description      string    `gorm:"type:text;not null;default:''"`
+	Kind             string    `gorm:"not null"`
+	ProviderID       string    `gorm:"not null;default:'';index"`
+	Model            string    `gorm:"not null;default:''"`
+	Instructions     string    `gorm:"type:text;not null;default:''"`
+	Tools            string    `gorm:"type:text;not null;default:'[]'"`
+	Triggers         string    `gorm:"type:text;not null;default:'{}'"` // Protojson AgentTriggers
+	MaxTurns         int       `gorm:"not null;default:0"`
+	MaxTokens        int64     `gorm:"not null;default:0"`
+	Temperature      float64   `gorm:"not null;default:-1"` // Negative means unset
+	Approval         string    `gorm:"not null;default:'none'"`
+	Enabled          bool      `gorm:"not null;default:true"`
+	Concurrency      int       `gorm:"not null;default:0"`
+	AllowedCallerIDs string    `gorm:"type:text;not null;default:'[]'"`
+	CreatedBy        string    `gorm:"not null;default:''"`
+	CreatedAt        time.Time `gorm:"autoCreateTime"`
+	UpdatedAt        time.Time `gorm:"autoUpdateTime"`
+}
+
+// Bot account behind an agent handle, shared by every scope using the slug
+type AgentIdentity struct {
+	Slug      string    `gorm:"primaryKey"`
+	UserID    string    `gorm:"not null;uniqueIndex"`
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+	User      *User     `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+type AgentSession struct {
+	ID               string  `gorm:"primaryKey"`
+	RepoID           string  `gorm:"not null;uniqueIndex:idx_agent_session_repo_number;index:idx_agent_session_repo_created"`
+	Number           int64   `gorm:"not null;uniqueIndex:idx_agent_session_repo_number"`
+	AgentID          string  `gorm:"not null;default:'';index"`
+	AgentSlug        string  `gorm:"not null;default:'';index"`
+	AgentName        string  `gorm:"not null;default:''"`
+	AgentKind        string  `gorm:"not null;default:''"`
+	AgentSource      string  `gorm:"not null;default:'database'"`
+	BotUserID        string  `gorm:"not null;default:''"`
+	ProviderID       string  `gorm:"not null;default:'';index"`
+	ProviderName     string  `gorm:"not null;default:''"`
+	Model            string  `gorm:"not null;default:''"`
+	Trigger          string  `gorm:"not null;default:'manual';index"`
+	TriggerUserID    string  `gorm:"not null;default:'';index"`
+	Prompt           string  `gorm:"type:text;not null;default:''"`
+	Title            string  `gorm:"not null;default:''"`
+	IssueID          *string `gorm:"index"`
+	IssueNumber      int64   `gorm:"not null;default:0"`
+	IsPull           bool    `gorm:"not null;default:false"`
+	Ref              string  `gorm:"not null;default:''"`
+	SHA              string  `gorm:"not null;default:'';column:sha"`
+	Branch           string  `gorm:"not null;default:''"`
+	Status           string  `gorm:"not null;default:'queued';index"`
+	Conclusion       string  `gorm:"not null;default:''"`
+	Summary          string  `gorm:"type:text;not null;default:''"`
+	Error            string  `gorm:"type:text;not null;default:''"`
+	Turns            int     `gorm:"not null;default:0"`
+	ToolCalls        int     `gorm:"not null;default:0"`
+	InputTokens      int64   `gorm:"not null;default:0"`
+	OutputTokens     int64   `gorm:"not null;default:0"`
+	MaxTurns         int     `gorm:"not null;default:0"`
+	MaxTokens        int64   `gorm:"not null;default:0"`
+	ResultPullNumber int64   `gorm:"not null;default:0"`
+	ResultReviewID   string  `gorm:"not null;default:''"`
+	ResultCommits    string  `gorm:"type:text;not null;default:'[]'"`
+	Definition       string  `gorm:"type:text;not null;default:'{}'"` // Agent snapshot as json at start
+	EventCount       int64   `gorm:"not null;default:0"`
+	StartedAt        *time.Time
+	FinishedAt       *time.Time
+	CreatedAt        time.Time      `gorm:"autoCreateTime;index:idx_agent_session_repo_created"`
+	UpdatedAt        time.Time      `gorm:"autoUpdateTime"`
+	Repo             *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+type AgentSessionEvent struct {
+	ID         int64         `gorm:"primaryKey;autoIncrement"`
+	SessionID  string        `gorm:"not null;uniqueIndex:idx_agent_event_seq"`
+	Seq        int64         `gorm:"not null;uniqueIndex:idx_agent_event_seq"`
+	Kind       string        `gorm:"not null"`
+	Text       string        `gorm:"type:text;not null;default:''"`
+	Tool       string        `gorm:"not null;default:''"`
+	ToolCallID string        `gorm:"not null;default:'';column:tool_call_id"`
+	Data       string        `gorm:"type:text;not null;default:'{}'"`
+	CreatedAt  time.Time     `gorm:"autoCreateTime"`
+	Session    *AgentSession `gorm:"foreignKey:SessionID;constraint:OnDelete:CASCADE"`
+}
+
+type AgentApproval struct {
+	ID        string `gorm:"primaryKey"`
+	SessionID string `gorm:"not null;index"`
+	EventSeq  int64  `gorm:"not null;default:0"`
+	Tool      string `gorm:"not null"`
+	Title     string `gorm:"not null;default:''"`
+	Arguments string `gorm:"type:text;not null;default:'{}'"`
+	Status    string `gorm:"not null;default:'pending';index"`
+	DecidedBy string `gorm:"not null;default:''"`
+	DecidedAt *time.Time
+	Note      string        `gorm:"type:text;not null;default:''"`
+	CreatedAt time.Time     `gorm:"autoCreateTime"`
+	Session   *AgentSession `gorm:"foreignKey:SessionID;constraint:OnDelete:CASCADE"`
 }

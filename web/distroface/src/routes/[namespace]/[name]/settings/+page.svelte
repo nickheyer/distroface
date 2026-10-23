@@ -40,6 +40,7 @@
 		projects: true,
 		packages: true,
 		actions: true,
+		agents: false,
 		externalIssuesUrl: '',
 		externalWikiUrl: '',
 		blockOnDependencies: false,
@@ -97,6 +98,7 @@
 				projects: r.units.projects,
 				packages: r.units.packages,
 				actions: r.units.actions,
+				agents: r.units.agents,
 				externalIssuesUrl: r.units.externalIssuesUrl,
 				externalWikiUrl: r.units.externalWikiUrl,
 				blockOnDependencies: r.units.blockOnDependencies,
@@ -443,6 +445,13 @@
 			</FormField>
 			<FormField label="Actions" layout="toggle" help="Workflows under .distroface/workflows">
 				<Switch bind:checked={units.actions} />
+			</FormField>
+			<FormField
+				label="Agents"
+				layout="toggle"
+				help="Model driven reviews, tasks, and answers through configured connectors"
+			>
+				<Switch bind:checked={units.agents} />
 			</FormField>
 			{#snippet footer()}
 				{@render saveButton(savingUnits, saveUnits)}

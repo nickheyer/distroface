@@ -15,6 +15,7 @@
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import DateInput from '$lib/components/date-input.svelte';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -498,7 +499,7 @@
 				{#if canTriage}
 					<section class="space-y-2 lg:border-t lg:pt-5">
 						<FormField label="Due date" id="issue-due">
-							<Input id="issue-due" type="date" bind:value={dueDate} />
+							<DateInput id="issue-due" bind:value={dueDate} />
 						</FormField>
 					</section>
 				{/if}

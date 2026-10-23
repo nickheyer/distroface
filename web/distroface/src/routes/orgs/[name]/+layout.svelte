@@ -18,7 +18,8 @@
 		UsersRound,
 		Tag,
 		SquareKanban,
-		Cpu,
+		Play,
+		Bot,
 		KeyRound,
 		Mail
 	} from '@lucide/svelte';
@@ -65,7 +66,8 @@
 						label: 'Projects',
 						icon: SquareKanban
 					},
-					{ href: resolve('/orgs/[name]/runners', { name }), label: 'Runners', icon: Cpu },
+					{ href: resolve('/orgs/[name]/actions', { name }), label: 'Actions', icon: Play },
+					{ href: resolve('/orgs/[name]/agents', { name }), label: 'Agents', icon: Bot },
 					{ href: resolve('/orgs/[name]/secrets', { name }), label: 'Secrets', icon: KeyRound }
 				);
 			}

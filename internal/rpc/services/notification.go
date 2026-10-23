@@ -115,6 +115,8 @@ func (s *NotificationService) toProtos(ctx context.Context, rows []*storage.GitN
 				p.HtmlUrl += "/releases"
 			case forge.NotifyWorkflowRun:
 				p.HtmlUrl += "/actions"
+			case forge.NotifyAgentSession:
+				p.HtmlUrl += "/agents"
 			case forge.NotifyInvite, forge.NotifyTransfer:
 				p.HtmlUrl = s.forge.Git().BaseURL(ctx) + "/notifications"
 			}

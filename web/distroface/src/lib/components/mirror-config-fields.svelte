@@ -10,7 +10,8 @@
 		username: string;
 		pattern: string;
 		includePrereleases: boolean;
-		syncDepth: number;
+		// Undefined keeps everything
+		syncDepth: number | undefined;
 		syncIntervalMinutes: number;
 		paused: boolean;
 	};
@@ -23,7 +24,7 @@
 			username: '',
 			pattern: '',
 			includePrereleases: false,
-			syncDepth: 0,
+			syncDepth: undefined,
 			syncIntervalMinutes: 0,
 			paused: false
 		};
@@ -36,7 +37,7 @@
 		form.username = cfg.username;
 		form.pattern = cfg.pattern;
 		form.includePrereleases = cfg.includePrereleases;
-		form.syncDepth = cfg.syncDepth;
+		form.syncDepth = cfg.syncDepth > 0 ? cfg.syncDepth : undefined;
 		form.syncIntervalMinutes = cfg.syncIntervalMinutes;
 		form.paused = cfg.paused;
 		return form;
@@ -69,7 +70,8 @@
 	import { Alert, AlertTitle, AlertDescription } from '$lib/components/ui/alert';
 	import FormField from '$lib/components/form-field.svelte';
 	import PasswordInput from '$lib/components/password-input.svelte';
-	import UnitInput from '$lib/components/unit-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
+	import DurationInput from '$lib/components/duration-input.svelte';
 	import { CheckCircle, AlertTriangle, Hourglass, Undo2 } from '@lucide/svelte';
 	import { relativeTime } from '$lib/utils';
 	import { fetchMirrorLimits, type MirrorLimits } from '$lib/mirror';
@@ -110,7 +112,7 @@
 				patternLabel: 'Asset filter',
 				patternHelp: 'Glob over asset names, empty mirrors all',
 				depthUnit: 'releases',
-				depthHelp: 'Number of releases to keep, 0 for all',
+				depthHelp: 'Newest releases kept per sync',
 				syncTarget: 'GitHub'
 			},
 			gitlab: {
@@ -121,7 +123,7 @@
 				patternLabel: 'Asset filter',
 				patternHelp: 'Glob over asset names, empty mirrors all',
 				depthUnit: 'releases',
-				depthHelp: 'Number of releases to keep, 0 for all',
+				depthHelp: 'Newest releases kept per sync',
 				syncTarget: 'GitLab'
 			},
 			gitea: {
@@ -132,7 +134,7 @@
 				patternLabel: 'Asset filter',
 				patternHelp: 'Glob over asset names, empty mirrors all',
 				depthUnit: 'releases',
-				depthHelp: 'Number of releases to keep, 0 for all',
+				depthHelp: 'Newest releases kept per sync',
 				syncTarget: 'Gitea'
 			},
 			oci: {
@@ -143,7 +145,7 @@
 				patternLabel: 'Tag filter',
 				patternHelp: 'Glob over tags, empty mirrors all',
 				depthUnit: 'tags',
-				depthHelp: 'Number of tags to keep, 0 for all',
+				depthHelp: 'Newest tags kept per sync',
 				syncTarget: 'the upstream'
 			},
 			git: {
@@ -180,8 +182,9 @@
 	});
 
 	const depthHelp = $derived(
-		depthCap > 0 ? `Set to 0 to keep the newest ${depthCap} ${copy.depthUnit}` : copy.depthHelp
+		depthCap > 0 ? `${copy.depthHelp}, at most ${depthCap}` : copy.depthHelp
 	);
+	const depthUnset = $derived(depthCap > 0 ? `Newest ${depthCap}` : 'All');
 </script>
 
 <div class="form-fields">
@@ -316,13 +319,15 @@
 		{/if}
 
 		{#if kind !== 'git'}
-			<FormField label="Sync depth" id="{idPrefix}-depth" help={depthHelp} span="third">
-				<UnitInput
+			<FormField label="Sync depth" id="{idPrefix}-depth" help={depthHelp} span="half">
+				<LimitInput
 					id="{idPrefix}-depth"
-					min={0}
-					max={depthCap > 0 ? depthCap : undefined}
+					label="sync depth"
 					unit={copy.depthUnit}
 					bind:value={form.syncDepth}
+					unset={depthUnset}
+					max={depthCap > 0 ? depthCap : undefined}
+					seed={depthCap > 0 ? Math.min(10, depthCap) : 10}
 				/>
 			</FormField>
 		{/if}
@@ -333,12 +338,14 @@
 			error={intervalError}
 			span="third"
 		>
-			<UnitInput
+			<DurationInput
 				id="{idPrefix}-interval"
 				min={minInterval > 0 ? minInterval : 0}
-				unit="min"
+				unit="minutes"
+				interval
 				bind:value={form.syncIntervalMinutes}
 				aria-invalid={!!intervalError}
+				class="w-full"
 			/>
 		</FormField>
 

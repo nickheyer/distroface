@@ -12,6 +12,7 @@
 	import IssueSidebar from '$lib/components/git/issue-sidebar.svelte';
 	import ReviewersPanel from '$lib/components/git/reviewers-panel.svelte';
 	import ChecksPanel from '$lib/components/git/checks-panel.svelte';
+	import AgentSessionsPanel from '$lib/components/git/agent-sessions-panel.svelte';
 	import MergeBox from '$lib/components/git/merge-box.svelte';
 	import ReviewForm from '$lib/components/git/review-form.svelte';
 	import ReviewCard from './review-card.svelte';
@@ -396,6 +397,7 @@
 				{onChanged}
 			/>
 		</section>
+		<AgentSessionsPanel {namespace} {name} issueNumber={number} isPull canStart={canWrite} />
 		{#if isFork}
 			<section class="space-y-2 lg:border-t lg:pt-5">
 				<span class="eyebrow">Maintainer edits</span>

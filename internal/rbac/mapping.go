@@ -61,6 +61,19 @@ var PortalWriteProcedures = map[string]bool{
 	distrofacev1connect.GitServiceAcceptTransferProcedure:      true,
 	distrofacev1connect.GitServiceRejectTransferProcedure:      true,
 	distrofacev1connect.GitServiceAcceptCollaborationProcedure: true,
+	// Agent sessions are mapped as reads for rbac, they still mutate
+	distrofacev1connect.AgentsServiceStartAgentSessionProcedure:    true,
+	distrofacev1connect.AgentsServiceCancelAgentSessionProcedure:   true,
+	distrofacev1connect.AgentsServiceRerunAgentSessionProcedure:    true,
+	distrofacev1connect.AgentsServiceContinueAgentSessionProcedure: true,
+	distrofacev1connect.AgentsServiceResolveAgentApprovalProcedure: true,
+	distrofacev1connect.AgentsServiceDeleteAgentSessionProcedure:   true,
+	distrofacev1connect.AgentsServiceCreateAgentProviderProcedure:  true,
+	distrofacev1connect.AgentsServiceUpdateAgentProviderProcedure:  true,
+	distrofacev1connect.AgentsServiceDeleteAgentProviderProcedure:  true,
+	distrofacev1connect.AgentsServiceCreateAgentProcedure:          true,
+	distrofacev1connect.AgentsServiceUpdateAgentProcedure:          true,
+	distrofacev1connect.AgentsServiceDeleteAgentProcedure:          true,
 	// Workflow controls are mapped as reads for rbac, they still mutate
 	distrofacev1connect.ActionsServiceEnableWorkflowProcedure:    true,
 	distrofacev1connect.ActionsServiceDisableWorkflowProcedure:   true,
@@ -167,6 +180,21 @@ var AuthenticatedOnlyProcedures = map[string]bool{
 	distrofacev1connect.ActionsServiceCreateRunnerTokenProcedure: true,
 	distrofacev1connect.ActionsServiceDeleteRunnerProcedure:      true,
 	distrofacev1connect.ActionsServiceUpdateRunnerProcedure:      true,
+
+	// Agent connectors and definitions resolve to system, org, or repo admins in-service
+	distrofacev1connect.AgentsServiceListAgentProvidersProcedure:      true,
+	distrofacev1connect.AgentsServiceGetAgentProviderProcedure:        true,
+	distrofacev1connect.AgentsServiceCreateAgentProviderProcedure:     true,
+	distrofacev1connect.AgentsServiceUpdateAgentProviderProcedure:     true,
+	distrofacev1connect.AgentsServiceDeleteAgentProviderProcedure:     true,
+	distrofacev1connect.AgentsServiceTestAgentProviderProcedure:       true,
+	distrofacev1connect.AgentsServiceListAgentProviderModelsProcedure: true,
+	distrofacev1connect.AgentsServiceListAgentsProcedure:              true,
+	distrofacev1connect.AgentsServiceGetAgentProcedure:                true,
+	distrofacev1connect.AgentsServiceCreateAgentProcedure:             true,
+	distrofacev1connect.AgentsServiceUpdateAgentProcedure:             true,
+	distrofacev1connect.AgentsServiceDeleteAgentProcedure:             true,
+	distrofacev1connect.AgentsServiceGetAgentUsageProcedure:           true,
 
 	// Boards resolve their repo or org in-service
 	distrofacev1connect.ProjectServiceCreateProjectProcedure:          true,
@@ -495,6 +523,19 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.ActionsServiceStreamJobLogProcedure:     {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
 	distrofacev1connect.ActionsServiceListRunArtifactsProcedure: {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
 	distrofacev1connect.ActionsServiceListRunImagesProcedure:    {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+
+	// ── AgentsService, repository scoped ──────────────────────────────
+	distrofacev1connect.AgentsServiceGetRepoAgentsProcedure:            {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceStartAgentSessionProcedure:        {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceListAgentSessionsProcedure:        {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceGetAgentSessionProcedure:          {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceCancelAgentSessionProcedure:       {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceRerunAgentSessionProcedure:        {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceContinueAgentSessionProcedure:     {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceResolveAgentApprovalProcedure:     {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceListAgentSessionEventsProcedure:   {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceStreamAgentSessionEventsProcedure: {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.AgentsServiceDeleteAgentSessionProcedure:       {Resource: ResourceGit, Action: ActionRead, AnyGrant: true},
 
 	// ── WebhookService ────────────────────────────────────────────────
 	distrofacev1connect.WebhookServiceCreateWebhookProcedure:         {Resource: ResourceWebhooks, Action: ActionCreate},

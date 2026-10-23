@@ -80,7 +80,16 @@ type Manager struct {
 
 	statusMu  sync.Mutex
 	jobStatus map[string]jobStatusEntry
+
+	// Observes finished runs, installed by the agents manager
+	runCompleted RunCompletedHook
 }
+
+// RunCompletedHook receives every run after it finishes
+type RunCompletedHook func(ctx context.Context, repo *db.GitRepository, run *db.ActionsRun)
+
+// SetRunCompleted installs the completion observer, set once at startup
+func (m *Manager) SetRunCompleted(fn RunCompletedHook) { m.runCompleted = fn }
 
 func NewManager(store *stores.Store, git *gitrepo.Manager, fm *forge.Manager, am *artifacts.Manager, authMgr *auth.Manager, res *settings.Resolver, log *logger.Logger) *Manager {
 	return &Manager{

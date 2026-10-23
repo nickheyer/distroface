@@ -1,8 +1,12 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import { renderMarkdown } from '$lib/markdown';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { cn } from '$lib/utils';
+
+	// Renders slower than this show a skeleton
+	const SLOW_MS = 150;
 
 	let {
 		source,
@@ -10,7 +14,8 @@
 		rawBase,
 		repo,
 		wikiBase,
-		class: className
+		class: className,
+		onRendered
 	}: {
 		source: string;
 		baseHref?: string;
@@ -20,12 +25,14 @@
 		// Enables [[Page]] links into this wiki directory
 		wikiBase?: string;
 		class?: string;
+		// Fires once the html is in the DOM
+		onRendered?: () => void;
 	} = $props();
 
 	const refRepo = $derived(repo ?? gitRepoStore.fullName);
 
 	let html = $state('');
-	let rendering = $state(true);
+	let slow = $state(false);
 	let seq = 0;
 
 	$effect(() => {
@@ -35,23 +42,30 @@
 		const target = refRepo;
 		const wiki = wikiBase;
 		const mine = ++seq;
-		rendering = true;
+		const timer = setTimeout(() => {
+			if (mine === seq) slow = true;
+		}, SLOW_MS);
 		renderMarkdown(src, { baseHref: base, rawBase: raw, repo: target || undefined, wikiBase: wiki })
 			.then((out) => {
 				if (mine !== seq) return;
 				html = out;
+				void tick().then(() => {
+					if (mine === seq) onRendered?.();
+				});
 			})
 			.catch(() => {
 				if (mine !== seq) return;
 				html = '';
 			})
 			.finally(() => {
-				if (mine === seq) rendering = false;
+				clearTimeout(timer);
+				if (mine === seq) slow = false;
 			});
+		return () => clearTimeout(timer);
 	});
 </script>
 
-{#if rendering && !html}
+{#if slow && !html}
 	<div class="space-y-2.5">
 		<Skeleton class="h-5 w-1/3" />
 		<Skeleton class="h-4 w-full" />

@@ -56,6 +56,7 @@ func NewRootCmd(version string) *cobra.Command {
 		newGPGCmd(),
 		newTokenCmd(),
 		newRunnerCmd(),
+		newAgentCmd(),
 		newVersionCmd(version),
 	)
 	return rootCmd

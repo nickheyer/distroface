@@ -217,6 +217,7 @@ type ActionsRunListOptions struct {
 	Event        string
 	Ref          string
 	Actor        string
+	SHA          string
 	Limit        int
 	Offset       int
 }
@@ -237,6 +238,9 @@ func (s *Store) ListActionsRuns(ctx context.Context, opts ActionsRunListOptions)
 	}
 	if opts.Ref != "" {
 		q = q.Where("ref = ?", opts.Ref)
+	}
+	if opts.SHA != "" {
+		q = q.Where("sha = ?", opts.SHA)
 	}
 	if opts.Actor != "" {
 		q = q.Where("trigger_user_id IN (SELECT id FROM users WHERE username = ? OR id = ?)", opts.Actor, opts.Actor)

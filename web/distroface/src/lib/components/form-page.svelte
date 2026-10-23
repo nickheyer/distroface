@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { ArrowLeft } from '@lucide/svelte';
 	import FormActions from '$lib/components/form-actions.svelte';
+	import SectionTabs, { type SectionTab } from '$lib/components/section-tabs.svelte';
 	import { cn } from '$lib/utils';
 
 	let {
@@ -10,6 +11,7 @@
 		backHref,
 		backLabel = 'Back',
 		level = 'page',
+		tabs,
 		actions,
 		children,
 		footer
@@ -19,6 +21,7 @@
 		backHref?: string;
 		backLabel?: string;
 		level?: 'page' | 'section';
+		tabs?: SectionTab[];
 		actions?: Snippet;
 		children: Snippet;
 		footer?: Snippet;
@@ -54,11 +57,14 @@
 			</div>
 		{/if}
 	</div>
-	<div class="form-stack mt-6 border-t pt-6">
+	{#if tabs}
+		<SectionTabs {tabs} label="{title} sections" class="mt-4" />
+	{/if}
+	<div class={cn('form-stack mt-6', !tabs && 'border-t pt-6')}>
 		{@render children()}
 	</div>
 	{#if footer}
-		<FormActions class="mt-8 border-t pt-6">
+		<FormActions class="mt-8">
 			{@render footer()}
 		</FormActions>
 	{/if}

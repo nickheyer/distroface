@@ -5,9 +5,12 @@
 	let { children, class: className }: { children: Snippet; class?: string } = $props();
 </script>
 
-<div class={cn('form-split', className)}>
-	<div class="hidden lg:block" aria-hidden="true"></div>
-	<div class="flex flex-wrap items-center gap-2">
-		{@render children()}
-	</div>
+<div
+	data-slot="form-actions"
+	class={cn(
+		'mt-6 flex flex-row-reverse flex-wrap items-center justify-start gap-2 border-t pt-5',
+		className
+	)}
+>
+	{@render children()}
 </div>

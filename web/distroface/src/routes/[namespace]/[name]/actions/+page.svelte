@@ -23,7 +23,7 @@
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import RunList from '$lib/components/git/run-list.svelte';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { Pager } from '$lib/pager.svelte';
@@ -54,9 +54,7 @@
 	const unitEnabled = $derived(repo?.units?.actions !== false);
 	const defaultBranch = $derived(repo?.defaultBranch ?? '');
 	const actionsHref = $derived(resolve('/[namespace]/[name]/actions', { namespace, name }));
-	const newWorkflowHref = $derived(
-		resolve('/[namespace]/[name]/actions/new', { namespace, name })
-	);
+	const newWorkflowHref = $derived(resolve('/[namespace]/[name]/actions/new', { namespace, name }));
 
 	let workflows = $state<Workflow[]>([]);
 	let workflowsLoading = $state(true);
@@ -138,6 +136,7 @@
 	}
 
 	async function loadRuns(silent = false) {
+		const opts = silent ? backgroundCallOptions : silentCallOptions;
 		const mine = ++seq;
 		if (!silent) runsLoading = true;
 		try {
@@ -154,7 +153,7 @@
 					ref: branch.trim(),
 					actor: actor.trim()
 				},
-				silentCallOptions
+				opts
 			);
 			if (mine !== seq) return;
 			runs = resp.runs;

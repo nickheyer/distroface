@@ -326,6 +326,7 @@ enum WebhookEvent {
   WEBHOOK_EVENT_GIT_FORK = 14;
   WEBHOOK_EVENT_GIT_REPOSITORY = 15;
   WEBHOOK_EVENT_GIT_WORKFLOW_RUN = 16;
+  WEBHOOK_EVENT_GIT_AGENT_SESSION = 17;
 }
 
 // WebhookScope represents what a webhook is scoped to.

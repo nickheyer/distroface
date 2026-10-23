@@ -6,12 +6,13 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
-	import UnitInput from '$lib/components/unit-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import FormActions from '$lib/components/form-actions.svelte';
 	import { Save, Undo2, Loader2 } from '@lucide/svelte';
 	import { errText } from '$lib/act.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
 	import {
 		isLocked,
 		patchSettings,
@@ -39,21 +40,29 @@
 	} = $props();
 
 	const P = {
+		enabled: 'git.actions.enabled',
 		runsOn: 'git.actions.default_runs_on',
 		runOnMirror: 'git.actions.run_on_mirror',
 		artifactDays: 'git.actions.artifact_retention_days',
 		logDays: 'git.actions.log_retention_days'
 	} as const;
 	type Path = (typeof P)[keyof typeof P];
-	const ALL = Object.values(P) as Path[];
 
+	const isSystem = $derived(scope.type === SettingsScopeType.SYSTEM);
+	const isRepo = $derived(scope.type === SettingsScopeType.REPO);
 	const ownTier = $derived(
 		scope.type === SettingsScopeType.ORG
 			? SettingsTier.ORG
-			: scope.type === SettingsScopeType.REPO
+			: isRepo
 				? SettingsTier.REPO
 				: SettingsTier.SYSTEM
 	);
+
+	// Repositories cannot flip the switch
+	const paths = $derived.by((): Path[] => {
+		const defaults: Path[] = [P.runsOn, P.runOnMirror, P.artifactDays, P.logDays];
+		return isRepo ? defaults : [P.enabled, ...defaults];
+	});
 
 	let loading = $state(true);
 	let saving = $state(false);
@@ -61,28 +70,46 @@
 	let prov = $state<FieldProvenance[]>([]);
 	let inherited = $state<Settings | null>(null);
 
+	let enabled = $state(false);
 	let runsOn = $state('');
 	let runOnMirror = $state(false);
-	let artifactDays = $state(0);
-	let logDays = $state(0);
+	let artifactDays = $state<number | undefined>();
+	let logDays = $state<number | undefined>();
 
 	const overridden = (path: string) => !!parentScope && tierOf(prov, path) === ownTier;
 	const tag = (path: string) => (overridden(path) ? 'Custom' : undefined);
 	const locked = (path: string) => isLocked(prov, path);
-	const overrideCount = $derived(ALL.filter(overridden).length);
-	const clampDays = (v: number) => Math.max(0, Math.min(3650, Math.round(Number(v) || 0)));
+	const overrideCount = $derived(paths.filter(overridden).length);
+	const clampDays = (v: number | null | undefined) =>
+		Math.max(0, Math.min(3650, Math.round(Number(v) || 0)));
+	const limitPaths: Path[] = [P.artifactDays, P.logDays];
+
+	// Lower tiers only show a retention they set themselves
+	function limit(path: Path, v: number | undefined): number | undefined {
+		if (!v || v <= 0) return undefined;
+		return parentScope && !overridden(path) ? undefined : v;
+	}
+
+	// Placeholder while retention is off
+	function unset(path: Path): string {
+		if (!parentScope) return 'Forever';
+		const v = Number(valuesOf(inherited)[path] ?? 0);
+		return v > 0 ? `Inherits ${v} days` : 'Forever';
+	}
 
 	function seed(s: Settings | null) {
 		const a = s?.git?.actions;
+		enabled = a?.enabled ?? false;
 		runsOn = a?.defaultRunsOn ?? '';
 		runOnMirror = a?.runOnMirror ?? false;
-		artifactDays = a?.artifactRetentionDays ?? 0;
-		logDays = a?.logRetentionDays ?? 0;
+		artifactDays = limit(P.artifactDays, a?.artifactRetentionDays);
+		logDays = limit(P.logDays, a?.logRetentionDays);
 	}
 
 	function valuesOf(s: Settings | null): Record<Path, unknown> {
 		const a = s?.git?.actions;
 		return {
+			[P.enabled]: a?.enabled ?? false,
 			[P.runsOn]: a?.defaultRunsOn ?? '',
 			[P.runOnMirror]: a?.runOnMirror ?? false,
 			[P.artifactDays]: a?.artifactRetentionDays ?? 0,
@@ -92,6 +119,7 @@
 
 	function formValues(): Record<Path, unknown> {
 		return {
+			[P.enabled]: enabled,
 			[P.runsOn]: runsOn.trim(),
 			[P.runOnMirror]: runOnMirror,
 			[P.artifactDays]: clampDays(artifactDays),
@@ -104,6 +132,7 @@
 		return {
 			git: {
 				actions: {
+					...(has(P.enabled) ? { enabled: f[P.enabled] as boolean } : {}),
 					...(has(P.runsOn) ? { defaultRunsOn: f[P.runsOn] as string } : {}),
 					...(has(P.runOnMirror) ? { runOnMirror: f[P.runOnMirror] as boolean } : {}),
 					...(has(P.artifactDays) ? { artifactRetentionDays: f[P.artifactDays] as number } : {}),
@@ -138,11 +167,14 @@
 		try {
 			const f = formValues();
 			const base = valuesOf(inherited);
-			const paths = ALL.filter((p) => !locked(p));
-			const keep = parentScope ? paths.filter((p) => f[p] !== base[p]) : paths;
-			const res = await patchSettings(scope, buildPatch(keep, f), paths);
+			const writable = paths.filter((p) => !locked(p));
+			const keep = parentScope
+				? writable.filter((p) => f[p] !== base[p] && !(limitPaths.includes(p) && f[p] === 0))
+				: writable;
+			const res = await patchSettings(scope, buildPatch(keep, f), writable);
 			prov = res.provenance;
 			if (res.effective) seed(res.effective);
+			if (isSystem && res.effective) configStore.settings = res.effective;
 			toast.success('Actions settings saved');
 		} catch (err) {
 			toast.error(errText(err));
@@ -157,7 +189,7 @@
 			const res = await patchSettings(
 				scope,
 				{},
-				ALL.filter((p) => !locked(p))
+				paths.filter((p) => !locked(p))
 			);
 			prov = res.provenance;
 			if (res.effective) seed(res.effective);
@@ -175,9 +207,31 @@
 {#if loading}
 	<Skeleton class="h-56 w-full rounded-lg" />
 {:else}
+	{#if !isRepo}
+		<FormSection
+			title="Policy"
+			description={isSystem
+				? 'Instance wide switch, organizations and repositories inherit it.'
+				: 'Whether workflows run for repositories in this organization.'}
+		>
+			<FormField
+				label="Actions enabled"
+				layout="toggle"
+				tag={tag(P.enabled)}
+				help={locked(P.enabled)
+					? 'Pinned by the config file'
+					: 'Workflows run on registered runners'}
+			>
+				<Switch bind:checked={enabled} disabled={!canEdit || locked(P.enabled)} />
+			</FormField>
+		</FormSection>
+	{/if}
+
 	<FormSection
 		title="Workflow defaults"
-		description="Inherited from the organization or instance until changed here."
+		description={isSystem
+			? 'Defaults every organization and repository inherits.'
+			: 'Inherited from the organization or instance until changed here.'}
 	>
 		<FormField
 			label="Default runs-on"
@@ -206,33 +260,32 @@
 		{/if}
 	</FormSection>
 
-	<FormSection
-		title="Retention"
-		description="How long job artifacts and logs are stored, in Days. Zero inherits application setting."
-	>
+	<FormSection title="Retention" description="How long job artifacts and logs are stored.">
 		<FormField
 			label="Artifact retention"
 			id="actions-artifact-days"
 			tag={tag(P.artifactDays)}
 			layout="inline"
 		>
-			<UnitInput
+			<LimitInput
 				id="actions-artifact-days"
+				label="artifact retention"
 				unit="days"
-				class="w-32"
 				bind:value={artifactDays}
-				min={0}
+				unset={unset(P.artifactDays)}
+				seed={30}
 				max={3650}
 				disabled={!canEdit || locked(P.artifactDays)}
 			/>
 		</FormField>
 		<FormField label="Log retention" id="actions-log-days" tag={tag(P.logDays)} layout="inline">
-			<UnitInput
+			<LimitInput
 				id="actions-log-days"
+				label="log retention"
 				unit="days"
-				class="w-32"
 				bind:value={logDays}
-				min={0}
+				unset={unset(P.logDays)}
+				seed={90}
 				max={3650}
 				disabled={!canEdit || locked(P.logDays)}
 			/>

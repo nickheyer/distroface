@@ -15,6 +15,7 @@
 		BookOpen,
 		Kanban,
 		Play,
+		Bot,
 		Package,
 		Activity,
 		Settings,
@@ -71,12 +72,16 @@
 		!!repo.importStatus && (repo.importStatus.running || mirrorSyncStore.syncing('import', repo.id))
 	);
 	const actionsEnabled = $derived(configStore.actionsEnabled && repo.units?.actions === true);
+	const agentsEnabled = $derived(configStore.agentsEnabled && repo.units?.agents === true);
 
-	// A finished import changes the repository, reload it
+	// A finished import changes the repository, reload it once
+	let syncSeqSeen = 0;
 	$effect(() => {
 		const seq = mirrorSyncStore.finishedSeq;
 		const ev = mirrorSyncStore.lastFinished;
-		if (seq > 0 && ev?.kind === 'import' && ev.repoId === repo.id) {
+		if (seq === syncSeqSeen) return;
+		syncSeqSeen = seq;
+		if (ev?.kind === 'import' && ev.repoId === repo.id) {
 			void gitRepoStore.load(namespace, name, true);
 		}
 	});
@@ -171,6 +176,13 @@
 			href: resolve('/[namespace]/[name]/actions', params),
 			icon: Play,
 			show: actionsEnabled
+		},
+		{
+			key: 'agents',
+			label: 'Agents',
+			href: resolve('/[namespace]/[name]/agents', params),
+			icon: Bot,
+			show: agentsEnabled
 		},
 		{
 			key: 'packages',

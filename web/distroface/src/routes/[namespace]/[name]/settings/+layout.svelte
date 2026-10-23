@@ -18,6 +18,7 @@
 		Upload,
 		Mail,
 		Play,
+		Bot,
 		LockKeyhole,
 		AlertTriangle
 	} from '@lucide/svelte';
@@ -51,6 +52,7 @@
 		| '/[namespace]/[name]/settings/push-mirrors'
 		| '/[namespace]/[name]/settings/email'
 		| '/[namespace]/[name]/settings/actions'
+		| '/[namespace]/[name]/settings/agents'
 		| '/[namespace]/[name]/settings/secrets'
 		| '/[namespace]/[name]/settings/danger';
 	type NavItem = { route: SettingsRoute; label: string; icon: typeof Settings; danger?: boolean };
@@ -68,6 +70,7 @@
 		{ route: '/[namespace]/[name]/settings/push-mirrors', label: 'Push mirrors', icon: Upload },
 		{ route: '/[namespace]/[name]/settings/email', label: 'Email', icon: Mail },
 		{ route: '/[namespace]/[name]/settings/actions', label: 'Actions', icon: Play },
+		{ route: '/[namespace]/[name]/settings/agents', label: 'Agents', icon: Bot },
 		{ route: '/[namespace]/[name]/settings/secrets', label: 'Secrets', icon: LockKeyhole },
 		{
 			route: '/[namespace]/[name]/settings/danger',

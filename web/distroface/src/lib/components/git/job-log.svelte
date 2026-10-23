@@ -227,8 +227,11 @@
 		streaming = false;
 	}
 
+	// Derived id keeps parent re-renders from restarting the stream
+	const streamId = $derived(jobId);
+
 	$effect(() => {
-		const id = jobId;
+		const id = streamId;
 		const ac = new AbortController();
 		abort?.abort();
 		abort = ac;
@@ -567,8 +570,7 @@
 					><Loader2 class="size-3 animate-spin" />Live</span
 				>
 			{/if}
-			<span
-				class="mr-1 hidden min-w-30 text-right text-muted-foreground tabular-nums sm:inline"
+			<span class="mr-1 hidden min-w-30 text-right text-muted-foreground tabular-nums sm:inline"
 				>{lines.length.toLocaleString()} lines</span
 			>
 			<Button

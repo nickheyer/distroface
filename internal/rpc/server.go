@@ -10,6 +10,7 @@ import (
 	"connectrpc.com/grpcreflect/v2"
 	"github.com/nickheyer/distroface/internal/actions"
 	"github.com/nickheyer/distroface/internal/admin"
+	"github.com/nickheyer/distroface/internal/agents"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -62,6 +63,7 @@ type ServerDeps struct {
 	GitSSH              *gitrepo.SSHManager // Nil disables the ssh port probe
 	ForgeManager        *forge.Manager
 	ActionsManager      *actions.Manager
+	AgentsManager       *agents.Manager
 	MailService         *mailer.Service
 }
 
@@ -192,6 +194,9 @@ func (s *Server) setupHandler() {
 
 			// Legacy artifactcache protocol for actions/cache and setup-* actions
 			mux.Handle("/api/actions/cache/", http.StripPrefix("/api/actions/cache", s.ActionsManager.CacheHandler()))
+		}
+		if s.AgentsManager != nil {
+			distrofacev1connect.RegisterAgentsServiceHandler(rpcServer, services.NewAgentsService(s.Store, s.AgentsManager, s.GitManager, s.Log))
 		}
 	}
 

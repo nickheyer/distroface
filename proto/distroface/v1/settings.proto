@@ -237,7 +237,7 @@ message MirrorSettings {
   optional int32 max_sync_depth = 11; // Cap on releases or tags per sync, 0 unlimited
 }
 
-// Git hosting, org scope may override lfs, visibility, default branch, quota, actions enabled
+// Git hosting, org scope may override lfs, visibility, default branch, quota, actions and agents enabled
 message GitSettings {
   optional bool enabled = 1;
   optional bool ssh_enabled = 2;
@@ -254,6 +254,7 @@ message GitSettings {
   GitGCSettings gc = 13;
   GitSigningSettings signing = 14;
   GitActionsSettings actions = 15;
+  GitAgentsSettings agents = 16;
 }
 
 // Scheduled repack and prune of every repository, system only
@@ -274,6 +275,25 @@ message GitActionsSettings {
   optional int32 log_retention_days = 3; // Zero keeps forever
   optional bool run_on_mirror = 4; // Mirror fetches trigger workflows too
   optional string default_runs_on = 5; // Label used when a job names none
+}
+
+// Agent execution policy, org scope overrides most fields, repo scope tightens limits
+message GitAgentsSettings {
+  optional bool enabled = 1;
+  optional bool allow_commands = 2; // Sessions may run commands through a workflow runner
+  optional string commands_runs_on = 3; // Runner label for command jobs, empty uses the actions default
+  optional int32 max_turns = 4; // Model round trips per session
+  optional int32 max_session_minutes = 5; // Wall clock cap on one session
+  optional int32 max_sessions_per_day = 6; // Per repository, zero unlimited
+  optional int32 max_concurrent_sessions = 7; // Per repository
+  optional int64 token_budget_per_session = 8; // Input plus output tokens, zero unlimited
+  optional int32 log_retention_days = 9; // Session transcripts, zero keeps forever
+  optional bool allow_private_networks = 10; // System only, inference endpoints on private ranges
+  optional bool allow_repo_providers = 11; // Repository admins may register their own connectors
+  optional bool allow_repo_agents = 12; // Repository admins may define agents
+  optional bool allow_file_agents = 13; // Agents declared in repository files
+  optional int32 command_timeout_minutes = 14; // Cap on one command job
+  optional bool debug_tool_calls = 15; // System only, every tool call and result goes to the server log
 }
 
 // Transport security for the smtp connection

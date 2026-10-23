@@ -227,6 +227,12 @@ func (s *Store) migrateTables() error {
 		&db.ActionsArtifact{},
 		&db.ActionsRunImage{},
 		&db.ActionsCache{},
+		&db.AgentProvider{},
+		&db.Agent{},
+		&db.AgentIdentity{},
+		&db.AgentSession{},
+		&db.AgentSessionEvent{},
+		&db.AgentApproval{},
 	); err != nil {
 		return fmt.Errorf("failed to auto-migrate: %w", err)
 	}

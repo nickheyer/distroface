@@ -23,17 +23,18 @@ import (
 
 // Notification kinds stored on git_notifications rows
 const (
-	NotifyIssue       = "issue"
-	NotifyPull        = "pull"
-	NotifyCommit      = "commit"
-	NotifyRelease     = "release"
-	NotifyMention     = "mention"
-	NotifyReview      = "review"
-	NotifyAssignment  = "assignment"
-	NotifyInvite      = "invite"
-	NotifyTransfer    = "transfer"
-	NotifyRepository  = "repository"
-	NotifyWorkflowRun = "workflow_run"
+	NotifyIssue        = "issue"
+	NotifyPull         = "pull"
+	NotifyCommit       = "commit"
+	NotifyRelease      = "release"
+	NotifyMention      = "mention"
+	NotifyReview       = "review"
+	NotifyAssignment   = "assignment"
+	NotifyInvite       = "invite"
+	NotifyTransfer     = "transfer"
+	NotifyRepository   = "repository"
+	NotifyWorkflowRun  = "workflow_run"
+	NotifyAgentSession = "agent_session"
 )
 
 // Reply by mail tokens live this long

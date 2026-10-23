@@ -323,6 +323,43 @@ func clampGit(eff *v1.Settings, sys *v1.GitSettings, prov map[string]v1.Settings
 		a.LogRetentionDays = new(limit)
 		prov["git.actions.log_retention_days"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
 	}
+	clampAgents(g.GetAgents(), sys.GetAgents(), prov)
+}
+
+// Lower tiers may only tighten agent limits and never switch on what the instance forbids
+func clampAgents(a, sa *v1.GitAgentsSettings, prov map[string]v1.SettingsTier) {
+	if a == nil || sa == nil {
+		return
+	}
+	sys := v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	capInt32 := func(path string, limit int32, cur *int32) *int32 {
+		if limit > 0 && (cur == nil || *cur <= 0 || *cur > limit) {
+			prov[path] = sys
+			return new(limit)
+		}
+		return cur
+	}
+	a.MaxTurns = capInt32("git.agents.max_turns", sa.GetMaxTurns(), a.MaxTurns)
+	a.MaxSessionMinutes = capInt32("git.agents.max_session_minutes", sa.GetMaxSessionMinutes(), a.MaxSessionMinutes)
+	a.MaxSessionsPerDay = capInt32("git.agents.max_sessions_per_day", sa.GetMaxSessionsPerDay(), a.MaxSessionsPerDay)
+	a.MaxConcurrentSessions = capInt32("git.agents.max_concurrent_sessions", sa.GetMaxConcurrentSessions(), a.MaxConcurrentSessions)
+	a.LogRetentionDays = capInt32("git.agents.log_retention_days", sa.GetLogRetentionDays(), a.LogRetentionDays)
+	a.CommandTimeoutMinutes = capInt32("git.agents.command_timeout_minutes", sa.GetCommandTimeoutMinutes(), a.CommandTimeoutMinutes)
+	if limit := sa.GetTokenBudgetPerSession(); limit > 0 && (a.GetTokenBudgetPerSession() <= 0 || a.GetTokenBudgetPerSession() > limit) {
+		a.TokenBudgetPerSession = new(limit)
+		prov["git.agents.token_budget_per_session"] = sys
+	}
+	forbid := func(path string, allowed bool, cur *bool) *bool {
+		if !allowed && cur != nil && *cur {
+			prov[path] = sys
+			return new(false)
+		}
+		return cur
+	}
+	a.AllowCommands = forbid("git.agents.allow_commands", sa.GetAllowCommands(), a.AllowCommands)
+	a.AllowRepoProviders = forbid("git.agents.allow_repo_providers", sa.GetAllowRepoProviders(), a.AllowRepoProviders)
+	a.AllowRepoAgents = forbid("git.agents.allow_repo_agents", sa.GetAllowRepoAgents(), a.AllowRepoAgents)
+	a.AllowFileAgents = forbid("git.agents.allow_file_agents", sa.GetAllowFileAgents(), a.AllowFileAgents)
 }
 
 // System is the common case shorthand

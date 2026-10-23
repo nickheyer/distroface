@@ -7,7 +7,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
-	import UnitInput from '$lib/components/unit-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import FormActions from '$lib/components/form-actions.svelte';
@@ -116,7 +116,7 @@
 	let replyTo = $state('');
 	let allowPrivate = $state(true);
 	let skipTlsVerify = $state(false);
-	let maxPerMinute = $state(0);
+	let maxPerMinute = $state<number | undefined>();
 	let ownRelay = $state(false);
 
 	let inEnabled = $state(false);
@@ -152,7 +152,7 @@
 		replyTo = m?.replyTo ?? '';
 		allowPrivate = m?.allowPrivateNetworks ?? true;
 		skipTlsVerify = m?.skipTlsVerify ?? false;
-		maxPerMinute = m?.maxPerMinute ?? 0;
+		maxPerMinute = m?.maxPerMinute && m.maxPerMinute > 0 ? m.maxPerMinute : undefined;
 		const i = m?.incoming;
 		inEnabled = i?.enabled ?? false;
 		imapHost = i?.imapHost ?? '';
@@ -491,19 +491,13 @@
 			/>
 		</FormField>
 		{#if !parentScope}
-			<FormField
-				label="Rate limit"
-				id="mail-rate"
-				tag={tag(P.maxPerMinute)}
-				help="Messages per minute, 0 means unlimited"
-				layout="inline"
-			>
-				<UnitInput
+			<FormField label="Rate limit" id="mail-rate" tag={tag(P.maxPerMinute)} layout="inline">
+				<LimitInput
 					id="mail-rate"
+					label="messages per minute"
 					unit="per min"
-					class="w-32"
 					bind:value={maxPerMinute}
-					min={0}
+					seed={60}
 					disabled={!canEdit || locked(P.maxPerMinute)}
 				/>
 			</FormField>

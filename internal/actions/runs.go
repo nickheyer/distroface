@@ -1028,6 +1028,9 @@ func (m *Manager) afterRunCompleted(ctx context.Context, repo *db.GitRepository,
 			URL:     url, Recipients: recipients,
 		})
 	}
+	if m.runCompleted != nil {
+		m.runCompleted(ctx, repo, run)
+	}
 }
 
 // Writes the commit status row a job conclusion maps onto

@@ -100,6 +100,7 @@ func (m *Manager) RequestReviewers(ctx context.Context, repo *db.GitRepository, 
 		_, _ = m.AddEvent(ctx, issue, actor.User, EventReviewRequested, map[string]string{"team_id": t.ID, "team": t.Name})
 	}
 	pr, _ := m.store.GetGitPullRequest(ctx, issue.ID)
+	requested := append([]string{}, users...)
 	m.Notify(ctx, Notification{
 		Repo: repo, Issue: issue, Kind: NotifyReview, Actor: actor.User, Reason: "review_requested",
 		Subject: fmt.Sprintf("[%s/%s] %s (#%d)", repo.Namespace, repo.Name, issue.Title, issue.Number),
@@ -108,7 +109,9 @@ func (m *Manager) RequestReviewers(ctx context.Context, repo *db.GitRepository, 
 	})
 	m.dispatchIssue(ctx, repo, issue, actor, "review_requested", nil)
 	if pr != nil {
-		m.Trigger(ctx, repo, "pull_request", "review_requested", PullRef(issue.Number).String(), pr.HeadSHA, actor.User, m.pullPayloadMap(ctx, repo, issue, pr))
+		payload := m.pullPayloadMap(ctx, repo, issue, pr)
+		payload["requested_reviewer_ids"] = requested
+		m.Trigger(ctx, repo, "pull_request", "review_requested", PullRef(issue.Number).String(), pr.HeadSHA, actor.User, payload)
 	}
 	return nil
 }
@@ -271,7 +274,9 @@ func (m *Manager) SubmitReview(ctx context.Context, repo *db.GitRepository, acto
 		URL:     m.IssueURL(ctx, repo, issue), Mentioned: m.resolveMentions(ctx, repo, mentions(rv.Body)),
 	})
 	m.dispatchReview(ctx, repo, issue, pr, actor, "submitted", rv)
-	m.Trigger(ctx, repo, "pull_request_review", "submitted", PullRef(issue.Number).String(), pr.HeadSHA, actor.User, m.pullPayloadMap(ctx, repo, issue, pr))
+	reviewPayload := m.pullPayloadMap(ctx, repo, issue, pr)
+	reviewPayload["review"] = map[string]any{"id": rv.ID, "state": rv.State, "body": rv.Body, "reviewer_id": rv.ReviewerID, "commit_sha": rv.CommitSHA}
+	m.Trigger(ctx, repo, "pull_request_review", "submitted", PullRef(issue.Number).String(), pr.HeadSHA, actor.User, reviewPayload)
 	if state == ReviewApproved {
 		go m.RetryAutoMerge(context.WithoutCancel(ctx), repo, pr.HeadSHA)
 	}
@@ -416,7 +421,9 @@ func (m *Manager) CreateReviewComment(ctx context.Context, repo *db.GitRepositor
 		URL:     m.IssueURL(ctx, repo, issue) + "/files#comment-" + c.ID, Mentioned: m.resolveMentions(ctx, repo, mentions(c.Body)), CommentID: c.ID,
 	})
 	m.dispatchIssue(ctx, repo, issue, actor, "created", &db.GitComment{ID: c.ID, Body: c.Body, AuthorID: c.AuthorID})
-	m.Trigger(ctx, repo, "pull_request_review_comment", "created", PullRef(issue.Number).String(), pr.HeadSHA, actor.User, m.pullPayloadMap(ctx, repo, issue, pr))
+	commentPayload := m.pullPayloadMap(ctx, repo, issue, pr)
+	commentPayload["comment"] = map[string]any{"id": c.ID, "body": c.Body, "author_id": c.AuthorID, "path": c.Path, "line": c.Line, "side": c.Side, "thread_id": c.ThreadID}
+	m.Trigger(ctx, repo, "pull_request_review_comment", "created", PullRef(issue.Number).String(), pr.HeadSHA, actor.User, commentPayload)
 	return c, nil
 }
 

@@ -1,0 +1,734 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/actions.proto";
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// AgentsService manages inference connectors, agent definitions, and agent sessions.
+// Connectors and agents live at system, org, or repo scope like runners and secrets.
+service AgentsService {
+  // ListAgentProviders returns inference connectors of a scope.
+  rpc ListAgentProviders(ListAgentProvidersRequest) returns (ListAgentProvidersResponse) {}
+  // GetAgentProvider returns one connector with its secret material redacted.
+  rpc GetAgentProvider(GetAgentProviderRequest) returns (GetAgentProviderResponse) {}
+  // CreateAgentProvider registers a connector.
+  rpc CreateAgentProvider(CreateAgentProviderRequest) returns (CreateAgentProviderResponse) {}
+  // UpdateAgentProvider changes a connector, an absent api key keeps the stored one.
+  rpc UpdateAgentProvider(UpdateAgentProviderRequest) returns (UpdateAgentProviderResponse) {}
+  // DeleteAgentProvider removes a connector, agents bound to it fall back to the scope default.
+  rpc DeleteAgentProvider(DeleteAgentProviderRequest) returns (DeleteAgentProviderResponse) {}
+  // TestAgentProvider sends a short completion and lists models through a saved or unsaved connector.
+  rpc TestAgentProvider(TestAgentProviderRequest) returns (TestAgentProviderResponse) {}
+  // ListAgentProviderModels returns the models a connector serves.
+  rpc ListAgentProviderModels(ListAgentProviderModelsRequest) returns (ListAgentProviderModelsResponse) {}
+  // ListAgents returns agent definitions of a scope.
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse) {}
+  // GetAgent returns one agent definition.
+  rpc GetAgent(GetAgentRequest) returns (GetAgentResponse) {}
+  // CreateAgent defines an agent and provisions its bot identity.
+  rpc CreateAgent(CreateAgentRequest) returns (CreateAgentResponse) {}
+  // UpdateAgent changes an agent definition.
+  rpc UpdateAgent(UpdateAgentRequest) returns (UpdateAgentResponse) {}
+  // DeleteAgent removes an agent definition, its sessions stay readable.
+  rpc DeleteAgent(DeleteAgentRequest) returns (DeleteAgentResponse) {}
+  // GetRepoAgents returns what the agents tab of a repository needs, usable agents and limits.
+  rpc GetRepoAgents(GetRepoAgentsRequest) returns (GetRepoAgentsResponse) {}
+  // StartAgentSession queues a session for an agent against a repository target.
+  rpc StartAgentSession(StartAgentSessionRequest) returns (StartAgentSessionResponse) {}
+  // ListAgentSessions pages sessions of a repository.
+  rpc ListAgentSessions(ListAgentSessionsRequest) returns (ListAgentSessionsResponse) {}
+  // GetAgentSession returns one session.
+  rpc GetAgentSession(GetAgentSessionRequest) returns (GetAgentSessionResponse) {}
+  // CancelAgentSession stops a queued, running, or waiting session.
+  rpc CancelAgentSession(CancelAgentSessionRequest) returns (CancelAgentSessionResponse) {}
+  // RerunAgentSession starts a fresh session with the same inputs.
+  rpc RerunAgentSession(RerunAgentSessionRequest) returns (RerunAgentSessionResponse) {}
+  // ContinueAgentSession appends an instruction to a finished session and resumes it.
+  rpc ContinueAgentSession(ContinueAgentSessionRequest) returns (ContinueAgentSessionResponse) {}
+  // ResolveAgentApproval approves or rejects a gated action, resuming the session.
+  rpc ResolveAgentApproval(ResolveAgentApprovalRequest) returns (ResolveAgentApprovalResponse) {}
+  // ListAgentSessionEvents pages the transcript of a session.
+  rpc ListAgentSessionEvents(ListAgentSessionEventsRequest) returns (ListAgentSessionEventsResponse) {}
+  // StreamAgentSessionEvents streams transcript events until the session finishes.
+  // buf:lint:ignore RPC_RESPONSE_STANDARD_NAME
+  rpc StreamAgentSessionEvents(StreamAgentSessionEventsRequest) returns (stream AgentSessionEvent) {}
+  // DeleteAgentSession removes a finished session and its transcript.
+  rpc DeleteAgentSession(DeleteAgentSessionRequest) returns (DeleteAgentSessionResponse) {}
+  // GetAgentUsage aggregates sessions and tokens for a scope.
+  rpc GetAgentUsage(GetAgentUsageRequest) returns (GetAgentUsageResponse) {}
+}
+
+// Wire protocol a connector speaks, every kind is opaque to agents
+enum AgentProviderKind {
+  AGENT_PROVIDER_KIND_UNSPECIFIED = 0;
+  // Any OpenAI compatible chat completions endpoint, vLLM, llama.cpp, LM Studio, LiteLLM, OpenRouter, OpenAI
+  AGENT_PROVIDER_KIND_OPENAI = 1;
+  AGENT_PROVIDER_KIND_ANTHROPIC = 2;
+  AGENT_PROVIDER_KIND_AZURE_OPENAI = 3;
+  AGENT_PROVIDER_KIND_OLLAMA = 4;
+  AGENT_PROVIDER_KIND_GEMINI = 5;
+  AGENT_PROVIDER_KIND_BEDROCK = 6;
+}
+
+// Built in behavior of an agent, each kind has a default toolset and prompt
+enum AgentKind {
+  AGENT_KIND_UNSPECIFIED = 0;
+  // Reviews pull requests and leaves inline comments
+  AGENT_KIND_REVIEW = 1;
+  // Implements issues and feedback by committing to a branch and opening pull requests
+  AGENT_KIND_CODE = 2;
+  // Answers questions in issue and pull request threads
+  AGENT_KIND_CHAT = 3;
+  // Labels, assigns, and deduplicates issues
+  AGENT_KIND_TRIAGE = 4;
+  // Toolset and prompt chosen entirely by the definition
+  AGENT_KIND_CUSTOM = 5;
+}
+
+// Which tool calls pause for a human
+enum AgentApprovalPolicy {
+  AGENT_APPROVAL_POLICY_UNSPECIFIED = 0;
+  AGENT_APPROVAL_POLICY_NONE = 1;
+  // Commits, pull requests, and commands wait
+  AGENT_APPROVAL_POLICY_COMMITS = 2;
+  // Every write including comments and reviews waits
+  AGENT_APPROVAL_POLICY_ALL_WRITES = 3;
+}
+
+// Where an agent definition came from
+enum AgentSource {
+  AGENT_SOURCE_UNSPECIFIED = 0;
+  AGENT_SOURCE_DATABASE = 1;
+  // Declared in a repository file under .distroface/agents or .github/agents
+  AGENT_SOURCE_FILE = 2;
+}
+
+// Lifecycle state of a session
+enum AgentSessionStatus {
+  AGENT_SESSION_STATUS_UNSPECIFIED = 0;
+  AGENT_SESSION_STATUS_QUEUED = 1;
+  AGENT_SESSION_STATUS_RUNNING = 2;
+  AGENT_SESSION_STATUS_WAITING_APPROVAL = 3;
+  AGENT_SESSION_STATUS_COMPLETED = 4;
+}
+
+// Outcome of a completed session
+enum AgentSessionConclusion {
+  AGENT_SESSION_CONCLUSION_UNSPECIFIED = 0;
+  AGENT_SESSION_CONCLUSION_SUCCESS = 1;
+  AGENT_SESSION_CONCLUSION_FAILURE = 2;
+  AGENT_SESSION_CONCLUSION_CANCELLED = 3;
+  AGENT_SESSION_CONCLUSION_TIMED_OUT = 4;
+  // A human rejected a gated action
+  AGENT_SESSION_CONCLUSION_REJECTED = 5;
+  // Turn or token budget exhausted
+  AGENT_SESSION_CONCLUSION_BUDGET_EXCEEDED = 6;
+}
+
+// Kind of a transcript event
+enum AgentEventKind {
+  AGENT_EVENT_KIND_UNSPECIFIED = 0;
+  AGENT_EVENT_KIND_STATUS = 1;
+  AGENT_EVENT_KIND_SYSTEM = 2;
+  AGENT_EVENT_KIND_USER = 3;
+  AGENT_EVENT_KIND_ASSISTANT = 4;
+  AGENT_EVENT_KIND_TOOL_CALL = 5;
+  AGENT_EVENT_KIND_TOOL_RESULT = 6;
+  AGENT_EVENT_KIND_APPROVAL = 7;
+  AGENT_EVENT_KIND_ERROR = 8;
+  AGENT_EVENT_KIND_RESULT = 9;
+  AGENT_EVENT_KIND_USAGE = 10;
+}
+
+// State of a gated action
+enum AgentApprovalStatus {
+  AGENT_APPROVAL_STATUS_UNSPECIFIED = 0;
+  AGENT_APPROVAL_STATUS_PENDING = 1;
+  AGENT_APPROVAL_STATUS_APPROVED = 2;
+  AGENT_APPROVAL_STATUS_REJECTED = 3;
+}
+
+// AgentProvider is an inference connector, secret material is write only.
+message AgentProvider {
+  string id = 1;
+  ActionsScope scope = 2;
+  string name = 3;
+  AgentProviderKind kind = 4;
+  string base_url = 5;
+  bool api_key_set = 6;
+  bool headers_set = 7;
+  // Azure api-version, unused elsewhere
+  string api_version = 8;
+  string default_model = 9;
+  // Models agents may pick, empty allows any the endpoint serves
+  repeated string models = 10;
+  // Output cap per completion, zero uses the connector default
+  int32 max_tokens = 11;
+  int32 timeout_seconds = 12;
+  bool skip_tls_verify = 13;
+  // Native tool calling, off falls back to a prompted tool protocol
+  bool tools_supported = 14;
+  // Zero unlimited
+  int32 requests_per_minute = 15;
+  int64 tokens_per_day = 16;
+  bool enabled = 17;
+  // Agents without a connector use the scope default
+  bool is_default = 18;
+  google.protobuf.Timestamp last_tested_at = 19;
+  string last_test_error = 20;
+  string created_by = 21;
+  google.protobuf.Timestamp created_at = 22;
+  google.protobuf.Timestamp updated_at = 23;
+  // Defined at a scope above the one requested
+  bool inherited = 24;
+  int64 tokens_today = 25;
+  // Context size hint used to compact long transcripts, zero uses the kind default
+  int32 context_window = 26;
+}
+
+// Fields of a new or changed connector
+message AgentProviderSpec {
+  string name = 1;
+  AgentProviderKind kind = 2;
+  string base_url = 3;
+  // Absent keeps the stored key, empty clears it
+  optional string api_key = 4;
+  // Extra request headers, applied when set_headers is true
+  map<string, string> headers = 5;
+  bool set_headers = 6;
+  string api_version = 7;
+  string default_model = 8;
+  repeated string models = 9;
+  int32 max_tokens = 10;
+  int32 timeout_seconds = 11;
+  bool skip_tls_verify = 12;
+  bool tools_supported = 13;
+  int32 requests_per_minute = 14;
+  int64 tokens_per_day = 15;
+  bool enabled = 16;
+  bool is_default = 17;
+  int32 context_window = 18;
+}
+
+// One model a connector serves
+message AgentModel {
+  string id = 1;
+  string name = 2;
+  int64 context_window = 3;
+}
+
+// Events that start a session for an agent
+message AgentTriggers {
+  bool pull_request_opened = 1;
+  bool pull_request_synchronize = 2;
+  bool pull_request_ready_for_review = 3;
+  // A review was requested from the agent's user
+  bool review_requested = 4;
+  // An issue was assigned to the agent's user
+  bool issue_assigned = 5;
+  // Labels that start a session when added to an issue or pull request
+  repeated string issue_labels = 6;
+  // The agent was mentioned in a comment or review comment
+  bool mention = 7;
+  // A review or comment landed on a pull request the agent opened
+  bool review_feedback = 8;
+  // A workflow run failed on a pull request the agent opened
+  bool workflow_failure = 9;
+  // Glob filters on the base branch, empty matches every branch
+  repeated string base_branches = 10;
+  repeated string paths = 11;
+  repeated string paths_ignore = 12;
+  bool include_drafts = 13;
+  // Respond to events raised by other agents, off prevents loops
+  bool respond_to_bots = 14;
+}
+
+// Agent is a configured persona bound to a connector and a toolset.
+message Agent {
+  string id = 1;
+  ActionsScope scope = 2;
+  // Mention handle and bot username, unique per instance
+  string slug = 3;
+  string name = 4;
+  string description = 5;
+  AgentKind kind = 6;
+  // Empty uses the scope default connector
+  string provider_id = 7;
+  string provider_name = 8;
+  // Empty uses the connector default model
+  string model = 9;
+  // Extra system instructions appended to the kind prompt
+  string instructions = 10;
+  // Tool names the agent may call, empty uses the kind default
+  repeated string tools = 11;
+  AgentTriggers triggers = 12;
+  // Zero inherits the settings cap
+  int32 max_turns = 13;
+  int64 max_tokens = 14;
+  optional double temperature = 15;
+  AgentApprovalPolicy approval = 16;
+  bool enabled = 17;
+  string bot_username = 18;
+  string bot_user_id = 19;
+  // Sessions running at once for this agent per repository, zero unlimited
+  int32 concurrency = 20;
+  // Users and teams who may start sessions, empty allows anyone with write access
+  repeated string allowed_caller_ids = 21;
+  AgentSource source = 22;
+  string file_path = 23;
+  bool inherited = 24;
+  int64 session_count = 25;
+  google.protobuf.Timestamp last_session_at = 26;
+  google.protobuf.Timestamp created_at = 27;
+  google.protobuf.Timestamp updated_at = 28;
+  // Parse error of a file defined agent
+  string error = 29;
+  string created_by = 30;
+}
+
+// Fields of a new or changed agent
+message AgentSpec {
+  string slug = 1;
+  string name = 2;
+  string description = 3;
+  AgentKind kind = 4;
+  string provider_id = 5;
+  string model = 6;
+  string instructions = 7;
+  repeated string tools = 8;
+  AgentTriggers triggers = 9;
+  int32 max_turns = 10;
+  int64 max_tokens = 11;
+  optional double temperature = 12;
+  AgentApprovalPolicy approval = 13;
+  bool enabled = 14;
+  int32 concurrency = 15;
+  repeated string allowed_caller_ids = 16;
+}
+
+// One gated tool call waiting for a decision
+message AgentApproval {
+  string id = 1;
+  string tool = 2;
+  string title = 3;
+  // Tool arguments as json
+  string arguments = 4;
+  AgentApprovalStatus status = 5;
+  string decided_by = 6;
+  google.protobuf.Timestamp decided_at = 7;
+  string note = 8;
+  google.protobuf.Timestamp created_at = 9;
+  int64 event_seq = 10;
+}
+
+// AgentSession is one execution of an agent against a target.
+message AgentSession {
+  string id = 1;
+  string repo_full_name = 2;
+  int64 number = 3;
+  string agent_id = 4;
+  string agent_slug = 5;
+  string agent_name = 6;
+  AgentKind agent_kind = 7;
+  string provider_name = 8;
+  string model = 9;
+  // manual, pull_request, issue, mention, review, workflow_run, continue
+  string trigger = 10;
+  string trigger_user = 11;
+  string prompt = 12;
+  int64 issue_number = 13;
+  bool is_pull = 14;
+  string ref = 15;
+  string sha = 16;
+  // Working branch the session commits to
+  string branch = 17;
+  AgentSessionStatus status = 18;
+  AgentSessionConclusion conclusion = 19;
+  string summary = 20;
+  string error = 21;
+  int32 turns = 22;
+  int32 tool_calls = 23;
+  int64 input_tokens = 24;
+  int64 output_tokens = 25;
+  int64 result_pull_number = 26;
+  string result_review_id = 27;
+  repeated string result_commits = 28;
+  AgentApproval pending_approval = 29;
+  string html_url = 30;
+  google.protobuf.Timestamp started_at = 31;
+  google.protobuf.Timestamp finished_at = 32;
+  google.protobuf.Timestamp created_at = 33;
+  google.protobuf.Timestamp updated_at = 34;
+  string bot_username = 35;
+  int32 max_turns = 36;
+  int64 max_tokens = 37;
+  // Short label derived from the target or prompt
+  string title = 38;
+  int64 event_count = 39;
+}
+
+// One transcript event
+message AgentSessionEvent {
+  int64 seq = 1;
+  AgentEventKind kind = 2;
+  string text = 3;
+  string tool = 4;
+  string tool_call_id = 5;
+  // Structured details as json, shape depends on kind
+  string data = 6;
+  google.protobuf.Timestamp created_at = 7;
+  // Session state after this event
+  AgentSessionStatus status = 8;
+  // No more events will follow
+  bool done = 9;
+}
+
+// Sessions and tokens of one group
+message AgentUsageBucket {
+  string key = 1;
+  string label = 2;
+  int64 sessions = 3;
+  int64 input_tokens = 4;
+  int64 output_tokens = 5;
+  int64 succeeded = 6;
+  int64 failed = 7;
+  int64 tool_calls = 8;
+}
+
+// ListAgentProvidersRequest identifies a scope.
+message ListAgentProvidersRequest {
+  PageRequest page = 1;
+  ActionsScope scope = 2;
+  // Also list connectors inherited from the org and instance
+  bool include_inherited = 3;
+}
+
+// ListAgentProvidersResponse contains connectors, own scope first.
+message ListAgentProvidersResponse {
+  repeated AgentProvider providers = 1;
+  PageInfo page = 2;
+}
+
+// GetAgentProviderRequest identifies a connector.
+message GetAgentProviderRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+}
+
+// GetAgentProviderResponse contains the connector.
+message GetAgentProviderResponse {
+  AgentProvider provider = 1;
+}
+
+// CreateAgentProviderRequest registers a connector.
+message CreateAgentProviderRequest {
+  ActionsScope scope = 1;
+  AgentProviderSpec spec = 2;
+}
+
+// CreateAgentProviderResponse contains the connector.
+message CreateAgentProviderResponse {
+  AgentProvider provider = 1;
+}
+
+// UpdateAgentProviderRequest replaces a connector's fields.
+message UpdateAgentProviderRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+  AgentProviderSpec spec = 3;
+}
+
+// UpdateAgentProviderResponse contains the connector.
+message UpdateAgentProviderResponse {
+  AgentProvider provider = 1;
+}
+
+// DeleteAgentProviderRequest identifies a connector.
+message DeleteAgentProviderRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+}
+
+// DeleteAgentProviderResponse is empty on success.
+message DeleteAgentProviderResponse {}
+
+// TestAgentProviderRequest tests a saved connector by id or an unsaved spec.
+message TestAgentProviderRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+  AgentProviderSpec spec = 3;
+  // Model to complete with, empty uses the default
+  string model = 4;
+}
+
+// TestAgentProviderResponse reports the outcome.
+message TestAgentProviderResponse {
+  bool ok = 1;
+  string message = 2;
+  repeated AgentModel models = 3;
+  int64 latency_ms = 4;
+  // Reply to the probe prompt
+  string sample = 5;
+  // Native tool calling worked
+  bool tools_ok = 6;
+}
+
+// ListAgentProviderModelsRequest identifies a connector.
+message ListAgentProviderModelsRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+}
+
+// ListAgentProviderModelsResponse contains the models.
+message ListAgentProviderModelsResponse {
+  repeated AgentModel models = 1;
+}
+
+// ListAgentsRequest identifies a scope.
+message ListAgentsRequest {
+  PageRequest page = 1;
+  ActionsScope scope = 2;
+  bool include_inherited = 3;
+}
+
+// ListAgentsResponse contains agents, own scope first.
+message ListAgentsResponse {
+  repeated Agent agents = 1;
+  PageInfo page = 2;
+}
+
+// GetAgentRequest identifies an agent.
+message GetAgentRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+}
+
+// GetAgentResponse contains the agent.
+message GetAgentResponse {
+  Agent agent = 1;
+}
+
+// CreateAgentRequest defines an agent.
+message CreateAgentRequest {
+  ActionsScope scope = 1;
+  AgentSpec spec = 2;
+}
+
+// CreateAgentResponse contains the agent.
+message CreateAgentResponse {
+  Agent agent = 1;
+}
+
+// UpdateAgentRequest replaces an agent's fields.
+message UpdateAgentRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+  AgentSpec spec = 3;
+}
+
+// UpdateAgentResponse contains the agent.
+message UpdateAgentResponse {
+  Agent agent = 1;
+}
+
+// DeleteAgentRequest identifies an agent.
+message DeleteAgentRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+}
+
+// DeleteAgentResponse is empty on success.
+message DeleteAgentResponse {}
+
+// GetRepoAgentsRequest identifies a repository.
+message GetRepoAgentsRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// GetRepoAgentsResponse describes agent availability for one repository.
+message GetRepoAgentsResponse {
+  // Instance or org policy allows agents here
+  bool enabled = 1;
+  // The repository unit is switched on
+  bool unit_enabled = 2;
+  // A connector resolves for this repository
+  bool has_provider = 3;
+  // Agents usable here from every scope and from files
+  repeated Agent agents = 4;
+  // Instruction files found on the default branch
+  repeated string instruction_files = 5;
+  // Caller may start sessions
+  bool can_start = 6;
+  // Caller may approve gated actions
+  bool can_approve = 7;
+  bool allow_commands = 8;
+  int32 max_turns = 9;
+  int64 token_budget = 10;
+  int32 max_session_minutes = 11;
+  int64 active_sessions = 12;
+  int64 sessions_today = 13;
+  int32 max_sessions_per_day = 14;
+  // Branch names and default ref for the new task form
+  string default_branch = 15;
+}
+
+// StartAgentSessionRequest queues a session.
+message StartAgentSessionRequest {
+  string namespace = 1;
+  string name = 2;
+  // Agent id or slug
+  string agent = 3;
+  string prompt = 4;
+  // Branch to work from, empty uses the default branch or the pull request head
+  string ref = 5;
+  // Issue or pull request the session targets, zero for a free standing task
+  int64 issue_number = 6;
+  // Model override within the connector allowlist
+  string model = 7;
+}
+
+// StartAgentSessionResponse contains the session.
+message StartAgentSessionResponse {
+  AgentSession session = 1;
+}
+
+// ListAgentSessionsRequest pages sessions.
+message ListAgentSessionsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  // Agent id or slug
+  string agent = 4;
+  AgentSessionStatus status = 5;
+  AgentSessionConclusion conclusion = 6;
+  int64 issue_number = 7;
+  string actor = 8;
+  string trigger = 9;
+}
+
+// ListAgentSessionsResponse contains sessions newest first.
+message ListAgentSessionsResponse {
+  repeated AgentSession sessions = 1;
+  PageInfo page = 2;
+  int64 active_count = 3;
+}
+
+// GetAgentSessionRequest identifies a session.
+message GetAgentSessionRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// GetAgentSessionResponse contains the session.
+message GetAgentSessionResponse {
+  AgentSession session = 1;
+}
+
+// CancelAgentSessionRequest identifies a session.
+message CancelAgentSessionRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// CancelAgentSessionResponse contains the session.
+message CancelAgentSessionResponse {
+  AgentSession session = 1;
+}
+
+// RerunAgentSessionRequest identifies a session to repeat.
+message RerunAgentSessionRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// RerunAgentSessionResponse contains the new session.
+message RerunAgentSessionResponse {
+  AgentSession session = 1;
+}
+
+// ContinueAgentSessionRequest adds an instruction to a finished session.
+message ContinueAgentSessionRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+  string prompt = 4;
+}
+
+// ContinueAgentSessionResponse contains the session.
+message ContinueAgentSessionResponse {
+  AgentSession session = 1;
+}
+
+// ResolveAgentApprovalRequest decides a gated action.
+message ResolveAgentApprovalRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+  string approval_id = 4;
+  bool approve = 5;
+  string note = 6;
+}
+
+// ResolveAgentApprovalResponse contains the session.
+message ResolveAgentApprovalResponse {
+  AgentSession session = 1;
+}
+
+// ListAgentSessionEventsRequest pages a transcript.
+message ListAgentSessionEventsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string id = 4;
+}
+
+// ListAgentSessionEventsResponse contains events oldest first.
+message ListAgentSessionEventsResponse {
+  repeated AgentSessionEvent events = 1;
+  PageInfo page = 2;
+}
+
+// StreamAgentSessionEventsRequest identifies a session and a starting sequence.
+message StreamAgentSessionEventsRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+  // Events with a sequence above this are sent
+  int64 after_seq = 4;
+}
+
+// DeleteAgentSessionRequest identifies a session.
+message DeleteAgentSessionRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// DeleteAgentSessionResponse is empty on success.
+message DeleteAgentSessionResponse {}
+
+// GetAgentUsageRequest identifies a scope and a window.
+message GetAgentUsageRequest {
+  ActionsScope scope = 1;
+  // Days back from today, zero means thirty
+  int32 days = 2;
+}
+
+// GetAgentUsageResponse contains totals and breakdowns.
+message GetAgentUsageResponse {
+  AgentUsageBucket totals = 1;
+  // One bucket per day oldest first, key is the date
+  repeated AgentUsageBucket days = 2;
+  repeated AgentUsageBucket agents = 3;
+  repeated AgentUsageBucket repos = 4;
+  repeated AgentUsageBucket providers = 5;
+  repeated AgentUsageBucket models = 6;
+}

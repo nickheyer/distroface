@@ -7,7 +7,7 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
-	import UnitInput from '$lib/components/unit-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
 	import AsyncSelect from '$lib/components/async-select.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import FormPage from '$lib/components/form-page.svelte';
@@ -103,16 +103,17 @@
 					data-bwignore
 				/>
 			</FormField>
-			<FormField label="Max uses" id="invite-max" span="third">
-				<Input id="invite-max" type="number" bind:value={maxUses} placeholder="Unlimited" min={1} />
+			<FormField label="Max uses" id="invite-max" layout="inline" newRow>
+				<LimitInput id="invite-max" label="uses" unit="uses" bind:value={maxUses} seed={1} />
 			</FormField>
-			<FormField label="Expires" id="invite-expiry" span="third">
-				<UnitInput
+			<FormField label="Expires" id="invite-expiry" layout="inline">
+				<LimitInput
 					id="invite-expiry"
-					unit="hrs"
+					label="expiry"
+					unit="hours"
 					bind:value={expiryHours}
-					placeholder="Never"
-					min={1}
+					unset="Never"
+					seed={72}
 				/>
 			</FormField>
 		</FormSection>

@@ -59,6 +59,10 @@ class ConfigStore {
 	get actionsEnabled(): boolean {
 		return this.gitEnabled && this.settings?.git?.actions?.enabled === true;
 	}
+
+	get agentsEnabled(): boolean {
+		return this.gitEnabled && this.settings?.git?.agents?.enabled === true;
+	}
 }
 
 export const configStore = new ConfigStore();

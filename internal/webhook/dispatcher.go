@@ -191,23 +191,41 @@ type WorkflowRunPayload struct {
 	URL        string `json:"url"`
 }
 
+// Agent session details
+type AgentSessionPayload struct {
+	ID          string `json:"id"`
+	Number      int64  `json:"number"`
+	Agent       string `json:"agent"`
+	AgentName   string `json:"agent_name"`
+	Kind        string `json:"kind"`
+	Trigger     string `json:"trigger"`
+	Status      string `json:"status"`
+	Conclusion  string `json:"conclusion"`
+	IssueNumber int64  `json:"issue_number,omitempty"`
+	PullNumber  int64  `json:"pull_number,omitempty"`
+	Branch      string `json:"branch,omitempty"`
+	Summary     string `json:"summary,omitempty"`
+	URL         string `json:"url"`
+}
+
 // GitPayload is the body of every git webhook
 type GitPayload struct {
-	Event       string              `json:"event"`
-	Action      string              `json:"action,omitempty"`
-	Timestamp   string              `json:"timestamp"`
-	Repository  GitRepoPayload      `json:"repository"`
-	Sender      Sender              `json:"sender"`
-	Push        *PushPayload        `json:"push,omitempty"`
-	Ref         *RefPayload         `json:"ref,omitempty"`
-	Wiki        *WikiPayload        `json:"wiki,omitempty"`
-	Issue       *IssuePayload       `json:"issue,omitempty"`
-	Comment     *CommentPayload     `json:"comment,omitempty"`
-	PullRequest *PullRequestPayload `json:"pull_request,omitempty"`
-	Review      *ReviewPayload      `json:"review,omitempty"`
-	Release     *ReleasePayload     `json:"release,omitempty"`
-	Forkee      *GitRepoPayload     `json:"forkee,omitempty"`
-	WorkflowRun *WorkflowRunPayload `json:"workflow_run,omitempty"`
+	Event        string               `json:"event"`
+	Action       string               `json:"action,omitempty"`
+	Timestamp    string               `json:"timestamp"`
+	Repository   GitRepoPayload       `json:"repository"`
+	Sender       Sender               `json:"sender"`
+	Push         *PushPayload         `json:"push,omitempty"`
+	Ref          *RefPayload          `json:"ref,omitempty"`
+	Wiki         *WikiPayload         `json:"wiki,omitempty"`
+	Issue        *IssuePayload        `json:"issue,omitempty"`
+	Comment      *CommentPayload      `json:"comment,omitempty"`
+	PullRequest  *PullRequestPayload  `json:"pull_request,omitempty"`
+	Review       *ReviewPayload       `json:"review,omitempty"`
+	Release      *ReleasePayload      `json:"release,omitempty"`
+	Forkee       *GitRepoPayload      `json:"forkee,omitempty"`
+	WorkflowRun  *WorkflowRunPayload  `json:"workflow_run,omitempty"`
+	AgentSession *AgentSessionPayload `json:"agent_session,omitempty"`
 }
 
 // Dispatcher handles async webhook delivery with retries.

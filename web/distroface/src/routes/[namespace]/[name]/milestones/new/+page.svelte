@@ -7,6 +7,7 @@
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import DateInput from '$lib/components/date-input.svelte';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import FormPage from '$lib/components/form-page.svelte';
@@ -84,7 +85,7 @@
 				help="Optional, overdue milestones are flagged in the list"
 				span="third"
 			>
-				<Input id="ms-due" type="date" bind:value={fDue} />
+				<DateInput id="ms-due" bind:value={fDue} />
 			</FormField>
 			<FormField label="Description" id="ms-desc">
 				<Textarea

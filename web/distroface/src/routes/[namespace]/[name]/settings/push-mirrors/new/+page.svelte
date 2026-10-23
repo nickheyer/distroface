@@ -12,7 +12,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import PasswordInput from '$lib/components/password-input.svelte';
-	import UnitInput from '$lib/components/unit-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
 
 	const namespace = $derived(page.params.namespace ?? '');
 	const name = $derived(page.params.name ?? '');
@@ -24,7 +24,7 @@
 	let username = $state('');
 	let authToken = $state('');
 	let useSshKey = $state(false);
-	let intervalMinutes = $state(60);
+	let intervalMinutes = $state<number | undefined>(60);
 	let syncOnPush = $state(true);
 	let creating = $state(false);
 
@@ -111,8 +111,16 @@
 	</FormSection>
 
 	<FormSection title="Schedule" description="How often changes are pushed.">
-		<FormField label="Interval" id="pm-interval" help="0 disables scheduled pushes" span="third">
-			<UnitInput id="pm-interval" unit="min" min={0} bind:value={intervalMinutes} />
+		<FormField label="Interval" id="pm-interval" layout="inline">
+			<LimitInput
+				id="pm-interval"
+				label="interval"
+				unit="minutes"
+				interval
+				bind:value={intervalMinutes}
+				unset="Not scheduled"
+				seed={60}
+			/>
 		</FormField>
 		<FormField
 			label="Push after every push"

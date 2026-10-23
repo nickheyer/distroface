@@ -10,7 +10,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import { Loader2 } from '@lucide/svelte';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { Act } from '$lib/act.svelte';
 	import { formatBytes, relativeTime } from '$lib/utils';
@@ -28,7 +28,7 @@
 
 	async function loadGCStatus() {
 		try {
-			gcStatus = await rpcClient.gc.getGCStatus({}, silentCallOptions);
+			gcStatus = await rpcClient.gc.getGCStatus({}, backgroundCallOptions);
 			if (gcStatus.running) {
 				if (!gcPollTimer) gcPollTimer = setInterval(loadGCStatus, 2000);
 			} else {

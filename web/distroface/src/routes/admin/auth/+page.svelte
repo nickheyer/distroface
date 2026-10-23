@@ -5,7 +5,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
-	import UnitInput from '$lib/components/unit-input.svelte';
+	import DurationInput from '$lib/components/duration-input.svelte';
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
@@ -213,13 +213,12 @@
 				tag={timeoutAct.tag}
 				error={timeoutAct.error}
 			>
-				<UnitInput
+				<DurationInput
 					id="session-timeout"
-					unit="min"
+					unit="minutes"
 					bind:value={timeoutMinutes}
 					min={5}
 					max={10080}
-					class="w-32"
 					disabled={!canEdit || timeoutAct.busy || locked('auth.session_timeout_seconds')}
 					onblur={commitTimeout}
 					onkeydown={(e) => {

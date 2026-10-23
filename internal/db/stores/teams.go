@@ -17,7 +17,7 @@ const DefaultTeamName = "Members"
 // Every unit written at the write level
 func DefaultTeamUnits() map[string]string {
 	units := map[string]string{}
-	for _, u := range []string{db.GitUnitCode, db.GitUnitIssues, db.GitUnitPulls, db.GitUnitReleases, db.GitUnitWiki, db.GitUnitProjects, db.GitUnitPackages, db.GitUnitActions} {
+	for _, u := range []string{db.GitUnitCode, db.GitUnitIssues, db.GitUnitPulls, db.GitUnitReleases, db.GitUnitWiki, db.GitUnitProjects, db.GitUnitPackages, db.GitUnitActions, db.GitUnitAgents} {
 		units[u] = db.GitLevelWrite
 	}
 	return units

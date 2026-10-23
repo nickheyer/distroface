@@ -5,9 +5,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Switch } from '$lib/components/ui/switch';
-	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
-	import UnitInput from '$lib/components/unit-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import { Save, Undo2, Loader2 } from '@lucide/svelte';
@@ -57,11 +56,11 @@
 	const overrideCount = $derived(ALL_PATHS.filter(overridden).length);
 
 	let retentionEnabled = $state(false);
-	let maxVersions = $state(0);
-	let maxAgeDays = $state(0);
-	let maxTotalSizeMb = $state(0);
+	let maxVersions = $state<number | undefined>();
+	let maxAgeDays = $state<number | undefined>();
+	let maxTotalSizeMb = $state<number | undefined>();
 	let excludeLatest = $state(true);
-	let maxFileSizeMb = $state(0);
+	let maxFileSizeMb = $state<number | undefined>();
 	let privateByDefault = $state(false);
 	let portalsIsolated = $state(false);
 	let anonymousMode = $state<AnonymousMode>('inherit');
@@ -77,15 +76,36 @@
 				: 'Deny'
 	);
 
+	const LIMIT_PATHS: SavePath[] = [
+		PATHS.maxVersions,
+		PATHS.maxAgeDays,
+		PATHS.maxTotalSize,
+		PATHS.maxFileSizeMb
+	];
+	const whole = (v: number | null | undefined) => Math.max(0, Math.round(Number(v) || 0));
+
+	// Only a limit the org set itself shows a value
+	function limit(path: string, v: number | bigint | undefined): number | undefined {
+		const n = Number(v ?? 0);
+		return n > 0 && overridden(path) ? n : undefined;
+	}
+
+	// Placeholder while a limit is off
+	function unset(v: number | bigint | undefined, unit: string, none = 'Unlimited'): string {
+		const n = Number(v ?? 0);
+		return n > 0 ? `Inherits ${n} ${unit}` : none;
+	}
+
 	function seed(eff: Settings) {
 		retentionEnabled = eff.artifacts?.retention?.enabled ?? false;
-		maxVersions = eff.artifacts?.retention?.maxVersions ?? 0;
-		maxAgeDays = eff.artifacts?.retention?.maxAgeDays ?? 0;
-		maxTotalSizeMb = Math.round(
-			Number(eff.artifacts?.retention?.maxTotalSizeBytes ?? 0n) / (1024 * 1024)
+		maxVersions = limit(PATHS.maxVersions, eff.artifacts?.retention?.maxVersions);
+		maxAgeDays = limit(PATHS.maxAgeDays, eff.artifacts?.retention?.maxAgeDays);
+		maxTotalSizeMb = limit(
+			PATHS.maxTotalSize,
+			Math.round(Number(eff.artifacts?.retention?.maxTotalSizeBytes ?? 0n) / (1024 * 1024))
 		);
 		excludeLatest = eff.artifacts?.retention?.excludeLatest ?? true;
-		maxFileSizeMb = Number(eff.artifacts?.maxFileSizeMb ?? 0n);
+		maxFileSizeMb = limit(PATHS.maxFileSizeMb, eff.artifacts?.maxFileSizeMb);
 		privateByDefault = eff.artifacts?.privateByDefault ?? false;
 		portalsIsolated = eff.portals?.isolated ?? false;
 	}
@@ -154,18 +174,18 @@
 		}
 	}
 
-	// Values matching the instance tier clear back to inherit
+	// Values matching the instance tier clear back to inherit, limits switched off inherit
 	async function save() {
 		saving = true;
 		try {
 			const inh = inherited;
 			const form = {
 				[PATHS.retentionEnabled]: retentionEnabled,
-				[PATHS.maxVersions]: Math.max(0, Math.round(maxVersions)),
-				[PATHS.maxAgeDays]: Math.max(0, Math.round(maxAgeDays)),
-				[PATHS.maxTotalSize]: Math.max(0, Math.round(maxTotalSizeMb)) * 1024 * 1024,
+				[PATHS.maxVersions]: whole(maxVersions),
+				[PATHS.maxAgeDays]: whole(maxAgeDays),
+				[PATHS.maxTotalSize]: whole(maxTotalSizeMb) * 1024 * 1024,
 				[PATHS.excludeLatest]: excludeLatest,
-				[PATHS.maxFileSizeMb]: Math.max(0, Math.round(maxFileSizeMb)),
+				[PATHS.maxFileSizeMb]: whole(maxFileSizeMb),
 				[PATHS.privateByDefault]: privateByDefault
 			} as const;
 			const base = {
@@ -178,7 +198,9 @@
 				[PATHS.privateByDefault]: inh?.artifacts?.privateByDefault ?? false
 			} as const;
 
-			const keep = ALL_PATHS.filter((p) => form[p] !== base[p]);
+			const keep = ALL_PATHS.filter(
+				(p) => form[p] !== base[p] && !(LIMIT_PATHS.includes(p) && form[p] === 0)
+			);
 			const patch = {
 				artifacts: {
 					...(keep.includes(PATHS.maxFileSizeMb)
@@ -282,16 +304,22 @@
 			label="Max upload size"
 			id="art-max-file"
 			tag={customTag(PATHS.maxFileSizeMb)}
-			help="0 means unlimited"
 			layout="inline"
 		>
-			<UnitInput id="art-max-file" unit="MB" bind:value={maxFileSizeMb} min={0} class="w-32" />
+			<LimitInput
+				id="art-max-file"
+				label="upload size"
+				unit="MB"
+				bind:value={maxFileSizeMb}
+				unset={unset(inherited?.artifacts?.maxFileSizeMb, 'MB')}
+				seed={512}
+			/>
 		</FormField>
 	</FormSection>
 
 	<FormSection
 		title="Artifact retention"
-		description="Prunes old artifacts automatically. Values matching the instance clear back to inherited."
+		description="Prunes old artifacts automatically. Blank fields inherit the instance."
 	>
 		<FormField label="Enable retention" tag={customTag(PATHS.retentionEnabled)} layout="toggle">
 			<Switch bind:checked={retentionEnabled} />
@@ -302,28 +330,52 @@
 					label="Max versions per path"
 					id="art-max-versions"
 					tag={customTag(PATHS.maxVersions)}
-					help="0 means unlimited"
-					span="third"
+					layout="inline"
 				>
-					<Input id="art-max-versions" type="number" bind:value={maxVersions} min={0} />
+					<LimitInput
+						id="art-max-versions"
+						label="versions per path"
+						unit="versions"
+						bind:value={maxVersions}
+						unset={unset(inherited?.artifacts?.retention?.maxVersions, 'versions')}
+						seed={10}
+					/>
 				</FormField>
 				<FormField
 					label="Max age"
 					id="art-max-age"
 					tag={customTag(PATHS.maxAgeDays)}
-					help="0 disables age pruning"
-					span="third"
+					layout="inline"
 				>
-					<UnitInput id="art-max-age" unit="days" bind:value={maxAgeDays} min={0} />
+					<LimitInput
+						id="art-max-age"
+						label="age"
+						unit="days"
+						bind:value={maxAgeDays}
+						unset={unset(inherited?.artifacts?.retention?.maxAgeDays, 'days', 'Any age')}
+						seed={90}
+					/>
 				</FormField>
 				<FormField
 					label="Max total size"
 					id="art-max-total"
 					tag={customTag(PATHS.maxTotalSize)}
-					help="Per repo, 0 means unlimited"
-					span="third"
+					layout="inline"
+					help="Per repository"
 				>
-					<UnitInput id="art-max-total" unit="MB" bind:value={maxTotalSizeMb} min={0} />
+					<LimitInput
+						id="art-max-total"
+						label="total size"
+						unit="MB"
+						bind:value={maxTotalSizeMb}
+						unset={unset(
+							Math.round(
+								Number(inherited?.artifacts?.retention?.maxTotalSizeBytes ?? 0n) / (1024 * 1024)
+							),
+							'MB'
+						)}
+						seed={10240}
+					/>
 				</FormField>
 				<FormField
 					label="Keep latest"

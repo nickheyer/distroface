@@ -43,10 +43,13 @@
 		}
 	});
 
-	// Finished syncs refresh the status card
+	// Finished syncs refresh the status card once
+	let syncSeqSeen = 0;
 	$effect(() => {
+		const seq = mirrorSyncStore.finishedSeq;
 		const ev = mirrorSyncStore.lastFinished;
-		void mirrorSyncStore.finishedSeq;
+		if (seq === syncSeqSeen) return;
+		syncSeqSeen = seq;
 		if (ev && repo && ev.kind === 'git' && ev.repoId === repo.id) void gitRepoStore.reload();
 	});
 

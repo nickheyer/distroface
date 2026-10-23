@@ -35,6 +35,7 @@ git clone git@localhost:myteam/app.git
 ## Inside
 
 - Git repositories served in process by go-git over smart http and ssh, with LFS, branch protection, code browsing and editing, issues, pull requests with reviews, releases, wiki, projects, notifications, mirrors, imports, and Actions
+- Agents: model driven reviewers, coders, assistants, and triage bots per repository, org, or instance, speaking to any OpenAI compatible, Ollama, Anthropic, Azure, Gemini, or Bedrock endpoint through opaque connectors, with mentions, assignments, review requests, approval gates, budgets, transcripts, and commands on your own runners
 - OCI registry under `/v2/`, namespaced per user and org
 - Artifact repos: versioned files, key=value properties, query-based download
 - One project per `ns/name`: images and artifacts named after a git repo link to it, share access, and show up on its releases

@@ -25,7 +25,7 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import CertMaterialRow from '$lib/components/cert-material-row.svelte';
 	import CertUploadPanel from '$lib/components/cert-upload-panel.svelte';
-	import UnitInput from '$lib/components/unit-input.svelte';
+	import DurationInput from '$lib/components/duration-input.svelte';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import PemInput from '$lib/components/pem-input.svelte';
@@ -356,12 +356,13 @@
 				/>
 			</FormField>
 			<FormField label="Validity" id="csr-days" span="third">
-				<UnitInput
+				<DurationInput
 					id="csr-days"
 					unit="days"
-					min="1"
+					min={1}
 					bind:value={validityDays}
 					disabled={signAct.busy}
+					class="w-full"
 				/>
 			</FormField>
 			{#if signedPem}

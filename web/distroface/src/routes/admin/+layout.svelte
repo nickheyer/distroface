@@ -19,7 +19,8 @@
 		Ticket,
 		GitBranch,
 		Mail,
-		Cpu
+		Play,
+		Bot
 	} from '@lucide/svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
 	import SideNav from '$lib/components/side-nav.svelte';
@@ -65,7 +66,8 @@
 			? [
 					{ href: '/admin/git', label: 'Git', icon: GitBranch } satisfies NavItem,
 					{ href: '/admin/mail', label: 'Mail', icon: Mail } satisfies NavItem,
-					{ href: '/admin/runners', label: 'Runners', icon: Cpu } satisfies NavItem
+					{ href: '/admin/actions', label: 'Actions', icon: Play } satisfies NavItem,
+					{ href: '/admin/agents', label: 'Agents', icon: Bot } satisfies NavItem
 				]
 			: []),
 		...(authStore.canReadUsers

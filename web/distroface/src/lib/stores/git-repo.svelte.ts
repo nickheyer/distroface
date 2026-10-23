@@ -10,21 +10,44 @@ class GitRepoStore {
 	error = $state('');
 	notFound = $state(false);
 	loadedFor = $state(''); // Wont be the same as repo after rename
+	private inflight: { key: string; promise: Promise<GitRepository | undefined> } | null = null;
+	private seq = 0;
 
 	// Loads once per namespace and name, force refetches
 	async load(namespace: string, name: string, force = false): Promise<GitRepository | undefined> {
 		if (!force && this.repo && this.repo.namespace === namespace && this.repo.name === name) {
 			return this.repo;
 		}
+		const key = `${namespace}/${name}`;
+		// Callers racing for one address share the request
+		if (this.inflight?.key === key) return this.inflight.promise;
+		const promise = this.fetch(namespace, name, key);
+		this.inflight = { key, promise };
+		try {
+			return await promise;
+		} finally {
+			if (this.inflight?.promise === promise) this.inflight = null;
+		}
+	}
+
+	// Stale answers never overwrite a newer address
+	private async fetch(
+		namespace: string,
+		name: string,
+		key: string
+	): Promise<GitRepository | undefined> {
+		const mine = ++this.seq;
 		this.loading = true;
 		this.error = '';
 		this.notFound = false;
-		this.loadedFor = `${namespace}/${name}`;
+		this.loadedFor = key;
 		try {
 			const resp = await rpcClient.git.getGitRepository({ namespace, name }, silentCallOptions);
+			if (mine !== this.seq) return undefined;
 			this.repo = resp.repository;
 			return this.repo;
 		} catch (err) {
+			if (mine !== this.seq) return undefined;
 			this.repo = undefined;
 			if (err instanceof ConnectError) {
 				this.notFound = err.code === 5;
@@ -34,7 +57,7 @@ class GitRepoStore {
 			}
 			return undefined;
 		} finally {
-			this.loading = false;
+			if (mine === this.seq) this.loading = false;
 		}
 	}
 
@@ -100,6 +123,8 @@ class GitRepoStore {
 				return u.packages;
 			case GitUnit.ACTIONS:
 				return u.actions;
+			case GitUnit.AGENTS:
+				return u.agents;
 			default:
 				return false;
 		}

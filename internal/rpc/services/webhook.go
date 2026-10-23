@@ -544,6 +544,24 @@ func deliveryToProto(d *storage.WebhookDelivery) *v1.WebhookDelivery {
 	}
 }
 
+// Stored names of git webhook events, the enum suffix in lower case
+var gitWebhookEventNames = map[v1.WebhookEvent]string{
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_PUSH:                 "git_push",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_BRANCH:               "git_branch",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_TAG:                  "git_tag",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_ISSUE:                "git_issue",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_ISSUE_COMMENT:        "git_issue_comment",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_PULL_REQUEST:         "git_pull_request",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_PULL_REQUEST_REVIEW:  "git_pull_request_review",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_PULL_REQUEST_COMMENT: "git_pull_request_comment",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_RELEASE:              "git_release",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_WIKI:                 "git_wiki",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_FORK:                 "git_fork",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_REPOSITORY:           "git_repository",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_WORKFLOW_RUN:         "git_workflow_run",
+	v1.WebhookEvent_WEBHOOK_EVENT_GIT_AGENT_SESSION:        "git_agent_session",
+}
+
 func eventsToStrings(events []v1.WebhookEvent) []string {
 	result := make([]string, 0, len(events))
 	for _, e := range events {
@@ -554,6 +572,10 @@ func eventsToStrings(events []v1.WebhookEvent) []string {
 			result = append(result, "pull")
 		case v1.WebhookEvent_WEBHOOK_EVENT_DELETE:
 			result = append(result, "delete")
+		default:
+			if name, ok := gitWebhookEventNames[e]; ok {
+				result = append(result, name)
+			}
 		}
 	}
 	return result
@@ -576,6 +598,11 @@ func stringToEvent(s string) v1.WebhookEvent {
 	case "delete":
 		return v1.WebhookEvent_WEBHOOK_EVENT_DELETE
 	default:
+		for ev, name := range gitWebhookEventNames {
+			if name == s {
+				return ev
+			}
+		}
 		return v1.WebhookEvent_WEBHOOK_EVENT_UNSPECIFIED
 	}
 }

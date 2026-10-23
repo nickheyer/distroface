@@ -424,6 +424,8 @@ func unitLabel(unit string) string {
 		return "Releases"
 	case db.GitUnitActions:
 		return "Actions"
+	case db.GitUnitAgents:
+		return "Agents"
 	}
 	return "Features"
 }

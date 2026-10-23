@@ -32,6 +32,7 @@
 	import ReactionBar from '$lib/components/git/reaction-bar.svelte';
 	import Timeline from '$lib/components/git/timeline.svelte';
 	import IssueSidebar from '$lib/components/git/issue-sidebar.svelte';
+	import AgentSessionsPanel from '$lib/components/git/agent-sessions-panel.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -507,7 +508,7 @@
 				{/if}
 			</div>
 
-			<aside>
+			<aside class="space-y-5 text-sm">
 				<IssueSidebar
 					{namespace}
 					{name}
@@ -516,6 +517,7 @@
 					canModerate={canWrite}
 					onChanged={refresh}
 				/>
+				<AgentSessionsPanel {namespace} {name} issueNumber={issue.number} canStart={canWrite} />
 			</aside>
 		</div>
 	</div>

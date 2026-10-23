@@ -27,7 +27,7 @@ const (
 // Every repository unit in display order
 var AllUnits = []string{
 	db.GitUnitCode, db.GitUnitIssues, db.GitUnitPulls, db.GitUnitReleases,
-	db.GitUnitWiki, db.GitUnitProjects, db.GitUnitPackages, db.GitUnitActions,
+	db.GitUnitWiki, db.GitUnitProjects, db.GitUnitPackages, db.GitUnitActions, db.GitUnitAgents,
 }
 
 // Proto enum for a level
@@ -110,7 +110,7 @@ func levelForAction(action string) Level {
 
 // Units enabled on a repository, every unit on when nothing is stored
 func UnitsOf(repo *db.GitRepository) *v1.GitRepoUnits {
-	units := &v1.GitRepoUnits{Issues: true, Pulls: true, Releases: true, Wiki: true, Projects: true, Packages: true, Actions: false}
+	units := &v1.GitRepoUnits{Issues: true, Pulls: true, Releases: true, Wiki: true, Projects: true, Packages: true, Actions: false, Agents: false}
 	if repo != nil && repo.Units != "" && repo.Units != "{}" {
 		_ = protojson.Unmarshal([]byte(repo.Units), units)
 	}
@@ -150,6 +150,8 @@ func unitOn(u *v1.GitRepoUnits, unit string) bool {
 		return u.Packages
 	case db.GitUnitActions:
 		return u.Actions
+	case db.GitUnitAgents:
+		return u.Agents
 	}
 	return false
 }
@@ -232,6 +234,8 @@ func unitProto(u string) v1.GitUnit {
 		return v1.GitUnit_GIT_UNIT_PACKAGES
 	case db.GitUnitActions:
 		return v1.GitUnit_GIT_UNIT_ACTIONS
+	case db.GitUnitAgents:
+		return v1.GitUnit_GIT_UNIT_AGENTS
 	}
 	return v1.GitUnit_GIT_UNIT_UNSPECIFIED
 }
@@ -265,6 +269,16 @@ func (a *Access) levels(ctx context.Context, user *auth.AuthenticatedUser, repo 
 		}
 	}
 	if anonymous {
+		return out
+	}
+
+	// Agent bots never sign in, the agents manager drives their writes
+	if user.Provider == db.AuthProviderAgent {
+		for _, u := range AllUnits {
+			if unitOn(units, u) {
+				out.Units[u] = max(out.Units[u], LevelRead)
+			}
+		}
 		return out
 	}
 
@@ -435,6 +449,8 @@ func (a *Access) CanSeeMany(ctx context.Context, users []*auth.AuthenticatedUser
 			out[u.ID] = true
 		case u.IsAnonymous():
 			out[u.ID] = false
+		case u.Provider == db.AuthProviderAgent:
+			out[u.ID] = true
 		case (repo.OwnerID != "" && repo.OwnerID == u.ID) || repo.Namespace == u.Username:
 			out[u.ID] = true
 		case a.enforcer.HasPermission(u.Roles, rbac.ResourceGit, rbac.ActionManage):

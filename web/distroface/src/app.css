@@ -306,9 +306,26 @@
 		@apply grid grid-cols-1 gap-x-10 gap-y-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)];
 	}
 
-	/* Siblings separated by a rule */
-	.form-stack > * + * {
+	/* Siblings separated by a rule, the action row brings its own */
+	.form-stack > * + *:not([data-slot='form-actions']) {
 		@apply mt-8 border-t pt-8;
+	}
+
+	/* Fixed label column so inline controls line up */
+	.form-inline {
+		@apply grid grid-cols-1 gap-x-4 gap-y-1.5;
+	}
+	.form-inline-control {
+		@apply min-w-0 space-y-1.5;
+	}
+	@media (width >= 40rem) {
+		.form-inline {
+			grid-template-columns: var(--form-label-w, 15rem) minmax(0, 1fr);
+			align-items: start;
+		}
+		.form-inline-label {
+			min-height: 2rem;
+		}
 	}
 
 	/* Six column field grid, children span the row unless marked */

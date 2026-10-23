@@ -186,6 +186,7 @@ enum GitUnit {
   GIT_UNIT_PROJECTS = 6;
   GIT_UNIT_PACKAGES = 7;
   GIT_UNIT_ACTIONS = 8;
+  GIT_UNIT_AGENTS = 9;
 }
 
 // Access level on a unit or on the repository as a whole
@@ -277,6 +278,8 @@ message GitRepoUnits {
   bool block_on_dependencies = 10;
   // Manual time entries and time to resolution on issues, off by default
   bool time_tracking = 11;
+  // Agent sessions, reviews, and tasks, off by default
+  bool agents = 12;
 }
 
 // Allowed merge methods and defaults

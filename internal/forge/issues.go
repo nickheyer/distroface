@@ -641,7 +641,9 @@ func (m *Manager) SetLabels(ctx context.Context, repo *db.GitRepository, actor A
 		if before[id] == nil {
 			_, _ = m.AddEvent(ctx, issue, actor.User, EventLabeled, labelEvent(l))
 			m.dispatchIssue(ctx, repo, issue, actor, "labeled", nil)
-			m.Trigger(ctx, repo, m.issueEvent(issue), "labeled", "", "", actor.User, m.issuePayloadMap(ctx, repo, issue))
+			payload := m.issuePayloadMap(ctx, repo, issue)
+			payload["label"] = map[string]any{"id": l.ID, "name": l.Name}
+			m.Trigger(ctx, repo, m.issueEvent(issue), "labeled", "", "", actor.User, payload)
 		}
 	}
 	return nil
@@ -704,7 +706,9 @@ func (m *Manager) SetAssignees(ctx context.Context, repo *db.GitRepository, acto
 			URL:     m.IssueURL(ctx, repo, issue), Recipients: added, Assigned: added, Reason: "assigned",
 		})
 		m.dispatchIssue(ctx, repo, issue, actor, "assigned", nil)
-		m.Trigger(ctx, repo, m.issueEvent(issue), "assigned", "", "", actor.User, m.issuePayloadMap(ctx, repo, issue))
+		payload := m.issuePayloadMap(ctx, repo, issue)
+		payload["assignee_ids"] = added
+		m.Trigger(ctx, repo, m.issueEvent(issue), "assigned", "", "", actor.User, payload)
 	}
 	return nil
 }

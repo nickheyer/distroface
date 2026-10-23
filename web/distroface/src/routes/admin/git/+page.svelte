@@ -7,6 +7,8 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Button } from '$lib/components/ui/button';
 	import UnitInput from '$lib/components/unit-input.svelte';
+	import DurationInput, { isDurationUnit } from '$lib/components/duration-input.svelte';
+	import LimitInput from '$lib/components/limit-input.svelte';
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
@@ -36,8 +38,11 @@
 		label: string;
 		help?: string;
 		unit: string;
+		interval?: boolean;
 		min: number;
 		max: number;
+		// Zero stored means off, shown as a switched off limit
+		unset?: string;
 		get: (s: Settings) => number;
 		patch: (v: number) => SettingsPatch;
 		verify?: (v: number) => Promise<string>;
@@ -119,22 +124,6 @@
 			help: 'The instance key signs commits and merges made in the browser',
 			get: (s) => git(s)?.signing?.enabled ?? false,
 			patch: (v) => ({ git: { signing: { enabled: v } } })
-		},
-		actionsEnabled: {
-			key: 'actionsEnabled',
-			path: 'git.actions.enabled',
-			label: 'Actions enabled',
-			help: 'Workflows run on registered runners',
-			get: (s) => git(s)?.actions?.enabled ?? false,
-			patch: (v) => ({ git: { actions: { enabled: v } } })
-		},
-		runOnMirror: {
-			key: 'runOnMirror',
-			path: 'git.actions.run_on_mirror',
-			label: 'Run on mirror fetch',
-			help: 'Mirror updates trigger workflows too',
-			get: (s) => git(s)?.actions?.runOnMirror ?? false,
-			patch: (v) => ({ git: { actions: { runOnMirror: v } } })
 		}
 	};
 
@@ -143,10 +132,11 @@
 			key: 'maxRepoSizeMb',
 			path: 'git.max_repo_size_mb',
 			label: 'Max repository size',
-			help: 'Pushes past this are rejected, 0 unlimited',
+			help: 'Pushes past this are rejected',
 			unit: 'MB',
-			min: 0,
+			min: 1,
 			max: 1_000_000,
+			unset: 'Unlimited',
 			get: (s) => Number(git(s)?.maxRepoSizeMb ?? 0n),
 			patch: (v) => ({ git: { maxRepoSizeMb: BigInt(v) } })
 		},
@@ -188,34 +178,13 @@
 			key: 'gcIntervalHours',
 			path: 'git.gc.interval_hours',
 			label: 'GC interval',
-			help: 'Hours between sweeps',
+			help: 'Time between sweeps',
 			unit: 'hours',
+			interval: true,
 			min: 1,
 			max: 8760,
 			get: (s) => git(s)?.gc?.intervalHours ?? 168,
 			patch: (v) => ({ git: { gc: { intervalHours: v } } })
-		},
-		artifactRetentionDays: {
-			key: 'artifactRetentionDays',
-			path: 'git.actions.artifact_retention_days',
-			label: 'Artifact retention',
-			help: 'Days before run artifacts are deleted, 0 keeps forever',
-			unit: 'days',
-			min: 0,
-			max: 3650,
-			get: (s) => git(s)?.actions?.artifactRetentionDays ?? 0,
-			patch: (v) => ({ git: { actions: { artifactRetentionDays: v } } })
-		},
-		logRetentionDays: {
-			key: 'logRetentionDays',
-			path: 'git.actions.log_retention_days',
-			label: 'Log retention',
-			help: 'Days before job logs are deleted, 0 keeps forever',
-			unit: 'days',
-			min: 0,
-			max: 3650,
-			get: (s) => git(s)?.actions?.logRetentionDays ?? 0,
-			patch: (v) => ({ git: { actions: { logRetentionDays: v } } })
 		}
 	};
 
@@ -237,15 +206,6 @@
 			placeholder: configStore.publicHostname.replace(/:\d+$/, ''),
 			get: (s) => git(s)?.sshPublicHost ?? '',
 			patch: (v) => ({ git: { sshPublicHost: v } })
-		},
-		defaultRunsOn: {
-			key: 'defaultRunsOn',
-			path: 'git.actions.default_runs_on',
-			label: 'Default runs-on',
-			help: 'Label used when a job names none',
-			placeholder: 'ubuntu-latest',
-			get: (s) => git(s)?.actions?.defaultRunsOn ?? '',
-			patch: (v) => ({ git: { actions: { defaultRunsOn: v } } })
 		}
 	};
 
@@ -368,7 +328,8 @@
 	}
 
 	async function commitNum(f: NumField) {
-		const v = Math.min(Math.max(Math.round(numValues[f.key] ?? 0), f.min), f.max);
+		const raw = numValues[f.key];
+		const v = f.unset && !raw ? 0 : Math.min(Math.max(Math.round(Number(raw) || 0), f.min), f.max);
 		numValues[f.key] = v;
 		if (eff && v === f.get(eff)) return;
 		if (f.verify) {
@@ -427,19 +388,54 @@
 		tag={acts[f.key].tag}
 		error={acts[f.key].error}
 	>
-		<UnitInput
-			id={f.key}
-			unit={f.unit}
-			bind:value={numValues[f.key]}
-			min={f.min}
-			max={f.max}
-			class="w-32"
-			disabled={!canEdit || acts[f.key].busy || locked(f.path)}
-			onblur={() => commitNum(f)}
-			onkeydown={(e) => {
-				if (e.key === 'Enter') commitNum(f);
-			}}
-		/>
+		{#if f.unset}
+			<LimitInput
+				id={f.key}
+				label={f.label.toLowerCase()}
+				unit={f.unit}
+				interval={f.interval}
+				bind:value={numValues[f.key]}
+				unset={f.unset}
+				min={f.min}
+				max={f.max}
+				disabled={!canEdit || acts[f.key].busy || locked(f.path)}
+				onToggle={(on) => {
+					if (!on) commitNum(f);
+				}}
+				onblur={() => commitNum(f)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') commitNum(f);
+				}}
+			/>
+		{:else if isDurationUnit(f.unit)}
+			<DurationInput
+				id={f.key}
+				unit={f.unit}
+				interval={f.interval}
+				bind:value={numValues[f.key]}
+				min={f.min}
+				max={f.max}
+				disabled={!canEdit || acts[f.key].busy || locked(f.path)}
+				onblur={() => commitNum(f)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') commitNum(f);
+				}}
+			/>
+		{:else}
+			<UnitInput
+				id={f.key}
+				unit={f.unit}
+				bind:value={numValues[f.key]}
+				min={f.min}
+				max={f.max}
+				class="w-32"
+				disabled={!canEdit || acts[f.key].busy || locked(f.path)}
+				onblur={() => commitNum(f)}
+				onkeydown={(e) => {
+					if (e.key === 'Enter') commitNum(f);
+				}}
+			/>
+		{/if}
 	</FormField>
 {/snippet}
 
@@ -481,7 +477,7 @@
 	<FormPage
 		level="section"
 		title="Git"
-		description="Repository hosting, SSH, storage, and workflow policy. Changes apply immediately."
+		description="Repository hosting, SSH, storage, and maintenance. Changes apply immediately."
 	>
 		<FormSection
 			title="Hosting"
@@ -616,17 +612,6 @@
 
 		<FormSection title="Signing" description="Instance key for commits made through the web.">
 			{@render boolRow(bools.signingEnabled)}
-		</FormSection>
-
-		<FormSection
-			title="Actions"
-			description="Workflow execution policy, organizations may enable their own."
-		>
-			{@render boolRow(bools.actionsEnabled)}
-			{@render boolRow(bools.runOnMirror)}
-			{@render textRow(texts.defaultRunsOn)}
-			{@render numRow(nums.artifactRetentionDays)}
-			{@render numRow(nums.logRetentionDays)}
 		</FormSection>
 	</FormPage>
 {/if}

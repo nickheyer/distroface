@@ -26,6 +26,7 @@
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import DateInput from '$lib/components/date-input.svelte';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import FormField from '$lib/components/form-field.svelte';
@@ -599,25 +600,7 @@
 	<section class="space-y-2 lg:border-t lg:pt-5">
 		{#if canWrite}
 			<label for="issue-due" class="text-xs font-medium text-muted-foreground">Due date</label>
-			<div class="flex items-center gap-1.5">
-				<Input
-					id="issue-due"
-					type="date"
-					value={dueValue}
-					aria-invalid={overdue}
-					onchange={(e) => setDue((e.currentTarget as HTMLInputElement).value)}
-				/>
-				{#if issue.dueDate}
-					<Button
-						variant="ghost-muted"
-						size="icon"
-						class="shrink-0"
-						title="Clear due date"
-						aria-label="Clear due date"
-						onclick={() => setDue('')}><X /></Button
-					>
-				{/if}
-			</div>
+			<DateInput id="issue-due" value={dueValue} invalid={overdue} onValueChange={setDue} />
 			{#if overdue}
 				<p class="text-xs text-destructive" role="alert">Overdue</p>
 			{/if}

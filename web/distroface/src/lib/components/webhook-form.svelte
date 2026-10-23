@@ -9,7 +9,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import FormActions from '$lib/components/form-actions.svelte';
-	import { webhookEventLabels } from '$lib/utils';
+	import { webhookEventLabels, gitWebhookEvents } from '$lib/utils';
 	import { WebhookEvent, WebhookScope } from '$lib/proto/distroface/v1/types_pb';
 	import type { Webhook as WebhookType } from '$lib/proto/distroface/v1/types_pb';
 	import isURL from 'validator/lib/isURL';
@@ -57,7 +57,14 @@
   "timestamp": "{{ .Timestamp }}"
 }`;
 
-	const allEvents = [WebhookEvent.PUSH, WebhookEvent.PULL, WebhookEvent.DELETE];
+	// Image events everywhere, git events where a git repository or an org can receive them
+	const allEvents = $derived(
+		scope === WebhookScope.REPOSITORY
+			? [WebhookEvent.PUSH, WebhookEvent.PULL, WebhookEvent.DELETE]
+			: scope === WebhookScope.GIT_REPOSITORY
+				? gitWebhookEvents
+				: [WebhookEvent.PUSH, WebhookEvent.PULL, WebhookEvent.DELETE, ...gitWebhookEvents]
+	);
 
 	function toggleEvent(event: WebhookEvent) {
 		events = events.includes(event) ? events.filter((e) => e !== event) : [...events, event];

@@ -38,7 +38,7 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import CommitBadge from '$lib/components/git/commit-badge.svelte';
 	import RunStatusIcon from '$lib/components/git/run-status-icon.svelte';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { GitUnit } from '$lib/proto/distroface/v1/git_pb';
 	import {
@@ -85,17 +85,16 @@
 	let seq = 0;
 
 	async function load(silent = false) {
+		const opts = silent ? backgroundCallOptions : silentCallOptions;
 		const mine = ++seq;
 		if (!silent) loading = true;
 		try {
 			const [r, a, im] = await Promise.all([
-				rpcClient.actions.getWorkflowRun({ namespace, name, id }, silentCallOptions),
+				rpcClient.actions.getWorkflowRun({ namespace, name, id }, opts),
 				rpcClient.actions
-					.listRunArtifacts({ namespace, name, runId: id }, silentCallOptions)
+					.listRunArtifacts({ namespace, name, runId: id }, opts)
 					.catch(() => undefined),
-				rpcClient.actions
-					.listRunImages({ namespace, name, runId: id }, silentCallOptions)
-					.catch(() => undefined)
+				rpcClient.actions.listRunImages({ namespace, name, runId: id }, opts).catch(() => undefined)
 			]);
 			if (mine !== seq) return;
 			run = r.run;
@@ -571,7 +570,9 @@
 												>{img.fullName}:{img.tag}</a
 											>
 											{#if img.pinned}
-												<Badge variant="secondary" class="gap-1"><Pin class="size-3" />release</Badge>
+												<Badge variant="secondary" class="gap-1"
+													><Pin class="size-3" />release</Badge
+												>
 											{/if}
 										</div>
 										<div class="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -594,7 +595,9 @@
 										</div>
 									</div>
 									<div class="flex items-center gap-1">
-										<code class="code-inline hidden max-w-80 truncate lg:inline">{img.pullCommand}</code>
+										<code class="code-inline hidden max-w-80 truncate lg:inline"
+											>{img.pullCommand}</code
+										>
 										<CopyButton text={img.pullCommand} label="Pull command copied" />
 									</div>
 								</div>

@@ -76,12 +76,12 @@
 		</span>
 	</Label>
 {:else if layout === 'inline'}
-	<div class={cn('min-w-0 space-y-1.5', spanClass[span], newRow && 'span-break', className)}>
-		<div class="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-			<Label for={id} class="gap-2">{@render text()}</Label>
+	<div class={cn('form-inline', spanClass[span], newRow && 'span-break', className)}>
+		<Label for={id} class="form-inline-label gap-2">{@render text()}</Label>
+		<div class="form-inline-control">
 			{@render children()}
+			{@render caption()}
 		</div>
-		{@render caption()}
 	</div>
 {:else}
 	<div class={cn('min-w-0 space-y-1.5', spanClass[span], newRow && 'span-break', className)}>

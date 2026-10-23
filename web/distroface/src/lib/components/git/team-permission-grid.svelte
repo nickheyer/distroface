@@ -18,7 +18,8 @@
 			unit: GitUnit.PACKAGES,
 			help: 'Linked image and artifact repos'
 		},
-		{ key: 'actions', label: 'Actions', unit: GitUnit.ACTIONS, help: 'Workflows, runs, secrets' }
+		{ key: 'actions', label: 'Actions', unit: GitUnit.ACTIONS, help: 'Workflows, runs, secrets' },
+		{ key: 'agents', label: 'Agents', unit: GitUnit.AGENTS, help: 'Agent sessions and approvals' }
 	];
 
 	export const LEVELS: { value: TeamUnitLevel; label: string }[] = [

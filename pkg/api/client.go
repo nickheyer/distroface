@@ -204,6 +204,10 @@ func (c *Client) Actions() distrofacev1connect.ActionsServiceClient {
 	return distrofacev1connect.NewActionsServiceClient(c.rpc())
 }
 
+func (c *Client) Agents() distrofacev1connect.AgentsServiceClient {
+	return distrofacev1connect.NewAgentsServiceClient(c.rpc())
+}
+
 func (c *Client) Runner() distrofacev1connect.RunnerServiceClient {
 	return distrofacev1connect.NewRunnerServiceClient(c.rpc())
 }

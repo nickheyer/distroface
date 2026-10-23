@@ -25,7 +25,8 @@
 		GitBranch,
 		Users,
 		ArrowRightLeft,
-		Search
+		Search,
+		Bot
 	} from '@lucide/svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { portalStore } from '$lib/stores/portal.svelte';
@@ -45,7 +46,8 @@
 		release: Tag,
 		repository: GitBranch,
 		collaboration: Users,
-		transfer: ArrowRightLeft
+		transfer: ArrowRightLeft,
+		agent_session: Bot
 	};
 
 	let notifications = $state<Notification[]>([]);

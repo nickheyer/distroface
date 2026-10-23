@@ -48,10 +48,13 @@
 		}
 	});
 
-	// Finished pushes refresh the list
+	// Finished pushes refresh the list once
+	let syncSeqSeen = 0;
 	$effect(() => {
+		const seq = mirrorSyncStore.finishedSeq;
 		const ev = mirrorSyncStore.lastFinished;
-		void mirrorSyncStore.finishedSeq;
+		if (seq === syncSeqSeen) return;
+		syncSeqSeen = seq;
 		if (ev && ev.kind === 'git_push' && mirrors.some((m) => m.id === ev.repoId)) void load();
 	});
 
