@@ -415,6 +415,11 @@ func validateSettingsPatch(patch *v1.Settings) error {
 		if g.SshPort != nil && (*g.SshPort < 1 || *g.SshPort > 65535) {
 			return fmt.Errorf("ssh port must be between 1 and 65535")
 		}
+		if b := g.GetActions().GetBuiltinRunner(); b != nil {
+			if b.Concurrency != nil && (*b.Concurrency < 1 || *b.Concurrency > 64) {
+				return fmt.Errorf("built in runner concurrency must be between 1 and 64")
+			}
+		}
 		if g.SshPublicHost != nil && *g.SshPublicHost != "" {
 			host := *g.SshPublicHost
 			if h, p, err := net.SplitHostPort(host); err == nil {

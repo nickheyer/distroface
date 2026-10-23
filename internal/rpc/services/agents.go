@@ -924,6 +924,7 @@ func (s *AgentsService) sessionProto(ctx context.Context, repo *storage.GitRepos
 		IssueNumber: sess.IssueNumber, IsPull: sess.IsPull, Ref: sess.Ref, Sha: sess.SHA, Branch: sess.Branch,
 		Status: agents.ProtoStatus(sess.Status), Conclusion: agents.ProtoConclusion(sess.Conclusion), Summary: sess.Summary, Error: sess.Error,
 		Turns: int32(sess.Turns), ToolCalls: int32(sess.ToolCalls), InputTokens: sess.InputTokens, OutputTokens: sess.OutputTokens,
+		PromptTokens: sess.PromptTokens, ContextTokens: sess.ContextTokens, CacheReadTokens: sess.CacheReadTokens, CacheWriteTokens: sess.CacheWriteTokens,
 		ResultPullNumber: sess.ResultPullNumber, ResultReviewId: sess.ResultReviewID, ResultCommits: decodeStringList(sess.ResultCommits),
 		HtmlUrl: s.manager.HTMLURL(ctx, repo) + "/agents/sessions/" + sess.ID, MaxTurns: int32(sess.MaxTurns), MaxTokens: sess.MaxTokens, Title: sess.Title,
 		EventCount: sess.EventCount, CreatedAt: timestamppb.New(sess.CreatedAt), UpdatedAt: timestamppb.New(sess.UpdatedAt),

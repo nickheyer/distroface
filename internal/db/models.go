@@ -931,16 +931,18 @@ const (
 )
 
 type ActionsRunner struct {
-	ID        string `gorm:"primaryKey"`
-	ScopeKind string `gorm:"not null;index:idx_runner_scope"`
-	ScopeID   string `gorm:"not null;default:'';index:idx_runner_scope"`
-	Name      string `gorm:"not null"`
-	Labels    string `gorm:"type:text;not null;default:'[]'"`
-	TokenHash string `gorm:"not null;uniqueIndex"`
-	Version   string `gorm:"not null;default:''"`
-	Busy      int    `gorm:"not null;default:0"`
-	LastSeen  *time.Time
-	CreatedAt time.Time `gorm:"autoCreateTime"`
+	ID           string `gorm:"primaryKey"`
+	ScopeKind    string `gorm:"not null;index:idx_runner_scope"`
+	ScopeID      string `gorm:"not null;default:'';index:idx_runner_scope"`
+	Name         string `gorm:"not null"`
+	Labels       string `gorm:"type:text;not null;default:'[]'"`
+	TokenHash    string `gorm:"not null;uniqueIndex"`
+	Version      string `gorm:"not null;default:''"`
+	Busy         int    `gorm:"not null;default:0"`
+	LastSeen     *time.Time
+	Builtin      bool      `gorm:"not null;default:false"` // Runs inside the server process
+	Capabilities string    `gorm:"type:text;not null;default:'[]'"`
+	CreatedAt    time.Time `gorm:"autoCreateTime"`
 }
 
 type ActionsRunnerToken struct {
@@ -962,58 +964,62 @@ type ActionsWorkflowState struct {
 }
 
 type ActionsRun struct {
-	ID            string `gorm:"primaryKey"`
-	RepoID        string `gorm:"not null;uniqueIndex:idx_run_repo_number;index:idx_run_repo_created"`
-	Number        int64  `gorm:"not null;uniqueIndex:idx_run_repo_number"`
-	WorkflowPath  string `gorm:"not null;index"`
-	WorkflowName  string `gorm:"not null;default:''"`
-	Event         string `gorm:"not null"`
-	Ref           string `gorm:"not null"`
-	SHA           string `gorm:"not null;column:sha;index"`
-	TriggerUserID string `gorm:"not null;default:''"`
-	Status        string `gorm:"not null;default:'queued';index"`
-	Conclusion    string `gorm:"not null;default:''"`
-	NeedsApproval bool   `gorm:"not null;default:false"`
-	FromFork      bool   `gorm:"not null;default:false"` // Head code from a fork, no secrets and a read only token
-	SkipCI        bool   `gorm:"not null;default:false;column:skip_ci"`
-	PullNumber    int64  `gorm:"not null;default:0"`
-	Payload       string `gorm:"type:text;not null;default:'{}'"` // Event payload as json
-	Workflow      string `gorm:"type:text;not null;default:''"`   // Workflow source at trigger time
-	Concurrency   string `gorm:"not null;default:''"`
-	Notes         string `gorm:"type:text;not null;default:'[]'"` // Parser notes shown on the run
-	StartedAt     *time.Time
-	FinishedAt    *time.Time
-	CreatedAt     time.Time      `gorm:"autoCreateTime;index:idx_run_repo_created"`
-	Repo          *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+	ID             string `gorm:"primaryKey"`
+	RepoID         string `gorm:"not null;uniqueIndex:idx_run_repo_number;index:idx_run_repo_created"`
+	Number         int64  `gorm:"not null;uniqueIndex:idx_run_repo_number"`
+	WorkflowPath   string `gorm:"not null;index"`
+	WorkflowName   string `gorm:"not null;default:''"`
+	Event          string `gorm:"not null"`
+	Ref            string `gorm:"not null"`
+	SHA            string `gorm:"not null;column:sha;index"`
+	TriggerUserID  string `gorm:"not null;default:''"`
+	Status         string `gorm:"not null;default:'queued';index"`
+	Conclusion     string `gorm:"not null;default:''"`
+	NeedsApproval  bool   `gorm:"not null;default:false"`
+	FromFork       bool   `gorm:"not null;default:false"` // Head code from a fork, no secrets and a read only token
+	SkipCI         bool   `gorm:"not null;default:false;column:skip_ci"`
+	PullNumber     int64  `gorm:"not null;default:0"`
+	Payload        string `gorm:"type:text;not null;default:'{}'"` // Event payload as json
+	Workflow       string `gorm:"type:text;not null;default:''"`   // Workflow source at trigger time
+	Concurrency    string `gorm:"not null;default:''"`
+	Notes          string `gorm:"type:text;not null;default:'[]'"` // Parser notes shown on the run
+	AgentSessionID string `gorm:"not null;default:'';index"`       // Agent session that owns the run
+	AgentSlug      string `gorm:"not null;default:''"`
+	StartedAt      *time.Time
+	FinishedAt     *time.Time
+	CreatedAt      time.Time      `gorm:"autoCreateTime;index:idx_run_repo_created"`
+	Repo           *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
 }
 
 type ActionsJob struct {
-	ID          string `gorm:"primaryKey"`
-	RunID       string `gorm:"not null;index"`
-	Name        string `gorm:"not null"`
-	JobKey      string `gorm:"not null"` // Key in the jobs map plus matrix suffix
-	RunsOn      string `gorm:"type:text;not null;default:'[]'"`
-	Needs       string `gorm:"type:text;not null;default:'[]'"`
-	Matrix      string `gorm:"type:text;not null;default:'{}'"`
-	MatrixGroup string `gorm:"not null;default:''"` // Job key before the matrix suffix
-	MaxParallel int    `gorm:"not null;default:0"`
-	Concurrency string `gorm:"not null;default:'';index"` // Job level concurrency group
-	Status      string `gorm:"not null;default:'waiting';index"`
-	Conclusion  string `gorm:"not null;default:''"`
-	RunnerID    string `gorm:"not null;default:'';index"`
-	Attempt     int    `gorm:"not null;default:1"`
-	Steps       string `gorm:"type:text;not null;default:'[]'"`
-	Outputs     string `gorm:"type:text;not null;default:'{}'"`
-	Annotations string `gorm:"type:text;not null;default:'[]'"`
-	Definition  string `gorm:"type:text;not null;default:'{}'"` // Resolved job definition as json
-	TokenID     string `gorm:"not null;default:'';index"`
-	LogChunks   int    `gorm:"not null;default:0"`
-	LogBytes    int64  `gorm:"not null;default:0"`
-	LogDigest   string `gorm:"not null;default:''"` // Compacted log blob after completion
-	StartedAt   *time.Time
-	FinishedAt  *time.Time
-	CreatedAt   time.Time   `gorm:"autoCreateTime"`
-	Run         *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
+	ID             string `gorm:"primaryKey"`
+	RunID          string `gorm:"not null;index"`
+	Name           string `gorm:"not null"`
+	JobKey         string `gorm:"not null"` // Key in the jobs map plus matrix suffix
+	RunsOn         string `gorm:"type:text;not null;default:'[]'"`
+	Needs          string `gorm:"type:text;not null;default:'[]'"`
+	Matrix         string `gorm:"type:text;not null;default:'{}'"`
+	MatrixGroup    string `gorm:"not null;default:''"` // Job key before the matrix suffix
+	MaxParallel    int    `gorm:"not null;default:0"`
+	Concurrency    string `gorm:"not null;default:'';index"` // Job level concurrency group
+	Status         string `gorm:"not null;default:'waiting';index"`
+	Conclusion     string `gorm:"not null;default:''"`
+	RunnerID       string `gorm:"not null;default:'';index"`
+	Attempt        int    `gorm:"not null;default:1"`
+	Steps          string `gorm:"type:text;not null;default:'[]'"`
+	Outputs        string `gorm:"type:text;not null;default:'{}'"`
+	Annotations    string `gorm:"type:text;not null;default:'[]'"`
+	Definition     string `gorm:"type:text;not null;default:'{}'"` // Resolved job definition as json
+	TokenID        string `gorm:"not null;default:'';index"`
+	LogChunks      int    `gorm:"not null;default:0"`
+	LogBytes       int64  `gorm:"not null;default:0"`
+	LogDigest      string `gorm:"not null;default:''"`    // Compacted log blob after completion
+	Interactive    bool   `gorm:"not null;default:false"` // Serves commands over FetchExec after its steps
+	CloseRequested bool   `gorm:"not null;default:false"` // Owner asked the job to finish after the current command
+	StartedAt      *time.Time
+	FinishedAt     *time.Time
+	CreatedAt      time.Time   `gorm:"autoCreateTime"`
+	Run            *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
 }
 
 type ActionsJobLog struct {
@@ -1174,8 +1180,12 @@ type AgentSession struct {
 	Error            string  `gorm:"type:text;not null;default:''"`
 	Turns            int     `gorm:"not null;default:0"`
 	ToolCalls        int     `gorm:"not null;default:0"`
-	InputTokens      int64   `gorm:"not null;default:0"`
+	InputTokens      int64   `gorm:"not null;default:0"` // Tokens read for the first time
 	OutputTokens     int64   `gorm:"not null;default:0"`
+	PromptTokens     int64   `gorm:"not null;default:0"` // Every prompt sent in full, the billed input
+	ContextTokens    int64   `gorm:"not null;default:0"` // Prompt plus output of the latest call
+	CacheReadTokens  int64   `gorm:"not null;default:0"` // Prompt tokens the provider served from cache
+	CacheWriteTokens int64   `gorm:"not null;default:0"`
 	MaxTurns         int     `gorm:"not null;default:0"`
 	MaxTokens        int64   `gorm:"not null;default:0"`
 	ResultPullNumber int64   `gorm:"not null;default:0"`
@@ -1216,4 +1226,22 @@ type AgentApproval struct {
 	Note      string        `gorm:"type:text;not null;default:''"`
 	CreatedAt time.Time     `gorm:"autoCreateTime"`
 	Session   *AgentSession `gorm:"foreignKey:SessionID;constraint:OnDelete:CASCADE"`
+}
+
+// One bash script queued on an interactive job
+type ActionsJobExec struct {
+	ID             string    `gorm:"primaryKey"`
+	JobID          string    `gorm:"not null;index:idx_job_exec_job_number,unique"`
+	Number         int       `gorm:"not null;index:idx_job_exec_job_number,unique"`
+	Script         string    `gorm:"type:text;not null;default:''"`
+	TimeoutMinutes int       `gorm:"not null;default:0"`
+	Status         string    `gorm:"not null;default:'queued';index"`
+	Conclusion     string    `gorm:"not null;default:''"`
+	ExitCode       int       `gorm:"not null;default:0"`
+	Output         string    `gorm:"type:text;not null;default:''"` // Head and tail of what it printed
+	Error          string    `gorm:"type:text;not null;default:''"` // Why it never ran
+	CreatedAt      time.Time `gorm:"autoCreateTime"`
+	StartedAt      *time.Time
+	FinishedAt     *time.Time
+	Job            *ActionsJob `gorm:"foreignKey:JobID;constraint:OnDelete:CASCADE"`
 }

@@ -391,6 +391,14 @@ export function parseEventData(raw: string): Record<string, unknown> {
 	}
 }
 
+// Share of prompt tokens served from cache
+export function cacheShare(read: bigint | number, prompt: bigint | number): string {
+	const r = Number(read);
+	const p = Number(prompt);
+	if (r <= 0 || p <= 0) return '';
+	return `${Math.round((100 * r) / p)}%`;
+}
+
 export function formatTokens(n: bigint | number): string {
 	const v = typeof n === 'bigint' ? Number(n) : n;
 	if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;

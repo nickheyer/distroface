@@ -325,7 +325,13 @@
 						{:else}
 							<TableRow>
 								<TableCell>
-									<p class="font-medium">{runner.name}</p>
+									<p class="flex items-center gap-2 font-medium">
+										{runner.name}
+										{#if runner.builtin}<Badge
+												variant="secondary"
+												title="Runs inside the server process">Built in</Badge
+											>{/if}
+									</p>
 									<p class="mt-0.5 font-mono text-xs text-muted-foreground">
 										{runner.version || 'unknown version'}
 									</p>
@@ -356,7 +362,12 @@
 								</TableCell>
 								{#if canManage}
 									<TableCell class="text-right">
-										{#if own(runner)}
+										{#if runner.builtin}
+											<span
+												class="text-xs whitespace-nowrap text-muted-foreground"
+												title="Configured under the instance actions settings">Server managed</span
+											>
+										{:else if own(runner)}
 											<div class="flex justify-end gap-1">
 												<Button
 													variant="ghost-muted"
@@ -382,8 +393,9 @@
 										{:else}
 											<span
 												class="text-xs whitespace-nowrap text-muted-foreground"
-												title="Managed in the {scopeLabel(runner.scope?.kind).toLowerCase()} settings"
-												>Inherited</span
+												title="Managed in the {scopeLabel(
+													runner.scope?.kind
+												).toLowerCase()} settings">Inherited</span
 											>
 										{/if}
 									</TableCell>

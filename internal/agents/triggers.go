@@ -144,7 +144,7 @@ func (m *Manager) triggerAgent(ctx context.Context, repo *db.GitRepository, def 
 		review, _ := payload["review"].(map[string]any)
 		state, _ := review["state"].(string)
 		body, _ := review["body"].(string)
-		if state != "changes_requested" && !(state == "commented" && strings.TrimSpace(body) != "") {
+		if state != "changes_requested" && (state != "commented" || strings.TrimSpace(body) == "") {
 			return
 		}
 		if !m.ownsPull(ctx, repo, def, number) {

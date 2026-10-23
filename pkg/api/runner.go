@@ -137,8 +137,8 @@ func newRunnerRegisterCmd() *cobra.Command {
 	addRunnerConfigFlag(cmd, &config)
 	cmd.Flags().IntVar(&concurrency, "concurrency", 1, "Jobs to run at once")
 	cmd.Flags().BoolVar(&host, "host", false, "Enable the host executor for labels mapped to host")
-	cmd.Flags().StringVar(&workDir, "work-dir", "", "Parent of job work trees (default DFCLI_RUNNER_WORK_DIR or the temp dir), with sibling containers it must be the same path on the host")
-	cmd.Flags().BoolVar(&privileged, "privileged-jobs", false, "Let jobs mount the docker socket, run --privileged, and bind host paths (root on this machine for every workflow author)")
+	cmd.Flags().StringVar(&workDir, "work-dir", "", "Parent of job work trees")
+	cmd.Flags().BoolVar(&privileged, "privileged-jobs", false, "Let jobs mount the docker socket, run --privileged, and bind host paths")
 	_ = cmd.MarkFlagRequired("token")
 	return cmd
 }

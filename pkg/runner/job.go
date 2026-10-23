@@ -338,6 +338,13 @@ func (j *job) fail(row int, format string, args ...any) {
 	j.markFailed()
 }
 
+// Whether a step already failed the job
+func (j *job) failed() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.status == "failure"
+}
+
 func (j *job) markFailed() {
 	j.mu.Lock()
 	if j.status == "" {
@@ -404,6 +411,10 @@ func (j *job) execute(ctx context.Context) v1.ActionsConclusion {
 			continue
 		}
 		j.runStep(ctx, i, st)
+	}
+	// Session jobs stay open for commands after checkout
+	if j.task.GetInteractive() && ready && !j.stopped() && !j.failed() {
+		j.serveExecs(ctx)
 	}
 	j.runPost(ctx)
 	j.teardown(ctx)

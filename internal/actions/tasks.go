@@ -2,8 +2,6 @@ package actions
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,30 +13,11 @@ import (
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// RunnerTokenHeader carries the long lived runner token
-const RunnerTokenHeader = "X-Runner-Token"
-
-func hashToken(tok string) string {
-	sum := sha256.Sum256([]byte(tok))
-	return hex.EncodeToString(sum[:])
-}
-
-// AuthenticateRunner resolves the runner behind a token
-func (m *Manager) AuthenticateRunner(ctx context.Context, token string) (*db.ActionsRunner, error) {
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return nil, fmt.Errorf("%w: missing runner token", ErrDenied)
-	}
-	r, err := m.store.GetActionsRunnerByTokenHash(ctx, hashToken(token))
-	if err != nil {
-		return nil, err
-	}
-	if r == nil {
-		return nil, fmt.Errorf("%w: unknown runner token", ErrDenied)
-	}
-	return r, nil
+func timestampOf(t time.Time) *timestamppb.Timestamp {
+	return timestamppb.New(t)
 }
 
 // Loads a job and refuses ones not assigned to the runner
@@ -203,6 +182,11 @@ func (m *Manager) tryClaim(ctx context.Context, runner *db.ActionsRunner, reject
 				rejected[j.ID] = true
 				continue
 			}
+			// Interactive jobs need a runner that speaks the exec protocol
+			if j.Interactive && !RunnerHasCapability(runner, CapabilityExec) {
+				rejected[j.ID] = true
+				continue
+			}
 			if r.Concurrency != "" && groupBusy(busyRuns, r.RepoID, r.Concurrency, r.ID) {
 				continue
 			}
@@ -343,6 +327,7 @@ func (m *Manager) buildTask(ctx context.Context, repo *db.GitRepository, run *db
 		CloneUrl:       m.git.HTTPCloneURL(ctx, repo, false),
 		ServerUrl:      m.git.BaseURL(ctx),
 		RunsOn:         decodeStrings(job.RunsOn),
+		Interactive:    job.Interactive,
 	}
 	if task.TimeoutMinutes <= 0 {
 		task.TimeoutMinutes = defaultJobTimeout
@@ -621,6 +606,7 @@ func (m *Manager) CompleteTask(ctx context.Context, runner *db.ActionsRunner, jo
 	job.Status, job.Conclusion, job.FinishedAt = StatusCompleted, conclusion, &now
 	m.revokeJobToken(ctx, job)
 	m.clearCancel(job.ID)
+	m.closeJobExecs(ctx, job, conclusionForExecs(conclusion), "the command workspace ended")
 	m.compactJobLogs(ctx, job)
 	m.writeCommitStatus(ctx, repo, run, job, conclusion)
 	if conclusion == ConclusionFailure || conclusion == ConclusionTimedOut {
@@ -680,4 +666,13 @@ func DecodeSteps(raw string) []*v1.JobStep {
 		out = append(out, st)
 	}
 	return out
+}
+
+// Open commands share the job's fate, success means unrun
+func conclusionForExecs(jobConclusion string) string {
+	switch jobConclusion {
+	case ConclusionCancelled, ConclusionTimedOut:
+		return jobConclusion
+	}
+	return ConclusionFailure
 }

@@ -298,10 +298,17 @@ func (m *Manager) run(ctx context.Context, sess *db.AgentSession) {
 			return
 		}
 		sess.Turns++
-		sess.InputTokens += resp.Usage.InputTokens
-		sess.OutputTokens += resp.Usage.OutputTokens
-		_ = m.store.UpdateAgentSessionColumns(ctx, sess.ID, map[string]any{"turns": sess.Turns, "input_tokens": sess.InputTokens, "output_tokens": sess.OutputTokens, "updated_at": time.Now().UTC()})
-		m.record(ctx, sess, EventUsage, "", "", "", map[string]any{"input_tokens": resp.Usage.InputTokens, "output_tokens": resp.Usage.OutputTokens, "total_input": sess.InputTokens, "total_output": sess.OutputTokens, "turn": sess.Turns, "model": resp.Model})
+		tallyUsage(sess, resp.Usage)
+		_ = m.store.UpdateAgentSessionColumns(ctx, sess.ID, map[string]any{
+			"turns": sess.Turns, "input_tokens": sess.InputTokens, "output_tokens": sess.OutputTokens,
+			"prompt_tokens": sess.PromptTokens, "context_tokens": sess.ContextTokens,
+			"cache_read_tokens": sess.CacheReadTokens, "cache_write_tokens": sess.CacheWriteTokens, "updated_at": time.Now().UTC(),
+		})
+		m.record(ctx, sess, EventUsage, "", "", "", map[string]any{
+			"input_tokens": resp.Usage.InputTokens, "output_tokens": resp.Usage.OutputTokens, "context": sess.ContextTokens,
+			"cache_read": resp.Usage.CacheReadTokens, "cache_write": resp.Usage.CacheWriteTokens,
+			"total_input": sess.InputTokens, "total_output": sess.OutputTokens, "total_prompt": sess.PromptTokens, "turn": sess.Turns, "model": resp.Model,
+		})
 
 		calls := resp.ToolCalls
 		m.record(ctx, sess, EventAssistant, resp.Content, "", "", map[string]any{"tool_calls": encodeCalls(calls), "stop_reason": resp.StopReason})
@@ -839,6 +846,9 @@ func (m *Manager) finish(ctx context.Context, sess *db.AgentSession, rc *runCont
 			rc.posted = true
 		}
 	}
+	if m.actions != nil {
+		m.actions.CloseAgentSessionJobs(ctx, sess.ID)
+	}
 	now := time.Now().UTC()
 	sess.Status, sess.Conclusion, sess.Summary, sess.Error, sess.FinishedAt = StatusCompleted, conclusion, summary, errText, &now
 	cols := map[string]any{"status": StatusCompleted, "conclusion": conclusion, "summary": summary, "error": errText, "finished_at": now, "updated_at": now}
@@ -946,6 +956,26 @@ func (m *Manager) dispatchWebhook(ctx context.Context, repo *db.GitRepository, s
 	})
 }
 
+// Only transcript growth counts as new input
+func tallyUsage(sess *db.AgentSession, u llm.Usage) {
+	if fresh := u.InputTokens - sess.ContextTokens; fresh > 0 {
+		sess.InputTokens += fresh
+	}
+	sess.OutputTokens += u.OutputTokens
+	sess.PromptTokens += u.InputTokens
+	sess.CacheReadTokens += u.CacheReadTokens
+	sess.CacheWriteTokens += u.CacheWriteTokens
+	sess.ContextTokens = u.InputTokens + u.OutputTokens
+}
+
+// Approval waits and commands can stall past five minutes
+func cacheTTL(rc *runContext) string {
+	if rc.def.Approval != ApprovalNone || rc.settings.GetAllowCommands() {
+		return "1h"
+	}
+	return ""
+}
+
 // Last assistant text, for summaries of sessions cut short
 func lastAssistantText(msgs []llm.Message) string {
 	for i := len(msgs) - 1; i >= 0; i-- {
@@ -969,7 +999,7 @@ func (m *Manager) complete(rc *runContext, msgs []llm.Message, tools []llm.Tool)
 		temp = rc.def.Temperature
 	}
 	build := func(list []llm.Message) *llm.Request {
-		req := &llm.Request{Model: rc.provider.Model, Tools: tools, MaxTokens: rc.provider.Row.MaxTokens, Temperature: temp}
+		req := &llm.Request{Model: rc.provider.Model, Tools: tools, MaxTokens: rc.provider.Row.MaxTokens, Temperature: temp, CacheKey: rc.sess.ID, CacheTTL: cacheTTL(rc)}
 		for _, msg := range list {
 			if msg.Role == llm.RoleSystem {
 				req.System = msg.Content

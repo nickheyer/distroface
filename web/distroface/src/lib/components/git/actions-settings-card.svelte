@@ -7,6 +7,7 @@
 	import { Switch } from '$lib/components/ui/switch';
 	import { Input } from '$lib/components/ui/input';
 	import LimitInput from '$lib/components/limit-input.svelte';
+	import UnitInput from '$lib/components/unit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import FormActions from '$lib/components/form-actions.svelte';
@@ -44,7 +45,11 @@
 		runsOn: 'git.actions.default_runs_on',
 		runOnMirror: 'git.actions.run_on_mirror',
 		artifactDays: 'git.actions.artifact_retention_days',
-		logDays: 'git.actions.log_retention_days'
+		logDays: 'git.actions.log_retention_days',
+		builtinEnabled: 'git.actions.builtin_runner.enabled',
+		builtinLabels: 'git.actions.builtin_runner.labels',
+		builtinConcurrency: 'git.actions.builtin_runner.concurrency',
+		builtinImage: 'git.actions.builtin_runner.image'
 	} as const;
 	type Path = (typeof P)[keyof typeof P];
 
@@ -58,10 +63,18 @@
 				: SettingsTier.SYSTEM
 	);
 
-	// Repositories cannot flip the switch
+	// The built in runner is instance wide
+	const builtinPaths: Path[] = [
+		P.builtinEnabled,
+		P.builtinLabels,
+		P.builtinConcurrency,
+		P.builtinImage
+	];
 	const paths = $derived.by((): Path[] => {
 		const defaults: Path[] = [P.runsOn, P.runOnMirror, P.artifactDays, P.logDays];
-		return isRepo ? defaults : [P.enabled, ...defaults];
+		if (isRepo) return defaults;
+		if (isSystem) return [P.enabled, ...defaults, ...builtinPaths];
+		return [P.enabled, ...defaults];
 	});
 
 	let loading = $state(true);
@@ -75,6 +88,10 @@
 	let runOnMirror = $state(false);
 	let artifactDays = $state<number | undefined>();
 	let logDays = $state<number | undefined>();
+	let builtinEnabled = $state(false);
+	let builtinLabels = $state('ubuntu-latest');
+	let builtinConcurrency = $state(2);
+	let builtinImage = $state('');
 
 	const overridden = (path: string) => !!parentScope && tierOf(prov, path) === ownTier;
 	const tag = (path: string) => (overridden(path) ? 'Custom' : undefined);
@@ -104,6 +121,11 @@
 		runOnMirror = a?.runOnMirror ?? false;
 		artifactDays = limit(P.artifactDays, a?.artifactRetentionDays);
 		logDays = limit(P.logDays, a?.logRetentionDays);
+		const b = a?.builtinRunner;
+		builtinEnabled = b?.enabled ?? false;
+		builtinLabels = b?.labels || 'ubuntu-latest';
+		builtinConcurrency = b?.concurrency || 2;
+		builtinImage = b?.image ?? '';
 	}
 
 	function valuesOf(s: Settings | null): Record<Path, unknown> {
@@ -113,7 +135,11 @@
 			[P.runsOn]: a?.defaultRunsOn ?? '',
 			[P.runOnMirror]: a?.runOnMirror ?? false,
 			[P.artifactDays]: a?.artifactRetentionDays ?? 0,
-			[P.logDays]: a?.logRetentionDays ?? 0
+			[P.logDays]: a?.logRetentionDays ?? 0,
+			[P.builtinEnabled]: a?.builtinRunner?.enabled ?? false,
+			[P.builtinLabels]: a?.builtinRunner?.labels ?? 'ubuntu-latest',
+			[P.builtinConcurrency]: a?.builtinRunner?.concurrency ?? 2,
+			[P.builtinImage]: a?.builtinRunner?.image ?? ''
 		};
 	}
 
@@ -123,7 +149,14 @@
 			[P.runsOn]: runsOn.trim(),
 			[P.runOnMirror]: runOnMirror,
 			[P.artifactDays]: clampDays(artifactDays),
-			[P.logDays]: clampDays(logDays)
+			[P.logDays]: clampDays(logDays),
+			[P.builtinEnabled]: builtinEnabled,
+			[P.builtinLabels]: builtinLabels.trim() || 'ubuntu-latest',
+			[P.builtinConcurrency]: Math.max(
+				1,
+				Math.min(64, Math.round(Number(builtinConcurrency) || 2))
+			),
+			[P.builtinImage]: builtinImage.trim()
 		};
 	}
 
@@ -136,7 +169,19 @@
 					...(has(P.runsOn) ? { defaultRunsOn: f[P.runsOn] as string } : {}),
 					...(has(P.runOnMirror) ? { runOnMirror: f[P.runOnMirror] as boolean } : {}),
 					...(has(P.artifactDays) ? { artifactRetentionDays: f[P.artifactDays] as number } : {}),
-					...(has(P.logDays) ? { logRetentionDays: f[P.logDays] as number } : {})
+					...(has(P.logDays) ? { logRetentionDays: f[P.logDays] as number } : {}),
+					...(builtinPaths.some(has)
+						? {
+								builtinRunner: {
+									...(has(P.builtinEnabled) ? { enabled: f[P.builtinEnabled] as boolean } : {}),
+									...(has(P.builtinLabels) ? { labels: f[P.builtinLabels] as string } : {}),
+									...(has(P.builtinConcurrency)
+										? { concurrency: f[P.builtinConcurrency] as number }
+										: {}),
+									...(has(P.builtinImage) ? { image: f[P.builtinImage] as string } : {})
+								}
+							}
+						: {})
 				}
 			}
 		};
@@ -291,6 +336,65 @@
 			/>
 		</FormField>
 	</FormSection>
+
+	{#if isSystem}
+		<FormSection
+			title="Built in runner"
+			description="A runner inside the server process. Jobs run as sibling containers on the docker socket, so the data dir must sit at the same path on the host."
+		>
+			<FormField
+				label="Enabled"
+				layout="toggle"
+				help={locked(P.builtinEnabled) ? 'Pinned by the config file' : 'Registers as builtin'}
+			>
+				<Switch bind:checked={builtinEnabled} disabled={!canEdit || locked(P.builtinEnabled)} />
+			</FormField>
+			<FormField
+				label="Labels"
+				id="builtin-labels"
+				help="Comma separated, matched against runs-on"
+				span="half"
+			>
+				<Input
+					id="builtin-labels"
+					bind:value={builtinLabels}
+					placeholder="ubuntu-latest"
+					class="font-mono"
+					disabled={!canEdit || locked(P.builtinLabels)}
+				/>
+			</FormField>
+			<FormField
+				label="Job image"
+				id="builtin-image"
+				help="Image behind every label, the stock act image when blank"
+				span="half"
+			>
+				<Input
+					id="builtin-image"
+					bind:value={builtinImage}
+					placeholder="ghcr.io/catthehacker/ubuntu:act-latest"
+					class="font-mono"
+					disabled={!canEdit || locked(P.builtinImage)}
+				/>
+			</FormField>
+			<FormField
+				label="Concurrency"
+				id="builtin-concurrency"
+				layout="inline"
+				help="Jobs at once, an agent session holds one slot while it runs"
+			>
+				<UnitInput
+					id="builtin-concurrency"
+					unit="jobs"
+					bind:value={builtinConcurrency}
+					min={1}
+					max={64}
+					class="w-32"
+					disabled={!canEdit || locked(P.builtinConcurrency)}
+				/>
+			</FormField>
+		</FormSection>
+	{/if}
 
 	<FormActions>
 		<Button onclick={save} disabled={saving || resetting || !canEdit}>

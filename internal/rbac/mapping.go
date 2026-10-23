@@ -45,6 +45,8 @@ var PublicProcedures = map[string]bool{
 	distrofacev1connect.RunnerServiceUploadTaskArtifactProcedure: true,
 	distrofacev1connect.RunnerServiceFinishTaskArtifactProcedure: true,
 	distrofacev1connect.RunnerServiceListTaskArtifactsProcedure:  true,
+	distrofacev1connect.RunnerServiceFetchExecProcedure:          true,
+	distrofacev1connect.RunnerServiceCompleteExecProcedure:       true,
 }
 
 // Mutations outside the resource action heuristic that read only portals refuse

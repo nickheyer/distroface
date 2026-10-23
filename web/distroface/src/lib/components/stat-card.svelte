@@ -5,12 +5,14 @@
 		label,
 		value,
 		icon,
-		href
+		href,
+		hint
 	}: {
 		label: string;
 		value: string | number;
 		icon?: Component<{ class?: string }>;
 		href?: string;
+		hint?: string;
 	} = $props();
 </script>
 
@@ -23,6 +25,9 @@
 		{/if}
 	</div>
 	<p class="mt-2 text-2xl leading-none font-semibold tracking-tight tabular-nums">{value}</p>
+	{#if hint}
+		<p class="mt-1.5 text-xs text-muted-foreground tabular-nums">{hint}</p>
+	{/if}
 {/snippet}
 
 {#if href}

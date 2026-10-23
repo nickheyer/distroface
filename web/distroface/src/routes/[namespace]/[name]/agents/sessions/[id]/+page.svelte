@@ -34,6 +34,7 @@
 	import { GitUnit } from '$lib/proto/distroface/v1/git_pb';
 	import { AgentSessionStatus, type AgentSession } from '$lib/proto/distroface/v1/agents_pb';
 	import {
+		cacheShare,
 		formatTokens,
 		isSessionActive,
 		kindLabels,
@@ -303,8 +304,15 @@
 								><Timer class="size-3" />{duration}</span
 							>{/if}
 						<span class="inline-flex items-center gap-1 tabular-nums"
-							><Coins class="size-3" />{formatTokens(session.inputTokens + session.outputTokens)} tokens,
-							{session.turns}{session.maxTurns > 0 ? `/${session.maxTurns}` : ''} turns</span
+							><Coins class="size-3" />{formatTokens(
+								session.inputTokens + session.outputTokens
+							)}{session.maxTokens > 0n ? `/${formatTokens(session.maxTokens)}` : ''} tokens,
+							{session.turns}{session.maxTurns > 0 ? `/${session.maxTurns}` : ''} turns{cacheShare(
+								session.cacheReadTokens,
+								session.promptTokens
+							)
+								? `, ${cacheShare(session.cacheReadTokens, session.promptTokens)} cached`
+								: ''}</span
 						>
 						{#if session.model}<span class="font-mono">{session.model}</span>{/if}
 						{#if session.providerName}<span>{session.providerName}</span>{/if}

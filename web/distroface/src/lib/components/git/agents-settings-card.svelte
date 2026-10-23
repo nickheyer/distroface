@@ -384,7 +384,7 @@
 			id="agents-command-timeout"
 			tag={tag(P.commandTimeout)}
 			layout="inline"
-			help="Per command job"
+			help="Per command, the workspace stays open between commands"
 		>
 			<LimitInput
 				id="agents-command-timeout"
@@ -426,7 +426,7 @@
 			id="agents-tokens"
 			tag={tag(P.tokens)}
 			layout="inline"
-			help="Input plus output per session"
+			help="Transcript size, every token counted once"
 		>
 			<LimitInput
 				id="agents-tokens"

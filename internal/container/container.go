@@ -3,14 +3,16 @@ package container
 import (
 	"context"
 	"fmt"
-	"github.com/nickheyer/distroface/pkg/utils"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"syscall"
 	"time"
+
+	"github.com/nickheyer/distroface/pkg/utils"
 
 	"github.com/distribution/distribution/v3/registry/handlers"
 	"github.com/nickheyer/distroface/internal/actions"
@@ -30,6 +32,7 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc"
+	"github.com/nickheyer/distroface/internal/runner"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/config"
@@ -319,6 +322,7 @@ func New() (*App, error) {
 		return fail("seeding legacy acme domains", err)
 	}
 
+	runners := runner.NewRegistry(store, actionsManager)
 	rpcServer := rpc.NewServer(rpc.ServerDeps{
 		Store:               store,
 		Resolver:            resolver,
@@ -348,9 +352,16 @@ func New() (*App, error) {
 		GitSSH:              gitSSH,
 		ForgeManager:        forgeManager,
 		ActionsManager:      actionsManager,
+		Runners:             runners,
 		AgentsManager:       agentsManager,
 		MailService:         mailService,
 	})
+
+	// Embedded runner calls the handler directly, follows settings
+	runner.NewSupervisor(runner.SupervisorOptions{
+		Resolver: resolver, Registry: runners, Handler: rpcServer.Handler(), Version: appVersion(),
+		WorkDir: filepath.Join(cfg.Storage.DataDir, "runner"), Log: log,
+	}).Start(ctx)
 
 	// Portal listeners reuse the fully built app handler
 	portalProxies.SetHandler(rpcServer.Handler())
@@ -494,4 +505,12 @@ func (a *App) Close() {
 	if a.Log != nil {
 		a.Log.Close()
 	}
+}
+
+// Version the image was built with, dev for local builds
+func appVersion() string {
+	if v := os.Getenv("APP_VERSION"); v != "" {
+		return v
+	}
+	return "dev"
 }

@@ -55,7 +55,25 @@ type Runner struct {
 
 	dnsMu sync.Mutex
 	dns   *dnsConfig
+
+	// Embedded runners leave process signals to their host
+	noSignals bool
+	// Closed once polling stopped, open workspaces wrap up
+	drain chan struct{}
 }
+
+// Whether a stop was requested, interactive jobs stop taking commands
+func (r *Runner) draining() bool {
+	select {
+	case <-r.drain:
+		return true
+	default:
+		return false
+	}
+}
+
+// Leaves SIGINT and SIGTERM to the host process
+func (r *Runner) DisableSignals() { r.noSignals = true }
 
 // The http client carries the instance trust settings
 func New(cfg *Config, version string, httpClient *http.Client) (*Runner, error) {
@@ -79,6 +97,7 @@ func New(cfg *Config, version string, httpClient *http.Client) (*Runner, error) 
 		ext:     newExternals(filepath.Join(cfg.JobRoot(), "_externals"), httpClient),
 		bkSlots: make(chan string, cfg.Concurrency),
 		pulled:  map[string]bool{},
+		drain:   make(chan struct{}),
 	}
 	for i := range cfg.Concurrency {
 		r.bkSlots <- buildKitVolumeName(cfg.Name, i)
@@ -139,12 +158,18 @@ func (r *Runner) labels(jobID string) map[string]string {
 func (r *Runner) Run(ctx context.Context) error {
 	pollCtx, stopPolling := context.WithCancel(ctx)
 	defer stopPolling()
+	go func() {
+		<-pollCtx.Done()
+		close(r.drain)
+	}()
 	jobCtx, cancelJobs := context.WithCancel(context.Background())
 	defer cancelJobs()
 
 	sigs := make(chan os.Signal, 2)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	defer signal.Stop(sigs)
+	if !r.noSignals {
+		signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+		defer signal.Stop(sigs)
+	}
 	go func() {
 		select {
 		case <-sigs:

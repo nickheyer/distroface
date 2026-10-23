@@ -116,6 +116,12 @@ func Defaults() *v1.Settings {
 				LogRetentionDays:      proto.Int32(90),
 				RunOnMirror:           proto.Bool(false),
 				DefaultRunsOn:         proto.String("ubuntu-latest"),
+				BuiltinRunner: &v1.BuiltinRunnerSettings{
+					Enabled:     proto.Bool(false),
+					Labels:      proto.String("ubuntu-latest"),
+					Concurrency: proto.Int32(2),
+					Image:       proto.String(""),
+				},
 			},
 			Agents: &v1.GitAgentsSettings{
 				Enabled:               proto.Bool(false),

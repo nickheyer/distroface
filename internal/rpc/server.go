@@ -25,6 +25,7 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/registry"
 	"github.com/nickheyer/distroface/internal/rpc/services"
+	"github.com/nickheyer/distroface/internal/runner"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -63,6 +64,7 @@ type ServerDeps struct {
 	GitSSH              *gitrepo.SSHManager // Nil disables the ssh port probe
 	ForgeManager        *forge.Manager
 	ActionsManager      *actions.Manager
+	Runners             *runner.Registry
 	AgentsManager       *agents.Manager
 	MailService         *mailer.Service
 }
@@ -189,8 +191,8 @@ func (s *Server) setupHandler() {
 			distrofacev1connect.RegisterMailServiceHandler(rpcServer, services.NewMailService(s.Store, s.MailService, s.GitManager, s.Enforcer, s.Log))
 		}
 		if s.ActionsManager != nil {
-			distrofacev1connect.RegisterActionsServiceHandler(rpcServer, services.NewActionsService(s.Store, s.ActionsManager, s.GitManager, s.RegistryAccess, s.Log))
-			distrofacev1connect.RegisterRunnerServiceHandler(rpcServer, services.NewRunnerService(s.Store, s.ActionsManager, s.Log))
+			distrofacev1connect.RegisterActionsServiceHandler(rpcServer, services.NewActionsService(s.Store, s.ActionsManager, s.Runners, s.GitManager, s.RegistryAccess, s.Log))
+			distrofacev1connect.RegisterRunnerServiceHandler(rpcServer, services.NewRunnerService(s.Store, s.ActionsManager, s.Runners, s.Log))
 
 			// Legacy artifactcache protocol for actions/cache and setup-* actions
 			mux.Handle("/api/actions/cache/", http.StripPrefix("/api/actions/cache", s.ActionsManager.CacheHandler()))
@@ -248,8 +250,8 @@ func (s *Server) httpsOnlyRedirect(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Portals enforce their own scheme in portal middleware
-		if r.TLS != nil || portal.FromContext(r.Context()) != nil {
+		// Portals enforce their own scheme, in process calls have none
+		if r.TLS != nil || portal.FromContext(r.Context()) != nil || runner.InProcess(r.Context()) {
 			next.ServeHTTP(w, r)
 			return
 		}

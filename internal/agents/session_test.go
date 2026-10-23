@@ -5,6 +5,9 @@ import (
 	"testing"
 
 	"github.com/nickheyer/distroface/internal/agents/llm"
+	"github.com/nickheyer/distroface/internal/db"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestCompactTrimsOldToolResults(t *testing.T) {
@@ -13,7 +16,7 @@ func TestCompactTrimsOldToolResults(t *testing.T) {
 		{Role: llm.RoleSystem, Content: "sys"},
 		{Role: llm.RoleUser, Content: "task"},
 	}
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, ToolCalls: []llm.ToolCall{{ID: "c", Name: "read_file"}}})
 		msgs = append(msgs, llm.Message{Role: llm.RoleTool, ToolCallID: "c", Content: big})
 	}
@@ -46,6 +49,48 @@ func TestEffectiveLimits(t *testing.T) {
 	}
 	if got := effectiveTokens(&Definition{MaxTokens: 5000}, fakeLimits{tokens: 1000}); got != 1000 {
 		t.Fatalf("token cap %d", got)
+	}
+}
+
+func TestTallyUsageCountsTranscriptOnce(t *testing.T) {
+	sess := &db.AgentSession{}
+	// Prompts resend the whole transcript, so turn two is turn one plus its answer and a tool result
+	for _, u := range []llm.Usage{{InputTokens: 1000, OutputTokens: 50}, {InputTokens: 1250, OutputTokens: 50}, {InputTokens: 1500, OutputTokens: 100}} {
+		tallyUsage(sess, u)
+	}
+	if sess.InputTokens != 1400 || sess.OutputTokens != 200 {
+		t.Fatalf("transcript in=%d out=%d", sess.InputTokens, sess.OutputTokens)
+	}
+	if sess.PromptTokens != 3750 || sess.ContextTokens != 1600 {
+		t.Fatalf("billed prompt=%d context=%d", sess.PromptTokens, sess.ContextTokens)
+	}
+	// Compaction shrinks the prompt, nothing new was read and the count never drops
+	tallyUsage(sess, llm.Usage{InputTokens: 900, OutputTokens: 10})
+	if sess.InputTokens != 1400 || sess.ContextTokens != 910 || sess.PromptTokens != 4650 {
+		t.Fatalf("after compaction in=%d context=%d prompt=%d", sess.InputTokens, sess.ContextTokens, sess.PromptTokens)
+	}
+	// A continuation appends a user prompt, only that is new
+	tallyUsage(sess, llm.Usage{InputTokens: 950, OutputTokens: 10, CacheReadTokens: 900, CacheWriteTokens: 50})
+	if sess.InputTokens != 1440 || sess.OutputTokens != 220 {
+		t.Fatalf("after continue in=%d out=%d", sess.InputTokens, sess.OutputTokens)
+	}
+	if sess.CacheReadTokens != 900 || sess.CacheWriteTokens != 50 {
+		t.Fatalf("cache read=%d write=%d", sess.CacheReadTokens, sess.CacheWriteTokens)
+	}
+}
+
+func TestCacheTTLFollowsStallRisk(t *testing.T) {
+	quick := &runContext{def: &Definition{Approval: ApprovalNone}, settings: &v1.GitAgentsSettings{}}
+	if got := cacheTTL(quick); got != "" {
+		t.Fatalf("quick agent ttl %q", got)
+	}
+	gated := &runContext{def: &Definition{Approval: ApprovalCommits}, settings: &v1.GitAgentsSettings{}}
+	if got := cacheTTL(gated); got != "1h" {
+		t.Fatalf("gated agent ttl %q", got)
+	}
+	shell := &runContext{def: &Definition{Approval: ApprovalNone}, settings: &v1.GitAgentsSettings{AllowCommands: proto.Bool(true)}}
+	if got := cacheTTL(shell); got != "1h" {
+		t.Fatalf("shell agent ttl %q", got)
 	}
 }
 

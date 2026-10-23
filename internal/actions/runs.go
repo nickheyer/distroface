@@ -116,6 +116,9 @@ func (m *Manager) createRun(ctx context.Context, repo *db.GitRepository, f *Work
 	if in.NeedsApproval {
 		run.Status = StatusWaiting
 	}
+	if in.AgentSession != nil {
+		run.AgentSessionID, run.AgentSlug = in.AgentSession.SessionID, in.AgentSession.AgentSlug
+	}
 	ectx := m.baseContext(ctx, repo, run, wf, in.Inputs)
 	if wf.HasCalls() {
 		wf = m.expandCalls(ctx, repo, f, in, wf, ectx)
@@ -128,6 +131,11 @@ func (m *Manager) createRun(ctx context.Context, repo *db.GitRepository, f *Work
 	}
 	jobs := m.planJobs(wf, ectx)
 	run.Notes = mustJSON(orEmpty(wf.Notes))
+	if in.AgentSession != nil {
+		for _, j := range jobs {
+			j.Interactive = true
+		}
+	}
 	if err := m.store.CreateActionsRun(ctx, run, jobs); err != nil {
 		return nil, err
 	}
@@ -965,6 +973,7 @@ func (m *Manager) failJob(ctx context.Context, repo *db.GitRepository, run *db.A
 	_ = m.store.UpdateActionsJobColumns(ctx, j.ID, cols)
 	m.revokeJobToken(ctx, j)
 	m.clearCancel(j.ID)
+	m.closeJobExecs(ctx, j, conclusion, "the command workspace ended: "+note)
 	m.writeCommitStatus(ctx, repo, run, j, conclusion)
 }
 
@@ -979,9 +988,9 @@ func (m *Manager) completeRun(ctx context.Context, repo *db.GitRepository, run *
 		c := effectiveConclusion(j)
 		if c != ConclusionSkipped {
 			allSkipped = false
-		}
-		if rankConclusion(c) > rankConclusion(conclusion) {
-			conclusion = c
+			if rankConclusion(c) > rankConclusion(conclusion) {
+				conclusion = c
+			}
 		}
 		m.clearCancel(j.ID)
 	}
@@ -1010,6 +1019,10 @@ func (m *Manager) completeRun(ctx context.Context, repo *db.GitRepository, run *
 
 // Webhook, notification, and auto merge retry after a run ends
 func (m *Manager) afterRunCompleted(ctx context.Context, repo *db.GitRepository, run *db.ActionsRun) {
+	// Agent command workspaces end quietly, the session reports for them
+	if run.AgentSessionID != "" {
+		return
+	}
 	url := m.runURL(ctx, repo, run.ID)
 	actor := m.username(ctx, run.TriggerUserID)
 	m.git.DispatchGit(ctx, "git_workflow_run", repo, webhook.GitPayload{
@@ -1035,7 +1048,8 @@ func (m *Manager) afterRunCompleted(ctx context.Context, repo *db.GitRepository,
 
 // Writes the commit status row a job conclusion maps onto
 func (m *Manager) writeCommitStatus(ctx context.Context, repo *db.GitRepository, run *db.ActionsRun, j *db.ActionsJob, conclusion string) {
-	if run.SHA == "" {
+	// Command workspaces are not checks, they never mark a commit
+	if run.SHA == "" || run.AgentSessionID != "" {
 		return
 	}
 	state, desc := "pending", "Queued"
@@ -1118,6 +1132,9 @@ func (m *Manager) ApproveRun(ctx context.Context, repo *db.GitRepository, run *d
 
 // RerunRun resets failed or every job and queues the run again
 func (m *Manager) RerunRun(ctx context.Context, repo *db.GitRepository, run *db.ActionsRun, failedOnly bool) error {
+	if run.AgentSessionID != "" {
+		return fmt.Errorf("%w: agent session runs cannot be rerun, continue the session instead", ErrConflict)
+	}
 	if run.Status != StatusCompleted {
 		return fmt.Errorf("%w: run is still active", ErrConflict)
 	}

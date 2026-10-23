@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { GitBranch, Tag, RotateCcw, Ban, Loader2, Timer, Play } from '@lucide/svelte';
+	import { GitBranch, Tag, RotateCcw, Ban, Loader2, Timer, Play, Bot } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -147,6 +147,19 @@
 						{#if run.needsApproval}
 							<Badge variant="warning">Needs approval</Badge>
 						{/if}
+						{#if run.agentSessionId}
+							<a
+								href={resolve('/[namespace]/[name]/agents/sessions/[id]', {
+									namespace,
+									name,
+									id: run.agentSessionId
+								})}
+								class="inline-flex"
+								title="Open the agent session"
+							>
+								<Badge variant="secondary"><Bot />{run.agentSlug || 'agent'}</Badge>
+							</a>
+						{/if}
 					</div>
 					<div
 						class="mt-0.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground"
@@ -220,7 +233,7 @@
 										<Ban />
 									{/if}
 								</Button>
-							{:else if run.status === ActionsStatus.COMPLETED}
+							{:else if run.status === ActionsStatus.COMPLETED && !run.agentSessionId}
 								<Button
 									variant="ghost-muted"
 									size="icon-sm"

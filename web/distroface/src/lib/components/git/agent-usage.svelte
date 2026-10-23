@@ -14,7 +14,7 @@
 	import { Bot, Coins, CheckCircle2, XCircle } from '@lucide/svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import type { AgentUsageBucket, GetAgentUsageResponse } from '$lib/proto/distroface/v1/agents_pb';
-	import { formatTokens } from './agents-state';
+	import { cacheShare, formatTokens } from './agents-state';
 
 	let { scope }: { scope: { kind: string; id: string } } = $props();
 
@@ -53,7 +53,8 @@
 						<TableHead>{title}</TableHead>
 						<TableHead class="w-24 text-right">Sessions</TableHead>
 						<TableHead class="hidden w-28 text-right sm:table-cell">Succeeded</TableHead>
-						<TableHead class="w-28 text-right">Tokens</TableHead>
+						<TableHead class="w-28 text-right">Billed tokens</TableHead>
+						<TableHead class="hidden w-20 text-right md:table-cell">Cached</TableHead>
 					</TableRow>
 				</TableHeader>
 				<TableBody>
@@ -67,7 +68,10 @@
 								></TableCell
 							>
 							<TableCell class="text-right tabular-nums"
-								>{formatTokens(b.inputTokens + b.outputTokens)}</TableCell
+								>{formatTokens(b.promptTokens + b.outputTokens)}</TableCell
+							>
+							<TableCell class="hidden text-right text-muted-foreground tabular-nums md:table-cell"
+								>{cacheShare(b.cacheReadTokens, b.promptTokens) || '-'}</TableCell
 							>
 						</TableRow>
 					{/each}
@@ -106,9 +110,12 @@
 		<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 			<StatCard label="Sessions" value={Number(totals.sessions)} icon={Bot} />
 			<StatCard
-				label="Tokens"
-				value={formatTokens(totals.inputTokens + totals.outputTokens)}
+				label="Billed tokens"
+				value={formatTokens(totals.promptTokens + totals.outputTokens)}
 				icon={Coins}
+				hint={cacheShare(totals.cacheReadTokens, totals.promptTokens)
+					? `${cacheShare(totals.cacheReadTokens, totals.promptTokens)} served from cache`
+					: undefined}
 			/>
 			<StatCard label="Succeeded" value={Number(totals.succeeded)} icon={CheckCircle2} />
 			<StatCard label="Failed" value={Number(totals.failed)} icon={XCircle} />

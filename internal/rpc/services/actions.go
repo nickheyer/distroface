@@ -15,6 +15,7 @@ import (
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/registry"
+	"github.com/nickheyer/distroface/internal/runner"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -29,13 +30,14 @@ const actionsLogPoll = time.Second
 type ActionsService struct {
 	store    *stores.Store
 	actions  *actions.Manager
+	runners  *runner.Registry
 	manager  *gitrepo.Manager
 	registry *registry.RegistryAccess
 	log      *logger.Logger
 }
 
-func NewActionsService(store *stores.Store, am *actions.Manager, manager *gitrepo.Manager, reg *registry.RegistryAccess, log *logger.Logger) *ActionsService {
-	return &ActionsService{store: store, actions: am, manager: manager, registry: reg, log: log}
+func NewActionsService(store *stores.Store, am *actions.Manager, runners *runner.Registry, manager *gitrepo.Manager, reg *registry.RegistryAccess, log *logger.Logger) *ActionsService {
+	return &ActionsService{store: store, actions: am, runners: runners, manager: manager, registry: reg, log: log}
 }
 
 // ── Workflows ────────────────────────────────────────────────────────────
@@ -457,7 +459,7 @@ func (s *ActionsService) ListRunners(ctx context.Context, req *v1.ListRunnersReq
 	}
 	limit, offset := pages.Parse(req.Page)
 	if req.IncludeInherited && sc.repo != nil {
-		rows, total, err := s.actions.RunnersServingRepo(ctx, sc.repo, limit, offset)
+		rows, total, err := s.runners.ServingRepo(ctx, sc.repo, limit, offset)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
@@ -484,7 +486,7 @@ func (s *ActionsService) CreateRunnerToken(ctx context.Context, req *v1.CreateRu
 		return nil, err
 	}
 	user := auth.UserFromContext(ctx)
-	token, expires, err := s.actions.CreateRegistrationToken(ctx, sc.kind, sc.id, user.ID)
+	token, expires, err := s.runners.CreateRegistrationToken(ctx, sc.kind, sc.id, user.ID)
 	if err != nil {
 		return nil, mapActionsErr(err)
 	}
@@ -497,7 +499,10 @@ func (s *ActionsService) DeleteRunner(ctx context.Context, req *v1.DeleteRunnerR
 		return nil, err
 	}
 	_ = sc
-	if err := s.actions.DeleteRunner(ctx, runner); err != nil {
+	if runner.Builtin {
+		return nil, connect.NewError(connect.CodeFailedPrecondition, "the built in runner is managed under the instance actions settings, disable it there")
+	}
+	if err := s.runners.Delete(ctx, runner); err != nil {
 		return nil, mapActionsErr(err)
 	}
 	return &v1.DeleteRunnerResponse{}, nil
@@ -508,7 +513,7 @@ func (s *ActionsService) UpdateRunner(ctx context.Context, req *v1.UpdateRunnerR
 	if err != nil {
 		return nil, err
 	}
-	if err := s.actions.UpdateRunner(ctx, runner, req.RunnerName, req.Labels, req.SetLabels); err != nil {
+	if err := s.runners.Update(ctx, runner, req.RunnerName, req.Labels, req.SetLabels); err != nil {
 		return nil, mapActionsErr(err)
 	}
 	return &v1.UpdateRunnerResponse{Runner: actionsRunnerProto(runner, sc.proto())}, nil
@@ -795,6 +800,7 @@ func (s *ActionsService) actionsRunProtoNamed(ctx context.Context, repo *storage
 		CreatedAt: timestamppb.New(run.CreatedAt),
 		Notes:     actions.StringList(run.Notes),
 	}
+	out.AgentSessionId, out.AgentSlug = run.AgentSessionID, run.AgentSlug
 	if run.TriggerUserID != "" {
 		if names != nil {
 			out.TriggerUser = names[run.TriggerUserID]
@@ -856,6 +862,7 @@ func actionsRunnerProto(r *storage.ActionsRunner, scope *v1.ActionsScope) *v1.Ru
 	out := &v1.Runner{
 		Id: r.ID, Name: r.Name, Scope: scope, Labels: actions.RunnerLabels(r), Version: r.Version,
 		Status: actions.RunnerStatus(r), CreatedAt: timestamppb.New(r.CreatedAt),
+		Builtin: r.Builtin, Capabilities: actionsDecodeList(r.Capabilities),
 	}
 	if scope == nil {
 		out.Scope = &v1.ActionsScope{Kind: r.ScopeKind, Id: r.ScopeID}

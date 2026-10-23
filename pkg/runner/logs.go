@@ -151,6 +151,13 @@ func (l *logStream) mask(s string) string {
 	return l.replacer.Replace(s)
 }
 
+// Masks text that leaves the log another way
+func (l *logStream) Masked(s string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.mask(s)
+}
+
 // Masks complete lines, partial lines wait for their newline
 func (l *logStream) Write(p []byte) (int, error) {
 	l.mu.Lock()

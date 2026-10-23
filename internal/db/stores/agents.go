@@ -91,7 +91,7 @@ func (s *Store) DeleteAgentProvider(ctx context.Context, id string) error {
 func (s *Store) AgentProviderTokensSince(ctx context.Context, providerID string, since time.Time) (int64, error) {
 	var total struct{ Total int64 }
 	err := s.db.WithContext(ctx).Model(&db.AgentSession{}).
-		Select("COALESCE(SUM(input_tokens + output_tokens), 0) AS total").
+		Select("COALESCE(SUM(prompt_tokens + output_tokens), 0) AS total").
 		Where("provider_id = ? AND created_at >= ?", providerID, since).
 		Scan(&total).Error
 	return total.Total, err
@@ -469,25 +469,27 @@ func (s *Store) ListAgentApprovals(ctx context.Context, sessionID string) ([]*db
 
 // One session reduced to what usage reports aggregate
 type AgentUsageRow struct {
-	RepoID       string
-	AgentID      string
-	AgentSlug    string
-	AgentName    string
-	ProviderID   string
-	ProviderName string
-	Model        string
-	Conclusion   string
-	Status       string
-	ToolCalls    int64
-	InputTokens  int64
-	OutputTokens int64
-	CreatedAt    time.Time
+	RepoID          string
+	AgentID         string
+	AgentSlug       string
+	AgentName       string
+	ProviderID      string
+	ProviderName    string
+	Model           string
+	Conclusion      string
+	Status          string
+	ToolCalls       int64
+	InputTokens     int64
+	OutputTokens    int64
+	PromptTokens    int64
+	CacheReadTokens int64
+	CreatedAt       time.Time
 }
 
 // Sessions since a moment, every repository when repoIDs is nil
 func (s *Store) AgentUsageRows(ctx context.Context, repoIDs []string, since time.Time) ([]AgentUsageRow, error) {
 	q := s.db.WithContext(ctx).Model(&db.AgentSession{}).
-		Select("repo_id, agent_id, agent_slug, agent_name, provider_id, provider_name, model, conclusion, status, tool_calls, input_tokens, output_tokens, created_at").
+		Select("repo_id, agent_id, agent_slug, agent_name, provider_id, provider_name, model, conclusion, status, tool_calls, input_tokens, output_tokens, prompt_tokens, cache_read_tokens, created_at").
 		Where("created_at >= ?", since)
 	if repoIDs != nil {
 		if len(repoIDs) == 0 {

@@ -22,7 +22,7 @@ func (m *Manager) Usage(ctx context.Context, repoIDs []string, days int) (*v1.Ge
 	}
 	out := &v1.GetAgentUsageResponse{Totals: &v1.AgentUsageBucket{Key: "total", Label: "Total"}}
 	byDay := map[string]*v1.AgentUsageBucket{}
-	for i := 0; i < days; i++ {
+	for i := range days {
 		day := since.AddDate(0, 0, i).Format("2006-01-02")
 		byDay[day] = &v1.AgentUsageBucket{Key: day, Label: day}
 	}
@@ -37,6 +37,8 @@ func (m *Manager) Usage(ctx context.Context, repoIDs []string, days int) (*v1.Ge
 			b.Sessions++
 			b.InputTokens += r.InputTokens
 			b.OutputTokens += r.OutputTokens
+			b.PromptTokens += r.PromptTokens
+			b.CacheReadTokens += r.CacheReadTokens
 			b.ToolCalls += r.ToolCalls
 			if r.Status == StatusCompleted {
 				if r.Conclusion == ConclusionSuccess {
@@ -103,7 +105,7 @@ func (m *Manager) Usage(ctx context.Context, repoIDs []string, days int) (*v1.Ge
 			}
 		}
 	}
-	for i := 0; i < days; i++ {
+	for i := range days {
 		out.Days = append(out.Days, byDay[since.AddDate(0, 0, i).Format("2006-01-02")])
 	}
 	out.Agents = sortedBuckets(agents)

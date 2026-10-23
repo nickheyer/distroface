@@ -9,6 +9,7 @@ import (
 	"github.com/nickheyer/distroface/internal/actions"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/runner"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
@@ -19,11 +20,12 @@ var _ distrofacev1connect.RunnerServiceHandler = (*RunnerService)(nil)
 type RunnerService struct {
 	store   *stores.Store
 	actions *actions.Manager
+	runners *runner.Registry
 	log     *logger.Logger
 }
 
-func NewRunnerService(store *stores.Store, am *actions.Manager, log *logger.Logger) *RunnerService {
-	return &RunnerService{store: store, actions: am, log: log}
+func NewRunnerService(store *stores.Store, am *actions.Manager, runners *runner.Registry, log *logger.Logger) *RunnerService {
+	return &RunnerService{store: store, actions: am, runners: runners, log: log}
 }
 
 // Authenticates the runner from the token header
@@ -32,29 +34,29 @@ func (s *RunnerService) runner(ctx context.Context) (*storage.ActionsRunner, err
 	if !ok {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "runner token required")
 	}
-	token := info.RequestHeader().Get(actions.RunnerTokenHeader)
+	token := info.RequestHeader().Get(runner.TokenHeader)
 	if token == "" {
 		return nil, connect.NewError(connect.CodeUnauthenticated, "runner token required")
 	}
-	runner, err := s.actions.AuthenticateRunner(ctx, token)
+	r, err := s.runners.Authenticate(ctx, token)
 	if err != nil {
 		if errors.Is(err, actions.ErrDenied) {
 			return nil, connect.NewError(connect.CodeUnauthenticated, err.Error())
 		}
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
-	return runner, nil
+	return r, nil
 }
 
 func (s *RunnerService) RegisterRunner(ctx context.Context, req *v1.RegisterRunnerRequest) (*v1.RegisterRunnerResponse, error) {
-	runner, token, err := s.actions.Register(ctx, req.RegistrationToken, req.RunnerName, req.Labels, req.Version)
+	r, token, err := s.runners.Register(ctx, req.RegistrationToken, req.RunnerName, req.Labels, req.Version, req.Capabilities)
 	if err != nil {
 		if errors.Is(err, actions.ErrDenied) {
 			return nil, connect.NewError(connect.CodeUnauthenticated, err.Error())
 		}
 		return nil, mapActionsErr(err)
 	}
-	return &v1.RegisterRunnerResponse{Runner: actionsRunnerProto(runner, s.displayScope(ctx, runner)), RunnerToken: token}, nil
+	return &v1.RegisterRunnerResponse{Runner: actionsRunnerProto(r, s.displayScope(ctx, r)), RunnerToken: token}, nil
 }
 
 // Names the scope by org or repo instead of by id
@@ -77,7 +79,7 @@ func (s *RunnerService) Heartbeat(ctx context.Context, req *v1.HeartbeatRequest)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.actions.Heartbeat(ctx, runner, req.Version, req.RunningJobIds, req.ReportsJobs); err != nil {
+	if err := s.runners.Heartbeat(ctx, runner, req.Version, req.RunningJobIds, req.ReportsJobs, req.Capabilities); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	return &v1.HeartbeatResponse{}, nil
@@ -186,4 +188,35 @@ func (s *RunnerService) ListTaskArtifacts(ctx context.Context, req *v1.ListTaskA
 		out = append(out, actionsArtifactProto(g, nil))
 	}
 	return &v1.ListTaskArtifactsResponse{Artifacts: out}, nil
+}
+
+func (s *RunnerService) FetchExec(ctx context.Context, req *v1.FetchExecRequest) (*v1.FetchExecResponse, error) {
+	runner, err := s.runner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_ = s.store.TouchActionsRunner(ctx, runner.ID, runner.Version, runner.Busy)
+	exec, done, cancelled, err := s.actions.FetchExec(ctx, runner, req.JobId, time.Duration(req.WaitSeconds)*time.Second)
+	if err != nil {
+		if ctx.Err() != nil {
+			return &v1.FetchExecResponse{}, nil
+		}
+		return nil, mapActionsErr(err)
+	}
+	return &v1.FetchExecResponse{Exec: exec, Done: done, Cancelled: cancelled}, nil
+}
+
+func (s *RunnerService) CompleteExec(ctx context.Context, req *v1.CompleteExecRequest) (*v1.CompleteExecResponse, error) {
+	runner, err := s.runner(ctx)
+	if err != nil {
+		return nil, err
+	}
+	res := actions.ExecResult{
+		Conclusion: actions.ConclusionFromProto(req.Conclusion), ExitCode: int(req.ExitCode),
+		Output: req.Output, Error: req.Error,
+	}
+	if err := s.actions.CompleteExec(ctx, runner, req.JobId, req.ExecId, res); err != nil {
+		return nil, mapActionsErr(err)
+	}
+	return &v1.CompleteExecResponse{}, nil
 }

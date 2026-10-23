@@ -479,7 +479,7 @@ func ParseAgentFile(path, source string) (*Definition, error) {
 	}
 	var meta agentFile
 	if err := yaml.Unmarshal([]byte(front), &meta); err != nil {
-		return d, fmt.Errorf("front matter: %v", err)
+		return d, fmt.Errorf("front matter: %w", err)
 	}
 	if n := strings.TrimSpace(meta.Name); n != "" {
 		d.Name = n

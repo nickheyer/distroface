@@ -41,6 +41,8 @@ type triggerInput struct {
 	FromFork      bool
 	OnlyPath      string
 	Mirror        bool
+	// Owning agent session, its job stays open for commands
+	AgentSession *AgentRunInfo
 	// Commit the workflow files were read from
 	FileCommit plumbing.Hash
 	// Paths a push touched, diffed only once a path filter asks

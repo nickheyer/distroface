@@ -222,6 +222,7 @@ func (s *Store) migrateTables() error {
 		&db.ActionsRun{},
 		&db.ActionsJob{},
 		&db.ActionsJobLog{},
+		&db.ActionsJobExec{},
 		&db.ActionsSecret{},
 		&db.ActionsVariable{},
 		&db.ActionsArtifact{},

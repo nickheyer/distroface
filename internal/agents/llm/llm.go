@@ -70,12 +70,19 @@ type Request struct {
 	Tools       []Tool
 	MaxTokens   int
 	Temperature *float64
+	// Stable id of the conversation, routes provider caches
+	CacheKey string
+	// Empty is the provider default, "1h" survives long pauses
+	CacheTTL string
 }
 
-// Usage counts tokens of one completion
+// Usage counts tokens of one completion, input is the whole prompt
 type Usage struct {
 	InputTokens  int64
 	OutputTokens int64
+	// Prompt tokens served from or written to the provider cache
+	CacheReadTokens  int64
+	CacheWriteTokens int64
 }
 
 // Response is the model's answer

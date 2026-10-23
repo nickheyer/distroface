@@ -32,18 +32,17 @@ import (
 
 // Everything a session touches, wired like the container does
 type harness struct {
-	t       *testing.T
-	store   *stores.Store
-	git     *gitrepo.Manager
-	forge   *forge.Manager
-	agents  *Manager
-	user    *db.User
-	actor   *auth.AuthenticatedUser
-	repo    *db.GitRepository
-	server  *httptest.Server
-	script  *scriptedModel
-	ctx     context.Context
-	cancels []func()
+	t      *testing.T
+	store  *stores.Store
+	git    *gitrepo.Manager
+	forge  *forge.Manager
+	agents *Manager
+	user   *db.User
+	actor  *auth.AuthenticatedUser
+	repo   *db.GitRepository
+	server *httptest.Server
+	script *scriptedModel
+	ctx    context.Context
 }
 
 // Fake chat completions endpoint answering from a scripted list of turns
@@ -90,10 +89,11 @@ func (s *scriptedModel) handler(w http.ResponseWriter, r *http.Request) {
 		msg["content"] = nil
 		finish = "tool_calls"
 	}
+	// Each prompt carries the last answer and a tool result on top of the one before
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"model":   "test-model",
 		"choices": []map[string]any{{"message": msg, "finish_reason": finish}},
-		"usage":   map[string]any{"prompt_tokens": 100, "completion_tokens": 20},
+		"usage":   map[string]any{"prompt_tokens": 100 + 120*idx, "completion_tokens": 20},
 	})
 }
 
@@ -250,6 +250,9 @@ func TestCodeSessionCommitsAndOpensPullRequest(t *testing.T) {
 	if done.Turns != 5 || done.InputTokens != 500 || done.OutputTokens != 100 {
 		t.Fatalf("usage turns=%d in=%d out=%d", done.Turns, done.InputTokens, done.OutputTokens)
 	}
+	if done.PromptTokens != 1700 || done.ContextTokens != 600 {
+		t.Fatalf("billed prompt=%d context=%d", done.PromptTokens, done.ContextTokens)
+	}
 	// The branch holds the file and the pull request belongs to the bot
 	r, err := h.git.Engine().OpenRepo(h.repo.Namespace, h.repo.Name, false)
 	if err != nil {
@@ -390,7 +393,7 @@ func TestMentionStartsSessionAndBotsAreIgnored(t *testing.T) {
 func TestSessionLimitsAndCancel(t *testing.T) {
 	// A model that never stops calling tools hits the turn cap
 	var turns []scriptedTurn
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		turns = append(turns, scriptedTurn{calls: []llm.ToolCall{call("c", "list_files", map[string]any{})}})
 	}
 	h := newHarness(t, turns)

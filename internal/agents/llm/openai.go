@@ -58,6 +58,7 @@ type oaRequest struct {
 	MaxCompletionTokens int         `json:"max_completion_tokens,omitempty"`
 	Temperature         *float64    `json:"temperature,omitempty"`
 	Stream              bool        `json:"stream"`
+	PromptCacheKey      string      `json:"prompt_cache_key,omitempty"`
 }
 
 type oaResponse struct {
@@ -67,9 +68,18 @@ type oaResponse struct {
 		FinishReason string    `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
-		PromptTokens     int64 `json:"prompt_tokens"`
-		CompletionTokens int64 `json:"completion_tokens"`
+		PromptTokens        int64 `json:"prompt_tokens"`
+		CompletionTokens    int64 `json:"completion_tokens"`
+		PromptTokensDetails struct {
+			CachedTokens int64 `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
+}
+
+// Only the first party api takes the key
+func (c *openAIClient) routesCacheByKey() bool {
+	u, err := url.Parse(c.base)
+	return err == nil && !c.azure && strings.EqualFold(u.Hostname(), "api.openai.com")
 }
 
 func (c *openAIClient) auth(req *http.Request) {
@@ -119,6 +129,9 @@ func (c *openAIClient) Complete(ctx context.Context, req *Request) (*Response, e
 	if len(body.Tools) > 0 {
 		body.ToolChoice = "auto"
 	}
+	if req.CacheKey != "" && c.routesCacheByKey() {
+		body.PromptCacheKey = req.CacheKey
+	}
 	var out oaResponse
 	err := postJSON(ctx, c.http, c.cfg, c.chatURL(req.Model), c.auth, body, &out)
 	var apiErr *APIError
@@ -134,7 +147,9 @@ func (c *openAIClient) Complete(ctx context.Context, req *Request) (*Response, e
 		return nil, &APIError{Message: "provider returned no choices", class: ErrUnavailable}
 	}
 	ch := out.Choices[0]
-	resp := &Response{Model: out.Model, Usage: Usage{InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens}}
+	resp := &Response{Model: out.Model, Usage: Usage{
+		InputTokens: out.Usage.PromptTokens, OutputTokens: out.Usage.CompletionTokens, CacheReadTokens: out.Usage.PromptTokensDetails.CachedTokens,
+	}}
 	if ch.Message.Content != nil {
 		resp.Content = *ch.Message.Content
 	}

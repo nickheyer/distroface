@@ -28,7 +28,18 @@ var learnedCeilings sync.Map
 // Endpoints that refused a long answer outside the event stream
 var streamOnly sync.Map
 
+// How much of the cache markup each endpoint accepts
+var cacheSupport sync.Map
+
+const (
+	cacheFull = iota
+	cacheNoTTL
+	cacheNone
+)
+
 var ceilingPattern = regexp.MustCompile(`max_tokens: *\d+ *> *(\d+)`)
+
+var cachePattern = regexp.MustCompile(`cache_control|\bttl\b`)
 
 // Messages api client
 type anthropicClient struct {
@@ -38,13 +49,19 @@ type anthropicClient struct {
 }
 
 type anBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Name      string          `json:"name,omitempty"`
-	Input     json.RawMessage `json:"input,omitempty"`
-	ToolUseID string          `json:"tool_use_id,omitempty"`
-	Content   string          `json:"content,omitempty"`
+	Type         string          `json:"type"`
+	Text         string          `json:"text,omitempty"`
+	ID           string          `json:"id,omitempty"`
+	Name         string          `json:"name,omitempty"`
+	Input        json.RawMessage `json:"input,omitempty"`
+	ToolUseID    string          `json:"tool_use_id,omitempty"`
+	Content      string          `json:"content,omitempty"`
+	CacheControl *anCache        `json:"cache_control,omitempty"`
+}
+
+type anCache struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type anMessage struct {
@@ -60,7 +77,7 @@ type anTool struct {
 
 type anRequest struct {
 	Model       string      `json:"model"`
-	System      string      `json:"system,omitempty"`
+	System      []anBlock   `json:"system,omitempty"`
 	Messages    []anMessage `json:"messages"`
 	Tools       []anTool    `json:"tools,omitempty"`
 	MaxTokens   int         `json:"max_tokens"`
@@ -76,11 +93,18 @@ type anResponse struct {
 	Model      string    `json:"model"`
 	Content    []anBlock `json:"content"`
 	StopReason string    `json:"stop_reason"`
-	Usage      struct {
-		InputTokens  int64 `json:"input_tokens"`
-		OutputTokens int64 `json:"output_tokens"`
-	} `json:"usage"`
+	Usage      anUsage   `json:"usage"`
 }
+
+// Input excludes cached tokens, the prompt sums all three
+type anUsage struct {
+	InputTokens         int64 `json:"input_tokens"`
+	CacheCreationTokens int64 `json:"cache_creation_input_tokens"`
+	CacheReadTokens     int64 `json:"cache_read_input_tokens"`
+	OutputTokens        int64 `json:"output_tokens"`
+}
+
+func (u anUsage) prompt() int64 { return u.InputTokens + u.CacheCreationTokens + u.CacheReadTokens }
 
 func (c *anthropicClient) auth(req *http.Request) {
 	if c.cfg.APIKey != "" {
@@ -101,7 +125,10 @@ func (c *anthropicClient) Complete(ctx context.Context, req *Request) (*Response
 	if v, ok := learnedCeilings.Load(key); ok && v.(int) < maxTokens {
 		maxTokens = v.(int)
 	}
-	body := anRequest{Model: req.Model, System: req.System, MaxTokens: maxTokens, Temperature: req.Temperature}
+	body := anRequest{Model: req.Model, MaxTokens: maxTokens, Temperature: req.Temperature}
+	if req.System != "" {
+		body.System = []anBlock{{Type: "text", Text: req.System}}
+	}
 	// Tool results and user text share the user role, strict alternation is required
 	roleOf := func(m Message) string {
 		if m.Role == RoleTool {
@@ -146,17 +173,34 @@ func (c *anthropicClient) Complete(ctx context.Context, req *Request) (*Response
 		}
 		body.Tools = append(body.Tools, anTool{Name: t.Name, Description: t.Description, InputSchema: schema})
 	}
+	level := cacheFull
+	if v, ok := cacheSupport.Load(c.base); ok {
+		level = v.(int)
+	}
+	markCache(&body, level, req.CacheTTL)
 	out, err := c.send(ctx, key, body)
-	// The model ceiling is learned from the rejection
-	if ceiling := rejectedCeiling(err); ceiling > 0 && ceiling < body.MaxTokens {
-		learnedCeilings.Store(key, ceiling)
-		body.MaxTokens = ceiling
+	// Rejections teach the ceiling and the accepted cache markup
+	for attempt := 0; err != nil && attempt < 3; attempt++ {
+		switch {
+		case rejectedCeiling(err) > 0 && rejectedCeiling(err) < body.MaxTokens:
+			body.MaxTokens = rejectedCeiling(err)
+			learnedCeilings.Store(key, body.MaxTokens)
+		case rejectsCache(err) && level < cacheNone:
+			level++
+			cacheSupport.Store(c.base, level)
+			markCache(&body, level, req.CacheTTL)
+		default:
+			return nil, err
+		}
 		out, err = c.send(ctx, key, body)
 	}
 	if err != nil {
 		return nil, err
 	}
-	resp := &Response{Model: out.Model, Usage: Usage{InputTokens: out.Usage.InputTokens, OutputTokens: out.Usage.OutputTokens}}
+	resp := &Response{Model: out.Model, Usage: Usage{
+		InputTokens: out.Usage.prompt(), OutputTokens: out.Usage.OutputTokens,
+		CacheReadTokens: out.Usage.CacheReadTokens, CacheWriteTokens: out.Usage.CacheCreationTokens,
+	}}
 	for _, b := range out.Content {
 		switch b.Type {
 		case "text":
@@ -196,6 +240,45 @@ func (c *anthropicClient) send(ctx context.Context, key string, body anRequest) 
 	}
 	streamOnly.Store(key, true)
 	return c.stream(ctx, body)
+}
+
+// System marker caches tools and prompt, tail marker the transcript
+func markCache(body *anRequest, level int, ttl string) {
+	for i := range body.System {
+		body.System[i].CacheControl = nil
+	}
+	for i := range body.Messages {
+		for j := range body.Messages[i].Content {
+			body.Messages[i].Content[j].CacheControl = nil
+		}
+	}
+	if level >= cacheNone {
+		return
+	}
+	mark := func() *anCache {
+		cc := &anCache{Type: "ephemeral"}
+		if level == cacheFull {
+			cc.TTL = ttl
+		}
+		return cc
+	}
+	if n := len(body.System); n > 0 {
+		body.System[n-1].CacheControl = mark()
+	}
+	if n := len(body.Messages); n > 0 {
+		if blocks := body.Messages[n-1].Content; len(blocks) > 0 {
+			blocks[len(blocks)-1].CacheControl = mark()
+		}
+	}
+}
+
+// A 400 naming cache markup, older gateways lack it
+func rejectsCache(err error) bool {
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusBadRequest {
+		return false
+	}
+	return cachePattern.MatchString(strings.ToLower(apiErr.Message))
 }
 
 // The api demands the event stream for long answers

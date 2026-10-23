@@ -133,6 +133,39 @@ func (s *Store) RegisterActionsRunner(ctx context.Context, tokenID string, r *db
 
 // ── Workflow state ───────────────────────────────────────────────────────
 
+// The runner the server process operates, nil when none registered
+func (s *Store) GetBuiltinActionsRunner(ctx context.Context) (*db.ActionsRunner, error) {
+	var r db.ActionsRunner
+	err := s.db.WithContext(ctx).Where("builtin = ?", true).Order("created_at ASC").First(&r).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &r, err
+}
+
+// Refreshes the built in runner row, id survives reboots
+func (s *Store) UpsertBuiltinActionsRunner(ctx context.Context, r *db.ActionsRunner) error {
+	existing, err := s.GetBuiltinActionsRunner(ctx)
+	if err != nil {
+		return err
+	}
+	if existing == nil {
+		if r.ID == "" {
+			r.ID = uuid.New().String()
+		}
+		return s.db.WithContext(ctx).Create(r).Error
+	}
+	r.ID, r.CreatedAt = existing.ID, existing.CreatedAt
+	return s.db.WithContext(ctx).Model(&db.ActionsRunner{}).Where("id = ?", existing.ID).Updates(map[string]any{
+		"name": r.Name, "labels": r.Labels, "token_hash": r.TokenHash, "version": r.Version,
+		"capabilities": r.Capabilities, "last_seen": r.LastSeen, "busy": 0, "scope_kind": r.ScopeKind, "scope_id": r.ScopeID,
+	}).Error
+}
+
+func (s *Store) SetActionsRunnerCapabilities(ctx context.Context, id, capabilities string) error {
+	return s.db.WithContext(ctx).Model(&db.ActionsRunner{}).Where("id = ?", id).Update("capabilities", capabilities).Error
+}
+
 func (s *Store) GetDisabledWorkflows(ctx context.Context, repoID string) (map[string]bool, error) {
 	var rows []db.ActionsWorkflowState
 	if err := s.db.WithContext(ctx).Where("repo_id = ? AND disabled = ?", repoID, true).Find(&rows).Error; err != nil {
@@ -218,8 +251,10 @@ type ActionsRunListOptions struct {
 	Ref          string
 	Actor        string
 	SHA          string
-	Limit        int
-	Offset       int
+	// Hide the runs agent sessions own
+	ExcludeAgentRuns bool
+	Limit            int
+	Offset           int
 }
 
 func (s *Store) ListActionsRuns(ctx context.Context, opts ActionsRunListOptions) ([]*db.ActionsRun, int64, error) {
@@ -244,6 +279,9 @@ func (s *Store) ListActionsRuns(ctx context.Context, opts ActionsRunListOptions)
 	}
 	if opts.Actor != "" {
 		q = q.Where("trigger_user_id IN (SELECT id FROM users WHERE username = ? OR id = ?)", opts.Actor, opts.Actor)
+	}
+	if opts.ExcludeAgentRuns {
+		q = q.Where("agent_session_id = ''")
 	}
 	var total int64
 	if err := q.Count(&total).Error; err != nil {

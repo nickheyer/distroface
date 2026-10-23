@@ -275,6 +275,15 @@ message GitActionsSettings {
   optional int32 log_retention_days = 3; // Zero keeps forever
   optional bool run_on_mirror = 4; // Mirror fetches trigger workflows too
   optional string default_runs_on = 5; // Label used when a job names none
+  BuiltinRunnerSettings builtin_runner = 6; // System only
+}
+
+// Runner the server process operates itself, jobs run as sibling containers on its docker socket
+message BuiltinRunnerSettings {
+  optional bool enabled = 1;
+  optional string labels = 2; // Comma separated runs-on labels it serves
+  optional int32 concurrency = 3; // Jobs at once
+  optional string image = 4; // Image behind every label, the stock act image when empty
 }
 
 // Agent execution policy, org scope overrides most fields, repo scope tightens limits
@@ -286,7 +295,7 @@ message GitAgentsSettings {
   optional int32 max_session_minutes = 5; // Wall clock cap on one session
   optional int32 max_sessions_per_day = 6; // Per repository, zero unlimited
   optional int32 max_concurrent_sessions = 7; // Per repository
-  optional int64 token_budget_per_session = 8; // Input plus output tokens, zero unlimited
+  optional int64 token_budget_per_session = 8; // Transcript tokens, each counted once, zero unlimited
   optional int32 log_retention_days = 9; // Session transcripts, zero keeps forever
   optional bool allow_private_networks = 10; // System only, inference endpoints on private ranges
   optional bool allow_repo_providers = 11; // Repository admins may register their own connectors

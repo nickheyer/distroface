@@ -47,14 +47,13 @@ var (
 )
 
 const (
-	runnerOnlineWindow         = 2 * time.Minute
-	runnerStaleWindow          = 10 * time.Minute
-	droppedJobGrace            = 2 * time.Minute
-	jobTokenDays         int32 = 1
-	maxTaskWait                = 30 * time.Second
-	defaultJobTimeout          = 360
-	registrationTokenTTL       = time.Hour
-	workflowFileCap            = 1 << 20
+	runnerOnlineWindow       = 2 * time.Minute
+	runnerStaleWindow        = 10 * time.Minute
+	droppedJobGrace          = 2 * time.Minute
+	jobTokenDays       int32 = 1
+	maxTaskWait              = 30 * time.Second
+	defaultJobTimeout        = 360
+	workflowFileCap          = 1 << 20
 )
 
 // Manager owns workflows, runs, jobs, runners, secrets, and the runner protocol
@@ -81,6 +80,9 @@ type Manager struct {
 	statusMu  sync.Mutex
 	jobStatus map[string]jobStatusEntry
 
+	execMu   sync.Mutex
+	execWake map[string]chan struct{}
+
 	// Observes finished runs, installed by the agents manager
 	runCompleted RunCompletedHook
 }
@@ -98,6 +100,7 @@ func NewManager(store *stores.Store, git *gitrepo.Manager, fm *forge.Manager, am
 		wake:            make(chan struct{}),
 		schedCache:      map[string]*scheduleEntry{},
 		jobStatus:       map[string]jobStatusEntry{},
+		execWake:        map[string]chan struct{}{},
 	}
 }
 

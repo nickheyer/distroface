@@ -548,6 +548,21 @@ func TestMiddlewareOIDCBounce(t *testing.T) {
 	}
 }
 
+func TestMiddlewareInProcessOrigin(t *testing.T) {
+	store := newTestStore(t)
+	res := NewResolver(store, nil, logger.New())
+
+	var scheme string
+	h := res.Middleware(func() string { return "registry.example.com" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scheme = SchemeFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://builtin.test/api/v1/ping", nil))
+	if scheme != "http" {
+		t.Errorf("in process scheme = %q, must not upgrade built links to https", scheme)
+	}
+}
+
 func TestRealmRewrite(t *testing.T) {
 	store := newTestStore(t)
 	res := NewResolver(store, nil, logger.New())

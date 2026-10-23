@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,6 +39,8 @@ type runContext struct {
 	ws       *workspace
 	provider *ResolvedProvider
 	settings *v1.GitAgentsSettings
+	// Open command workspace, nil until the first run_command
+	cmd *commandWorkspace
 	// Side effects the finisher may complete
 	posted   bool
 	reviewed bool
@@ -109,9 +112,9 @@ func argInt(args map[string]any, key string) int {
 	case int:
 		return v
 	case string:
-		var n int
-		fmt.Sscanf(v, "%d", &n)
-		return n
+		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+			return n
+		}
 	}
 	return 0
 }
@@ -283,7 +286,7 @@ var toolRegistry = map[string]*toolSpec{
 	},
 	"run_command": {
 		Name:        "run_command",
-		Description: "Runs a shell script on a workflow runner against the working branch with uncommitted edits applied, and returns its output. Use it to build, test, or lint. Slow, so batch commands into one script.",
+		Description: "Runs a bash script in this session's command workspace on a workflow runner and returns its output. The workspace is a checkout of the working branch with your uncommitted edits applied, and it persists between calls, so installed dependencies and build output survive. Use it to build, test, lint, or run scripts. Never use it to list, read, or edit files, the file tools are faster and see the same content.",
 		Schema:      `{"type":"object","properties":{"command":{"type":"string","description":"bash script"},"timeout_minutes":{"type":"integer"}},"required":["command"]}`,
 		Commit:      true,
 		Run:         toolRunCommand,

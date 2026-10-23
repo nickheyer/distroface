@@ -15,7 +15,7 @@ import (
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 )
 
-// Mirrors actions.RunnerTokenHeader on the server
+// Mirrors the server side runner token header
 const runnerTokenHeader = "X-Runner-Token"
 
 // Runner token for rpc, job tokens for the data plane
@@ -48,7 +48,7 @@ func (c *Client) tokenInterceptor() connect.ClientInterceptor {
 }
 
 func (c *Client) Register(ctx context.Context, registration, name string, labels []string, version string) (*v1.Runner, string, error) {
-	resp, err := c.rpc.RegisterRunner(ctx, &v1.RegisterRunnerRequest{RegistrationToken: registration, RunnerName: name, Labels: labels, Version: version})
+	resp, err := c.rpc.RegisterRunner(ctx, &v1.RegisterRunnerRequest{RegistrationToken: registration, RunnerName: name, Labels: labels, Version: version, Capabilities: Capabilities})
 	if err != nil {
 		return nil, "", rpcErr(err)
 	}
@@ -56,7 +56,7 @@ func (c *Client) Register(ctx context.Context, registration, name string, labels
 }
 
 func (c *Client) Heartbeat(ctx context.Context, version string, running []string, reportsJobs bool) error {
-	_, err := c.rpc.Heartbeat(ctx, &v1.HeartbeatRequest{Version: version, RunningJobIds: running, ReportsJobs: reportsJobs})
+	_, err := c.rpc.Heartbeat(ctx, &v1.HeartbeatRequest{Version: version, RunningJobIds: running, ReportsJobs: reportsJobs, Capabilities: Capabilities})
 	return rpcErr(err)
 }
 
@@ -173,4 +173,21 @@ func permanent(err error) bool {
 		return true
 	}
 	return false
+}
+
+// Protocol features this runner announces to the server
+var Capabilities = []string{"exec"}
+
+// Nil exec with done false when the poll window closed without a command
+func (c *Client) FetchExec(ctx context.Context, jobID string, wait time.Duration) (*v1.FetchExecResponse, error) {
+	resp, err := c.rpc.FetchExec(ctx, &v1.FetchExecRequest{JobId: jobID, WaitSeconds: int32(wait / time.Second)})
+	if err != nil {
+		return nil, rpcErr(err)
+	}
+	return resp, nil
+}
+
+func (c *Client) CompleteExec(ctx context.Context, req *v1.CompleteExecRequest) error {
+	_, err := c.rpc.CompleteExec(ctx, req)
+	return rpcErr(err)
 }

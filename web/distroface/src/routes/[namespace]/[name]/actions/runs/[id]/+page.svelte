@@ -20,7 +20,8 @@
 		Play,
 		Layers,
 		Container,
-		Pin
+		Pin,
+		Bot
 	} from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -349,6 +350,17 @@
 						{#if run.sha}
 							<CommitBadge sha={run.sha} {namespace} {name} />
 						{/if}
+						{#if run.agentSessionId}
+							<a
+								href={resolve('/[namespace]/[name]/agents/sessions/[id]', {
+									namespace,
+									name,
+									id: run.agentSessionId
+								})}
+								class="inline-flex items-center gap-1 text-foreground hover:text-primary"
+								title="Open the agent session"><Bot class="size-3" />{run.agentSlug || 'agent'}</a
+							>
+						{/if}
 						{#if ref.name}
 							<a
 								href={resolve('/[namespace]/[name]/tree/[ref]/[...path]', {
@@ -410,7 +422,7 @@
 							>
 								<Ban />Cancel run
 							</Button>
-						{:else}
+						{:else if !run.agentSessionId}
 							<DropdownMenu>
 								<DropdownMenuTrigger>
 									{#snippet child({ props })}

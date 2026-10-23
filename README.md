@@ -71,6 +71,10 @@ dfcli release upload myteam/app v1.2.3 ./dist/*
 dfcli runner register --server https://df.example.com --token <t> --name ci && dfcli runner start
 ```
 
+The server can run jobs itself. Turn the built in runner on under Admin, Actions, give the process the docker socket, and bind the data dir at the same path on the host and in the container, jobs are sibling containers and the daemon mounts job directories by host path. A runner named `builtin` then serves the configured labels at the instance scope. The socket makes the server root on its host, so keep it to development and small instances and use `dfcli runner` on a separate machine for anything shared.
+
+Agent sessions that run commands open one job per session, the command workspace. It checks the working branch out once, writes the session's uncommitted edits in front of each command, and stays open until the session ends, so installed dependencies survive between commands.
+
 Repos are addressed as `[namespace/]name`, bare names resolve to your own namespace first, then the unique visible match, qualify the name if it's ambiguous.
 
 ## Config

@@ -8,3 +8,10 @@ services:
     network_mode: host
     environment:
       - TZ=UTC
+      # The built in Actions runner (Admin, Actions) starts jobs as sibling
+      # containers over the docker socket, so the data dir must sit at the
+      # same path on the host and in the container
+      # - DISTROFACE_DATA_DIR=/srv/distroface
+    # volumes:
+    #   - /srv/distroface:/srv/distroface
+    #   - /var/run/docker.sock:/var/run/docker.sock

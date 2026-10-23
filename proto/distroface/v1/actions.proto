@@ -81,6 +81,10 @@ service RunnerService {
   rpc FinishTaskArtifact(FinishTaskArtifactRequest) returns (FinishTaskArtifactResponse) {}
   // ListTaskArtifacts lists what the job's run has uploaded so far.
   rpc ListTaskArtifacts(ListTaskArtifactsRequest) returns (ListTaskArtifactsResponse) {}
+  // FetchExec long polls for the next command of an interactive job.
+  rpc FetchExec(FetchExecRequest) returns (FetchExecResponse) {}
+  // CompleteExec reports the outcome of one command of an interactive job.
+  rpc CompleteExec(CompleteExecRequest) returns (CompleteExecResponse) {}
 }
 
 // Lifecycle state of a run, job, or step
@@ -179,6 +183,9 @@ message WorkflowRun {
   google.protobuf.Timestamp created_at = 18;
   // Parser notes, keys the workflow used that this instance ignores
   repeated string notes = 19;
+  // Set when an agent session owns the run
+  string agent_session_id = 20;
+  string agent_slug = 21;
 }
 
 // Bytes of log appended to a job
@@ -250,6 +257,10 @@ message Runner {
   string status = 6;
   google.protobuf.Timestamp last_seen = 7;
   google.protobuf.Timestamp created_at = 8;
+  // Managed by the server process, not deletable
+  bool builtin = 9;
+  // Protocol features the runner reported, such as exec
+  repeated string capabilities = 10;
 }
 
 // ListWorkflowsRequest identifies a repository.
@@ -548,6 +559,7 @@ message RegisterRunnerRequest {
   string runner_name = 2;
   repeated string labels = 3;
   string version = 4;
+  repeated string capabilities = 5;
 }
 
 // RegisterRunnerResponse contains the runner identity and its long lived token.
@@ -563,6 +575,8 @@ message HeartbeatRequest {
   repeated string running_job_ids = 2;
   // True when running_job_ids is authoritative, one off checks leave it unset
   bool reports_jobs = 3;
+  // Protocol features, exec for interactive jobs
+  repeated string capabilities = 4;
 }
 
 // HeartbeatResponse is empty on success.
@@ -643,6 +657,8 @@ message Task {
   // Resolved runs-on labels of the job
   repeated string runs_on = 20;
   TaskCredentials container_credentials = 21;
+  // Job stays open after its steps and serves commands via FetchExec
+  bool interactive = 22;
 }
 
 // FetchTaskResponse contains a task or nothing.
@@ -731,3 +747,41 @@ message ListTaskArtifactsRequest {
 message ListTaskArtifactsResponse {
   repeated RunArtifact artifacts = 1;
 }
+
+// One command queued on an interactive job, run with bash
+message ExecRequest {
+  string id = 1;
+  int32 number = 2;
+  string script = 3;
+  int32 timeout_minutes = 4;
+}
+
+// FetchExecRequest long polls for the next command of a job.
+message FetchExecRequest {
+  string job_id = 1;
+  int32 wait_seconds = 2;
+}
+
+// FetchExecResponse carries a command, or tells the runner to finish the job.
+message FetchExecResponse {
+  ExecRequest exec = 1;
+  // No more commands will come, finish the job with success
+  bool done = 2;
+  // The job was cancelled, finish it as cancelled
+  bool cancelled = 3;
+}
+
+// CompleteExecRequest reports one finished command.
+message CompleteExecRequest {
+  string job_id = 1;
+  string exec_id = 2;
+  ActionsConclusion conclusion = 3;
+  int32 exit_code = 4;
+  // Combined output, the runner keeps the head and tail of long output
+  string output = 5;
+  // Why the command did not run, empty when it ran
+  string error = 6;
+}
+
+// CompleteExecResponse is empty on success.
+message CompleteExecResponse {}

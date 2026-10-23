@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -86,16 +87,16 @@ func TestRawArguments(t *testing.T) {
 }
 
 func TestAPIErrorClassification(t *testing.T) {
-	if e := newAPIError(400, `{"error":{"message":"This model's maximum context length is 8192 tokens"}}`); e.class != ErrContextLength {
+	if e := newAPIError(400, `{"error":{"message":"This model's maximum context length is 8192 tokens"}}`); !errors.Is(e.class, ErrContextLength) {
 		t.Fatalf("context length not detected: %v", e.class)
 	}
-	if e := newAPIError(429, "slow down"); e.class != ErrRateLimited {
+	if e := newAPIError(429, "slow down"); !errors.Is(e.class, ErrRateLimited) {
 		t.Fatal("rate limit")
 	}
-	if e := newAPIError(401, "nope"); e.class != ErrUnauthorized {
+	if e := newAPIError(401, "nope"); !errors.Is(e.class, ErrUnauthorized) {
 		t.Fatal("auth")
 	}
-	if e := newAPIError(503, "down"); e.class != ErrUnavailable {
+	if e := newAPIError(503, "down"); !errors.Is(e.class, ErrUnavailable) {
 		t.Fatal("unavailable")
 	}
 }

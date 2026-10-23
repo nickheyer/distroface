@@ -185,6 +185,7 @@ message AgentProvider {
   google.protobuf.Timestamp updated_at = 23;
   // Defined at a scope above the one requested
   bool inherited = 24;
+  // Billed prompt plus output tokens since midnight utc
   int64 tokens_today = 25;
   // Context size hint used to compact long transcripts, zero uses the kind default
   int32 context_window = 26;
@@ -352,6 +353,7 @@ message AgentSession {
   string error = 21;
   int32 turns = 22;
   int32 tool_calls = 23;
+  // Read for the first time, with output the transcript size
   int64 input_tokens = 24;
   int64 output_tokens = 25;
   int64 result_pull_number = 26;
@@ -369,6 +371,13 @@ message AgentSession {
   // Short label derived from the target or prompt
   string title = 38;
   int64 event_count = 39;
+  // Every prompt sent in full, cache reads included
+  int64 prompt_tokens = 40;
+  // Prompt plus output of the latest call
+  int64 context_tokens = 41;
+  // Prompt tokens the connector served from its cache
+  int64 cache_read_tokens = 42;
+  int64 cache_write_tokens = 43;
 }
 
 // One transcript event
@@ -397,6 +406,10 @@ message AgentUsageBucket {
   int64 succeeded = 6;
   int64 failed = 7;
   int64 tool_calls = 8;
+  // Every prompt sent in full, cache reads included
+  int64 prompt_tokens = 9;
+  // Prompt tokens the connectors served from cache
+  int64 cache_read_tokens = 10;
 }
 
 // ListAgentProvidersRequest identifies a scope.

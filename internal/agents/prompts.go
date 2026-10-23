@@ -34,7 +34,7 @@ func (m *Manager) systemPrompt(rc *runContext) string {
 - Your commits land on the branch %s, created from %s. open_pull_request proposes %s into %s.
 - Explore the code with list_files, search_code, and read_file before changing anything. Follow existing conventions.
 - Make the change, then commit with a clear message. Commit related edits together.
-- When commands are available, run the relevant build, tests, or linters with run_command and fix what fails before finishing.
+- When commands are available, run the relevant build, tests, or linters with run_command and fix what fails before finishing. Commands share one workspace per session, so dependencies installed by one command are there for the next. Use list_files, read_file, write_file, and edit_file for file work instead of shell commands.
 - Finish with open_pull_request when the task started from an issue or a plain request, describing what changed and why. When the task is feedback on an existing pull request you own, commit to it and summarize what you changed.
 - If the task is unclear or impossible, explain why instead of guessing.
 `, rc.ws.branch, rc.ws.baseBranch, rc.ws.branch, rc.ws.baseBranch)

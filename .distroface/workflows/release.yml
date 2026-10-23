@@ -12,7 +12,6 @@ permissions:
 jobs:
   generate-proto:
     name: Generate Proto Code
-    if: ${{ github.server_url != 'https://github.com' }}
     runs-on: ubuntu-latest
 
     steps:
@@ -235,7 +234,6 @@ jobs:
 
   build-docker:
     name: Build Docker
-    if: ${{ github.server_url != 'https://github.com' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
