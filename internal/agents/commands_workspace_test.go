@@ -124,7 +124,7 @@ func TestCommandWorkspacePersistsAcrossCommands(t *testing.T) {
 			t.Fatalf("command %d must not touch the branch, it never moved, got %q", i+1, ex.Script)
 		}
 	}
-	if !strings.HasSuffix(first.Script, "\ncat hello.txt") || first.Number != 1 {
+	if !strings.HasSuffix(first.Script, "\nset +e\ncat hello.txt") || first.Number != 1 {
 		t.Fatalf("first = %+v", first)
 	}
 	if !strings.HasSuffix(second.Script, "\necho again") || second.Number != 2 {

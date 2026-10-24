@@ -234,6 +234,8 @@ func commandScript(rc *runContext, cw *commandWorkspace, command string) (script
 			fmt.Fprintf(&b, "chmod +x -- %s\n", shellQuote(p))
 		}
 	}
+	// Errexit guards only the sync, the script runs whole
+	b.WriteString("set +e\n")
 	b.WriteString(command)
 	return b.String(), branch, head
 }

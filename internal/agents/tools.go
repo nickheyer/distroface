@@ -286,7 +286,7 @@ var toolRegistry = map[string]*toolSpec{
 	},
 	"run_command": {
 		Name:        "run_command",
-		Description: "Runs a bash script in this session's command workspace on a workflow runner and returns its output. The workspace is a checkout of the working branch with your uncommitted edits applied, and it persists between calls, so installed dependencies and build output survive. Use it to build, test, lint, or run scripts. Never use it to list, read, or edit files, the file tools are faster and see the same content.",
+		Description: "Runs a bash script in this session's command workspace on a workflow runner and returns its output, every line of it, with the exit code of the last command. The script starts in the root of a checkout of the working branch with your uncommitted edits applied, so relative paths work and there is nothing to locate. The workspace persists between calls, so installed dependencies and build output survive. Use it to build, test, lint, or run scripts. Never use it to list, read, or edit files, the file tools are faster and see the same content. Never run git or gh in it, the checkout is disposable and only the commit tool and open_pull_request tool change the branch. If a toolchain is missing on the runner, say so and move on.",
 		Schema:      `{"type":"object","properties":{"command":{"type":"string","description":"bash script"},"timeout_minutes":{"type":"integer"}},"required":["command"]}`,
 		Commit:      true,
 		Run:         toolRunCommand,
