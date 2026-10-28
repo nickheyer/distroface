@@ -26,7 +26,7 @@ func TestParseToolBlocks(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatalf("calls %d", len(calls))
 	}
-	if calls[0].Name != "read_file" || string(calls[0].Arguments) != `{"path": "a.go"}` {
+	if calls[0].Name != "read_file" || string(calls[0].Arguments) != `{"path":"a.go"}` {
 		t.Fatalf("first call %+v", calls[0])
 	}
 	if calls[1].Name != "list_files" || string(calls[1].Arguments) != "{}" {

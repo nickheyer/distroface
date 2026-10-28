@@ -31,6 +31,9 @@ var streamOnly sync.Map
 // How much of the cache markup each endpoint accepts
 var cacheSupport sync.Map
 
+// Endpoints and models that refuse a sampling temperature
+var noTemperature sync.Map
+
 const (
 	cacheFull = iota
 	cacheNoTTL
@@ -40,6 +43,11 @@ const (
 var ceilingPattern = regexp.MustCompile(`max_tokens: *\d+ *> *(\d+)`)
 
 var cachePattern = regexp.MustCompile(`cache_control|\bttl\b`)
+
+const (
+	blockThinking = "thinking"
+	blockRedacted = "redacted_thinking"
+)
 
 // Messages api client
 type anthropicClient struct {
@@ -56,8 +64,26 @@ type anBlock struct {
 	Input        json.RawMessage `json:"input,omitempty"`
 	ToolUseID    string          `json:"tool_use_id,omitempty"`
 	Content      string          `json:"content,omitempty"`
+	Thinking     string          `json:"thinking,omitempty"`
+	Signature    string          `json:"signature,omitempty"`
+	Data         string          `json:"data,omitempty"`
 	CacheControl *anCache        `json:"cache_control,omitempty"`
 }
+
+// Replay needs the thinking field even when empty
+func (b anBlock) MarshalJSON() ([]byte, error) {
+	type plain anBlock
+	if b.Type != blockThinking {
+		return json.Marshal(plain(b))
+	}
+	return json.Marshal(struct {
+		Type      string `json:"type"`
+		Thinking  string `json:"thinking"`
+		Signature string `json:"signature,omitempty"`
+	}{b.Type, b.Thinking, b.Signature})
+}
+
+func (b anBlock) reasoning() bool { return b.Type == blockThinking || b.Type == blockRedacted }
 
 type anCache struct {
 	Type string `json:"type"`
@@ -126,6 +152,9 @@ func (c *anthropicClient) Complete(ctx context.Context, req *Request) (*Response
 		maxTokens = v.(int)
 	}
 	body := anRequest{Model: req.Model, MaxTokens: maxTokens, Temperature: req.Temperature}
+	if _, ok := noTemperature.Load(key); ok {
+		body.Temperature = nil
+	}
 	if req.System != "" {
 		body.System = []anBlock{{Type: "text", Text: req.System}}
 	}
@@ -147,6 +176,10 @@ func (c *anthropicClient) Complete(ctx context.Context, req *Request) (*Response
 				}
 				msg.Content = append(msg.Content, anBlock{Type: "tool_result", ToolUseID: m.ToolCallID, Content: content})
 			case RoleAssistant:
+				var reasoning []anBlock
+				if len(m.Reasoning) > 0 && json.Unmarshal(m.Reasoning, &reasoning) == nil {
+					msg.Content = append(msg.Content, reasoning...)
+				}
 				if m.Content != "" {
 					msg.Content = append(msg.Content, anBlock{Type: "text", Text: m.Content})
 				}
@@ -189,6 +222,9 @@ func (c *anthropicClient) Complete(ctx context.Context, req *Request) (*Response
 			level++
 			cacheSupport.Store(c.base, level)
 			markCache(&body, level, req.CacheTTL)
+		case rejectsTemperature(err) && body.Temperature != nil:
+			body.Temperature = nil
+			noTemperature.Store(key, true)
 		default:
 			return nil, err
 		}
@@ -201,6 +237,7 @@ func (c *anthropicClient) Complete(ctx context.Context, req *Request) (*Response
 		InputTokens: out.Usage.prompt(), OutputTokens: out.Usage.OutputTokens,
 		CacheReadTokens: out.Usage.CacheReadTokens, CacheWriteTokens: out.Usage.CacheCreationTokens,
 	}}
+	var reasoning []anBlock
 	for _, b := range out.Content {
 		switch b.Type {
 		case "text":
@@ -210,7 +247,12 @@ func (c *anthropicClient) Complete(ctx context.Context, req *Request) (*Response
 			resp.Content += b.Text
 		case "tool_use":
 			resp.ToolCalls = append(resp.ToolCalls, ToolCall{ID: b.ID, Name: b.Name, Arguments: rawArguments(b.Input)})
+		case blockThinking, blockRedacted:
+			reasoning = append(reasoning, anBlock{Type: b.Type, Thinking: b.Thinking, Signature: b.Signature, Data: b.Data})
 		}
+	}
+	if len(reasoning) > 0 {
+		resp.Reasoning, _ = json.Marshal(reasoning)
 	}
 	switch {
 	case len(resp.ToolCalls) > 0:
@@ -265,9 +307,14 @@ func markCache(body *anRequest, level int, ttl string) {
 	if n := len(body.System); n > 0 {
 		body.System[n-1].CacheControl = mark()
 	}
+	// Reasoning blocks do not get markers
 	if n := len(body.Messages); n > 0 {
-		if blocks := body.Messages[n-1].Content; len(blocks) > 0 {
-			blocks[len(blocks)-1].CacheControl = mark()
+		blocks := body.Messages[n-1].Content
+		for j := len(blocks) - 1; j >= 0; j-- {
+			if !blocks[j].reasoning() {
+				blocks[j].CacheControl = mark()
+				break
+			}
 		}
 	}
 }
@@ -279,6 +326,11 @@ func rejectsCache(err error) bool {
 		return false
 	}
 	return cachePattern.MatchString(strings.ToLower(apiErr.Message))
+}
+
+func rejectsTemperature(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusBadRequest && strings.Contains(strings.ToLower(apiErr.Message), "temperature")
 }
 
 // The api demands the event stream for long answers
@@ -366,6 +418,8 @@ func readEventStream(r io.Reader) (*anResponse, error) {
 				Type        string `json:"type"`
 				Text        string `json:"text"`
 				PartialJSON string `json:"partial_json"`
+				Thinking    string `json:"thinking"`
+				Signature   string `json:"signature"`
 			}
 			_ = json.Unmarshal(ev.Delta, &d)
 			if b := blocks[ev.Index]; b != nil {
@@ -374,6 +428,10 @@ func readEventStream(r io.Reader) (*anResponse, error) {
 					b.Text += d.Text
 				case "input_json_delta":
 					inputs[ev.Index].WriteString(d.PartialJSON)
+				case "thinking_delta":
+					b.Thinking += d.Thinking
+				case "signature_delta":
+					b.Signature += d.Signature
 				}
 			}
 		case "message_delta":
@@ -444,8 +502,9 @@ func readEventStream(r io.Reader) (*anResponse, error) {
 func (c *anthropicClient) ListModels(ctx context.Context) ([]Model, error) {
 	var out struct {
 		Data []struct {
-			ID          string `json:"id"`
-			DisplayName string `json:"display_name"`
+			ID             string `json:"id"`
+			DisplayName    string `json:"display_name"`
+			MaxInputTokens int64  `json:"max_input_tokens"`
 		} `json:"data"`
 	}
 	if err := getJSON(ctx, c.http, c.cfg, c.base+"/v1/models?limit=100", c.auth, &out); err != nil {
@@ -457,7 +516,7 @@ func (c *anthropicClient) ListModels(ctx context.Context) ([]Model, error) {
 		if name == "" {
 			name = d.ID
 		}
-		models = append(models, Model{ID: d.ID, Name: name})
+		models = append(models, Model{ID: d.ID, Name: name, ContextWindow: d.MaxInputTokens})
 	}
 	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 	return models, nil

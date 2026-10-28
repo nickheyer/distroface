@@ -44,11 +44,25 @@ type runContext struct {
 	// Last assistant text already in the transcript
 	said string
 	// Side effects the finisher may complete
-	posted   bool
-	reviewed bool
-	prOpened bool
-	comments []string
+	posted      bool
+	reviewed    bool
+	prOpened    bool
+	comments    []string
+	window      int               // Model context window in tokens, zero when unknown
+	pruned      map[string]string // Stubs for results dropped from requests, by call id
+	results     []toolRecord      // Every call answered so far, for repeats
+	bound, sent string            // Digests of the request last answered and last sent
 }
+
+const ( // Read bounds
+	maxReadLines         = 1000
+	maxReadBytes         = 32000
+	maxListEntries       = 2000
+	defaultSearchMatches = 200
+	defaultCommitList    = 50
+	defaultIssueMatches  = 50
+	defaultLogTail       = 500
+)
 
 // One callable the model may use
 type toolSpec struct {
@@ -59,7 +73,9 @@ type toolSpec struct {
 	Write bool
 	// Counts as a commit under the commits policy
 	Commit bool
-	Run    func(rc *runContext, args map[string]any) (string, error)
+	// Changes nothing, so repeats may point at earlier results
+	Read bool
+	Run  func(rc *runContext, args map[string]any) (string, error)
 }
 
 // Whether a call pauses for a human under the agent's policy
@@ -159,66 +175,77 @@ var toolRegistry = map[string]*toolSpec{
 		Name:        "get_repository_info",
 		Description: "Describes the repository, its default branch, languages, the working branch of this session, and the instruction files found.",
 		Schema:      `{"type":"object","properties":{}}`,
+		Read:        true,
 		Run:         toolRepositoryInfo,
 	},
 	"list_files": {
 		Name:        "list_files",
-		Description: "Lists files in a directory of the working tree. Directories end with a slash. Use recursive for a full subtree listing.",
+		Description: "Lists files in a directory of the working tree, up to 2000 entries. Directories end with a slash. Use recursive for a full subtree listing.",
 		Schema:      `{"type":"object","properties":{"path":{"type":"string","description":"Directory path, empty for the root"},"recursive":{"type":"boolean"}}}`,
+		Read:        true,
 		Run:         toolListFiles,
 	},
 	"read_file": {
 		Name:        "read_file",
-		Description: "Reads a text file from the working tree with line numbers. Use start_line and end_line to read a range of a large file.",
+		Description: "Reads a text file from the working tree with line numbers, up to 1000 lines or 32000 bytes per call. Use start_line and end_line to page through a large file.",
 		Schema:      `{"type":"object","properties":{"path":{"type":"string"},"start_line":{"type":"integer","minimum":1},"end_line":{"type":"integer","minimum":1}},"required":["path"]}`,
+		Read:        true,
 		Run:         toolReadFile,
 	},
 	"search_code": {
 		Name:        "search_code",
-		Description: "Searches committed files with a regular expression and returns matching lines as path:line: text. Uncommitted edits are not searched.",
-		Schema:      `{"type":"object","properties":{"pattern":{"type":"string","description":"Go regular expression"},"path_glob":{"type":"string","description":"Glob such as src/**/*.go"},"case_insensitive":{"type":"boolean"},"limit":{"type":"integer","description":"Zero or absent returns every match"}},"required":["pattern"]}`,
+		Description: "Searches committed files with a regular expression and returns matching lines as path:line: text, 200 of them unless limit is given. Uncommitted edits are not searched.",
+		Schema:      `{"type":"object","properties":{"pattern":{"type":"string","description":"Go regular expression"},"path_glob":{"type":"string","description":"Glob such as src/**/*.go"},"case_insensitive":{"type":"boolean"},"limit":{"type":"integer","description":"Matches returned, defaults to 200"}},"required":["pattern"]}`,
+		Read:        true,
 		Run:         toolSearchCode,
 	},
 	"get_diff": {
 		Name:        "get_diff",
 		Description: "Shows what changed. On a pull request this is the diff against its base, otherwise the uncommitted edits of this session. Without a path it lists changed files with counts, with a path it returns the hunks with old and new line numbers.",
 		Schema:      `{"type":"object","properties":{"path":{"type":"string"}}}`,
+		Read:        true,
 		Run:         toolGetDiff,
 	},
 	"get_pull_request": {
 		Name:        "get_pull_request",
 		Description: "Returns the pull request this session targets: description, commits, review threads, checks, mergeability, and recent comments.",
 		Schema:      `{"type":"object","properties":{"number":{"type":"integer","description":"Another pull request of this repository, defaults to the target"}}}`,
+		Read:        true,
 		Run:         toolGetPull,
 	},
 	"get_issue": {
 		Name:        "get_issue",
 		Description: "Returns an issue or pull request with its labels, assignees, and comments.",
 		Schema:      `{"type":"object","properties":{"number":{"type":"integer","description":"Defaults to the target of this session"}}}`,
+		Read:        true,
 		Run:         toolGetIssue,
 	},
 	"list_commits": {
 		Name:        "list_commits",
-		Description: "Lists recent commits, the pull request's commits when one is targeted, otherwise the working branch history.",
-		Schema:      `{"type":"object","properties":{"limit":{"type":"integer","description":"Zero or absent lists every commit"}}}`,
+		Description: "Lists recent commits, 50 unless limit is given, the pull request's commits when one is targeted, otherwise the working branch history.",
+		Schema:      `{"type":"object","properties":{"limit":{"type":"integer","description":"Commits listed, defaults to 50"}}}`,
+		Read:        true,
 		Run:         toolListCommits,
 	},
 	"get_checks": {
 		Name:        "get_checks",
 		Description: "Returns commit statuses and workflow runs for the head commit, with run ids for get_workflow_run_log.",
 		Schema:      `{"type":"object","properties":{}}`,
+		Read:        true,
 		Run:         toolGetChecks,
 	},
 	"get_workflow_run_log": {
 		Name:        "get_workflow_run_log",
-		Description: "Returns a workflow job log, whole unless tail_lines is given. Picks the first failed job unless job_name is given.",
-		Schema:      `{"type":"object","properties":{"run_id":{"type":"string"},"job_name":{"type":"string"},"tail_lines":{"type":"integer","description":"Lines from the end, zero or absent returns the whole log"}},"required":["run_id"]}`,
+		Description: "Returns the last 500 lines of a workflow job log unless tail_lines is given. Picks the first failed job unless job_name is given.",
+		Schema:      `{"type":"object","properties":{"run_id":{"type":"string"},"job_name":{"type":"string"},"tail_lines":{"type":"integer","description":"Lines from the end, defaults to 500"}},"required":["run_id"]}`,
+		Read:        true,
 		Run:         toolWorkflowLog,
 	},
 	"search_issues": {
 		Name:        "search_issues",
-		Description: "Searches issues and pull requests of this repository by text, state, and labels.",
-		Schema:      `{"type":"object","properties":{"query":{"type":"string"},"state":{"type":"string","enum":["open","closed","all"]},"labels":{"type":"array","items":{"type":"string"}},"is_pull":{"type":"boolean"},"limit":{"type":"integer","description":"Zero or absent returns every match"}}}`,
+		Description: "Searches issues and pull requests of this repository by text, state, and labels, 50 matches unless limit is given.",
+		Schema:      `{"type":"object","properties":{"query":{"type":"string"},"state":{"type":"string","enum":["open","closed","all"]},"labels":{"type":"array","items":{"type":"string"}},"is_pull":{"type":"boolean"},"limit":{"type":"integer","description":"Matches returned, defaults to 50"}}}`,
+		Read:        true,
 		Run:         toolSearchIssues,
 	},
 	"create_issue": {
@@ -289,7 +316,7 @@ var toolRegistry = map[string]*toolSpec{
 	},
 	"run_command": {
 		Name:        "run_command",
-		Description: "Runs a bash script in this session's command workspace on a workflow runner and returns its output, every line of it, with the exit code of the last command. The script starts in the root of a checkout of the working branch with your uncommitted edits applied, so relative paths work and there is nothing to locate. The workspace persists between calls, so installed dependencies and build output survive. Use it to build, test, lint, or run scripts. Never use it to list, read, or edit files, the file tools are faster and see the same content. Never run git, gh, or curl against an API in it, the checkout is disposable and only the commit tool and open_pull_request tool change the branch. The GITHUB_* and DISTROFACE_* variables there point at this Distroface instance, not GitHub, with a read only token, so issues, comments, reviews, and pull requests go through the tools. If a toolchain is missing on the runner, say so and move on.",
+		Description: "Runs a bash script in this session's command workspace on a workflow runner and returns its output and the exit code of the last command. Output past 30000 bytes loses its middle, so pipe long output through tail or grep. The script starts in the root of a checkout of the working branch with your uncommitted edits applied, so relative paths work and there is nothing to locate. The workspace persists between calls, so installed dependencies and build output survive. Use it to build, test, lint, or run scripts. Never use it to list, read, or edit files, the file tools are faster and see the same content. Never run git, gh, or curl against an API in it, the checkout is disposable and only the commit tool and open_pull_request tool change the branch. The GITHUB_* and DISTROFACE_* variables there point at this Distroface instance, not GitHub, with a read only token, so issues, comments, reviews, and pull requests go through the tools. If a toolchain is missing on the runner, say so and move on.",
 		Schema:      `{"type":"object","properties":{"command":{"type":"string","description":"bash script"},"timeout_minutes":{"type":"integer"}},"required":["command"]}`,
 		Commit:      true,
 		Run:         toolRunCommand,
@@ -382,6 +409,9 @@ func toolListFiles(rc *runContext, args map[string]any) (string, error) {
 	if len(entries) == 0 {
 		return "(empty)", nil
 	}
+	if rest := len(entries) - maxListEntries; rest > 0 {
+		entries = append(entries[:maxListEntries], fmt.Sprintf("[%d more entries not shown, list a subdirectory]", rest))
+	}
 	return strings.Join(entries, "\n"), nil
 }
 
@@ -413,6 +443,9 @@ func toolReadFile(rc *runContext, args map[string]any) (string, error) {
 	if end > len(lines) {
 		end = len(lines)
 	}
+	if end-start+1 > maxReadLines {
+		end = start + maxReadLines - 1
+	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s (%d lines)\n", p, len(lines))
 	if start > len(lines) {
@@ -420,11 +453,21 @@ func toolReadFile(rc *runContext, args map[string]any) (string, error) {
 		return b.String(), nil
 	}
 	width := len(fmt.Sprint(end))
+	size, last := 0, start-1
 	for i := start; i <= end; i++ {
-		fmt.Fprintf(&b, "%*d| %s\n", width, i, lines[i-1])
+		line := fmt.Sprintf("%*d| %s\n", width, i, lines[i-1])
+		if size+len(line) > maxReadBytes && i > start {
+			break
+		}
+		b.WriteString(line)
+		size += len(line)
+		last = i
 	}
-	if end < len(lines) {
-		fmt.Fprintf(&b, "[%d more lines, read from start_line %d]\n", len(lines)-end, end+1)
+	switch {
+	case last < end:
+		fmt.Fprintf(&b, "[cut at %d bytes, %d more lines, read from start_line %d]\n", maxReadBytes, len(lines)-last, last+1)
+	case last < len(lines):
+		fmt.Fprintf(&b, "[%d more lines, read from start_line %d]\n", len(lines)-last, last+1)
 	}
 	return b.String(), nil
 }
@@ -438,17 +481,15 @@ func toolSearchCode(rc *runContext, args map[string]any) (string, error) {
 		return "", err
 	}
 	defer r.Close()
-	// Zero or absent means every match
-	limit := max(argInt(args, "limit"), 0)
+	limit := argInt(args, "limit")
+	if limit <= 0 {
+		limit = defaultSearchMatches
+	}
 	pattern := argString(args, "pattern")
 	if strings.TrimSpace(pattern) == "" {
 		return "", fmt.Errorf("pattern is required")
 	}
-	fetch := 0
-	if limit > 0 {
-		fetch = limit + 1
-	}
-	results, err := r.Grep(rc.ws.head, pattern, argString(args, "path_glob"), argBool(args, "case_insensitive"), fetch)
+	results, err := r.Grep(rc.ws.head, pattern, argString(args, "path_glob"), argBool(args, "case_insensitive"), limit+1)
 	if err != nil {
 		return "", err
 	}
@@ -457,7 +498,7 @@ func toolSearchCode(rc *runContext, args map[string]any) (string, error) {
 	}
 	var b strings.Builder
 	for i, res := range results {
-		if limit > 0 && i >= limit {
+		if i >= limit {
 			b.WriteString("[more matches not shown, raise limit or narrow the pattern]\n")
 			break
 		}
@@ -714,8 +755,10 @@ func toolGetIssue(rc *runContext, args map[string]any) (string, error) {
 }
 
 func toolListCommits(rc *runContext, args map[string]any) (string, error) {
-	// Zero or absent lists every commit
-	limit := max(argInt(args, "limit"), 0)
+	limit := argInt(args, "limit")
+	if limit <= 0 {
+		limit = defaultCommitList
+	}
 	var b strings.Builder
 	if rc.pr != nil && len(rc.ws.commits) == 0 {
 		commits, err := rc.m.forge.PullCommits(rc.ctx, rc.repo, rc.pr, limit)
@@ -827,14 +870,21 @@ func toolWorkflowLog(rc *runContext, args map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Zero or absent returns the whole log
 	tail := argInt(args, "tail_lines")
+	if tail <= 0 {
+		tail = defaultLogTail
+	}
 	lines := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
-	if tail > 0 && len(lines) > tail {
-		lines = lines[len(lines)-tail:]
+	skipped := 0
+	if len(lines) > tail {
+		skipped = len(lines) - tail
+		lines = lines[skipped:]
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "Job %q of %s #%d: status=%s conclusion=%s\n", job.Name, run.WorkflowName, run.Number, job.Status, job.Conclusion)
+	if skipped > 0 {
+		fmt.Fprintf(&b, "[first %d lines not shown, raise tail_lines to see them]\n", skipped)
+	}
 	for _, l := range lines {
 		b.WriteString(l)
 		b.WriteByte('\n')
@@ -843,8 +893,10 @@ func toolWorkflowLog(rc *runContext, args map[string]any) (string, error) {
 }
 
 func toolSearchIssues(rc *runContext, args map[string]any) (string, error) {
-	// Zero or absent returns every match
-	limit := max(argInt(args, "limit"), 0)
+	limit := argInt(args, "limit")
+	if limit <= 0 {
+		limit = defaultIssueMatches
+	}
 	opts := stores.IssueListOptions{RepoID: rc.repo.ID, Limit: limit, OrderBy: "updated_at DESC"}
 	if st := argString(args, "state"); st == "open" || st == "closed" {
 		opts.State = st

@@ -2,6 +2,7 @@
 package llm
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -38,13 +39,12 @@ const (
 
 // Message is one turn of a conversation
 type Message struct {
-	Role    string
-	Content string
-	// Assistant turns that asked for tools
-	ToolCalls []ToolCall
-	// Tool turns answer one call
-	ToolCallID string
+	Role       string
+	Content    string
+	ToolCalls  []ToolCall // requests for tools from assistant
+	ToolCallID string     // one call
 	ToolName   string
+	Reasoning  json.RawMessage // replayed provider reasoning
 }
 
 // ToolCall is one function invocation the model asked for
@@ -92,6 +92,7 @@ type Response struct {
 	StopReason string
 	Usage      Usage
 	Model      string
+	Reasoning  json.RawMessage // reasoning blocks
 }
 
 // Model is one entry of a provider's catalog
@@ -262,7 +263,7 @@ func applyHeaders(req *http.Request, cfg Config) {
 	}
 }
 
-// Stringifies tool arguments that arrived as objects or strings
+// Compact arguments from objects or strings, replays match bytewise
 func rawArguments(v json.RawMessage) json.RawMessage {
 	if len(v) == 0 {
 		return json.RawMessage("{}")
@@ -274,15 +275,23 @@ func rawArguments(v json.RawMessage) json.RawMessage {
 			return json.RawMessage("{}")
 		}
 		if json.Valid([]byte(s)) {
-			return json.RawMessage(s)
+			return compactArguments([]byte(s))
 		}
 		b, _ := json.Marshal(map[string]any{"input": s})
 		return b
 	}
 	if json.Valid(v) {
-		return v
+		return compactArguments(v)
 	}
 	return json.RawMessage("{}")
+}
+
+func compactArguments(v []byte) json.RawMessage {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, v); err != nil {
+		return v
+	}
+	return buf.Bytes()
 }
 
 // Merges adjacent same role messages, which strict providers require

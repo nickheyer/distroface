@@ -311,7 +311,7 @@ func (m *Manager) run(ctx context.Context, sess *db.AgentSession) {
 		})
 
 		calls := resp.ToolCalls
-		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Content: resp.Content, ToolCalls: calls})
+		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Content: resp.Content, ToolCalls: calls, Reasoning: resp.Reasoning})
 		if len(calls) == 0 {
 			text := strings.TrimSpace(resp.Content)
 			if resp.StopReason == llm.StopLength && text == "" {
@@ -369,6 +369,7 @@ func (m *Manager) buildRunContext(ctx context.Context, sess *db.AgentSession, re
 	}
 	rc := &runContext{m: m, ctx: ctx, sess: sess, repo: repo, def: def, bot: bot, botUser: botUser, provider: provider, settings: m.Settings(ctx, repo)}
 	rc.actor = forge.Actor{User: bot, CanWrite: true}
+	rc.window = m.contextWindow(ctx, provider)
 	if sess.IssueID != nil {
 		issue, err := m.store.GetGitIssueByID(ctx, *sess.IssueID)
 		if err != nil {
@@ -467,19 +468,29 @@ func (m *Manager) transcript(ctx context.Context, rc *runContext) ([]llm.Message
 	if err != nil {
 		return nil, nil, err
 	}
-	system := ""
+	system, frozen := "", ""
 	for _, ev := range events {
 		if ev.Kind == EventSystem {
-			system = ev.Text
+			var data struct {
+				Context string `json:"context"`
+			}
+			_ = json.Unmarshal([]byte(ev.Data), &data)
+			system, frozen = ev.Text, data.Context
 			break
 		}
 	}
 	if system == "" {
-		system = m.systemPrompt(rc)
-		m.record(ctx, rc.sess, EventSystem, system, "", "", nil)
+		// Both kept so every resume replays the same bytes
+		system, frozen = m.systemPrompt(rc), m.sessionContext(rc)
+		m.record(ctx, rc.sess, EventSystem, system, "", "", map[string]any{"context": frozen})
+	}
+	if frozen == "" {
+		// Sessions older than the kept context render it live
+		frozen = m.sessionContext(rc)
 	}
 	msgs := []llm.Message{{Role: llm.RoleSystem, Content: system}}
 	answered := map[string]bool{}
+	argsOf := map[string]json.RawMessage{}
 	var lastCalls []llm.ToolCall
 	firstUser := true
 	for _, ev := range events {
@@ -487,7 +498,7 @@ func (m *Manager) transcript(ctx context.Context, rc *runContext) ([]llm.Message
 		case EventUser:
 			text := ev.Text
 			if firstUser {
-				text = m.initialMessage(rc, ev.Text)
+				text = initialMessage(frozen, ev.Text)
 				firstUser = false
 			}
 			msgs = append(msgs, llm.Message{Role: llm.RoleUser, Content: text})
@@ -500,6 +511,7 @@ func (m *Manager) transcript(ctx context.Context, rc *runContext) ([]llm.Message
 			lastCalls = nil
 			for _, c := range data.ToolCalls {
 				tc := llm.ToolCall{ID: c.ID, Name: c.Name, Arguments: c.Arguments}
+				argsOf[c.ID] = c.Arguments
 				msg.ToolCalls = append(msg.ToolCalls, tc)
 				lastCalls = append(lastCalls, tc)
 			}
@@ -513,6 +525,11 @@ func (m *Manager) transcript(ctx context.Context, rc *runContext) ([]llm.Message
 			lastCalls = nil
 		case EventToolResult:
 			answered[ev.ToolCallID] = true
+			var data struct {
+				OK bool `json:"ok"`
+			}
+			_ = json.Unmarshal([]byte(ev.Data), &data)
+			rc.results = append(rc.results, toolRecord{id: ev.ToolCallID, name: ev.Tool, args: compactJSON(argsOf[ev.ToolCallID]), text: ev.Text, ok: data.OK})
 			msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: ev.Text, ToolCallID: ev.ToolCallID, ToolName: ev.Tool})
 		}
 	}
@@ -576,6 +593,10 @@ func (m *Manager) executeCalls(rc *runContext, calls []llm.ToolCall, resumed boo
 			}
 		}
 		text, data := formatResult(result, err)
+		if err == nil {
+			text = rc.dedup(call, spec, text)
+		}
+		rc.results = append(rc.results, toolRecord{id: call.ID, name: call.Name, args: compactJSON(call.Arguments), text: text, ok: err == nil})
 		m.debugToolCall(rc, call, args, text, err, time.Since(started))
 		rc.sess.ToolCalls++
 		_ = m.store.UpdateAgentSessionColumns(ctx, rc.sess.ID, map[string]any{"tool_calls": rc.sess.ToolCalls})
@@ -604,7 +625,8 @@ func (m *Manager) execTool(rc *runContext, spec *toolSpec, args map[string]any) 
 			err = fmt.Errorf("tool crashed: %v", r)
 		}
 	}()
-	return spec.Run(rc, args)
+	result, err = spec.Run(rc, args)
+	return capResult(result), err
 }
 
 func formatResult(result string, err error) (string, map[string]any) {
@@ -1004,10 +1026,14 @@ func lastAssistantText(msgs []llm.Message) string {
 // One completion with retries on transient failures and compaction on context overflow
 func (m *Manager) complete(rc *runContext, msgs []llm.Message, tools []llm.Tool) (*llm.Response, error) {
 	ctx := rc.ctx
-	working := msgs
+	limit := rc.window * approxCharsPerToken
+
+	// Near the window every old result goes, else batches
+	working := rc.prune(msgs, limit > 0 && estimateChars(msgs) > limit*7/10)
+
 	// Zero compacts only after the provider rejects the context
-	if window := rc.provider.Row.ContextWindow; window > 0 && estimateChars(working) > window*approxCharsPerToken {
-		working = compact(working, window*approxCharsPerToken)
+	if limit > 0 && estimateChars(working) > limit {
+		working = compact(working, limit)
 	}
 	var temp *float64
 	if rc.def.Temperature != nil {
@@ -1022,6 +1048,7 @@ func (m *Manager) complete(rc *runContext, msgs []llm.Message, tools []llm.Tool)
 			}
 			req.Messages = append(req.Messages, msg)
 		}
+		rc.bindReasoning(req)
 		return req
 	}
 	var lastErr error
@@ -1032,6 +1059,7 @@ func (m *Manager) complete(rc *runContext, msgs []llm.Message, tools []llm.Tool)
 		}
 		resp, err := rc.provider.Client.Complete(ctx, build(working))
 		if err == nil {
+			rc.bound = rc.sent
 			return resp, nil
 		}
 		lastErr = err

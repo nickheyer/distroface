@@ -50,16 +50,16 @@ func (m *Manager) systemPrompt(rc *runContext) string {
 	}
 	// Any agent that can commit gets the branch rules, whatever its kind
 	if rc.def.Kind == KindCode || tools["commit"] {
-		fmt.Fprintf(&b, `
+		b.WriteString(`
 # Implementing changes
-- Your commits land on the branch %s, created from %s. open_pull_request proposes %s into %s.
+- Your commits land on the working branch named in the context, created from its base branch. open_pull_request proposes the working branch into its base.
 - Explore the code with list_files, search_code, and read_file before changing anything. Follow existing conventions.
 - Make the change, then commit it with the commit tool and a clear message. Commit related edits together. Nothing else lands on the branch, git in a command workspace changes nothing.
 - When commands are available, run the relevant build, tests, or linters with run_command and fix what fails before finishing. Commands run in the root of a checkout that already holds your edits and share one workspace per session, so dependencies installed by one command are there for the next. Use list_files, read_file, write_file, and edit_file for file work instead of shell commands.
 - Toolchains come from the repository's agent-setup-steps workflow. If the runner lacks a tool you need, name it in your summary so it can be added there, rather than searching for it.
 - Finish with open_pull_request when the task started from an issue or a plain request, describing what changed and why. When the task is feedback on an existing pull request you own, commit to it and summarize what you changed.
 - If the task is unclear or impossible, explain why instead of guessing.
-`, rc.ws.branch, rc.ws.baseBranch, rc.ws.branch, rc.ws.baseBranch)
+`)
 	}
 	if tools["create_issue"] {
 		b.WriteString(`
@@ -81,17 +81,16 @@ func (m *Manager) systemPrompt(rc *runContext) string {
 	return b.String()
 }
 
-// First user message, the target context followed by the task
-func (m *Manager) initialMessage(rc *runContext, prompt string) string {
+// Target context at session start, kept for identical resumes
+func (m *Manager) sessionContext(rc *runContext) string {
 	var b strings.Builder
-	b.WriteString("# Context\n")
 	fmt.Fprintf(&b, "Repository %s/%s, default branch %s.\n", rc.repo.Namespace, rc.repo.Name, rc.repo.DefaultBranch)
 	if rc.ws != nil {
 		fmt.Fprintf(&b, "Working branch %s from %s", rc.ws.branch, rc.ws.baseBranch)
 		if !rc.ws.head.IsZero() {
 			fmt.Fprintf(&b, " at %s", rc.ws.head.String()[:10])
 		}
-		b.WriteString(".\n")
+		fmt.Fprintf(&b, ". Commits land on %s and open_pull_request proposes it into %s.\n", rc.ws.branch, rc.ws.baseBranch)
 	}
 	if rc.issue != nil {
 		b.WriteString("\n")
@@ -101,6 +100,14 @@ func (m *Manager) initialMessage(rc *runContext, prompt string) string {
 			b.WriteString(m.describeIssue(rc.ctx, rc.repo, rc.issue))
 		}
 	}
+	return b.String()
+}
+
+// Initial user prompt
+func initialMessage(context, prompt string) string {
+	var b strings.Builder
+	b.WriteString("# Context\n")
+	b.WriteString(context)
 	b.WriteString("\n# Task\n")
 	b.WriteString(strings.TrimSpace(prompt))
 	b.WriteString("\n")

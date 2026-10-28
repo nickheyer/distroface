@@ -83,30 +83,25 @@ var (
 
 // Manager owns connectors, agent definitions, bot identities, and sessions
 type Manager struct {
-	store   *stores.Store
-	git     *gitrepo.Manager
-	forge   *forge.Manager
-	actions *actions.Manager
-	auth    *auth.Manager
-	res     *settings.Resolver
-	log     *logger.Logger
-	hub     *eventHub
-
-	runMu   sync.Mutex
-	running map[string]context.CancelFunc
-
-	kickMu  sync.Mutex
-	kicking map[string]bool
-
+	store    *stores.Store
+	git      *gitrepo.Manager
+	forge    *forge.Manager
+	actions  *actions.Manager
+	auth     *auth.Manager
+	res      *settings.Resolver
+	log      *logger.Logger
+	hub      *eventHub
+	runMu    sync.Mutex
+	running  map[string]context.CancelFunc
+	kickMu   sync.Mutex
+	kicking  map[string]bool
 	limMu    sync.Mutex
 	limiters map[string]*rateLimiter
-
-	botMu  sync.Mutex
-	botIDs map[string]bool
-	botAt  time.Time
-
-	// Base context for sessions, ends on shutdown
-	base context.Context
+	botMu    sync.Mutex
+	botIDs   map[string]bool
+	botAt    time.Time
+	windows  sync.Map        // Context windows from connector catalogs
+	base     context.Context // Base context for sessions
 }
 
 func NewManager(store *stores.Store, git *gitrepo.Manager, fm *forge.Manager, am *actions.Manager, authMgr *auth.Manager, res *settings.Resolver, log *logger.Logger) *Manager {

@@ -351,6 +351,40 @@ func (m *Manager) ResolveProvider(ctx context.Context, repo *db.GitRepository, p
 	return &ResolvedProvider{Row: chosen, Client: client, Model: model}, nil
 }
 
+// How long a listed context window is trusted
+const windowTTL = time.Hour
+
+type windowEntry struct {
+	tokens int
+	at     time.Time
+}
+
+// Window in tokens from the connector setting or its catalog
+func (m *Manager) contextWindow(ctx context.Context, p *ResolvedProvider) int {
+	if p.Row.ContextWindow > 0 {
+		return p.Row.ContextWindow
+	}
+	key := p.Row.ID + "/" + p.Model
+	if v, ok := m.windows.Load(key); ok {
+		if e := v.(windowEntry); time.Since(e.at) < windowTTL {
+			return e.tokens
+		}
+	}
+	tokens := 0
+	listCtx, cancel := ProviderContext(ctx, p.Row)
+	defer cancel()
+	if models, err := p.Client.ListModels(listCtx); err == nil {
+		for _, mdl := range models {
+			if mdl.ID == p.Model {
+				tokens = int(mdl.ContextWindow)
+				break
+			}
+		}
+	}
+	m.windows.Store(key, windowEntry{tokens: tokens, at: time.Now()})
+	return tokens
+}
+
 // Client builds a speaking client for a connector row
 func (m *Manager) Client(ctx context.Context, p *db.AgentProvider) (llm.Client, error) {
 	key, err := m.open(p.APIKey)

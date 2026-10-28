@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -562,5 +563,103 @@ func TestFinalReplyIsRecordedOnce(t *testing.T) {
 	}
 	if assistant != 0 || results != 1 {
 		t.Fatalf("the final reply appears as %d assistant and %d result events, want only the result", assistant, results)
+	}
+}
+
+// Text of the first user message of a chat request
+func firstUserContent(req map[string]any) string {
+	msgs, _ := req["messages"].([]any)
+	for _, m := range msgs {
+		if mm, ok := m.(map[string]any); ok && mm["role"] == "user" {
+			s, _ := mm["content"].(string)
+			return s
+		}
+	}
+	return ""
+}
+
+// Each request must extend the one before, byte for byte
+func assertAppendOnly(t *testing.T, requests []map[string]any) {
+	t.Helper()
+	for i := 1; i < len(requests); i++ {
+		prev, _ := requests[i-1]["messages"].([]any)
+		cur, _ := requests[i]["messages"].([]any)
+		if len(cur) < len(prev) {
+			t.Fatalf("request %d shrank from %d to %d messages", i, len(prev), len(cur))
+		}
+		for j := range prev {
+			if !reflect.DeepEqual(prev[j], cur[j]) {
+				t.Fatalf("request %d rewrote message %d:\n%v\nwas\n%v", i, j, cur[j], prev[j])
+			}
+		}
+		if !reflect.DeepEqual(requests[i-1]["tools"], requests[i]["tools"]) {
+			t.Fatalf("request %d changed the tool list", i)
+		}
+	}
+}
+
+func TestResumedSessionReplaysTheSameFirstMessage(t *testing.T) {
+	h := newHarness(t, []scriptedTurn{
+		{calls: []llm.ToolCall{call("c1", "get_diff", map[string]any{})}},
+		{calls: []llm.ToolCall{call("c2", "post_comment", map[string]any{"body": "Looks fine."})}},
+		{text: "Reviewed."},
+	})
+	if _, err := h.git.CommitToBranch(h.ctx, h.repo, h.actor, gitrepo.CommitRequest{Branch: "main", NewBranch: "feature", Message: "feature", Edits: []gitrepo.TreeEdit{{Path: "feature.txt", Mode: 0o100644, Content: strings.NewReader("new feature\n")}}}); err != nil {
+		t.Fatalf("branch: %v", err)
+	}
+	writer := forge.Actor{User: h.actor, CanWrite: true}
+	issue, _, err := h.forge.CreatePull(h.ctx, h.repo, writer, forge.NewPull{Base: "main", Head: "feature", Title: "Feature"})
+	if err != nil {
+		t.Fatalf("pull: %v", err)
+	}
+	def := h.defineAgent(AgentSpec{Slug: "reviewer", Name: "Reviewer", Kind: KindReview, Approval: ApprovalAllWrites, Enabled: true})
+	sess, err := h.agents.StartSession(h.ctx, StartParams{Repo: h.repo, Def: def, IssueNumber: issue.Number, Trigger: TriggerManual, Actor: h.actor})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	waiting := h.waitFor(sess.ID, func(s *db.AgentSession) bool { return s.Status == StatusWaitingApproval })
+	// The thread moves on while the session waits
+	if _, err := h.forge.CreateComment(h.ctx, h.repo, writer, issue, "Still looking at this one.", false); err != nil {
+		t.Fatalf("comment: %v", err)
+	}
+	pending, err := h.store.GetPendingAgentApproval(h.ctx, waiting.ID)
+	if err != nil || pending == nil {
+		t.Fatalf("pending approval %v %v", pending, err)
+	}
+	if err := h.agents.ResolveApproval(h.ctx, waiting, pending, true, "", h.actor); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if done := h.waitFor(sess.ID, completed); done.Conclusion != ConclusionSuccess {
+		t.Fatalf("conclusion %s error %q", done.Conclusion, done.Error)
+	}
+	h.script.mu.Lock()
+	requests := append([]map[string]any(nil), h.script.requests...)
+	h.script.mu.Unlock()
+	if len(requests) != 3 {
+		t.Fatalf("%d requests", len(requests))
+	}
+	first := firstUserContent(requests[0])
+	if !strings.Contains(first, "Feature") || !strings.Contains(first, "Working branch") {
+		t.Fatalf("first message lacks the target context:\n%s", first)
+	}
+	for i, req := range requests {
+		if got := firstUserContent(req); got != first {
+			t.Fatalf("request %d rewrote the first message:\n%s\nwas\n%s", i, got, first)
+		}
+	}
+	if strings.Contains(first, "Still looking") {
+		t.Fatal("a comment posted after the start leaked into the kept context")
+	}
+	assertAppendOnly(t, requests)
+	events, _ := h.store.ListAgentSessionEvents(h.ctx, sess.ID, 0, 0)
+	for _, ev := range events {
+		if ev.Kind == EventSystem {
+			if strings.Contains(ev.Text, "feature") || strings.Contains(ev.Text, "agents/reviewer") {
+				t.Fatalf("branch names belong in the context, not the system prompt:\n%s", ev.Text)
+			}
+			if !strings.Contains(ev.Data, "Working branch") {
+				t.Fatalf("the system event should keep the context: %s", ev.Data)
+			}
+		}
 	}
 }
