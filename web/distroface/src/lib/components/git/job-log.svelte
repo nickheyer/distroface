@@ -172,7 +172,7 @@
 		scheduleFlush(final);
 	}
 
-	function reset() {
+	function clearLines() {
 		if (flushHandle) cancelAnimationFrame(flushHandle);
 		flushHandle = 0;
 		allLines = [];
@@ -185,6 +185,10 @@
 		openStack = [];
 		stepCursor = 0;
 		decoder = new TextDecoder();
+	}
+
+	function reset() {
+		clearLines();
 		finished = false;
 		error = '';
 		matchIndex = 0;
@@ -202,6 +206,7 @@
 					{ ...silentCallOptions, signal: ac.signal }
 				);
 				for await (const chunk of chunks) {
+					if (chunk.replace) clearLines();
 					if (chunk.data.length > 0)
 						ingest(chunk.data, isActive(job.status) ? Date.now() : undefined, false);
 					from = chunk.index + 1;

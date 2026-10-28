@@ -570,6 +570,21 @@ func (s *Store) AppendActionsJobLog(ctx context.Context, jobID, runnerID string,
 	})
 }
 
+// Appends a chunk on behalf of the server, no runner owns the job
+func (s *Store) PutActionsJobLog(ctx context.Context, jobID string, data []byte) error {
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var job db.ActionsJob
+		if err := tx.First(&job, "id = ?", jobID).Error; err != nil {
+			return err
+		}
+		cols := map[string]any{"log_chunks": job.LogChunks + 1, "log_bytes": job.LogBytes + int64(len(data))}
+		if err := tx.Model(&db.ActionsJob{}).Where("id = ?", jobID).Updates(cols).Error; err != nil {
+			return err
+		}
+		return tx.Create(&db.ActionsJobLog{JobID: jobID, Index: job.LogChunks, Data: data}).Error
+	})
+}
+
 // Chunks from an index onward, zero limit returns them all
 func (s *Store) ListActionsJobLogs(ctx context.Context, jobID string, fromIndex, limit int) ([]*db.ActionsJobLog, error) {
 	var out []*db.ActionsJobLog

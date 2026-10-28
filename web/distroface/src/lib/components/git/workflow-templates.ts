@@ -71,14 +71,14 @@ jobs:
 	{
 		id: 'go',
 		name: 'Go',
-		description: 'Build and test a Go module with the official Go image.',
+		description: 'Build and test a Go module with the Go version its go.mod declares.',
 		category: 'Continuous integration',
 		fileName: 'go.yml',
 		languages: ['Go'],
 		files: [/^go\.mod$/],
 		mark: 'Go',
 		color: '#00ADD8',
-		content: `# Builds and tests a Go module inside the official Go image
+		content: `# Builds and tests a Go module with the toolchain go.mod declares
 
 name: Go
 
@@ -87,10 +87,13 @@ ${onBranch}
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: golang:1.26
     steps:
       - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
       - name: Build
         run: go build -v ./...

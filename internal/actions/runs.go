@@ -971,10 +971,23 @@ func (m *Manager) failJob(ctx context.Context, repo *db.GitRepository, run *db.A
 	}
 	j.Status, j.Conclusion, j.FinishedAt = StatusCompleted, conclusion, &now
 	_ = m.store.UpdateActionsJobColumns(ctx, j.ID, cols)
+	if note != "" {
+		m.noteJobLog(ctx, j, note)
+	}
 	m.revokeJobToken(ctx, j)
 	m.clearCancel(j.ID)
 	m.closeJobExecs(ctx, j, conclusion, "the command workspace ended: "+note)
 	m.writeCommitStatus(ctx, repo, run, j, conclusion)
+}
+
+// Transcript line for a job the server finished itself
+func (m *Manager) noteJobLog(ctx context.Context, j *db.ActionsJob, note string) {
+	line := "##[error]" + strings.ReplaceAll(note, "\n", " ") + "\n"
+	if err := m.store.PutActionsJobLog(ctx, j.ID, []byte(line)); err != nil {
+		m.log.Warn("actions: note job log %s: %v", j.ID, err)
+	}
+	j.LogChunks++
+	j.LogBytes += int64(len(line))
 }
 
 // Finishes the run once every job completed

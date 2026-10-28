@@ -195,6 +195,8 @@ message JobLogChunk {
   bytes data = 3;
   // No more chunks will follow
   bool done = 4;
+  // Data replaces everything received so far
+  bool replace = 5;
 }
 
 // RunArtifact is a named upload of a run, stored as one zip.

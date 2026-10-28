@@ -234,10 +234,10 @@ func (s *ActionsService) StreamJobLog(ctx context.Context, req *v1.StreamJobLogR
 	if err != nil {
 		return err
 	}
-	from := int(req.FromIndex)
-	if from < 0 {
-		from = 0
-	}
+	from := max(int(req.FromIndex), 0)
+
+	// Bytes sent so far, an exact blob offset only when started at zero
+	sent, exact := 0, from == 0
 	ticker := time.NewTicker(actionsLogPoll)
 	defer ticker.Stop()
 	for {
@@ -250,15 +250,23 @@ func (s *ActionsService) StreamJobLog(ctx context.Context, req *v1.StreamJobLogR
 				return err
 			}
 			from = c.Index + 1
+			sent += len(c.Data)
 		}
 		if job.Status == actions.StatusCompleted {
-			if job.LogDigest != "" && from == 0 {
+			// Compaction replaced chunks this stream never read
+			if job.LogDigest != "" && from < job.LogChunks {
 				data, err := s.actions.ReadCompactedLog(job)
-				if err == nil && len(data) > 0 {
-					if err := stream.Send(&v1.JobLogChunk{JobId: job.ID, Index: 0, Data: data}); err != nil {
-						return err
+				if err == nil {
+					chunk := &v1.JobLogChunk{JobId: job.ID, Index: int32(from), Data: data, Replace: true}
+					if exact && sent <= len(data) {
+						chunk.Data, chunk.Replace = data[sent:], false
 					}
-					from = 1
+					if len(chunk.Data) > 0 {
+						if err := stream.Send(chunk); err != nil {
+							return err
+						}
+					}
+					from = job.LogChunks
 				}
 			}
 			return stream.Send(&v1.JobLogChunk{JobId: job.ID, Index: int32(from), Done: true})
