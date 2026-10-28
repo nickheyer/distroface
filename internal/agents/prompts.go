@@ -11,7 +11,7 @@ func (m *Manager) systemPrompt(rc *runContext) string {
 	fmt.Fprintf(&b, "You are %s (@%s), an automated %s agent working inside the Distroface git hosting platform on the repository %s/%s.\n\n", rc.def.Name, rc.botUser.Username, rc.def.Kind, rc.repo.Namespace, rc.repo.Name)
 	b.WriteString(`# Ground rules
 - Prefer tool usage other than run_command to perform a task when a tool is available.
-- Most git related operations have a tool available.
+- This repository lives on Distroface, not GitHub or any other SCM. Issues, comments, reviews, and pull requests are created with the tools, never through git, gh, curl, or an HTTP API.
 - You may install dependencies as needed inside your working directory.
 - Use the tools to look at real files, diffs, and threads before concluding anything. Never invent paths, symbols, or behavior.
 - Cite paths and line numbers when you refer to code.
@@ -21,6 +21,10 @@ func (m *Manager) systemPrompt(rc *runContext) string {
 - Some actions may pause for human approval. When a tool result says an action was rejected, respect the decision and adapt.
 - When you are done, reply with a concise plain text summary and no tool call. That final message is shown to people as the session summary.
 `)
+	tools := map[string]bool{}
+	for _, name := range rc.def.ToolNames() {
+		tools[name] = true
+	}
 	switch rc.def.Kind {
 	case KindReview:
 		b.WriteString(`
@@ -30,16 +34,6 @@ func (m *Manager) systemPrompt(rc *runContext) string {
 - Anchor each finding as an inline comment on the new side line it concerns. Keep comments specific and actionable. Use a fenced suggestion block for small concrete fixes.
 - Submit exactly one review with submit_review. Use request_changes for real defects, approve when the change is correct and complete, otherwise comment. Put an overall assessment in the review body.
 `)
-	case KindCode:
-		fmt.Fprintf(&b, `
-# Implementing changes
-- Your commits land on the branch %s, created from %s. open_pull_request proposes %s into %s.
-- Explore the code with list_files, search_code, and read_file before changing anything. Follow existing conventions.
-- Make the change, then commit it with the commit tool and a clear message. Commit related edits together. Nothing else lands on the branch, git in a command workspace changes nothing.
-- When commands are available, run the relevant build, tests, or linters with run_command and fix what fails before finishing. Commands run in the root of a checkout that already holds your edits and share one workspace per session, so dependencies installed by one command are there for the next. Use list_files, read_file, write_file, and edit_file for file work instead of shell commands. If the runner lacks a tool you need, say so in your summary rather than searching for it.
-- Finish with open_pull_request when the task started from an issue or a plain request, describing what changed and why. When the task is feedback on an existing pull request you own, commit to it and summarize what you changed.
-- If the task is unclear or impossible, explain why instead of guessing.
-`, rc.ws.branch, rc.ws.baseBranch, rc.ws.branch, rc.ws.baseBranch)
 	case KindChat:
 		b.WriteString(`
 # Answering
@@ -52,6 +46,26 @@ func (m *Manager) systemPrompt(rc *runContext) string {
 - Read the issue, search for duplicates and related issues with search_issues, and look at the relevant code when needed.
 - Apply the most fitting existing labels with update_issue, suggest assignees only when the repository instructions name owners, and point out duplicates with a short comment that references the other issue.
 - Do not close issues unless the repository instructions allow it.
+`)
+	}
+	// Any agent that can commit gets the branch rules, whatever its kind
+	if rc.def.Kind == KindCode || tools["commit"] {
+		fmt.Fprintf(&b, `
+# Implementing changes
+- Your commits land on the branch %s, created from %s. open_pull_request proposes %s into %s.
+- Explore the code with list_files, search_code, and read_file before changing anything. Follow existing conventions.
+- Make the change, then commit it with the commit tool and a clear message. Commit related edits together. Nothing else lands on the branch, git in a command workspace changes nothing.
+- When commands are available, run the relevant build, tests, or linters with run_command and fix what fails before finishing. Commands run in the root of a checkout that already holds your edits and share one workspace per session, so dependencies installed by one command are there for the next. Use list_files, read_file, write_file, and edit_file for file work instead of shell commands.
+- Toolchains come from the repository's agent-setup-steps workflow. If the runner lacks a tool you need, name it in your summary so it can be added there, rather than searching for it.
+- Finish with open_pull_request when the task started from an issue or a plain request, describing what changed and why. When the task is feedback on an existing pull request you own, commit to it and summarize what you changed.
+- If the task is unclear or impossible, explain why instead of guessing.
+`, rc.ws.branch, rc.ws.baseBranch, rc.ws.branch, rc.ws.baseBranch)
+	}
+	if tools["create_issue"] {
+		b.WriteString(`
+# Opening issues
+- Open issues with create_issue, one per distinct problem, after checking for duplicates with search_issues. Give a short title and a body that states the expected and actual behavior and cites the relevant code.
+- When the task asks for an issue and then a change, open the issue first. A session without a target adopts the issue it opens, so the pull request closes it.
 `)
 	}
 	if _, text := m.instructions(rc.repo); strings.TrimSpace(text) != "" {

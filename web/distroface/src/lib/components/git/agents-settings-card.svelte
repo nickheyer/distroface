@@ -13,7 +13,6 @@
 	import { Save, Undo2, Loader2 } from '@lucide/svelte';
 	import { errText } from '$lib/act.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
-	import { formatTokens } from './agents-state';
 	import {
 		isLocked,
 		patchSettings,
@@ -129,11 +128,11 @@
 		return parentScope && !overridden(path) ? undefined : n;
 	}
 
-	// Placeholder while a limit is off
-	function unset(path: Path, unit: string, none = 'Unlimited'): string {
-		if (!parentScope) return none;
+	// Inherited limit while this scope sets none
+	function fallback(path: Path): number | undefined {
+		if (!parentScope) return undefined;
 		const v = Number(valuesOf(inherited)[path] ?? 0);
-		return v > 0 ? `Inherits ${unit === 'tokens' ? formatTokens(v) : v} ${unit}` : none;
+		return v > 0 ? v : undefined;
 	}
 
 	function seed(s: Settings | null) {
@@ -391,7 +390,7 @@
 				label="command timeout"
 				unit="minutes"
 				bind:value={commandTimeout}
-				unset={unset(P.commandTimeout, 'minutes')}
+				fallback={fallback(P.commandTimeout)}
 				seed={20}
 				disabled={!canEdit || locked(P.commandTimeout)}
 			/>
@@ -416,7 +415,7 @@
 				label="model turns"
 				unit="turns"
 				bind:value={maxTurns}
-				unset={unset(P.maxTurns, 'turns')}
+				fallback={fallback(P.maxTurns)}
 				seed={40}
 				disabled={!canEdit || locked(P.maxTurns)}
 			/>
@@ -433,9 +432,8 @@
 				label="token budget"
 				unit="tokens"
 				bind:value={tokens}
-				unset={unset(P.tokens, 'tokens')}
+				fallback={fallback(P.tokens)}
 				seed={500000}
-				inputClass="w-40"
 				disabled={!canEdit || locked(P.tokens)}
 			/>
 		</FormField>
@@ -451,7 +449,7 @@
 				label="session time"
 				unit="minutes"
 				bind:value={maxMinutes}
-				unset={unset(P.maxMinutes, 'minutes')}
+				fallback={fallback(P.maxMinutes)}
 				seed={60}
 				disabled={!canEdit || locked(P.maxMinutes)}
 			/>
@@ -468,7 +466,7 @@
 				label="concurrent sessions"
 				unit="sessions"
 				bind:value={concurrent}
-				unset={unset(P.concurrent, 'sessions')}
+				fallback={fallback(P.concurrent)}
 				seed={2}
 				disabled={!canEdit || locked(P.concurrent)}
 			/>
@@ -485,7 +483,7 @@
 				label="sessions per day"
 				unit="sessions"
 				bind:value={perDay}
-				unset={unset(P.perDay, 'sessions')}
+				fallback={fallback(P.perDay)}
 				seed={50}
 				disabled={!canEdit || locked(P.perDay)}
 			/>
@@ -502,7 +500,7 @@
 				label="transcript retention"
 				unit="days"
 				bind:value={retention}
-				unset={unset(P.retention, 'days', 'Forever')}
+				fallback={fallback(P.retention)}
 				seed={90}
 				disabled={!canEdit || locked(P.retention)}
 			/>

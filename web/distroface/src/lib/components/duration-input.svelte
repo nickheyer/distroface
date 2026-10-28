@@ -183,7 +183,7 @@
 	data-slot="duration-input"
 	data-invalid={restProps['aria-invalid'] ? '' : undefined}
 	class={cn(
-		'flex h-8 items-stretch overflow-hidden rounded-md border border-input bg-field text-foreground shadow-[inset_0_1px_1px_0_rgb(0_0_0/0.04)] transition-[border-color,box-shadow] duration-150 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30 hover:border-border-strong has-[input:disabled]:cursor-not-allowed has-[input:disabled]:opacity-50 data-[invalid]:border-destructive data-[invalid]:ring-2 data-[invalid]:ring-destructive/25 dark:shadow-[inset_0_1px_1px_0_rgb(0_0_0/0.2)]',
+		'flex h-8 items-stretch overflow-hidden rounded-md border border-input bg-field text-foreground shadow-[inset_0_1px_1px_0_rgb(0_0_0/0.04)] transition-[border-color,box-shadow] duration-150 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/30 hover:border-border-strong has-[input:disabled]:cursor-not-allowed has-[input:disabled]:opacity-50 data-invalid:border-destructive data-invalid:ring-2 data-invalid:ring-destructive/25 dark:shadow-[inset_0_1px_1px_0_rgb(0_0_0/0.2)]',
 		interval ? 'w-52' : 'w-44',
 		className
 	)}

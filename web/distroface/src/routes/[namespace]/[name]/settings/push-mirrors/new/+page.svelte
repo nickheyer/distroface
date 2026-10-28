@@ -118,7 +118,6 @@
 				unit="minutes"
 				interval
 				bind:value={intervalMinutes}
-				unset="Not scheduled"
 				seed={60}
 			/>
 		</FormField>

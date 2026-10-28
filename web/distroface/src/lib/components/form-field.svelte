@@ -58,23 +58,13 @@
 {/snippet}
 
 {#if layout === 'toggle'}
-	<Label
-		for={id}
-		class={cn(
-			'group form-toggle cursor-pointer items-start gap-3 has-[[data-disabled]]:cursor-not-allowed',
-			spanClass[span],
-			newRow && 'span-break',
-			className
-		)}
-	>
-		<span class="flex h-5 shrink-0 items-center">
+	<label for={id} class={cn('form-toggle', spanClass[span], newRow && 'span-break', className)}>
+		<span class="form-toggle-control">
 			{@render children()}
 		</span>
-		<span class="min-w-0 flex-1 space-y-1 group-has-[[data-disabled]]:opacity-60">
-			<span class="flex items-center gap-2">{@render text()}</span>
-			{@render caption()}
-		</span>
-	</Label>
+		<span class="form-toggle-text">{@render text()}</span>
+		{@render caption()}
+	</label>
 {:else if layout === 'inline'}
 	<div class={cn('form-inline', spanClass[span], newRow && 'span-break', className)}>
 		<Label for={id} class="form-inline-label gap-2">{@render text()}</Label>

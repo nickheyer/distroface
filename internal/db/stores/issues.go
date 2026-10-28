@@ -67,6 +67,7 @@ type IssueListOptions struct {
 	Base        string
 	Head        string
 	Draft       *bool
+	Merged      *bool
 	Query       pages.Query
 	OrderBy     string
 	Limit       int
@@ -167,7 +168,21 @@ func (s *Store) issueQuery(ctx context.Context, opts IssueListOptions) *gorm.DB 
 	if opts.Draft != nil {
 		q = q.Where("git_issues.id IN (SELECT issue_id FROM git_pull_requests WHERE draft = ?)", *opts.Draft)
 	}
+	if opts.Merged != nil {
+		if *opts.Merged {
+			q = q.Where("git_issues.id IN (SELECT issue_id FROM git_pull_requests WHERE merged_at IS NOT NULL)")
+		} else {
+			q = q.Where("git_issues.id NOT IN (SELECT issue_id FROM git_pull_requests WHERE merged_at IS NOT NULL)")
+		}
+	}
 	return q.Scopes(IssuesQuery.Scope(opts.Query))
+}
+
+// Total under the filters, state included
+func (s *Store) CountGitIssues(ctx context.Context, opts IssueListOptions) (int64, error) {
+	var total int64
+	err := s.issueQuery(ctx, opts).Count(&total).Error
+	return total, err
 }
 
 func (s *Store) ListGitIssues(ctx context.Context, opts IssueListOptions) ([]*db.GitIssue, int64, error) {

@@ -23,6 +23,8 @@ interface RefLinkToken extends Tokens.Generic {
 	type: 'refLink';
 	href: string;
 	text: string;
+	// Hovercard target, rendered as data attributes
+	hover: Record<string, string>;
 }
 
 // [[Page]] and [[Text|Page]] become links into the wiki
@@ -53,11 +55,12 @@ function wikiLinks(wikiBase: string): TokenizerAndRendererExtension {
 	};
 }
 
-const REF_START = /(?:^|[\s(])(?:#\d|[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*#\d|@[A-Za-z0-9])/;
+const REF_START =
+	/(?:^|[\s(])(?:#\d|[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*[#@]|@[A-Za-z0-9]|[0-9a-f]{40}\b)/;
 const REF_TOKEN =
-	/^(?:([A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*)?#(\d+)|@([A-Za-z0-9][A-Za-z0-9_.-]*[A-Za-z0-9]|[A-Za-z0-9]))(?![\w#@/-])/;
+	/^(?:([A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*)?#(\d+)|@([A-Za-z0-9][A-Za-z0-9_.-]*[A-Za-z0-9]|[A-Za-z0-9])|(?:([A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*)@)?([0-9a-f]{40}))(?![\w#@/-])/;
 
-// #12, ns/name#12, and @user autolink the way issue bodies do
+// #12, ns/name#12, @user, and full shas autolink the way issue bodies do
 function refLinks(repo: string): TokenizerAndRendererExtension {
 	return {
 		name: 'refLink',
@@ -75,7 +78,20 @@ function refLinks(repo: string): TokenizerAndRendererExtension {
 					type: 'refLink',
 					raw: m[0],
 					href: `/${encodeURIComponent(m[3])}`,
-					text: m[0]
+					text: m[0],
+					hover: { hover: 'user', user: m[3] }
+				};
+				return token;
+			}
+			if (m[5]) {
+				const target = m[4] || repo;
+				if (!target) return undefined;
+				const token: RefLinkToken = {
+					type: 'refLink',
+					raw: m[0],
+					href: `/${target}/commit/${m[5]}`,
+					text: `${m[4] ? `${m[4]}@` : ''}${m[5].slice(0, 7)}`,
+					hover: { hover: 'commit', repo: target, sha: m[5] }
 				};
 				return token;
 			}
@@ -85,13 +101,17 @@ function refLinks(repo: string): TokenizerAndRendererExtension {
 				type: 'refLink',
 				raw: m[0],
 				href: `/${target}/issues/${m[2]}`,
-				text: m[0]
+				text: m[0],
+				hover: { hover: 'issue', repo: target, number: m[2] }
 			};
 			return token;
 		},
 		renderer(token) {
 			const t = token as RefLinkToken;
-			return `<a href="${escapeHtml(t.href)}" class="ref-link">${escapeHtml(t.text)}</a>`;
+			const data = Object.entries(t.hover)
+				.map(([k, v]) => ` data-${k}="${escapeHtml(v)}"`)
+				.join('');
+			return `<a href="${escapeHtml(t.href)}" class="ref-link"${data}>${escapeHtml(t.text)}</a>`;
 		}
 	};
 }

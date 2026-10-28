@@ -16,7 +16,7 @@
 	let {
 		value = $bindable(),
 		unit = '',
-		unset = 'Unlimited',
+		fallback,
 		seed,
 		allowZero = false,
 		min,
@@ -34,8 +34,8 @@
 	}: {
 		value?: number | null;
 		unit?: string;
-		// Placeholder while off
-		unset?: string;
+		// Value in force while off, shown disabled and edited from
+		fallback?: number;
 		// First value after switching on
 		seed?: number;
 		allowZero?: boolean;
@@ -55,6 +55,9 @@
 
 	const duration = $derived(isDurationUnit(unit));
 	const floor = $derived(min ?? (allowZero ? 0 : 1));
+
+	// Label targets the switch, the field gets its own id
+	const inputId = $derived(id ? `${id}-value` : undefined);
 
 	let on = $state(false);
 	let inner = $state<number | null | undefined>(undefined);
@@ -83,7 +86,15 @@
 		untrack(() => {
 			const n = num(v);
 			on = active(n);
-			inner = on ? n : undefined;
+			inner = on ? n : fallback;
+		});
+	});
+
+	// Off shows whatever is in force, it arrives after the first paint
+	$effect(() => {
+		const f = fallback;
+		untrack(() => {
+			if (!on) inner = f;
 		});
 	});
 
@@ -102,9 +113,10 @@
 		if (next) {
 			if (!active(num(inner))) inner = seed ?? floor;
 			await tick();
-			if (id) document.getElementById(id)?.focus();
+			if (inputId) document.getElementById(inputId)?.focus();
 		} else {
 			emit(undefined);
+			inner = fallback;
 		}
 		onToggle?.(next);
 	}
@@ -115,23 +127,24 @@
 	}
 </script>
 
-<div class={cn('flex items-center gap-2.5', className)}>
+<div data-slot="limit-input" class={cn('flex items-center gap-2.5', className)}>
 	<Switch
+		{id}
 		checked={on}
 		onCheckedChange={(v) => void toggle(v)}
 		{disabled}
 		aria-label={label ? `Limit ${label}` : 'Set a limit'}
-		aria-controls={id}
+		aria-controls={inputId}
 	/>
 	{#if duration}
 		<DurationInput
-			{id}
+			id={inputId}
+			aria-label={label}
 			unit={unit as DurationUnit}
 			{interval}
 			bind:value={inner}
 			min={floor}
 			{max}
-			placeholder={unset}
 			disabled={disabled || !on}
 			class={inputClass}
 			onblur={blur}
@@ -139,29 +152,29 @@
 		/>
 	{:else if unit}
 		<UnitInput
-			{id}
+			id={inputId}
+			aria-label={label}
 			{unit}
 			bind:value={inner}
 			min={floor}
 			{max}
 			{step}
-			placeholder={unset}
 			disabled={disabled || !on}
-			class={cn('w-32', inputClass)}
+			class={cn('w-44', inputClass)}
 			onblur={blur}
 			{onkeydown}
 		/>
 	{:else}
 		<Input
-			{id}
+			id={inputId}
+			aria-label={label}
 			type="number"
 			bind:value={inner}
 			min={floor}
 			{max}
 			{step}
-			placeholder={unset}
 			disabled={disabled || !on}
-			class={cn('w-24 tabular-nums', inputClass)}
+			class={cn('w-44 tabular-nums', inputClass)}
 			onblur={blur}
 			{onkeydown}
 		/>

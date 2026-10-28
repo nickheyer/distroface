@@ -775,9 +775,7 @@
 		--ansi-14: #67e8f9;
 		--ansi-15: #ffffff;
 	}
-	/* Pane scrolls alone, the page never follows */
 	.log-pane {
 		overflow-anchor: none;
-		overscroll-behavior: contain;
 	}
 </style>

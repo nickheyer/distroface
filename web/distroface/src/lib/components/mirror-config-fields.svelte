@@ -184,7 +184,6 @@
 	const depthHelp = $derived(
 		depthCap > 0 ? `${copy.depthHelp}, at most ${depthCap}` : copy.depthHelp
 	);
-	const depthUnset = $derived(depthCap > 0 ? `Newest ${depthCap}` : 'All');
 </script>
 
 <div class="form-fields">
@@ -325,7 +324,6 @@
 					label="sync depth"
 					unit={copy.depthUnit}
 					bind:value={form.syncDepth}
-					unset={depthUnset}
 					max={depthCap > 0 ? depthCap : undefined}
 					seed={depthCap > 0 ? Math.min(10, depthCap) : 10}
 				/>

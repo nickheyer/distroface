@@ -37,7 +37,8 @@
 		name,
 		sessionId,
 		active = false,
-		onStatus
+		onStatus,
+		onEvent
 	}: {
 		namespace: string;
 		name: string;
@@ -45,6 +46,7 @@
 		// Keeps the stream open and auto scrolls while the session works
 		active?: boolean;
 		onStatus?: (status: AgentSessionStatus, done: boolean) => void;
+		onEvent?: (ev: AgentSessionEvent) => void;
 	} = $props();
 
 	interface Row {
@@ -70,9 +72,18 @@
 		const out: Row[] = [];
 		const callRows: Record<string, Row> = {};
 		const approvalRows: Record<string, Row> = {};
+		const results = events.filter((e) => e.kind === AgentEventKind.RESULT);
 		for (const ev of events) {
 			const data = parseEventData(ev.data);
 			switch (ev.kind) {
+				case AgentEventKind.ASSISTANT: {
+					// A closing reply shows once, as the result it became
+					const calls = Array.isArray(data.tool_calls) ? data.tool_calls.length : 0;
+					const text = ev.text.trim();
+					const next = results.find((r) => r.seq > ev.seq);
+					if (!calls && text && next?.text.trim().startsWith(text)) continue;
+					break;
+				}
 				case AgentEventKind.TOOL_RESULT: {
 					const row = callRows[ev.toolCallId];
 					if (row) {
@@ -130,6 +141,7 @@
 						after = ev.seq;
 						events = [...events, ev];
 						onStatus?.(ev.status, false);
+						onEvent?.(ev);
 					}
 				}
 				error = '';
@@ -450,6 +462,5 @@
 <style>
 	.transcript {
 		overflow-anchor: none;
-		overscroll-behavior: contain;
 	}
 </style>

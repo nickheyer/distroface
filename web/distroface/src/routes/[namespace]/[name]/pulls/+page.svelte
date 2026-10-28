@@ -68,6 +68,7 @@
 	let pulls = $state<PullRequest[]>([]);
 	let openCount = $state(0);
 	let closedCount = $state(0);
+	let mergedCount = $state(0);
 	let loading = $state(true);
 	let seq = 0;
 
@@ -85,6 +86,7 @@
 					namespace,
 					name,
 					state: tab === 'open' ? IssueState.OPEN : IssueState.CLOSED,
+					merged: tab === 'open' ? undefined : tab === 'merged',
 					labels: filter.filters.filter((f) => f.field === 'label').map((f) => f.value),
 					milestone: firstFilter('milestone'),
 					assignee: firstFilter('assignee'),
@@ -101,6 +103,7 @@
 			pager.apply(resp.page);
 			openCount = Number(resp.openCount);
 			closedCount = Number(resp.closedCount);
+			mergedCount = Number(resp.mergedCount);
 		} catch {
 			if (mine !== seq) return;
 			pulls = [];
@@ -123,14 +126,7 @@
 
 	onMount(load);
 
-	// Merged rows hide inside the closed state server side
-	const rows = $derived(
-		tab === 'merged'
-			? pulls.filter((p) => !!p.mergedAt)
-			: tab === 'closed'
-				? pulls.filter((p) => !p.mergedAt)
-				: pulls
-	);
+	const rows = $derived(pulls);
 
 	function reviewIcon(p: PullRequest) {
 		const latest = latestReviews(p.reviews).filter((r) => !r.dismissed);
@@ -243,7 +239,7 @@
 			<div class="box-header flex-wrap">
 				<div class="flex flex-wrap items-center gap-1">
 					{@render tabButton('open', 'Open', openCount)}
-					{@render tabButton('merged', 'Merged')}
+					{@render tabButton('merged', 'Merged', mergedCount)}
 					{@render tabButton('closed', 'Closed', closedCount)}
 				</div>
 			</div>
@@ -268,7 +264,7 @@
 							: tab === 'open'
 								? 'No open pull requests'
 								: tab === 'merged'
-									? 'No merged pull requests on this page'
+									? 'No merged pull requests'
 									: 'No closed pull requests'}
 					</p>
 					{#if filter.active}

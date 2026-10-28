@@ -32,7 +32,12 @@
 	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { GitUnit } from '$lib/proto/distroface/v1/git_pb';
-	import { AgentSessionStatus, type AgentSession } from '$lib/proto/distroface/v1/agents_pb';
+	import {
+		AgentEventKind,
+		AgentSessionStatus,
+		type AgentSession,
+		type AgentSessionEvent
+	} from '$lib/proto/distroface/v1/agents_pb';
 	import {
 		cacheShare,
 		formatTokens,
@@ -106,6 +111,25 @@
 	// The stream announces state changes faster than polling
 	function onStatus(status: AgentSessionStatus, done: boolean) {
 		if (session && (session.status !== status || done)) load(true);
+		if (done) void gitRepoStore.refresh();
+	}
+
+	// Issues, pulls, and comments the agent makes move the header counts
+	const countTools = new Set([
+		'create_issue',
+		'open_pull_request',
+		'update_issue',
+		'commit',
+		'post_comment',
+		'submit_review'
+	]);
+	function onEvent(ev: AgentSessionEvent) {
+		if (!active) return;
+		if (
+			ev.kind === AgentEventKind.RESULT ||
+			(ev.kind === AgentEventKind.TOOL_RESULT && countTools.has(ev.tool))
+		)
+			void gitRepoStore.refresh();
 	}
 
 	let busy = $state('');
@@ -441,7 +465,7 @@
 		{/if}
 
 		{#key session.id}
-			<AgentTranscript {namespace} {name} sessionId={session.id} {active} {onStatus} />
+			<AgentTranscript {namespace} {name} sessionId={session.id} {active} {onStatus} {onEvent} />
 		{/key}
 
 		{#if !active}

@@ -27,7 +27,7 @@
 		min: number;
 		max: number;
 		// Zero stored means off, shown as a switched off limit
-		unset?: string;
+		unset?: boolean;
 	};
 
 	const scheduleFields: NumField[] = [
@@ -50,7 +50,7 @@
 			unit: 'minutes',
 			min: 1,
 			max: 1440,
-			unset: 'No floor'
+			unset: true
 		}
 	];
 
@@ -90,7 +90,7 @@
 			unit: 'items',
 			min: 1,
 			max: 10000,
-			unset: 'All'
+			unset: true
 		},
 		{
 			key: 'rateLimitCooldownMinutes',
@@ -217,7 +217,6 @@
 				unit={f.unit}
 				interval={f.interval}
 				bind:value={values[f.key]}
-				unset={f.unset}
 				min={f.min}
 				max={f.max}
 				disabled={!canEdit || acts[f.key].busy || locked(f.path)}

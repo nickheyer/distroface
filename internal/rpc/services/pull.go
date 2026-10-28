@@ -264,17 +264,21 @@ func (s *PullRequestService) ListPullRequests(ctx context.Context, req *v1.ListP
 	isPull := true
 	opts := stores.IssueListOptions{
 		RepoID: repo.ID, State: state, Labels: req.Labels, Milestone: req.Milestone, Assignee: req.Assignee, Author: req.Author,
-		Reviewer: req.Reviewer, Base: req.Base, Head: req.Head, Draft: req.Draft, IsPull: &isPull, Query: pages.ParseQuery(req.Page),
+		Reviewer: req.Reviewer, Base: req.Base, Head: req.Head, Draft: req.Draft, Merged: req.Merged, IsPull: &isPull, Query: pages.ParseQuery(req.Page),
 		OrderBy: issueOrder(req.Page), Limit: limit, Offset: offset,
 	}
 	issues, total, err := s.forge.ListIssues(ctx, opts)
 	if err != nil {
 		return nil, mapForgeErr(err)
 	}
+	// Merged pulls are closed rows, the tabs count them apart
 	countOpts := opts
-	countOpts.State = ""
+	countOpts.State, countOpts.Merged = "", nil
 	open, closed, _ := s.store.CountGitIssuesByState(ctx, countOpts)
-	out := &v1.ListPullRequestsResponse{Page: pages.Info(offset, limit, total), OpenCount: open, ClosedCount: closed}
+	merged := true
+	countOpts.State, countOpts.Merged = storage.IssueStateClosed, &merged
+	mergedCount, _ := s.store.CountGitIssues(ctx, countOpts)
+	out := &v1.ListPullRequestsResponse{Page: pages.Info(offset, limit, total), OpenCount: open, ClosedCount: closed - mergedCount, MergedCount: mergedCount}
 	views, err := s.forge.PullViews(ctx, actor, repo, issues)
 	if err != nil {
 		return nil, mapForgeErr(err)

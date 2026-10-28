@@ -87,7 +87,7 @@
 <div class="space-y-4">
 	<div class="section-header">
 		<div class="min-w-0">
-			<h2 class="section-title">Git</h2>
+			<h2 class="section-title">Git Repositories</h2>
 			<p class="section-subtitle">Git repositories owned by {orgName}.</p>
 		</div>
 		{#if ctx.canCreateRepos}

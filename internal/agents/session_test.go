@@ -124,4 +124,7 @@ func TestApprovalTitle(t *testing.T) {
 	if got := approvalTitle("run_command", map[string]any{"command": "go test ./..."}); got != "Run command: go test ./..." {
 		t.Fatalf("got %q", got)
 	}
+	if got := approvalTitle("create_issue", map[string]any{"title": "Default keybind missing"}); got != "Open issue: Default keybind missing" {
+		t.Fatalf("got %q", got)
+	}
 }

@@ -227,6 +227,8 @@ message ListPullRequestsRequest {
   // Branch in this repository, or prefixed with the fork repository for a fork head
   string head = 11;
   optional bool draft = 12;
+  // Merged pulls only, or unmerged only, both when unset
+  optional bool merged = 13;
 }
 
 // ListPullRequestsResponse contains a page of pull requests.
@@ -234,7 +236,9 @@ message ListPullRequestsResponse {
   repeated PullRequest pull_requests = 1;
   PageInfo page = 2;
   int64 open_count = 3;
+  // Closed without merging
   int64 closed_count = 4;
+  int64 merged_count = 5;
 }
 
 // UpdatePullRequestRequest changes the set fields.

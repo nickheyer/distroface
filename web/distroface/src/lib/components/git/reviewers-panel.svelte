@@ -203,7 +203,7 @@
 </script>
 
 <div class="space-y-2">
-	<div class="flex items-center justify-between">
+	<div class="flex min-h-6 items-center justify-between">
 		<span class="eyebrow">Reviewers</span>
 		{#if canRequest}
 			<Popover bind:open={pickerOpen}>

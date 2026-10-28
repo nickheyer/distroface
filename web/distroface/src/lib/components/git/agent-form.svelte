@@ -141,6 +141,23 @@
 		tools = tools.includes(name) ? tools.filter((x) => x !== name) : [...tools, name];
 	}
 
+	// Whether the chosen approval policy pauses a tool
+	function gated(tool: { write?: boolean; commit?: boolean }): boolean {
+		switch (approval) {
+			case AgentApprovalPolicy.ALL_WRITES:
+				return !!(tool.write || tool.commit);
+			case AgentApprovalPolicy.COMMITS:
+				return !!tool.commit;
+			default:
+				return false;
+		}
+	}
+	const toolsHelp = $derived(
+		approval === AgentApprovalPolicy.NONE
+			? 'Every tool runs without approval under the never pause policy.'
+			: 'Gated tools wait for approval before they run.'
+	);
+
 	function spec(): AgentSpec {
 		return {
 			$typeName: 'distroface.v1.AgentSpec',
@@ -289,7 +306,6 @@
 			id="agent-temperature"
 			label="temperature"
 			bind:value={temperature}
-			unset="Model default"
 			seed={0.2}
 			allowZero
 			min={0}
@@ -313,7 +329,7 @@
 	</FormField>
 </FormSection>
 
-<FormSection title="Tools" description="Gated tools wait for approval before they run.">
+<FormSection title="Tools" description={toolsHelp}>
 	<FormField
 		label="Custom toolset"
 		layout="toggle"
@@ -341,7 +357,7 @@
 								/>
 								<span class="min-w-0">
 									<span class="font-mono text-xs">{tool.name}</span>
-									{#if tool.commit}<Badge variant="warning" class="ml-1">gated</Badge>{/if}
+									{#if gated(tool)}<Badge variant="warning" class="ml-1">gated</Badge>{/if}
 									<span class="block text-xs text-muted-foreground">{tool.description}</span>
 								</span>
 							</label>
@@ -488,14 +504,7 @@
 
 <FormSection title="Limits" description="Tighter than the policy caps, off inherits them.">
 	<FormField label="Model turns" id="agent-turns" layout="inline">
-		<LimitInput
-			id="agent-turns"
-			label="model turns"
-			unit="turns"
-			bind:value={maxTurns}
-			unset="Policy cap"
-			seed={40}
-		/>
+		<LimitInput id="agent-turns" label="model turns" unit="turns" bind:value={maxTurns} seed={40} />
 	</FormField>
 	<FormField label="Token budget" id="agent-tokens" layout="inline" help="Per session">
 		<LimitInput
@@ -503,9 +512,7 @@
 			label="token budget"
 			unit="tokens"
 			bind:value={maxTokens}
-			unset="Policy cap"
 			seed={200000}
-			inputClass="w-40"
 		/>
 	</FormField>
 	<FormField

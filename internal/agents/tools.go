@@ -41,6 +41,8 @@ type runContext struct {
 	settings *v1.GitAgentsSettings
 	// Open command workspace, nil until the first run_command
 	cmd *commandWorkspace
+	// Last assistant text already in the transcript
+	said string
 	// Side effects the finisher may complete
 	posted   bool
 	reviewed bool
@@ -71,8 +73,8 @@ func needsApproval(def *Definition, spec *toolSpec) bool {
 	return false
 }
 
-// Definitions handed to the model for an agent
-func toolsFor(def *Definition, cfg *v1.GitAgentsSettings, hasTarget, isPull bool) []llm.Tool {
+// Every configured tool goes to the model, commands only under policy
+func toolsFor(def *Definition, cfg *v1.GitAgentsSettings) []llm.Tool {
 	var out []llm.Tool
 	for _, name := range def.ToolNames() {
 		spec := toolRegistry[name]
@@ -80,12 +82,6 @@ func toolsFor(def *Definition, cfg *v1.GitAgentsSettings, hasTarget, isPull bool
 			continue
 		}
 		if name == "run_command" && !cfg.GetAllowCommands() {
-			continue
-		}
-		if (name == "post_comment" || name == "update_issue") && !hasTarget {
-			continue
-		}
-		if name == "submit_review" && !isPull {
 			continue
 		}
 		out = append(out, llm.Tool{Name: spec.Name, Description: spec.Description, Parameters: json.RawMessage(spec.Schema)})
@@ -225,24 +221,31 @@ var toolRegistry = map[string]*toolSpec{
 		Schema:      `{"type":"object","properties":{"query":{"type":"string"},"state":{"type":"string","enum":["open","closed","all"]},"labels":{"type":"array","items":{"type":"string"}},"is_pull":{"type":"boolean"},"limit":{"type":"integer","description":"Zero or absent returns every match"}}}`,
 		Run:         toolSearchIssues,
 	},
+	"create_issue": {
+		Name:        "create_issue",
+		Description: "Opens a new issue in this repository with a markdown body. Labels are matched by name and created when missing only if create_labels is true, assignees are usernames. When the session has no target yet, the new issue becomes it, so post_comment and update_issue default to it and a pull request opened later closes it.",
+		Schema:      `{"type":"object","properties":{"title":{"type":"string"},"body":{"type":"string","description":"Markdown"},"labels":{"type":"array","items":{"type":"string"}},"create_labels":{"type":"boolean"},"assignees":{"type":"array","items":{"type":"string"},"description":"Usernames"}},"required":["title"]}`,
+		Write:       true,
+		Run:         toolCreateIssue,
+	},
 	"post_comment": {
 		Name:        "post_comment",
-		Description: "Posts a markdown comment on the targeted issue or pull request.",
-		Schema:      `{"type":"object","properties":{"body":{"type":"string"}},"required":["body"]}`,
+		Description: "Posts a markdown comment on an issue or pull request, the session target unless number is given.",
+		Schema:      `{"type":"object","properties":{"body":{"type":"string"},"number":{"type":"integer","description":"Another issue or pull request of this repository, defaults to the target"}},"required":["body"]}`,
 		Write:       true,
 		Run:         toolPostComment,
 	},
 	"submit_review": {
 		Name:        "submit_review",
-		Description: "Submits one review on the targeted pull request with optional inline comments anchored to lines of the new side of the diff. Call it once when the review is complete.",
-		Schema:      `{"type":"object","properties":{"event":{"type":"string","enum":["approve","request_changes","comment"]},"body":{"type":"string","description":"Review summary in markdown"},"comments":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer","description":"Line number on the new side, or old side when side is old"},"side":{"type":"string","enum":["new","old"]},"start_line":{"type":"integer","description":"First line of a multi line comment"},"body":{"type":"string","description":"Markdown, a suggestion fenced block proposes a replacement"}},"required":["path","line","body"]}}},"required":["event"]}`,
+		Description: "Submits one review on a pull request, the session target unless number is given, with optional inline comments anchored to lines of the new side of the diff. Call it once when the review is complete.",
+		Schema:      `{"type":"object","properties":{"event":{"type":"string","enum":["approve","request_changes","comment"]},"body":{"type":"string","description":"Review summary in markdown"},"number":{"type":"integer","description":"Another pull request of this repository, defaults to the target"},"comments":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer","description":"Line number on the new side, or old side when side is old"},"side":{"type":"string","enum":["new","old"]},"start_line":{"type":"integer","description":"First line of a multi line comment"},"body":{"type":"string","description":"Markdown, a suggestion fenced block proposes a replacement"}},"required":["path","line","body"]}}},"required":["event"]}`,
 		Write:       true,
 		Run:         toolSubmitReview,
 	},
 	"update_issue": {
 		Name:        "update_issue",
-		Description: "Changes labels, assignees, title, or state of the targeted issue or pull request. Labels are matched by name and created when missing only if create_labels is true.",
-		Schema:      `{"type":"object","properties":{"add_labels":{"type":"array","items":{"type":"string"}},"remove_labels":{"type":"array","items":{"type":"string"}},"create_labels":{"type":"boolean"},"assignees":{"type":"array","items":{"type":"string"},"description":"Usernames, replaces the current assignees"},"title":{"type":"string"},"state":{"type":"string","enum":["open","closed"]}}}`,
+		Description: "Changes labels, assignees, title, or state of an issue or pull request, the session target unless number is given. Labels are matched by name and created when missing only if create_labels is true.",
+		Schema:      `{"type":"object","properties":{"number":{"type":"integer","description":"Another issue or pull request of this repository, defaults to the target"},"add_labels":{"type":"array","items":{"type":"string"}},"remove_labels":{"type":"array","items":{"type":"string"}},"create_labels":{"type":"boolean"},"assignees":{"type":"array","items":{"type":"string"},"description":"Usernames, replaces the current assignees"},"title":{"type":"string"},"state":{"type":"string","enum":["open","closed"]}}}`,
 		Write:       true,
 		Run:         toolUpdateIssue,
 	},
@@ -286,15 +289,15 @@ var toolRegistry = map[string]*toolSpec{
 	},
 	"run_command": {
 		Name:        "run_command",
-		Description: "Runs a bash script in this session's command workspace on a workflow runner and returns its output, every line of it, with the exit code of the last command. The script starts in the root of a checkout of the working branch with your uncommitted edits applied, so relative paths work and there is nothing to locate. The workspace persists between calls, so installed dependencies and build output survive. Use it to build, test, lint, or run scripts. Never use it to list, read, or edit files, the file tools are faster and see the same content. Never run git or gh in it, the checkout is disposable and only the commit tool and open_pull_request tool change the branch. If a toolchain is missing on the runner, say so and move on.",
+		Description: "Runs a bash script in this session's command workspace on a workflow runner and returns its output, every line of it, with the exit code of the last command. The script starts in the root of a checkout of the working branch with your uncommitted edits applied, so relative paths work and there is nothing to locate. The workspace persists between calls, so installed dependencies and build output survive. Use it to build, test, lint, or run scripts. Never use it to list, read, or edit files, the file tools are faster and see the same content. Never run git, gh, or curl against an API in it, the checkout is disposable and only the commit tool and open_pull_request tool change the branch. The GITHUB_* and DISTROFACE_* variables there point at this Distroface instance, not GitHub, with a read only token, so issues, comments, reviews, and pull requests go through the tools. If a toolchain is missing on the runner, say so and move on.",
 		Schema:      `{"type":"object","properties":{"command":{"type":"string","description":"bash script"},"timeout_minutes":{"type":"integer"}},"required":["command"]}`,
 		Commit:      true,
 		Run:         toolRunCommand,
 	},
 	"request_review": {
 		Name:        "request_review",
-		Description: "Requests reviews from users on the pull request this session opened or targets.",
-		Schema:      `{"type":"object","properties":{"usernames":{"type":"array","items":{"type":"string"}}},"required":["usernames"]}`,
+		Description: "Requests reviews from users on the pull request this session opened or targets, or on another one by number.",
+		Schema:      `{"type":"object","properties":{"usernames":{"type":"array","items":{"type":"string"}},"number":{"type":"integer","description":"Another pull request of this repository"}},"required":["usernames"]}`,
 		Write:       true,
 		Run:         toolRequestReview,
 	},
@@ -893,28 +896,167 @@ func issueIDs(issues []*db.GitIssue) []string {
 
 // ── Write tools ──────────────────────────────────────────────────────────
 
-func toolPostComment(rc *runContext, args map[string]any) (string, error) {
+// Session target, or another issue of the repository by number
+func targetIssue(rc *runContext, args map[string]any) (*db.GitIssue, error) {
+	n := argInt(args, "number")
+	if n <= 0 || (rc.issue != nil && rc.issue.Number == int64(n)) {
+		if rc.issue == nil {
+			return nil, fmt.Errorf("this session has no issue or pull request, pass a number")
+		}
+		return rc.issue, nil
+	}
+	issue, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n))
+	if err != nil {
+		return nil, fmt.Errorf("#%d not found", n)
+	}
+	return issue, nil
+}
+
+// Session pull request, or another one of the repository by number
+func targetPull(rc *runContext, args map[string]any) (*db.GitIssue, *db.GitPullRequest, error) {
+	n := argInt(args, "number")
+	if n <= 0 || (rc.issue != nil && rc.issue.Number == int64(n)) {
+		if rc.issue == nil || rc.pr == nil {
+			return nil, nil, fmt.Errorf("this session has no pull request, pass a number")
+		}
+		return rc.issue, rc.pr, nil
+	}
+	issue, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n))
+	if err != nil {
+		return nil, nil, fmt.Errorf("pull request #%d not found", n)
+	}
+	if !issue.IsPull {
+		return nil, nil, fmt.Errorf("#%d is an issue, not a pull request", n)
+	}
+	pr, err := rc.m.forge.Pull(rc.ctx, issue)
+	if err != nil {
+		return nil, nil, err
+	}
+	return issue, pr, nil
+}
+
+func (rc *runContext) isTarget(issue *db.GitIssue) bool {
+	return rc.issue != nil && rc.issue.ID == issue.ID
+}
+
+// Labels of the repository and its organization by lower case name
+func (rc *runContext) labelsByName() (map[string]*db.GitLabel, error) {
+	all, _, err := rc.m.forge.ListLabels(rc.ctx, rc.repo, rc.m.repoOrgID(rc.ctx, rc.repo), pages.Query{}, 500, 0)
+	if err != nil {
+		return nil, err
+	}
+	byName := make(map[string]*db.GitLabel, len(all))
+	for _, l := range all {
+		byName[strings.ToLower(l.Name)] = l
+	}
+	return byName, nil
+}
+
+// Label ids for names, missing ones created when asked
+func (rc *runContext) labelIDs(byName map[string]*db.GitLabel, names []string, create bool) (ids, missing []string) {
+	for _, name := range names {
+		l := byName[strings.ToLower(name)]
+		if l == nil && create {
+			if created, err := rc.m.forge.CreateLabel(rc.ctx, rc.repo, "", forge.LabelInput{Name: name, Color: "#ededed"}); err == nil {
+				l = created
+				byName[strings.ToLower(name)] = l
+			}
+		}
+		if l == nil {
+			missing = append(missing, name)
+			continue
+		}
+		ids = append(ids, l.ID)
+	}
+	return ids, missing
+}
+
+// User ids for usernames, unknown ones reported back
+func (rc *runContext) userIDs(names []string) (ids, unknown []string) {
+	for _, name := range names {
+		u, _ := rc.m.store.GetUserByUsername(rc.ctx, strings.TrimPrefix(name, "@"))
+		if u == nil {
+			unknown = append(unknown, name)
+			continue
+		}
+		ids = append(ids, u.ID)
+	}
+	return ids, unknown
+}
+
+func toolCreateIssue(rc *runContext, args map[string]any) (string, error) {
+	title := strings.TrimSpace(argString(args, "title"))
+	if title == "" {
+		return "", fmt.Errorf("a title is required")
+	}
+	in := forge.NewIssue{Title: title, Body: strings.TrimSpace(argString(args, "body"))}
+	var notes []string
+	if names := argStrings(args, "labels"); len(names) > 0 {
+		byName, err := rc.labelsByName()
+		if err != nil {
+			return "", err
+		}
+		var missing []string
+		in.LabelIDs, missing = rc.labelIDs(byName, names, argBool(args, "create_labels"))
+		if len(missing) > 0 {
+			notes = append(notes, fmt.Sprintf("unknown labels skipped: %s", strings.Join(missing, ", ")))
+		}
+	}
+	if names := argStrings(args, "assignees"); len(names) > 0 {
+		var unknown []string
+		in.AssigneeIDs, unknown = rc.userIDs(names)
+		if len(unknown) > 0 {
+			notes = append(notes, fmt.Sprintf("unknown users skipped: %s", strings.Join(unknown, ", ")))
+		}
+	}
+	issue, err := rc.m.forge.CreateIssue(rc.ctx, rc.repo, rc.actor, in)
+	if err != nil {
+		return "", err
+	}
+	out := fmt.Sprintf("opened issue #%d: %s", issue.Number, rc.m.forge.IssueURL(rc.ctx, rc.repo, issue))
 	if rc.issue == nil {
-		return "", fmt.Errorf("this session has no issue or pull request to comment on")
+		rc.adoptTarget(issue)
+		out += ", it is now the target of this session"
+	}
+	if len(notes) > 0 {
+		out += ", " + strings.Join(notes, ", ")
+	}
+	return out, nil
+}
+
+// A session started without a target takes the issue it opened
+func (rc *runContext) adoptTarget(issue *db.GitIssue) {
+	rc.issue = issue
+	rc.sess.IssueID, rc.sess.IssueNumber, rc.sess.IsPull = &issue.ID, issue.Number, false
+	_ = rc.m.store.UpdateAgentSessionColumns(rc.ctx, rc.sess.ID, map[string]any{"issue_id": issue.ID, "issue_number": issue.Number, "is_pull": false})
+}
+
+func toolPostComment(rc *runContext, args map[string]any) (string, error) {
+	issue, err := targetIssue(rc, args)
+	if err != nil {
+		return "", err
 	}
 	body := strings.TrimSpace(argString(args, "body"))
 	if body == "" {
 		return "", fmt.Errorf("body is required")
 	}
-	c, err := rc.m.forge.CreateComment(rc.ctx, rc.repo, rc.actor, rc.issue, body, false)
+	c, err := rc.m.forge.CreateComment(rc.ctx, rc.repo, rc.actor, issue, body, false)
 	if err != nil {
 		return "", err
 	}
-	rc.posted = true
-	rc.comments = append(rc.comments, c.ID)
-	return fmt.Sprintf("comment posted (id %s)", c.ID), nil
+	if rc.isTarget(issue) {
+		rc.posted = true
+		rc.comments = append(rc.comments, c.ID)
+	}
+	return fmt.Sprintf("comment posted on #%d (id %s)", issue.Number, c.ID), nil
 }
 
 func toolSubmitReview(rc *runContext, args map[string]any) (string, error) {
-	if rc.issue == nil || rc.pr == nil {
-		return "", fmt.Errorf("this session has no pull request to review")
+	issue, pr, err := targetPull(rc, args)
+	if err != nil {
+		return "", err
 	}
-	if rc.reviewed {
+	if rc.isTarget(issue) && rc.reviewed {
 		return "", fmt.Errorf("a review was already submitted in this session, use post_comment for follow ups")
 	}
 	var state string
@@ -952,52 +1094,40 @@ func toolSubmitReview(rc *runContext, args map[string]any) (string, error) {
 	if body == "" && len(inputs) == 0 {
 		return "", fmt.Errorf("a body or at least one inline comment is required")
 	}
-	rv, err := rc.m.forge.CreateReview(rc.ctx, rc.repo, rc.actor, rc.issue, rc.pr, state, body, rc.pr.HeadSHA, inputs)
+	rv, err := rc.m.forge.CreateReview(rc.ctx, rc.repo, rc.actor, issue, pr, state, body, pr.HeadSHA, inputs)
 	if err != nil {
 		return "", err
 	}
-	rc.reviewed = true
-	rc.sess.ResultReviewID = rv.ID
-	_ = rc.m.store.UpdateAgentSessionColumns(rc.ctx, rc.sess.ID, map[string]any{"result_review_id": rv.ID})
-	return fmt.Sprintf("review submitted as %s with %d inline comments (id %s)", state, len(inputs), rv.ID), nil
+	if rc.isTarget(issue) {
+		rc.reviewed = true
+	}
+	if rc.sess.ResultReviewID == "" {
+		rc.sess.ResultReviewID = rv.ID
+		_ = rc.m.store.UpdateAgentSessionColumns(rc.ctx, rc.sess.ID, map[string]any{"result_review_id": rv.ID})
+	}
+	return fmt.Sprintf("review submitted on #%d as %s with %d inline comments (id %s)", issue.Number, state, len(inputs), rv.ID), nil
 }
 
 func toolUpdateIssue(rc *runContext, args map[string]any) (string, error) {
-	if rc.issue == nil {
-		return "", fmt.Errorf("this session has no issue or pull request")
+	issue, err := targetIssue(rc, args)
+	if err != nil {
+		return "", err
 	}
 	var done []string
 	add, remove := argStrings(args, "add_labels"), argStrings(args, "remove_labels")
 	if len(add) > 0 || len(remove) > 0 {
-		orgID := rc.m.repoOrgID(rc.ctx, rc.repo)
-		all, _, err := rc.m.forge.ListLabels(rc.ctx, rc.repo, orgID, pages.Query{}, 500, 0)
+		byName, err := rc.labelsByName()
 		if err != nil {
 			return "", err
 		}
-		byName := map[string]*db.GitLabel{}
-		for _, l := range all {
-			byName[strings.ToLower(l.Name)] = l
-		}
-		current, _ := rc.m.store.GetGitIssueLabels(rc.ctx, []string{rc.issue.ID})
+		current, _ := rc.m.store.GetGitIssueLabels(rc.ctx, []string{issue.ID})
 		ids := map[string]bool{}
-		for _, l := range current[rc.issue.ID] {
+		for _, l := range current[issue.ID] {
 			ids[l.ID] = true
 		}
-		var missing []string
-		for _, name := range add {
-			l := byName[strings.ToLower(name)]
-			if l == nil && argBool(args, "create_labels") {
-				created, err := rc.m.forge.CreateLabel(rc.ctx, rc.repo, "", forge.LabelInput{Name: name, Color: "#ededed"})
-				if err == nil {
-					l = created
-					byName[strings.ToLower(name)] = l
-				}
-			}
-			if l == nil {
-				missing = append(missing, name)
-				continue
-			}
-			ids[l.ID] = true
+		added, missing := rc.labelIDs(byName, add, argBool(args, "create_labels"))
+		for _, id := range added {
+			ids[id] = true
 		}
 		for _, name := range remove {
 			if l := byName[strings.ToLower(name)]; l != nil {
@@ -1008,7 +1138,7 @@ func toolUpdateIssue(rc *runContext, args map[string]any) (string, error) {
 		for id := range ids {
 			list = append(list, id)
 		}
-		if err := rc.m.forge.SetLabels(rc.ctx, rc.repo, rc.actor, rc.issue, list); err != nil {
+		if err := rc.m.forge.SetLabels(rc.ctx, rc.repo, rc.actor, issue, list); err != nil {
 			return "", err
 		}
 		done = append(done, "labels updated")
@@ -1017,17 +1147,8 @@ func toolUpdateIssue(rc *runContext, args map[string]any) (string, error) {
 		}
 	}
 	if v, ok := args["assignees"]; ok && v != nil {
-		var ids []string
-		var unknown []string
-		for _, name := range argStrings(args, "assignees") {
-			u, _ := rc.m.store.GetUserByUsername(rc.ctx, strings.TrimPrefix(name, "@"))
-			if u == nil {
-				unknown = append(unknown, name)
-				continue
-			}
-			ids = append(ids, u.ID)
-		}
-		if err := rc.m.forge.SetAssignees(rc.ctx, rc.repo, rc.actor, rc.issue, ids); err != nil {
+		ids, unknown := rc.userIDs(argStrings(args, "assignees"))
+		if err := rc.m.forge.SetAssignees(rc.ctx, rc.repo, rc.actor, issue, ids); err != nil {
 			return "", err
 		}
 		done = append(done, "assignees updated")
@@ -1037,18 +1158,18 @@ func toolUpdateIssue(rc *runContext, args map[string]any) (string, error) {
 	}
 	up := forge.IssueUpdate{}
 	changed := false
-	if t := strings.TrimSpace(argString(args, "title")); t != "" && t != rc.issue.Title {
+	if t := strings.TrimSpace(argString(args, "title")); t != "" && t != issue.Title {
 		up.Title = &t
 		changed = true
 	}
 	if st := strings.TrimSpace(argString(args, "state")); st == "open" || st == "closed" {
-		if st != rc.issue.State {
+		if st != issue.State {
 			up.State = &st
 			changed = true
 		}
 	}
 	if changed {
-		if err := rc.m.forge.UpdateIssue(rc.ctx, rc.repo, rc.actor, rc.issue, up); err != nil {
+		if err := rc.m.forge.UpdateIssue(rc.ctx, rc.repo, rc.actor, issue, up); err != nil {
 			return "", err
 		}
 		done = append(done, "issue updated")
@@ -1056,10 +1177,12 @@ func toolUpdateIssue(rc *runContext, args map[string]any) (string, error) {
 	if len(done) == 0 {
 		return "nothing to change", nil
 	}
-	if fresh, _ := rc.m.store.GetGitIssueByID(rc.ctx, rc.issue.ID); fresh != nil {
-		rc.issue = fresh
+	if rc.isTarget(issue) {
+		if fresh, _ := rc.m.store.GetGitIssueByID(rc.ctx, issue.ID); fresh != nil {
+			rc.issue = fresh
+		}
 	}
-	return strings.Join(done, "; "), nil
+	return fmt.Sprintf("#%d: %s", issue.Number, strings.Join(done, "; ")), nil
 }
 
 func toolWriteFile(rc *runContext, args map[string]any) (string, error) {
@@ -1131,7 +1254,7 @@ func toolCommit(rc *runContext, args map[string]any) (string, error) {
 	if rc.ws.branch == "" {
 		return "", fmt.Errorf("this session has no working branch")
 	}
-	message += fmt.Sprintf("\n\nAgent: @%s session #%d", rc.botUser.Username, rc.sess.Number)
+	message += fmt.Sprintf("\n\nAgent: @%s session %d", rc.botUser.Username, rc.sess.Number)
 	r, err := rc.openRepo()
 	if err != nil {
 		return "", err
@@ -1190,7 +1313,7 @@ func toolOpenPull(rc *runContext, args map[string]any) (string, error) {
 	if rc.issue != nil && !rc.issue.IsPull && !strings.Contains(strings.ToLower(body), fmt.Sprintf("#%d", rc.issue.Number)) {
 		body = strings.TrimSpace(body + fmt.Sprintf("\n\nCloses #%d", rc.issue.Number))
 	}
-	body += fmt.Sprintf("\n\n---\nOpened by agent @%s from session #%d.", rc.botUser.Username, rc.sess.Number)
+	body += fmt.Sprintf("\n\n---\nOpened by agent @%s from [session %d](%s).", rc.botUser.Username, rc.sess.Number, rc.m.sessionURL(rc.ctx, rc.repo, rc.sess.ID))
 	issue, _, err := rc.m.forge.CreatePull(rc.ctx, rc.repo, rc.actor, forge.NewPull{Base: rc.ws.baseBranch, Head: rc.ws.branch, Title: title, Body: body, Draft: argBool(args, "draft")})
 	if err != nil {
 		if errors.Is(err, forge.ErrConflict) {
@@ -1206,7 +1329,12 @@ func toolOpenPull(rc *runContext, args map[string]any) (string, error) {
 
 func toolRequestReview(rc *runContext, args map[string]any) (string, error) {
 	issue, pr := rc.issue, rc.pr
-	if rc.sess.ResultPullNumber > 0 {
+	if argInt(args, "number") > 0 {
+		var err error
+		if issue, pr, err = targetPull(rc, args); err != nil {
+			return "", err
+		}
+	} else if rc.sess.ResultPullNumber > 0 {
 		if is, err := rc.m.forge.Issue(rc.ctx, rc.repo, rc.sess.ResultPullNumber); err == nil {
 			if p, err := rc.m.forge.Pull(rc.ctx, is); err == nil {
 				issue, pr = is, p
@@ -1216,15 +1344,7 @@ func toolRequestReview(rc *runContext, args map[string]any) (string, error) {
 	if issue == nil || pr == nil {
 		return "", fmt.Errorf("no pull request to request reviews on")
 	}
-	var ids, unknown []string
-	for _, name := range argStrings(args, "usernames") {
-		u, _ := rc.m.store.GetUserByUsername(rc.ctx, strings.TrimPrefix(name, "@"))
-		if u == nil {
-			unknown = append(unknown, name)
-			continue
-		}
-		ids = append(ids, u.ID)
-	}
+	ids, unknown := rc.userIDs(argStrings(args, "usernames"))
 	if len(ids) == 0 {
 		return "", fmt.Errorf("no known users among %s", strings.Join(unknown, ", "))
 	}

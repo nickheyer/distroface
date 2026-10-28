@@ -3,6 +3,7 @@
 	import { Bold, Italic, Code, Link, List, ListChecks, Quote, Loader2 } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
 	import Markdown from '$lib/components/git/markdown.svelte';
+	import RefSuggest from '$lib/components/git/ref-suggest.svelte';
 	import { cn } from '$lib/utils';
 
 	let {
@@ -141,6 +142,7 @@
 			onkeydown={onKeydown}
 			class="min-h-36 w-full resize-y bg-transparent px-3 py-2.5 font-mono text-sm leading-relaxed outline-none"
 		></textarea>
+		<RefSuggest {textarea} bind:value />
 	{:else}
 		<div class="min-h-36 px-4 py-3 text-sm">
 			{#if value.trim()}

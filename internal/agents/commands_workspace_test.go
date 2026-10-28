@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/nickheyer/distroface/internal/actions"
 	"github.com/nickheyer/distroface/internal/agents/llm"
 	"github.com/nickheyer/distroface/internal/db"
@@ -37,10 +38,20 @@ func (h *harness) enableCommands() {
 	h.agents.res.Invalidate()
 }
 
+// Commits one file on main
+func (h *harness) commitFile(path, content string) {
+	h.t.Helper()
+	req := gitrepo.CommitRequest{Branch: "main", Message: "Add " + path, Edits: []gitrepo.TreeEdit{{Path: path, Mode: filemode.Regular, Content: strings.NewReader(content)}}}
+	if _, err := h.git.CommitToBranch(h.ctx, h.repo, h.actor, req); err != nil {
+		h.t.Fatalf("commit %s: %v", path, err)
+	}
+}
+
 // What the fake runner saw while serving a job
 type fakeRunnerLog struct {
 	execs    []*v1.ExecRequest
 	jobs     []string
+	tasks    []*v1.Task
 	finished chan struct{}
 }
 
@@ -55,6 +66,7 @@ func (h *harness) fakeRunner(ctx context.Context, runner *db.ActionsRunner, outp
 				continue
 			}
 			rl.jobs = append(rl.jobs, task.JobId)
+			rl.tasks = append(rl.tasks, task)
 			for task.GetInteractive() && ctx.Err() == nil {
 				ex, done, cancelled, err := am.FetchExec(ctx, runner, task.JobId, 500*time.Millisecond)
 				if err != nil || done || cancelled {
@@ -210,5 +222,109 @@ func TestCommandWorkspaceRefusesWithoutCapableRunner(t *testing.T) {
 	}
 	if runs, _, _ := h.store.ListActionsRuns(h.ctx, stores.ActionsRunListOptions{RepoID: h.repo.ID}); len(runs) != 0 {
 		t.Fatal("no run may be created when no runner can serve it")
+	}
+}
+
+const setupWorkflow = `on: workflow_dispatch
+jobs:
+  agent-setup-steps:
+    runs-on: go-runner
+    container: golang:1.25
+    steps:
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go mod download
+`
+
+func TestCommandWorkspaceRunsAgentSetupSteps(t *testing.T) {
+	h := newHarness(t, []scriptedTurn{
+		{calls: []llm.ToolCall{call("c1", "run_command", map[string]any{"command": "go version"})}},
+		{text: "Go is there."},
+	})
+	h.enableCommands()
+	h.commitFile(".distroface/workflows/agent-setup-steps.yml", setupWorkflow)
+	// Only the setup job's label has a runner
+	builtin, _, err := runner.NewRegistry(h.store, h.agents.actions).RegisterBuiltin(h.ctx, []string{"go-runner"}, "test")
+	if err != nil {
+		t.Fatalf("runner: %v", err)
+	}
+	ctx, cancel := context.WithCancel(h.ctx)
+	defer cancel()
+	rl := h.fakeRunner(ctx, builtin, func(*v1.ExecRequest) string { return "go version go1.25 linux/amd64\n" })
+
+	def := h.defineAgent(AgentSpec{Slug: "coder", Name: "Coder", Kind: KindCode, Approval: ApprovalNone, Enabled: true})
+	sess, err := h.agents.StartSession(h.ctx, StartParams{Repo: h.repo, Def: def, Prompt: "Check go", Trigger: TriggerManual, Actor: h.actor})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	done := h.waitFor(sess.ID, completed)
+	if done.Conclusion != ConclusionSuccess {
+		t.Fatalf("conclusion %s, error %q", done.Conclusion, done.Error)
+	}
+	select {
+	case <-rl.finished:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the fake runner never finished the session job")
+	}
+	if len(rl.tasks) != 1 || len(rl.execs) != 1 {
+		t.Fatalf("tasks = %d execs = %d", len(rl.tasks), len(rl.execs))
+	}
+	// The setup job shapes the session job, checkout stays first
+	task := rl.tasks[0]
+	if len(task.RunsOn) != 1 || task.RunsOn[0] != "go-runner" || task.ContainerImage != "golang:1.25" || !task.Interactive {
+		t.Fatalf("task = runs_on %v container %q interactive %v", task.RunsOn, task.ContainerImage, task.Interactive)
+	}
+	if len(task.Steps) != 3 || task.Steps[0].Uses != "actions/checkout@v4" || task.Steps[1].Uses != "actions/setup-go@v5" || task.Steps[1].With["go-version-file"] != "go.mod" || task.Steps[2].Run != "go mod download" {
+		t.Fatalf("steps = %+v", task.Steps)
+	}
+	runs, _, _ := h.store.ListActionsRuns(h.ctx, stores.ActionsRunListOptions{RepoID: h.repo.ID})
+	if len(runs) != 1 || !strings.Contains(runs[0].Workflow, "actions/setup-go@v5") {
+		t.Fatalf("runs = %d, workflow must carry the setup steps", len(runs))
+	}
+	events, _ := h.store.ListAgentSessionEvents(h.ctx, sess.ID, 0, 0)
+	var opened string
+	for _, ev := range events {
+		if ev.Kind == EventStatus && strings.HasPrefix(ev.Text, "Opened command workspace") {
+			opened = ev.Text
+		}
+	}
+	if !strings.HasSuffix(opened, "prepared by .distroface/workflows/agent-setup-steps.yml") {
+		t.Fatalf("status = %q", opened)
+	}
+}
+
+func TestCommandWorkspaceRefusesBrokenSetupWorkflow(t *testing.T) {
+	h := newHarness(t, []scriptedTurn{
+		{calls: []llm.ToolCall{call("c1", "run_command", map[string]any{"command": "true"})}},
+		{text: "Could not run."},
+	})
+	h.enableCommands()
+	h.commitFile(".distroface/workflows/agent-setup-steps.yml", "on: push\njobs:\n  build:\n    steps:\n      - run: true\n")
+	builtin, _, err := runner.NewRegistry(h.store, h.agents.actions).RegisterBuiltin(h.ctx, []string{"ubuntu-latest"}, "test")
+	if err != nil {
+		t.Fatalf("runner: %v", err)
+	}
+	ctx, cancel := context.WithCancel(h.ctx)
+	defer cancel()
+	h.fakeRunner(ctx, builtin, func(*v1.ExecRequest) string { return "" })
+	def := h.defineAgent(AgentSpec{Slug: "coder", Name: "Coder", Kind: KindCode, Approval: ApprovalNone, Enabled: true})
+	sess, err := h.agents.StartSession(h.ctx, StartParams{Repo: h.repo, Def: def, Prompt: "Run", Trigger: TriggerManual, Actor: h.actor})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	h.waitFor(sess.ID, completed)
+	events, _ := h.store.ListAgentSessionEvents(h.ctx, sess.ID, 0, 0)
+	var result string
+	for _, ev := range events {
+		if ev.Kind == EventToolResult && ev.Tool == "run_command" {
+			result = ev.Text
+		}
+	}
+	if !strings.Contains(result, "agent-setup-steps.yml") || !strings.Contains(result, "needs a job named agent-setup-steps") {
+		t.Fatalf("expected the setup file to be named, got %q", result)
+	}
+	if runs, _, _ := h.store.ListActionsRuns(h.ctx, stores.ActionsRunListOptions{RepoID: h.repo.ID}); len(runs) != 0 {
+		t.Fatal("no run may be created from a broken setup workflow")
 	}
 }

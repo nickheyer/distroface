@@ -112,7 +112,6 @@
 					label="expiry"
 					unit="hours"
 					bind:value={expiryHours}
-					unset="Never"
 					seed={72}
 				/>
 			</FormField>

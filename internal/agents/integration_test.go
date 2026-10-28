@@ -460,3 +460,107 @@ func TestSearchIssuesToolQueriesTheStore(t *testing.T) {
 		}
 	}
 }
+
+func TestSessionOpensIssueAndAdoptsIt(t *testing.T) {
+	h := newHarness(t, []scriptedTurn{
+		{calls: []llm.ToolCall{call("c1", "create_issue", map[string]any{"title": "Close session keybind is unset", "body": "Expected ctrl+d.", "labels": []string{"bug"}, "create_labels": true})}},
+		{calls: []llm.ToolCall{call("c2", "post_comment", map[string]any{"body": "Looking into it."})}},
+		{calls: []llm.ToolCall{call("c3", "post_comment", map[string]any{"number": 1, "body": "Related to the new issue."})}},
+		{calls: []llm.ToolCall{call("c4", "write_file", map[string]any{"path": "keys.txt", "content": "ctrl+d\n"})}},
+		{calls: []llm.ToolCall{call("c5", "commit", map[string]any{"message": "Set the default"})}},
+		{calls: []llm.ToolCall{call("c6", "open_pull_request", map[string]any{"title": "Set the default", "body": "Sets ctrl+d."})}},
+		{text: "Opened the issue and a pull request."},
+	})
+	older, err := h.forge.CreateIssue(h.ctx, h.repo, forge.Actor{User: h.actor, CanWrite: true}, forge.NewIssue{Title: "Older", Body: "An existing issue."})
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	def := h.defineAgent(AgentSpec{Slug: "filer", Name: "Filer", Kind: KindCustom, Approval: ApprovalNone, Enabled: true,
+		Tools: []string{"create_issue", "post_comment", "write_file", "commit", "open_pull_request"}})
+	sess, err := h.agents.StartSession(h.ctx, StartParams{Repo: h.repo, Def: def, Prompt: "Open an issue for the missing keybind, then fix it", Trigger: TriggerManual, Actor: h.actor})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	done := h.waitFor(sess.ID, completed)
+	if done.Conclusion != ConclusionSuccess {
+		t.Fatalf("conclusion %s error %q", done.Conclusion, done.Error)
+	}
+	// The model saw every configured tool although the session started without a target
+	h.script.mu.Lock()
+	first := h.script.requests[0]
+	h.script.mu.Unlock()
+	offered := map[string]bool{}
+	for _, raw := range first["tools"].([]any) {
+		fn := raw.(map[string]any)["function"].(map[string]any)
+		offered[fn["name"].(string)] = true
+	}
+	for _, name := range []string{"create_issue", "post_comment", "commit", "open_pull_request"} {
+		if !offered[name] {
+			t.Fatalf("%s was withheld from the model, offered %v", name, offered)
+		}
+	}
+	// The new issue is the bot's, carries the label, and became the session target
+	issue, err := h.store.GetGitIssue(h.ctx, h.repo.ID, 2)
+	if err != nil || issue == nil || issue.IsPull || issue.Title != "Close session keybind is unset" {
+		t.Fatalf("issue %v %v", issue, err)
+	}
+	if !h.agents.IsAgentUser(h.ctx, issue.AuthorID) {
+		t.Fatal("issue author is not the bot")
+	}
+	if done.IssueID == nil || *done.IssueID != issue.ID || done.IssueNumber != issue.Number || done.IsPull {
+		t.Fatalf("session did not adopt the issue: %+v", done)
+	}
+	labels, _ := h.store.GetGitIssueLabels(h.ctx, []string{issue.ID})
+	if len(labels[issue.ID]) != 1 || labels[issue.ID][0].Name != "bug" {
+		t.Fatalf("labels %v", labels[issue.ID])
+	}
+	// The untargeted comment went to the new issue, the numbered one to the older issue
+	comments, _, _ := h.store.ListGitComments(h.ctx, issue.ID, true, 0, 0)
+	if len(comments) != 1 || comments[0].Body != "Looking into it." {
+		t.Fatalf("new issue comments %+v", comments)
+	}
+	olderComments, _, _ := h.store.ListGitComments(h.ctx, older.ID, true, 0, 0)
+	if len(olderComments) != 1 || olderComments[0].Body != "Related to the new issue." {
+		t.Fatalf("older issue comments %+v", olderComments)
+	}
+	// The pull request closes the adopted issue
+	if done.ResultPullNumber != 3 {
+		t.Fatalf("pull request number %d", done.ResultPullNumber)
+	}
+	pull, err := h.store.GetGitIssue(h.ctx, h.repo.ID, 3)
+	if err != nil || pull == nil || !pull.IsPull || !strings.Contains(pull.Body, "Closes #2") {
+		t.Fatalf("pull request %v %v", pull, err)
+	}
+}
+
+func TestFinalReplyIsRecordedOnce(t *testing.T) {
+	h := newHarness(t, []scriptedTurn{
+		{calls: []llm.ToolCall{call("c1", "read_file", map[string]any{"path": "README.md"})}},
+		{text: "All done here."},
+	})
+	def := h.defineAgent(AgentSpec{Slug: "helper", Name: "Helper", Kind: KindChat, Approval: ApprovalNone, Enabled: true})
+	sess, err := h.agents.StartSession(h.ctx, StartParams{Repo: h.repo, Def: def, Prompt: "Look around", Trigger: TriggerManual, Actor: h.actor})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	done := h.waitFor(sess.ID, completed)
+	if done.Conclusion != ConclusionSuccess || done.Summary != "All done here." {
+		t.Fatalf("conclusion %s summary %q error %q", done.Conclusion, done.Summary, done.Error)
+	}
+	events, _ := h.store.ListAgentSessionEvents(h.ctx, sess.ID, 0, 0)
+	assistant, results := 0, 0
+	for _, ev := range events {
+		switch {
+		case ev.Kind == EventAssistant && strings.Contains(ev.Text, "All done here"):
+			assistant++
+		case ev.Kind == EventResult:
+			results++
+			if ev.Text != "All done here." {
+				t.Fatalf("result = %q", ev.Text)
+			}
+		}
+	}
+	if assistant != 0 || results != 1 {
+		t.Fatalf("the final reply appears as %d assistant and %d result events, want only the result", assistant, results)
+	}
+}

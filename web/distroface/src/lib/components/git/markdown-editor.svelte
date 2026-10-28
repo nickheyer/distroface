@@ -27,6 +27,7 @@
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import Markdown from '$lib/components/git/markdown.svelte';
+	import RefSuggest from '$lib/components/git/ref-suggest.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { IssueState, type Issue } from '$lib/proto/distroface/v1/issue_pb';
 	import type { WikiPage } from '$lib/proto/distroface/v1/wiki_pb';
@@ -513,6 +514,7 @@
 			onkeydown={onKeydown}
 			class="max-h-[75vh] min-h-112 w-full resize-y bg-transparent px-5 py-4 text-sm leading-7 outline-none placeholder:text-muted-foreground"
 		></textarea>
+		<RefSuggest {textarea} bind:value {namespace} {name} />
 	{:else}
 		<div class="min-h-112 min-w-0 overflow-x-auto px-5 py-4 text-sm">
 			{#if value.trim()}

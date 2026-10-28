@@ -33,7 +33,7 @@
 	import Timeline from '$lib/components/git/timeline.svelte';
 	import IssueSidebar from '$lib/components/git/issue-sidebar.svelte';
 	import AgentSessionsPanel from '$lib/components/git/agent-sessions-panel.svelte';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { GitUnit } from '$lib/proto/distroface/v1/git_pb';
@@ -66,12 +66,13 @@
 			(!issue?.locked || canWrite)
 	);
 
-	async function loadIssue() {
+	async function loadIssue(silent = false) {
 		try {
 			const resp = await rpcClient.issue.getIssue(
 				{ namespace, name, number: BigInt(number) },
-				silentCallOptions
+				silent ? backgroundCallOptions : silentCallOptions
 			);
+			if (silent && !resp.issue) return;
 			issue = resp.issue;
 			notFound = !issue;
 			if (issue?.isPull) {
@@ -85,13 +86,14 @@
 				);
 			}
 		} catch {
+			if (silent) return;
 			issue = undefined;
 			notFound = true;
 		}
 	}
 
-	async function loadComments(reset = true) {
-		commentsLoading = true;
+	async function loadComments(reset = true, silent = false) {
+		if (!silent) commentsLoading = true;
 		try {
 			const resp = await rpcClient.issue.listComments(
 				{
@@ -115,6 +117,23 @@
 		loadIssue();
 		loadComments();
 	}
+
+	// Background refresh while visible, comments only after a change
+	const POLL_MS = 10000;
+	let pollTick = $state(0);
+	const activity = (i: NonNullable<typeof issue>) =>
+		`${i.updatedAt?.seconds ?? 0n}:${i.commentCount}:${i.state}`;
+	async function poll() {
+		if (!issue || document.visibilityState !== 'visible') return;
+		const before = activity(issue);
+		await loadIssue(true);
+		if (issue && activity(issue) !== before) await loadComments(true, true);
+		pollTick++;
+	}
+	$effect(() => {
+		const t = setInterval(() => void poll(), POLL_MS);
+		return () => clearInterval(t);
+	});
 
 	$effect(() => {
 		if (!number || loadedFor === number) return;
@@ -325,7 +344,9 @@
 				{#if issue.author}
 					<a
 						href={resolve('/[namespace]', { namespace: issue.author.username })}
-						class="font-medium text-foreground hover:text-primary">{issue.author.username}</a
+						class="font-medium text-foreground hover:text-primary"
+						data-hover="user"
+						data-user={issue.author.username}>{issue.author.username}</a
 					>
 				{/if}
 				<span
@@ -381,7 +402,9 @@
 						</Avatar>
 						{#if issue.author}<a
 								href={resolve('/[namespace]', { namespace: issue.author.username })}
-								class="font-medium text-foreground hover:text-primary">{issue.author.username}</a
+								class="font-medium text-foreground hover:text-primary"
+								data-hover="user"
+								data-user={issue.author.username}>{issue.author.username}</a
 							>{/if}
 						<span>opened</span>
 						{#if issue.createdAt}<span title={timestampDate(issue.createdAt).toLocaleString()}
@@ -517,7 +540,13 @@
 					canModerate={canWrite}
 					onChanged={refresh}
 				/>
-				<AgentSessionsPanel {namespace} {name} issueNumber={issue.number} canStart={canWrite} />
+				<AgentSessionsPanel
+					{namespace}
+					{name}
+					issueNumber={issue.number}
+					canStart={canWrite}
+					tick={pollTick}
+				/>
 			</aside>
 		</div>
 	</div>

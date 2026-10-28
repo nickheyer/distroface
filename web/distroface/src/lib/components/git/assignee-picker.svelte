@@ -106,8 +106,8 @@
 </script>
 
 <div class="space-y-2">
-	<div class="flex items-center justify-between">
-		<span class="text-xs font-medium text-muted-foreground">Assignees</span>
+	<div class="flex min-h-6 items-center justify-between">
+		<span class="eyebrow">Assignees</span>
 		{#if canEdit}
 			<Popover bind:open>
 				<PopoverTrigger>

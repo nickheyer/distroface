@@ -39,7 +39,8 @@
 		canWrite = false,
 		isAuthor = false,
 		orgId = '',
-		onChanged
+		onChanged,
+		tick = 0
 	}: {
 		namespace: string;
 		name: string;
@@ -54,6 +55,8 @@
 		isAuthor?: boolean;
 		orgId?: string;
 		onChanged: () => void;
+		// Bumped by the page's background poll
+		tick?: number;
 	} = $props();
 
 	const issue = $derived(pull.issue!);
@@ -397,10 +400,12 @@
 				{onChanged}
 			/>
 		</section>
-		<AgentSessionsPanel {namespace} {name} issueNumber={number} isPull canStart={canWrite} />
+		<AgentSessionsPanel {namespace} {name} issueNumber={number} isPull canStart={canWrite} {tick} />
 		{#if isFork}
 			<section class="space-y-2 lg:border-t lg:pt-5">
-				<span class="eyebrow">Maintainer edits</span>
+				<div class="flex min-h-6 items-center">
+					<span class="eyebrow">Maintainer edits</span>
+				</div>
 				{#if canSetMaintainerEdits}
 					<FormField
 						label="Allow edits by maintainers"
@@ -424,7 +429,9 @@
 			</section>
 		{/if}
 		<section class="space-y-2 lg:border-t lg:pt-5">
-			<span class="eyebrow">Checks</span>
+			<div class="flex min-h-6 items-center">
+				<span class="eyebrow">Checks</span>
+			</div>
 			<ChecksPanel {namespace} {name} sha={pull.headSha} />
 		</section>
 	</aside>

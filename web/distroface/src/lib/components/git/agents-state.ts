@@ -280,7 +280,8 @@ export const toolGroups: { label: string; tools: ToolInfo[] }[] = [
 	{
 		label: 'Discuss',
 		tools: [
-			{ name: 'post_comment', description: 'Comment on the target', write: true },
+			{ name: 'create_issue', description: 'Open a new issue', write: true },
+			{ name: 'post_comment', description: 'Comment on an issue or pull request', write: true },
 			{ name: 'submit_review', description: 'Submit a review with inline comments', write: true },
 			{ name: 'update_issue', description: 'Labels, assignees, title, state', write: true },
 			{ name: 'request_review', description: 'Request reviewers', write: true }
@@ -335,7 +336,8 @@ export const defaultTools: Record<number, string[]> = {
 		'run_command',
 		'post_comment',
 		'request_review',
-		'update_issue'
+		'update_issue',
+		'create_issue'
 	],
 	[AgentKind.CHAT]: [
 		'get_repository_info',
@@ -359,6 +361,7 @@ export const defaultTools: Record<number, string[]> = {
 		'search_issues',
 		'list_commits',
 		'update_issue',
+		'create_issue',
 		'post_comment'
 	],
 	[AgentKind.CUSTOM]: [
@@ -371,7 +374,8 @@ export const defaultTools: Record<number, string[]> = {
 		'get_issue',
 		'list_commits',
 		'search_issues',
-		'post_comment'
+		'post_comment',
+		'create_issue'
 	]
 };
 
@@ -427,6 +431,7 @@ export function summarizeArgs(tool: string, args: Record<string, unknown>): stri
 		case 'commit':
 			return str('message').split('\n')[0] ?? '';
 		case 'open_pull_request':
+		case 'create_issue':
 			return str('title');
 		case 'run_command':
 			return str('command').split('\n')[0] ?? '';

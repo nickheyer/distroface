@@ -108,10 +108,11 @@
 	}
 
 	// Placeholder while retention is off
-	function unset(path: Path): string {
-		if (!parentScope) return 'Forever';
+	// Inherited limit while this scope sets none
+	function fallback(path: Path): number | undefined {
+		if (!parentScope) return undefined;
 		const v = Number(valuesOf(inherited)[path] ?? 0);
-		return v > 0 ? `Inherits ${v} days` : 'Forever';
+		return v > 0 ? v : undefined;
 	}
 
 	function seed(s: Settings | null) {
@@ -317,7 +318,7 @@
 				label="artifact retention"
 				unit="days"
 				bind:value={artifactDays}
-				unset={unset(P.artifactDays)}
+				fallback={fallback(P.artifactDays)}
 				seed={30}
 				max={3650}
 				disabled={!canEdit || locked(P.artifactDays)}
@@ -329,7 +330,7 @@
 				label="log retention"
 				unit="days"
 				bind:value={logDays}
-				unset={unset(P.logDays)}
+				fallback={fallback(P.logDays)}
 				seed={90}
 				max={3650}
 				disabled={!canEdit || locked(P.logDays)}

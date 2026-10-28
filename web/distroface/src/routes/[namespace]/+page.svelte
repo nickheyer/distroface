@@ -229,7 +229,7 @@
 	{#if configStore.gitEnabled}
 		<div class="space-y-4">
 			<div class="section-header">
-				<h2 class="section-title">Git</h2>
+				<h2 class="section-title">Git repositories</h2>
 				{#if gitPager.totalCount > 0}
 					<span class="text-xs text-muted-foreground tabular-nums">{gitPager.totalCount} total</span
 					>

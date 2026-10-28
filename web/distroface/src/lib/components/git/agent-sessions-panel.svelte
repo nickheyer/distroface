@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { Bot, Plus, Loader2, ChevronDown } from '@lucide/svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -30,13 +31,16 @@
 		name,
 		issueNumber,
 		isPull = false,
-		canStart = false
+		canStart = false,
+		tick = 0
 	}: {
 		namespace: string;
 		name: string;
 		issueNumber: bigint;
 		isPull?: boolean;
 		canStart?: boolean;
+		// Bumped by the page's background poll
+		tick?: number;
 	} = $props();
 
 	let overview = $state<GetRepoAgentsResponse | undefined>();
@@ -46,16 +50,16 @@
 	let agentId = $state('');
 	let prompt = $state('');
 	let starting = $state(false);
+	let seen = '';
 
-	const enabled = $derived(
-		configStore.agentsEnabled && gitRepoStore.repo?.units?.agents === true && !!overview?.enabled
-	);
+	const unit = $derived(configStore.agentsEnabled && gitRepoStore.repo?.units?.agents === true);
+	const enabled = $derived(unit && !!overview?.enabled);
 	const agents = $derived((overview?.agents ?? []).filter((a) => a.enabled));
 	const selected = $derived(agents.find((a) => a.id === agentId) ?? agents[0]);
 	const anyActive = $derived(sessions.some((s) => isSessionActive(s.status)));
 
 	async function load(silent = false) {
-		if (!configStore.agentsEnabled || gitRepoStore.repo?.units?.agents !== true) {
+		if (!unit) {
 			loaded = true;
 			return;
 		}
@@ -71,6 +75,12 @@
 			]);
 			if (o) overview = o;
 			sessions = s.sessions;
+			// Agent activity moves the counts in the repository header
+			const sig = s.sessions
+				.map((x) => `${x.id}:${x.status}:${x.eventCount}:${x.resultPullNumber}`)
+				.join(',');
+			if (silent && seen && sig !== seen) void gitRepoStore.refresh();
+			seen = sig;
 		} catch {
 			// Unit may be off for this viewer
 		} finally {
@@ -78,16 +88,26 @@
 		}
 	}
 
+	// Only the target and the unit retrigger, loading must not track what it writes
 	$effect(() => {
+		void namespace;
+		void name;
 		void issueNumber;
-		overview = undefined;
-		void load();
+		void unit;
+		untrack(() => {
+			overview = undefined;
+			void load();
+		});
 	});
 
 	$effect(() => {
 		if (!anyActive) return;
 		const t = setInterval(() => load(true), 5000);
 		return () => clearInterval(t);
+	});
+
+	$effect(() => {
+		if (tick > 0) untrack(() => void load(true));
 	});
 
 	async function start() {
@@ -119,7 +139,7 @@
 
 {#if loaded && enabled && (sessions.length > 0 || (canStart && agents.length > 0))}
 	<section class="space-y-2 lg:border-t lg:pt-5">
-		<div class="flex items-center justify-between">
+		<div class="flex min-h-6 items-center justify-between">
 			<span class="eyebrow inline-flex items-center gap-1.5"><Bot class="size-3.5" />Agents</span>
 			{#if canStart && agents.length > 0 && overview?.canStart}
 				<Popover bind:open>

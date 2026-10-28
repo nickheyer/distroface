@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -41,6 +42,71 @@ type AgentRunOptions struct {
 	RunsOn []string
 	// Wall clock cap on the whole job, zero means none
 	TimeoutMinutes int
+	// Repository steps that prepare the workspace, nil for checkout only
+	Setup *AgentSetup
+}
+
+// Workflow file and job name that prepare command workspaces
+const AgentSetupJob = "agent-setup-steps"
+
+// Repository defined preparation of a session workspace
+type AgentSetup struct {
+	Path   string
+	RunsOn []string
+	// Workflow env and the setup job exactly as written
+	env *yaml.Node
+	job *yaml.Node
+}
+
+// Setup workflow at a revision, nil when none exists
+func (m *Manager) LoadAgentSetup(ctx context.Context, repo *db.GitRepository, rev string) (*AgentSetup, error) {
+	files, _, err := m.LoadWorkflows(ctx, repo, rev)
+	if err != nil {
+		return nil, err
+	}
+	for _, f := range files {
+		if strings.TrimSuffix(path.Base(f.Path), path.Ext(f.Path)) == AgentSetupJob {
+			return agentSetupFromFile(f)
+		}
+	}
+	return nil, nil
+}
+
+// Checks the setup file, keeps its job node
+func agentSetupFromFile(f *WorkflowFile) (*AgentSetup, error) {
+	if f.Err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Path, f.Err)
+	}
+	job := f.Workflow.Jobs[AgentSetupJob]
+	if job == nil {
+		return nil, fmt.Errorf("%s: needs a job named %s", f.Path, AgentSetupJob)
+	}
+	if job.Uses != "" {
+		return nil, fmt.Errorf("%s: job %s must list steps, not call a workflow", f.Path, AgentSetupJob)
+	}
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte(f.Source), &root); err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Path, err)
+	}
+	if len(root.Content) == 0 {
+		return nil, fmt.Errorf("%s: empty workflow", f.Path)
+	}
+	doc := root.Content[0]
+	s := &AgentSetup{Path: f.Path, RunsOn: job.RunsOn, env: mapValue(doc, "env"), job: mapValue(mapValue(doc, "jobs"), AgentSetupJob)}
+	if s.job == nil {
+		return nil, fmt.Errorf("%s: needs a job named %s", f.Path, AgentSetupJob)
+	}
+	return s, nil
+}
+
+// Mapping value under one key, nil when absent
+func mapValue(n *yaml.Node, key string) *yaml.Node {
+	for k, v := range mapPairs(n) {
+		if k == key {
+			return v
+		}
+	}
+	return nil
 }
 
 // Creates a run whose single job stays open for commands
@@ -79,6 +145,9 @@ func (m *Manager) StartAgentSessionRun(ctx context.Context, repo *db.GitReposito
 	}
 	wf, err := ParseWorkflow([]byte(source))
 	if err != nil {
+		if opts.Setup != nil {
+			return nil, nil, fmt.Errorf("%w: %s: %w", ErrInvalid, opts.Setup.Path, err)
+		}
 		return nil, nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	payload := map[string]any{
@@ -110,7 +179,7 @@ func (m *Manager) StartAgentSessionRun(ctx context.Context, repo *db.GitReposito
 	return run, jobs[0], nil
 }
 
-// Checkout only workflow, commands arrive later
+// Checkout then the repository's setup steps, commands arrive later
 func agentSessionWorkflow(opts AgentRunOptions) (string, error) {
 	timeout := opts.TimeoutMinutes
 	if timeout <= 0 {
@@ -120,18 +189,35 @@ func agentSessionWorkflow(opts AgentRunOptions) (string, error) {
 	if len(runsOn) == 0 {
 		runsOn = []string{defaultRunsOnLabel}
 	}
+	steps := []any{map[string]any{"uses": "actions/checkout@v4"}}
+	job := map[string]any{
+		"name":            "Command workspace",
+		"runs-on":         runsOn,
+		"timeout-minutes": timeout,
+		"steps":           steps,
+	}
 	wf := map[string]any{
 		"name":        fmt.Sprintf("Agent session #%d", opts.Session.SessionNumber),
 		"on":          "workflow_dispatch",
 		"permissions": "read-all",
-		"jobs": map[string]any{
-			"session": map[string]any{
-				"name":            "Command workspace",
-				"runs-on":         runsOn,
-				"timeout-minutes": timeout,
-				"steps":           []map[string]any{{"uses": "actions/checkout@v4"}},
-			},
-		},
+		"jobs":        map[string]any{"session": job},
+	}
+	// Setup nodes go in verbatim, parsed again afterwards
+	if s := opts.Setup; s != nil {
+		if s.env != nil {
+			wf["env"] = s.env
+		}
+		for _, key := range []string{"container", "services", "env", "defaults"} {
+			if n := mapValue(s.job, key); n != nil {
+				job[key] = n
+			}
+		}
+		if n := mapValue(s.job, "steps"); n != nil && n.Kind == yaml.SequenceNode {
+			for _, st := range n.Content {
+				steps = append(steps, st)
+			}
+			job["steps"] = steps
+		}
 	}
 	out, err := yaml.Marshal(wf)
 	if err != nil {

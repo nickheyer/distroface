@@ -47,6 +47,7 @@
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import CliSetupPrompt from '$lib/components/cli-setup-prompt.svelte';
 	import NotificationBell from '$lib/components/git/notification-bell.svelte';
+	import RefHovercard from '$lib/components/git/ref-hovercard.svelte';
 	import SideNav from '$lib/components/side-nav.svelte';
 
 	let { children } = $props();
@@ -155,6 +156,7 @@
 <ModeWatcher />
 <LoadingBar />
 <Toaster position="bottom-center" expand={true} richColors />
+<RefHovercard />
 
 {#if isAuthPage || isChangePasswordPage}
 	{@render children?.()}

@@ -450,7 +450,9 @@
 </script>
 
 {#snippet heading(label: string)}
-	<span class="text-xs font-medium text-muted-foreground">{label}</span>
+	<div class="flex min-h-6 items-center">
+		<span class="eyebrow">{label}</span>
+	</div>
 {/snippet}
 
 {#snippet refRow(ref: IssueRef, removable: boolean, resolved = false)}
@@ -529,7 +531,7 @@
 	</section>
 
 	<section class="space-y-2 lg:border-t lg:pt-5">
-		<div class="flex items-center justify-between">
+		<div class="flex min-h-6 items-center justify-between">
 			{@render heading('Project')}
 			{#if canWrite}
 				<Popover bind:open={projectOpen}>
@@ -599,7 +601,9 @@
 
 	<section class="space-y-2 lg:border-t lg:pt-5">
 		{#if canWrite}
-			<label for="issue-due" class="text-xs font-medium text-muted-foreground">Due date</label>
+			<div class="flex min-h-6 items-center">
+				<label for="issue-due" class="eyebrow">Due date</label>
+			</div>
 			<DateInput id="issue-due" value={dueValue} invalid={overdue} onValueChange={setDue} />
 			{#if overdue}
 				<p class="text-xs text-destructive" role="alert">Overdue</p>
@@ -619,7 +623,7 @@
 	</section>
 
 	<section class="space-y-2 lg:border-t lg:pt-5">
-		<div class="flex items-center justify-between">
+		<div class="flex min-h-6 items-center justify-between">
 			{@render heading('Dependencies')}
 			{#if canWrite}
 				<Popover bind:open={depOpen}>
@@ -719,7 +723,7 @@
 
 	{#if timeTracking}
 		<section class="space-y-2 lg:border-t lg:pt-5">
-			<div class="flex items-center justify-between">
+			<div class="flex min-h-6 items-center justify-between">
 				{@render heading('Time')}
 				{#if signedIn && !repoArchived}
 					<Button

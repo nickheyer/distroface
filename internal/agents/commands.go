@@ -27,6 +27,10 @@ type commandWorkspace struct {
 	runNumber int64
 	jobID     string
 	url       string
+	// Labels the job asked for, for messages
+	labels string
+	// Setup workflow the job ran first, empty for checkout only
+	setup string
 	// Where the checkout sat after the last successful command
 	branch string
 	head   plumbing.Hash
@@ -52,9 +56,7 @@ func toolRunCommand(rc *runContext, args map[string]any) (string, error) {
 	if capMinutes := int(rc.settings.GetCommandTimeoutMinutes()); capMinutes > 0 && (timeout <= 0 || timeout > capMinutes) {
 		timeout = capMinutes
 	}
-	runsOn := commandRunsOn(rc)
-	labels := strings.Join(runsOn, ", ")
-	cw, err := rc.m.ensureCommandWorkspace(rc, runsOn)
+	cw, err := rc.m.ensureCommandWorkspace(rc)
 	if err != nil {
 		return "", err
 	}
@@ -85,7 +87,7 @@ func toolRunCommand(rc *runContext, args map[string]any) (string, error) {
 		if errors.Is(err, context.DeadlineExceeded) {
 			// Runner stopped answering, a fresh job takes over
 			rc.m.abandonWorkspace(rc, cw)
-			return "", fmt.Errorf("the command did not finish within %d minutes, is a runner with label %s online?", timeout, labels)
+			return "", fmt.Errorf("the command did not finish within %d minutes, is a runner with label %s online?", timeout, cw.labels)
 		}
 		return "", err
 	}
@@ -93,6 +95,9 @@ func toolRunCommand(rc *runContext, args map[string]any) (string, error) {
 	case done.Error != "":
 		// Could not run at all, next call opens a fresh one
 		rc.cmd = nil
+		if cw.setup != "" && jobFailed(rc, cw) {
+			return "", fmt.Errorf("the command workspace failed before it could serve commands, check the steps in %s, see %s", cw.setup, cw.url)
+		}
 		return "", fmt.Errorf("the command could not run: %s, run it again to open a new workspace", done.Error)
 	case done.Conclusion == actions.ConclusionSuccess:
 		// Whole script ran, checkout holds tip and every edit
@@ -110,6 +115,12 @@ func toolRunCommand(rc *runContext, args map[string]any) (string, error) {
 		b.WriteByte('\n')
 	}
 	return b.String(), nil
+}
+
+// Whether the job ended in failure, setup steps included
+func jobFailed(rc *runContext, cw *commandWorkspace) bool {
+	job, _ := rc.m.actions.GetJob(rc.ctx, cw.jobID)
+	return job != nil && job.Status == actions.StatusCompleted && job.Conclusion == actions.ConclusionFailure
 }
 
 // Drops the workspace, cancelling a job nobody claimed
@@ -163,7 +174,7 @@ func commandJobMinutes(rc *runContext) int {
 }
 
 // Opens the workspace, adopting a live one after restart
-func (m *Manager) ensureCommandWorkspace(rc *runContext, runsOn []string) (*commandWorkspace, error) {
+func (m *Manager) ensureCommandWorkspace(rc *runContext) (*commandWorkspace, error) {
 	if rc.cmd != nil {
 		if job, _ := m.actions.GetJob(rc.ctx, rc.cmd.jobID); job != nil && commandJobOpen(job) {
 			return rc.cmd, nil
@@ -172,8 +183,22 @@ func (m *Manager) ensureCommandWorkspace(rc *runContext, runsOn []string) (*comm
 	}
 	if job, run, _ := m.actions.LiveAgentSessionJob(rc.ctx, rc.sess.ID); job != nil && run != nil {
 		// Unknown checkout state, the first command syncs it
-		rc.cmd = &commandWorkspace{runID: run.ID, runNumber: run.Number, jobID: job.ID, url: m.actions.RunURL(rc.ctx, rc.repo, run.ID)}
+		rc.cmd = &commandWorkspace{runID: run.ID, runNumber: run.Number, jobID: job.ID, url: m.actions.RunURL(rc.ctx, rc.repo, run.ID), labels: strings.Join(actions.StringList(job.RunsOn), ", ")}
 		return rc.cmd, nil
+	}
+	branch, sha := commandTarget(rc)
+	// The checked out commit brings its own setup workflow
+	rev := branch
+	if !sha.IsZero() {
+		rev = sha.String()
+	}
+	setup, err := m.actions.LoadAgentSetup(rc.ctx, rc.repo, rev)
+	if err != nil {
+		return nil, fmt.Errorf("the agent setup workflow cannot be used: %w", err)
+	}
+	runsOn := commandRunsOn(rc)
+	if setup != nil && len(setup.RunsOn) > 0 {
+		runsOn = setup.RunsOn
 	}
 	labels := strings.Join(runsOn, ", ")
 	online, registered := m.actions.RunnerOnlineFor(rc.ctx, rc.repo, runsOn, actions.CapabilityExec)
@@ -183,12 +208,12 @@ func (m *Manager) ensureCommandWorkspace(rc *runContext, runsOn []string) (*comm
 	case !online:
 		return nil, fmt.Errorf("no online runner with the label %s supports command workspaces, start the runner or upgrade dfcli, commands cannot run until then", labels)
 	}
-	branch, sha := commandTarget(rc)
 	opts := actions.AgentRunOptions{
 		Session:        actions.AgentRunInfo{SessionID: rc.sess.ID, SessionNumber: rc.sess.Number, AgentSlug: rc.def.Slug},
 		Branch:         branch,
 		RunsOn:         runsOn,
 		TimeoutMinutes: commandJobMinutes(rc),
+		Setup:          setup,
 	}
 	if !sha.IsZero() {
 		opts.SHA = sha.String()
@@ -198,9 +223,16 @@ func (m *Manager) ensureCommandWorkspace(rc *runContext, runsOn []string) (*comm
 		return nil, fmt.Errorf("could not open the command workspace: %w", err)
 	}
 	url := m.actions.RunURL(rc.ctx, rc.repo, run.ID)
-	m.record(rc.ctx, rc.sess, EventStatus, fmt.Sprintf("Opened command workspace in Actions workflow run #%d", run.Number), "run_command", "",
-		map[string]any{"run_id": run.ID, "run_number": run.Number, "job_id": job.ID, "url": url})
-	rc.cmd = &commandWorkspace{runID: run.ID, runNumber: run.Number, jobID: job.ID, url: url, branch: branch, head: sha}
+	text := fmt.Sprintf("Opened command workspace in Actions workflow run #%d", run.Number)
+	data := map[string]any{"run_id": run.ID, "run_number": run.Number, "job_id": job.ID, "url": url}
+	cw := &commandWorkspace{runID: run.ID, runNumber: run.Number, jobID: job.ID, url: url, labels: labels, branch: branch, head: sha}
+	if setup != nil {
+		text += ", prepared by " + setup.Path
+		data["setup"] = setup.Path
+		cw.setup = setup.Path
+	}
+	m.record(rc.ctx, rc.sess, EventStatus, text, "run_command", "", data)
+	rc.cmd = cw
 	return rc.cmd, nil
 }
 

@@ -1,4 +1,4 @@
-import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 import { ConnectError } from '@connectrpc/connect';
 import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 import { GitUnit, GitAccessLevel } from '$lib/proto/distroface/v1/git_pb';
@@ -64,6 +64,22 @@ class GitRepoStore {
 	async reload(): Promise<GitRepository | undefined> {
 		if (!this.repo) return undefined;
 		return this.load(this.repo.namespace, this.repo.name, true);
+	}
+
+	// Background refetch, a failure keeps what is shown
+	async refresh(): Promise<void> {
+		const r = this.repo;
+		if (!r) return;
+		const key = `${r.namespace}/${r.name}`;
+		try {
+			const resp = await rpcClient.git.getGitRepository(
+				{ namespace: r.namespace, name: r.name },
+				backgroundCallOptions
+			);
+			if (resp.repository && this.loadedFor === key) this.repo = resp.repository;
+		} catch {
+			// Next refresh retries
+		}
 	}
 
 	clear() {

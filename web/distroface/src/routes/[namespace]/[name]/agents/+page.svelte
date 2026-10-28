@@ -56,6 +56,7 @@
 	let actor = $state('');
 	let debounce: ReturnType<typeof setTimeout> | undefined;
 	let seq = 0;
+	let seen = '';
 
 	const statusOptions = [
 		{ value: ALL, label: 'Any state' },
@@ -148,6 +149,12 @@
 			if (mine !== seq) return;
 			sessions = resp.sessions;
 			activeCount = resp.activeCount;
+			// Agent activity moves the counts in the repository header
+			const sig = resp.sessions
+				.map((x) => `${x.id}:${x.status}:${x.eventCount}:${x.resultPullNumber}`)
+				.join(',');
+			if (silent && seen && sig !== seen) void gitRepoStore.refresh();
+			seen = sig;
 			pager.apply(resp.page);
 		} catch {
 			if (mine === seq) {

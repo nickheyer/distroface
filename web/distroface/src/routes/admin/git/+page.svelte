@@ -42,7 +42,7 @@
 		min: number;
 		max: number;
 		// Zero stored means off, shown as a switched off limit
-		unset?: string;
+		unset?: boolean;
 		get: (s: Settings) => number;
 		patch: (v: number) => SettingsPatch;
 		verify?: (v: number) => Promise<string>;
@@ -136,7 +136,7 @@
 			unit: 'MB',
 			min: 1,
 			max: 1_000_000,
-			unset: 'Unlimited',
+			unset: true,
 			get: (s) => Number(git(s)?.maxRepoSizeMb ?? 0n),
 			patch: (v) => ({ git: { maxRepoSizeMb: BigInt(v) } })
 		},
@@ -395,7 +395,6 @@
 				unit={f.unit}
 				interval={f.interval}
 				bind:value={numValues[f.key]}
-				unset={f.unset}
 				min={f.min}
 				max={f.max}
 				disabled={!canEdit || acts[f.key].busy || locked(f.path)}

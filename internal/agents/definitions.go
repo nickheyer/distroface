@@ -596,13 +596,13 @@ func DefaultTools(kind string) []string {
 	case KindReview:
 		return []string{"get_repository_info", "list_files", "read_file", "search_code", "get_diff", "get_pull_request", "list_commits", "get_checks", "get_workflow_run_log", "post_comment", "submit_review"}
 	case KindCode:
-		return []string{"get_repository_info", "list_files", "read_file", "search_code", "get_diff", "get_pull_request", "get_issue", "list_commits", "get_checks", "get_workflow_run_log", "search_issues", "write_file", "edit_file", "delete_file", "rename_file", "commit", "open_pull_request", "run_command", "post_comment", "request_review", "update_issue"}
+		return []string{"get_repository_info", "list_files", "read_file", "search_code", "get_diff", "get_pull_request", "get_issue", "list_commits", "get_checks", "get_workflow_run_log", "search_issues", "write_file", "edit_file", "delete_file", "rename_file", "commit", "open_pull_request", "run_command", "post_comment", "request_review", "update_issue", "create_issue"}
 	case KindChat:
 		return []string{"get_repository_info", "list_files", "read_file", "search_code", "get_diff", "get_pull_request", "get_issue", "list_commits", "get_checks", "get_workflow_run_log", "search_issues", "post_comment"}
 	case KindTriage:
-		return []string{"get_repository_info", "read_file", "search_code", "get_issue", "search_issues", "list_commits", "update_issue", "post_comment"}
+		return []string{"get_repository_info", "read_file", "search_code", "get_issue", "search_issues", "list_commits", "update_issue", "create_issue", "post_comment"}
 	}
-	return []string{"get_repository_info", "list_files", "read_file", "search_code", "get_diff", "get_pull_request", "get_issue", "list_commits", "search_issues", "post_comment"}
+	return []string{"get_repository_info", "list_files", "read_file", "search_code", "get_diff", "get_pull_request", "get_issue", "list_commits", "search_issues", "post_comment", "create_issue"}
 }
 
 // AllToolNames lists every registered tool, sorted

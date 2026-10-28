@@ -260,7 +260,7 @@ func (m *Manager) run(ctx context.Context, sess *db.AgentSession) {
 		m.finish(ctx, sess, rc, ConclusionFailure, "", err.Error())
 		return
 	}
-	tools := toolsFor(rc.def, cfg, rc.issue != nil, rc.pr != nil)
+	tools := toolsFor(rc.def, cfg)
 
 	// Calls interrupted by an approval pause or a restart come first
 	if len(pending) > 0 {
@@ -311,15 +311,20 @@ func (m *Manager) run(ctx context.Context, sess *db.AgentSession) {
 		})
 
 		calls := resp.ToolCalls
-		m.record(ctx, sess, EventAssistant, resp.Content, "", "", map[string]any{"tool_calls": encodeCalls(calls), "stop_reason": resp.StopReason})
 		msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Content: resp.Content, ToolCalls: calls})
 		if len(calls) == 0 {
-			if resp.StopReason == llm.StopLength && strings.TrimSpace(resp.Content) == "" {
+			text := strings.TrimSpace(resp.Content)
+			if resp.StopReason == llm.StopLength && text == "" {
 				m.finish(ctx, sess, rc, ConclusionFailure, "", "the model returned an empty answer at its output limit")
 				return
 			}
-			m.finish(ctx, sess, rc, ConclusionSuccess, strings.TrimSpace(resp.Content), "")
+			// The final reply lives in the result event alone
+			m.finish(ctx, sess, rc, ConclusionSuccess, text, "")
 			return
+		}
+		m.record(ctx, sess, EventAssistant, resp.Content, "", "", map[string]any{"tool_calls": encodeCalls(calls), "stop_reason": resp.StopReason})
+		if text := strings.TrimSpace(resp.Content); text != "" {
+			rc.said = text
 		}
 		results, paused := m.executeCalls(rc, calls, false)
 		if paused {
@@ -499,6 +504,13 @@ func (m *Manager) transcript(ctx context.Context, rc *runContext) ([]llm.Message
 				lastCalls = append(lastCalls, tc)
 			}
 			msgs = append(msgs, msg)
+			if text := strings.TrimSpace(ev.Text); text != "" {
+				rc.said = text
+			}
+		case EventResult:
+			// Earlier leg's reply, the model's own words
+			msgs = append(msgs, llm.Message{Role: llm.RoleAssistant, Content: ev.Text})
+			lastCalls = nil
 		case EventToolResult:
 			answered[ev.ToolCallID] = true
 			msgs = append(msgs, llm.Message{Role: llm.RoleTool, Content: ev.Text, ToolCallID: ev.ToolCallID, ToolName: ev.Tool})
@@ -672,6 +684,8 @@ func approvalTitle(tool string, args map[string]any) string {
 		return "Commit: " + firstLine(argString(args, "message"))
 	case "open_pull_request":
 		return "Open pull request: " + firstLine(argString(args, "title"))
+	case "create_issue":
+		return "Open issue: " + firstLine(argString(args, "title"))
 	case "run_command":
 		return "Run command: " + firstLine(argString(args, "command"))
 	case "post_comment":
@@ -841,7 +855,7 @@ func (m *Manager) finish(ctx context.Context, sess *db.AgentSession, rc *runCont
 	}
 	if rc != nil && rc.issue != nil && sess.Trigger != TriggerManual && !rc.posted &&
 		(conclusion == ConclusionFailure || conclusion == ConclusionTimedOut || conclusion == ConclusionBudgetExceeded) {
-		body := fmt.Sprintf("I could not finish this task: %s\n\n[Session #%d](%s)", errText, sess.Number, m.sessionURL(ctx, rc.repo, sess.ID))
+		body := fmt.Sprintf("I could not finish this task: %s\n\n[Session %d](%s)", errText, sess.Number, m.sessionURL(ctx, rc.repo, sess.ID))
 		if _, err := m.forge.CreateComment(ctx, rc.repo, rc.actor, rc.issue, body, false); err == nil {
 			rc.posted = true
 		}
@@ -859,7 +873,8 @@ func (m *Manager) finish(ctx context.Context, sess *db.AgentSession, rc *runCont
 	if errText != "" {
 		m.record(ctx, sess, EventError, errText, "", "", map[string]any{"conclusion": conclusion})
 	}
-	if summary != "" {
+	// Summaries lifted from earlier turns are already shown
+	if summary != "" && (rc == nil || summary != rc.said) {
 		m.record(ctx, sess, EventResult, summary, "", "", map[string]any{"conclusion": conclusion, "pull_number": sess.ResultPullNumber, "review_id": sess.ResultReviewID})
 	}
 	m.record(ctx, sess, EventStatus, "Completed: "+conclusion, "", "", map[string]any{"status": StatusCompleted, "conclusion": conclusion})
@@ -882,8 +897,8 @@ func (m *Manager) finish(ctx context.Context, sess *db.AgentSession, rc *runCont
 	}
 	m.forge.Notify(ctx, forge.Notification{
 		Repo: repo, Issue: issue, Kind: forge.NotifyAgentSession, Reason: "completed",
-		Subject: fmt.Sprintf("[%s/%s] %s session #%d %s", repo.Namespace, repo.Name, sess.AgentName, sess.Number, conclusion),
-		Text:    fmt.Sprintf("Agent %s finished session #%d with %s.\n\n%s", sess.AgentName, sess.Number, conclusion, text),
+		Subject: fmt.Sprintf("[%s/%s] %s session %d %s", repo.Namespace, repo.Name, sess.AgentName, sess.Number, conclusion),
+		Text:    fmt.Sprintf("Agent %s finished session %d with %s.\n\n%s", sess.AgentName, sess.Number, conclusion, text),
 		URL:     m.sessionURL(ctx, repo, sess.ID), Recipients: recipients, ExplicitOnly: true,
 	})
 }
@@ -917,7 +932,7 @@ func (m *Manager) wrapUp(rc *runContext, summary *string) {
 			if rc.issue != nil && !rc.issue.IsPull {
 				body += fmt.Sprintf("\n\nCloses #%d", rc.issue.Number)
 			}
-			body += fmt.Sprintf("\n\n---\nOpened by agent @%s from session #%d.", rc.botUser.Username, rc.sess.Number)
+			body += fmt.Sprintf("\n\n---\nOpened by agent @%s from [session %d](%s).", rc.botUser.Username, rc.sess.Number, m.sessionURL(ctx, rc.repo, rc.sess.ID))
 			if issue, _, err := m.forge.CreatePull(ctx, rc.repo, rc.actor, forge.NewPull{Base: rc.ws.baseBranch, Head: rc.ws.branch, Title: title, Body: body}); err == nil {
 				rc.sess.ResultPullNumber = issue.Number
 				rc.prOpened = true

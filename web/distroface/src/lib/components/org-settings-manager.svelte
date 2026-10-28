@@ -91,9 +91,10 @@
 	}
 
 	// Placeholder while a limit is off
-	function unset(v: number | bigint | undefined, unit: string, none = 'Unlimited'): string {
+	// Inherited limit while this scope sets none
+	function fallback(v: number | bigint | undefined): number | undefined {
 		const n = Number(v ?? 0);
-		return n > 0 ? `Inherits ${n} ${unit}` : none;
+		return n > 0 ? n : undefined;
 	}
 
 	function seed(eff: Settings) {
@@ -264,7 +265,6 @@
 			layout="toggle"
 			tag={isolatedAct.tag ?? customTag(PATHS.portalsIsolated)}
 			error={isolatedAct.error}
-			help="Portals serve only this organization's content"
 		>
 			<Switch
 				checked={portalsIsolated}
@@ -278,7 +278,6 @@
 			layout="inline"
 			tag={anonymousAct.tag ?? customTag(PATHS.anonymousAccess)}
 			error={anonymousAct.error}
-			help="Default for this organization's portals, each portal may override. Signed out visitors get the anonymous role grants"
 		>
 			<Select.Root
 				type="single"
@@ -311,7 +310,7 @@
 				label="upload size"
 				unit="MB"
 				bind:value={maxFileSizeMb}
-				unset={unset(inherited?.artifacts?.maxFileSizeMb, 'MB')}
+				fallback={fallback(inherited?.artifacts?.maxFileSizeMb)}
 				seed={512}
 			/>
 		</FormField>
@@ -337,7 +336,7 @@
 						label="versions per path"
 						unit="versions"
 						bind:value={maxVersions}
-						unset={unset(inherited?.artifacts?.retention?.maxVersions, 'versions')}
+						fallback={fallback(inherited?.artifacts?.retention?.maxVersions)}
 						seed={10}
 					/>
 				</FormField>
@@ -352,7 +351,7 @@
 						label="age"
 						unit="days"
 						bind:value={maxAgeDays}
-						unset={unset(inherited?.artifacts?.retention?.maxAgeDays, 'days', 'Any age')}
+						fallback={fallback(inherited?.artifacts?.retention?.maxAgeDays)}
 						seed={90}
 					/>
 				</FormField>
@@ -368,21 +367,15 @@
 						label="total size"
 						unit="MB"
 						bind:value={maxTotalSizeMb}
-						unset={unset(
+						fallback={fallback(
 							Math.round(
 								Number(inherited?.artifacts?.retention?.maxTotalSizeBytes ?? 0n) / (1024 * 1024)
-							),
-							'MB'
+							)
 						)}
 						seed={10240}
 					/>
 				</FormField>
-				<FormField
-					label="Keep latest"
-					tag={customTag(PATHS.excludeLatest)}
-					help="Always keeps the newest version per path regardless of retention"
-					layout="toggle"
-				>
+				<FormField label="Keep latest" tag={customTag(PATHS.excludeLatest)} layout="toggle">
 					<Switch bind:checked={excludeLatest} />
 				</FormField>
 			</div>

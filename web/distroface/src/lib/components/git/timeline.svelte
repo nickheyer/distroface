@@ -270,7 +270,9 @@
 	{:else}
 		<a
 			href={resolve('/[namespace]', { namespace: u })}
-			class="font-medium text-foreground hover:text-primary">{u}</a
+			class="font-medium text-foreground hover:text-primary"
+			data-hover="user"
+			data-user={u}>{u}</a
 		>
 	{/if}
 {/snippet}
@@ -278,7 +280,9 @@
 {#snippet userLink(id: string)}
 	<a
 		href={resolve('/[namespace]', { namespace: userName(id) })}
-		class="font-medium text-foreground hover:text-primary">{userName(id)}</a
+		class="font-medium text-foreground hover:text-primary"
+		data-hover="user"
+		data-user={userName(id)}>{userName(id)}</a
 	>
 {/snippet}
 

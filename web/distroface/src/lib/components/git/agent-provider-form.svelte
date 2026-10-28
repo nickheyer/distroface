@@ -282,9 +282,7 @@
 			label="output tokens"
 			unit="tokens"
 			bind:value={maxTokens}
-			unset="Model default"
 			seed={8192}
-			inputClass="w-40"
 		/>
 	</FormField>
 	<FormField
@@ -298,9 +296,7 @@
 			label="context window"
 			unit="tokens"
 			bind:value={contextWindow}
-			unset="Not set"
 			seed={128000}
-			inputClass="w-40"
 		/>
 	</FormField>
 </FormSection>
@@ -312,7 +308,6 @@
 			label="request timeout"
 			unit="seconds"
 			bind:value={timeoutSeconds}
-			unset="None"
 			seed={120}
 		/>
 	</FormField>
@@ -332,7 +327,6 @@
 			unit="tokens"
 			bind:value={tokensPerDay}
 			seed={1000000}
-			inputClass="w-40"
 		/>
 	</FormField>
 </FormSection>

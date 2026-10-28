@@ -327,6 +327,9 @@
 			min-height: 2rem;
 		}
 	}
+	.form-inline:has([data-slot='limit-input']) > .form-inline-label {
+		@apply cursor-pointer;
+	}
 
 	/* Six column field grid, children span the row unless marked */
 	.form-fields,
@@ -349,6 +352,30 @@
 		grid-column-start: 1;
 	}
 
+	/* Switch first, label beside it, caption under the label */
+	.form-toggle {
+		@apply grid cursor-pointer gap-x-3 gap-y-1 text-sm leading-5 font-medium text-foreground select-none;
+		grid-template-columns: auto minmax(0, 1fr);
+		align-items: start;
+	}
+	.form-toggle:has([data-disabled]) {
+		@apply cursor-not-allowed;
+	}
+	.form-toggle:has([data-disabled]) :is(.form-toggle-text, .form-caption) {
+		@apply opacity-60;
+	}
+	.form-toggle-control {
+		@apply flex h-5 items-center;
+		grid-area: 1 / 1;
+	}
+	.form-toggle-text {
+		@apply flex min-w-0 items-center gap-2;
+		grid-area: 1 / 2;
+	}
+	.form-toggle > .form-caption {
+		grid-area: 2 / 2;
+	}
+
 	/* Consecutive toggles sit closer than unrelated fields */
 	:is(.form-fields, .form-subfields) > .form-toggle + .form-toggle {
 		@apply -mt-1;
@@ -359,6 +386,24 @@
 		@apply -mt-2 gap-y-4 border-l-2;
 		margin-left: 17px;
 		padding-left: 29px;
+	}
+
+	/* Once any row carries a switch every row reserves the slot, limit switches move into it */
+	@media (width >= 40rem) {
+		:is(
+			:has(> .form-split :is(.form-toggle, [data-slot='limit-input'])),
+			.form-fields:has(:is(.form-toggle, [data-slot='limit-input']))
+		) {
+			.form-inline {
+				position: relative;
+				padding-left: 3rem;
+			}
+			.form-inline [data-slot='limit-input'] > [data-slot='switch'] {
+				position: absolute;
+				top: 0.375rem;
+				left: 0;
+			}
+		}
 	}
 
 	/* Help or error line under a field */

@@ -24,7 +24,7 @@
 	import PullConversation from './pull-conversation.svelte';
 	import PullCommits from './pull-commits.svelte';
 	import PullFiles from './pull-files.svelte';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { GitUnit } from '$lib/proto/distroface/v1/git_pb';
@@ -94,6 +94,29 @@
 	});
 
 	const reload = () => load(true);
+
+	// Background refresh while visible, a cheap probe decides
+	const POLL_MS = 10000;
+	let pollTick = $state(0);
+	const activity = (p: PullRequest) =>
+		`${p.issue?.updatedAt?.seconds ?? 0n}:${p.issue?.commentCount ?? 0}:${p.issue?.state}:${p.headSha}:${p.mergedAt?.seconds ?? 0n}:${p.draft}`;
+	async function poll() {
+		if (!pull || loading || document.visibilityState !== 'visible') return;
+		try {
+			const resp = await rpcClient.pull.getPullRequest(
+				{ namespace, name, number },
+				backgroundCallOptions
+			);
+			if (resp.pullRequest && activity(resp.pullRequest) !== activity(pull)) await load(true);
+		} catch {
+			// Next tick retries
+		}
+		pollTick++;
+	}
+	$effect(() => {
+		const t = setInterval(() => void poll(), POLL_MS);
+		return () => clearInterval(t);
+	});
 
 	const issue = $derived(pull?.issue);
 	const status = $derived(pull ? pullStatus(pull) : 'open');
@@ -273,7 +296,8 @@
 					<a
 						href={resolve('/[namespace]', { namespace: issue.author?.username ?? '' })}
 						class="font-medium text-foreground hover:text-primary"
-						>{issue.author?.username ?? 'unknown'}</a
+						data-hover="user"
+						data-user={issue.author?.username ?? ''}>{issue.author?.username ?? 'unknown'}</a
 					>
 					{status === 'merged' ? 'merged' : 'wants to merge'}
 					<a
@@ -366,6 +390,7 @@
 				{isAuthor}
 				{orgId}
 				onChanged={reload}
+				tick={pollTick}
 			/>
 		{/if}
 	</div>
