@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { GitBranch, Plus } from '@lucide/svelte';
+	import { GitBranch, Plus } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { Code, ConnectError } from '@connectrpc/connect';
 	import { authStore } from '$lib/stores/auth.svelte';

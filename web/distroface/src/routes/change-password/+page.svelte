@@ -3,7 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
 	import FormField from '$lib/components/form-field.svelte';
-	import { Lock, ArrowRight, Loader2, LogOut } from '@lucide/svelte';
+	import { Lock, ArrowRight, Loader, LogOut } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -75,7 +75,7 @@
 <div class="flex min-h-screen items-center justify-center bg-muted/40 p-4">
 	<div class="w-full max-w-sm">
 		<div class="mb-6 text-center">
-			<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 size-10 rounded-lg" />
+			<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 h-10 w-auto" />
 			<h1 class="text-xl font-semibold tracking-tight">Update your password</h1>
 			<p class="mt-1 text-sm text-muted-foreground">
 				{#if authStore.user?.mustChangePassword}
@@ -149,7 +149,7 @@
 					disabled={saving || !currentPassword || !newPassword}
 				>
 					{#if saving}
-						<Loader2 class="animate-spin" />
+						<Loader class="animate-spin" />
 						Updating password
 					{:else}
 						<Lock />

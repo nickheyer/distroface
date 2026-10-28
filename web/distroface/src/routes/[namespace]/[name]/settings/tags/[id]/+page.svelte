@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Loader2, Tag } from '@lucide/svelte';
+	import { Loader, Tag } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -137,7 +137,7 @@
 
 		{#snippet footer()}
 			<Button onclick={save} disabled={saving || !pattern.trim()}>
-				{#if saving}<Loader2 class="animate-spin" />{/if}
+				{#if saving}<Loader class="animate-spin" />{/if}
 				{saving ? 'Saving' : 'Save changes'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

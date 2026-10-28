@@ -9,7 +9,7 @@
 		REPO_AGENTS_CONTEXT_KEY,
 		type RepoAgentsContext
 	} from '$lib/components/git/repo-agents-context.svelte';
-	import { FileCode2 } from '@lucide/svelte';
+	import { FileCode } from '$lib/icons';
 
 	const ctx = getContext<RepoAgentsContext>(REPO_AGENTS_CONTEXT_KEY);
 	const namespace = $derived(page.params.namespace ?? '');
@@ -21,7 +21,7 @@
 <div class="space-y-4">
 	{#if overview && repo}
 		<Alert>
-			<FileCode2 />
+			<FileCode />
 			<AlertDescription>
 				{#if overview.instructionFiles.length > 0}
 					Repository instructions read by every session:

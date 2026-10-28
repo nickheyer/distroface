@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Bot, GitBranch, Loader2, FileCode2 } from '@lucide/svelte';
+	import { Bot, GitBranch, Loader, FileCode } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -198,7 +198,7 @@
 							<span class="flex flex-wrap items-center gap-2 text-sm font-medium">
 								{a.name}
 								<Badge variant="secondary">{kindLabels[a.kind]}</Badge>
-								{#if a.source === AgentSource.FILE}<FileCode2
+								{#if a.source === AgentSource.FILE}<FileCode
 										class="size-3.5 text-muted-foreground"
 									/>{/if}
 							</span>
@@ -297,7 +297,7 @@
 
 		{#snippet footer()}
 			<Button onclick={submit} disabled={!canSubmit}>
-				{#if submitting}<Loader2 class="animate-spin" />{:else}<Bot />{/if}
+				{#if submitting}<Loader class="animate-spin" />{:else}<Bot />{/if}
 				{submitting ? 'Starting' : 'Start session'}
 			</Button>
 			<Button variant="outline" href={agentsHref}>Cancel</Button>

@@ -8,7 +8,7 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
-	import { Save, Loader2 } from '@lucide/svelte';
+	import { Save, Loader } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -124,7 +124,7 @@
 				<div class="flex flex-wrap items-center gap-2 pt-1">
 					<Button type="submit" disabled={saving}>
 						{#if saving}
-							<Loader2 class="animate-spin" />
+							<Loader class="animate-spin" />
 						{:else}
 							<Save />
 						{/if}

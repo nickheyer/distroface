@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { GitBranch, Tag, RotateCcw, Ban, Loader2, Timer, Play, Bot } from '@lucide/svelte';
+	import { GitBranch, Tag, RotateCcw, Ban, Loader, Timer, Play, Bot } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -228,7 +228,7 @@
 									disabled={!!busy[run.id]}
 								>
 									{#if busy[run.id]}
-										<Loader2 class="animate-spin" />
+										<Loader class="animate-spin" />
 									{:else}
 										<Ban />
 									{/if}
@@ -243,7 +243,7 @@
 									disabled={!!busy[run.id]}
 								>
 									{#if busy[run.id]}
-										<Loader2 class="animate-spin" />
+										<Loader class="animate-spin" />
 									{:else}
 										<RotateCcw />
 									{/if}

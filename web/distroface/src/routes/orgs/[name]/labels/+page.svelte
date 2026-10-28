@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, getContext } from 'svelte';
-	import { Tag, Plus, Pencil, Trash2, RotateCw, Loader2, X } from '@lucide/svelte';
+	import { Tag, Plus, Pencil, Trash, RotateCw, Loader, X } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -233,7 +233,7 @@
 			<div class="flex items-center gap-2">
 				<Button variant="outline" onclick={closeForm}>Cancel</Button>
 				<Button onclick={save} disabled={saving || !fName.trim() || !colorValid}>
-					{#if saving}<Loader2 class="animate-spin" />{/if}
+					{#if saving}<Loader class="animate-spin" />{/if}
 					{saving ? 'Saving' : editing ? 'Save changes' : 'Create label'}
 				</Button>
 			</div>
@@ -285,7 +285,7 @@
 								deleteTarget = l;
 								deleteOpen = true;
 							}}
-							aria-label="Delete {l.name}"><Trash2 /></Button
+							aria-label="Delete {l.name}"><Trash /></Button
 						>
 					</div>
 				{/if}
@@ -365,7 +365,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Delete <strong>{deleteTarget?.name}</strong>? It is removed from every issue in the

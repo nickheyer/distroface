@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { SquareKanban, Plus, Trash2, CircleCheck, RotateCw, Lock } from '@lucide/svelte';
+	import { Kanban, Plus, Trash, CheckCircle, RotateCw, Lock } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -144,7 +144,7 @@
 		</div>
 	{:else if projects.length === 0}
 		<EmptyState
-			icon={SquareKanban}
+			icon={Kanban}
 			message={stateFilter === 'closed' ? 'No closed projects' : 'No open projects'}
 			description="Projects are kanban boards that track issues across columns."
 		>
@@ -158,7 +158,7 @@
 		<div class="box divide-y transition-opacity {loading ? 'opacity-60' : ''}">
 			{#each projects as p (p.id)}
 				<div class="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-					<SquareKanban class="size-4 shrink-0 text-muted-foreground" />
+					<Kanban class="size-4 shrink-0 text-muted-foreground" />
 					<div class="min-w-0 flex-1 basis-48">
 						<div class="flex min-w-0 items-center gap-2">
 							<a
@@ -188,7 +188,7 @@
 								disabled={toggling === p.id}
 								onclick={() => toggleClosed(p)}
 							>
-								{#if p.state === 'closed'}<RotateCw />Reopen{:else}<CircleCheck />Close{/if}
+								{#if p.state === 'closed'}<RotateCw />Reopen{:else}<CheckCircle />Close{/if}
 							</Button>
 							<Button
 								variant="ghost-muted"
@@ -198,7 +198,7 @@
 									deleteTarget = p;
 									deleteOpen = true;
 								}}
-								aria-label="Delete"><Trash2 /></Button
+								aria-label="Delete"><Trash /></Button
 							>
 						</div>
 					{/if}
@@ -215,7 +215,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This deletes <strong>{deleteTarget?.title}</strong> and its columns. Issues stay in the repository.

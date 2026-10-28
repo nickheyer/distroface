@@ -21,7 +21,7 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
-	import { Key, Plus, Trash2, Lock, PenLine } from '@lucide/svelte';
+	import { Key, Plus, Trash, Lock, PenLine } from '$lib/icons';
 	import type { APIToken } from '$lib/proto/distroface/v1/types_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');
@@ -162,7 +162,7 @@
 										revokeOpen = true;
 									}}
 								>
-									<Trash2 />
+									<Trash />
 								</Button>
 							</TableCell>
 						</TableRow>
@@ -180,7 +180,7 @@
 	confirmLabel="Revoke"
 	onConfirm={revoke}
 	loading={revoking}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Anything using <strong>{revokeTarget?.name}</strong> loses access immediately.

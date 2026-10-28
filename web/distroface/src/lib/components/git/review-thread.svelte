@@ -3,14 +3,14 @@
 	import {
 		Check,
 		Pencil,
-		Trash2,
+		Trash,
 		ChevronDown,
 		ChevronRight,
-		Loader2,
-		Wand2,
+		Loader,
+		Wand,
 		Reply,
-		Undo2
-	} from '@lucide/svelte';
+		Undo
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
@@ -272,7 +272,7 @@
 										title="Delete"
 										aria-label="Delete"
 									>
-										<Trash2 />
+										<Trash />
 									</Button>
 								{/if}
 							</span>
@@ -299,7 +299,7 @@
 								{:else}
 									<div class="overflow-hidden rounded-md border">
 										<div class="flex items-center gap-2 border-b bg-muted/40 px-2.5 py-1 text-xs">
-											<Wand2 class="size-3 text-muted-foreground" />
+											<Wand class="size-3 text-muted-foreground" />
 											<span class="font-medium">Suggested change</span>
 											{#if canApply && !c.pending && !c.outdated}
 												<Button
@@ -309,7 +309,7 @@
 													onclick={() => apply(c)}
 													disabled={applyingId !== ''}
 												>
-													{#if applyingId === c.id}<Loader2 class="animate-spin" />{/if}
+													{#if applyingId === c.id}<Loader class="animate-spin" />{/if}
 													Apply suggestion
 												</Button>
 											{:else if c.outdated}
@@ -376,9 +376,9 @@
 									disabled={resolving}
 								>
 									{#if resolving}
-										<Loader2 class="animate-spin" />
+										<Loader class="animate-spin" />
 									{:else if resolved}
-										<Undo2 />
+										<Undo />
 									{:else}
 										<Check />
 									{/if}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Settings2, Check, Search, Loader2 } from '@lucide/svelte';
+	import { Sliders, Check, Search, Loader } from '$lib/icons';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import LabelChip from '$lib/components/git/label-chip.svelte';
@@ -99,7 +99,7 @@
 							title="Edit labels"
 							aria-label="Edit labels"
 						>
-							<Settings2 />
+							<Sliders />
 						</Button>
 					{/snippet}
 				</PopoverTrigger>
@@ -112,7 +112,7 @@
 							bind:value={query}
 						/>
 						{#if loading}
-							<Loader2 class="size-3.5 animate-spin text-muted-foreground" />
+							<Loader class="size-3.5 animate-spin text-muted-foreground" />
 						{/if}
 					</div>
 					<div class="max-h-72 overflow-y-auto py-1">

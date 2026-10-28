@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { SquareKanban, Loader2, Lock, Eye } from '@lucide/svelte';
+	import { Kanban, Loader, Lock, Eye } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -95,7 +95,7 @@
 
 {#if !canEdit}
 	<EmptyState
-		icon={SquareKanban}
+		icon={Kanban}
 		message="You cannot edit projects"
 		description={repo.isArchived
 			? 'This repository is archived and read only.'
@@ -119,7 +119,7 @@
 	</div>
 {:else if !project}
 	<EmptyState
-		icon={SquareKanban}
+		icon={Kanban}
 		message="Project not found"
 		description="This board does not exist or you cannot see it."
 	>
@@ -167,7 +167,7 @@
 
 		{#snippet footer()}
 			<Button onclick={save} disabled={saving || !fTitle.trim()}>
-				{#if saving}<Loader2 class="animate-spin" />{/if}
+				{#if saving}<Loader class="animate-spin" />{/if}
 				{saving ? 'Saving' : 'Save changes'}
 			</Button>
 			<Button variant="ghost-muted" href={detailHref}>Cancel</Button>

@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getContext, onMount } from 'svelte';
-	import { Loader2, UsersRound } from '@lucide/svelte';
+	import { Loader, Users } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { Button } from '$lib/components/ui/button';
@@ -63,7 +63,7 @@
 	</div>
 {:else if !team || !ctx.canAdmin}
 	<EmptyState
-		icon={UsersRound}
+		icon={Users}
 		message={team ? 'You cannot add members' : 'Team not found'}
 		description={team
 			? 'Only organization owners and admins manage teams.'
@@ -108,7 +108,7 @@
 
 		{#snippet footer()}
 			<Button onclick={addMember} disabled={adding || !userId}>
-				{#if adding}<Loader2 class="animate-spin" />{/if}
+				{#if adding}<Loader class="animate-spin" />{/if}
 				{adding ? 'Adding' : 'Add member'}
 			</Button>
 			<Button variant="ghost-muted" href={teamHref}>Cancel</Button>

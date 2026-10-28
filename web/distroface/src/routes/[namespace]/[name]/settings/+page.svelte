@@ -14,7 +14,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import StatCard from '$lib/components/stat-card.svelte';
-	import { Save, X, Plus, Wrench, Loader2 } from '@lucide/svelte';
+	import { Save, X, Plus, Wrench, Loader } from '$lib/icons';
 	import { formatBytes } from '$lib/utils';
 	import { Visibility, GitRepoType } from '$lib/proto/distroface/v1/types_pb';
 	import { GitMergeMethod, type GitRepository } from '$lib/proto/distroface/v1/git_pb';
@@ -237,7 +237,7 @@
 {#snippet saveButton(saving: boolean, onclick: () => void)}
 	<Button {onclick} disabled={saving}>
 		{#if saving}
-			<Loader2 class="animate-spin" />
+			<Loader class="animate-spin" />
 		{:else}
 			<Save />
 		{/if}
@@ -507,7 +507,7 @@
 			{#snippet footer()}
 				<Button variant="outline" onclick={runMaintenance} disabled={maintaining}>
 					{#if maintaining}
-						<Loader2 class="animate-spin" />
+						<Loader class="animate-spin" />
 					{:else}
 						<Wrench />
 					{/if}

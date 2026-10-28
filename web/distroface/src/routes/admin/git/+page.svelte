@@ -12,7 +12,7 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
-	import { Loader2, RadioTower } from '@lucide/svelte';
+	import { Loader, RadioTower } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
@@ -505,7 +505,7 @@
 							>Off. Clone over SSH and deploy keys are hidden until enabled.</span
 						>
 					{:else if sshChecking && !sshStatus}
-						<Loader2 class="size-3.5 animate-spin text-muted-foreground" />
+						<Loader class="size-3.5 animate-spin text-muted-foreground" />
 						<span class="text-muted-foreground">Checking port</span>
 					{:else if sshStatus?.listening}
 						<span class="status-dot bg-success"></span>
@@ -530,7 +530,7 @@
 					disabled={sshChecking || !boolValues.sshEnabled}
 				>
 					{#if sshChecking}
-						<Loader2 class="animate-spin" />
+						<Loader class="animate-spin" />
 					{:else}
 						<RadioTower />
 					{/if}

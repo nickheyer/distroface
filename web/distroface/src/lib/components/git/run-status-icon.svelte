@@ -1,8 +1,8 @@
 <script lang="ts">
 	import {
-		CheckCircle2,
+		CheckCircle,
 		XCircle,
-		Loader2,
+		Loader,
 		Clock,
 		CircleDashed,
 		Ban,
@@ -11,7 +11,7 @@
 		CircleDot,
 		Circle,
 		ShieldAlert
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { ActionsConclusion, type ActionsStatus } from '$lib/proto/distroface/v1/actions_pb';
 	import { runState, stateLabels } from './actions-state';
 	import { cn } from '$lib/utils';
@@ -40,7 +40,7 @@
 	data-state={state}
 >
 	{#if state === 'running'}
-		<Loader2 class={cn('animate-spin text-warning', className)} />
+		<Loader class={cn('animate-spin text-warning', className)} />
 	{:else if state === 'approval'}
 		<ShieldAlert class={cn('text-warning', className)} />
 	{:else if state === 'waiting'}
@@ -48,7 +48,7 @@
 	{:else if state === 'queued'}
 		<CircleDashed class={cn('text-muted-foreground', className)} />
 	{:else if state === 'success'}
-		<CheckCircle2 class={cn('text-success', className)} />
+		<CheckCircle class={cn('text-success', className)} />
 	{:else if state === 'failure'}
 		<XCircle class={cn('text-destructive', className)} />
 	{:else if state === 'cancelled'}

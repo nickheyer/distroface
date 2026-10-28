@@ -2,7 +2,20 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Tag, Rocket, Pencil, Trash2, Package, Container, GitCommit, FileArchive, Download, ChevronLeft, ExternalLink, Pin } from '@lucide/svelte';
+	import {
+		Tag,
+		Rocket,
+		Pencil,
+		Trash,
+		Package,
+		Container,
+		GitCommit,
+		FileArchive,
+		Download,
+		ChevronLeft,
+		ExternalLink,
+		Pin
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -215,7 +228,7 @@
 						</Button>
 					{/if}
 					<Button variant="ghost" size="sm" class="h-8 px-2 text-destructive hover:text-destructive" onclick={() => (deleteOpen = true)} title="Delete release">
-						<Trash2 class="h-3.5 w-3.5" />
+						<Trash class="h-3.5 w-3.5" />
 					</Button>
 				</PermissionGate>
 			</div>
@@ -350,7 +363,7 @@
 	</div>
 {/if}
 
-<ConfirmDialog bind:open={deleteOpen} title="Delete release" confirmLabel="Delete" onConfirm={remove} loading={deleting} icon={Trash2}>
+<ConfirmDialog bind:open={deleteOpen} title="Delete release" confirmLabel="Delete" onConfirm={remove} loading={deleting} icon={Trash}>
 	{#snippet description()}
 		<span class="block">This removes the release <strong class="font-mono">{release?.tag}</strong> and detaches its assets. The files stay in the artifact package.</span>
 		<span class="block mt-3">

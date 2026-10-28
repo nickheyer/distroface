@@ -3,7 +3,7 @@
 	import { resolve } from '$app/paths';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
-	import { Settings, User, Lock, Key, KeyRound, Bell } from '@lucide/svelte';
+	import { Settings, User, Lock, Key, Key as KeyRound, Bell } from '$lib/icons';
 	import PageHeader from '$lib/components/page-header.svelte';
 	import SideNav from '$lib/components/side-nav.svelte';
 

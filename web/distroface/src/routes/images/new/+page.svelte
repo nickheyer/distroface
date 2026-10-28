@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Eye, Loader2, Lock, Package } from '@lucide/svelte';
+	import { Eye, Loader, Lock, Package } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -206,7 +206,7 @@
 
 		{#snippet footer()}
 			<Button onclick={createRepo} disabled={creating || !canSubmit}>
-				{#if creating}<Loader2 class="animate-spin" />{/if}
+				{#if creating}<Loader class="animate-spin" />{/if}
 				{creating ? (isMirror ? 'Validating' : 'Creating') : 'Create repository'}
 			</Button>
 			<Button variant="ghost-muted" href={exitHref}>Cancel</Button>

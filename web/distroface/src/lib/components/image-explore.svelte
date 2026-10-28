@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { mirrorSyncStore } from '$lib/stores/mirror-sync.svelte';
-	import { Package, Plus } from '@lucide/svelte';
+	import { Package, Plus } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { Code, ConnectError } from '@connectrpc/connect';
 	import { authStore } from '$lib/stores/auth.svelte';

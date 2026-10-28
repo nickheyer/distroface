@@ -10,7 +10,7 @@
 	import { Alert, AlertDescription } from '$lib/components/ui/alert';
 	import FormCard from '$lib/components/form-card.svelte';
 	import CommitForm from '$lib/components/git/commit-form.svelte';
-	import { Upload, Lock, X, File as FileIcon, RefreshCw, ChevronLeft } from '@lucide/svelte';
+	import { Upload, Lock, X, File as FileIcon, RefreshCw, ChevronLeft } from '$lib/icons';
 	import { formatBytes } from '$lib/utils';
 	import { GitUnit, FileOperationKind } from '$lib/proto/distroface/v1/git_pb';
 

@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { onMount, getContext } from 'svelte';
-	import { Plus } from '@lucide/svelte';
+	import { Plus } from '$lib/icons';
 	import RepoList from '$lib/components/repo-list.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import { Button } from '$lib/components/ui/button';

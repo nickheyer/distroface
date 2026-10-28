@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Loader2, Plus, Upload, X } from '@lucide/svelte';
+	import { Loader, Plus, Upload, X } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -164,7 +164,7 @@
 
 		{#snippet footer()}
 			<Button onclick={doUpload} disabled={uploading || !uploadFile || !uploadVersion.trim()}>
-				{#if uploading}<Loader2 class="animate-spin" />{/if}
+				{#if uploading}<Loader class="animate-spin" />{/if}
 				{uploading ? uploadStage || 'Uploading' : 'Upload artifact'}
 			</Button>
 			<Button variant="ghost-muted" href={repoHref}>Cancel</Button>

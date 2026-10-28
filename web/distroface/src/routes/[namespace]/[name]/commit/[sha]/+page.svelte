@@ -6,15 +6,15 @@
 		GitCommit as GitCommitIcon,
 		GitBranch,
 		Tag,
-		Undo2,
+		Undo,
 		Cherry,
 		ExternalLink,
-		CheckCircle2,
+		CheckCircle,
 		XCircle,
 		Clock,
 		AlertCircle,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { safeHref } from '$lib/utils';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -93,7 +93,7 @@
 	function statusIcon(s: CommitStatusState) {
 		switch (s) {
 			case CommitStatusState.SUCCESS:
-				return CheckCircle2;
+				return CheckCircle;
 			case CommitStatusState.FAILURE:
 				return XCircle;
 			case CommitStatusState.ERROR:
@@ -209,7 +209,7 @@
 					<PermissionGate allowed={canWrite}>
 						<div class="flex shrink-0 items-center gap-2">
 							<Button variant="outline" onclick={() => openOp('revert')}>
-								<Undo2 />Revert
+								<Undo />Revert
 							</Button>
 							<Button variant="outline" onclick={() => openOp('cherry')}>
 								<Cherry />Cherry pick
@@ -297,7 +297,7 @@
 				<div class="box-header">
 					<span class="flex items-center gap-2">
 						{#if op === 'revert'}
-							<Undo2 class="size-4 text-muted-foreground" />Revert commit
+							<Undo class="size-4 text-muted-foreground" />Revert commit
 						{:else}
 							<Cherry class="size-4 text-muted-foreground" />Cherry pick commit
 						{/if}
@@ -339,7 +339,7 @@
 						<div class="flex flex-wrap items-center gap-2">
 							<Button onclick={runOp} disabled={opBusy || !opBranch.trim()}>
 								{#if opBusy}
-									<Loader2 class="animate-spin" />
+									<Loader class="animate-spin" />
 								{/if}
 								{opBusy ? 'Working' : op === 'revert' ? 'Revert commit' : 'Cherry pick commit'}
 							</Button>

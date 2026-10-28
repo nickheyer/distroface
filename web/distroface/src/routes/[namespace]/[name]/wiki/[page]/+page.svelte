@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { BookOpen, Pencil, History, Trash2, ChevronLeft } from '@lucide/svelte';
+	import { BookOpen, Pencil, History, Trash, ChevronLeft } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';
@@ -184,7 +184,7 @@
 								title="Delete page"
 								aria-label="Delete page"
 							>
-								<Trash2 />
+								<Trash />
 							</Button>
 						</PermissionGate>
 					</div>
@@ -220,7 +220,7 @@
 	confirmLabel="Delete"
 	onConfirm={remove}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This removes <strong>{current?.title}</strong> from the wiki in a new commit. Earlier revisions stay

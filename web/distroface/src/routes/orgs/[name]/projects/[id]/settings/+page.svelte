@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getContext } from 'svelte';
-	import { SquareKanban, Loader2, Lock, Eye } from '@lucide/svelte';
+	import { Kanban, Loader, Lock, Eye } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { Button } from '$lib/components/ui/button';
@@ -91,7 +91,7 @@
 
 {#if !ctx.canAdmin}
 	<EmptyState
-		icon={SquareKanban}
+		icon={Kanban}
 		message="You cannot edit projects"
 		description="Only organization owners and admins manage projects."
 	>
@@ -111,7 +111,7 @@
 	</div>
 {:else if !project}
 	<EmptyState
-		icon={SquareKanban}
+		icon={Kanban}
 		message="Project not found"
 		description="This board does not exist or you cannot see it."
 	>
@@ -160,7 +160,7 @@
 
 		{#snippet footer()}
 			<Button onclick={save} disabled={saving || !fTitle.trim()}>
-				{#if saving}<Loader2 class="animate-spin" />{/if}
+				{#if saving}<Loader class="animate-spin" />{/if}
 				{saving ? 'Saving' : 'Save changes'}
 			</Button>
 			<Button variant="ghost-muted" href={detailHref}>Cancel</Button>

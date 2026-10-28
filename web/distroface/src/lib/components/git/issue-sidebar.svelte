@@ -2,18 +2,18 @@
 	import { resolve } from '$app/paths';
 	import { goto } from '$app/navigation';
 	import {
-		Settings2,
+		Sliders,
 		Check,
 		Search,
-		Loader2,
-		SquareKanban,
-		CalendarDays,
+		Loader,
+		Kanban,
+		Calendar,
 		Blocks,
 		X,
 		Clock,
 		Hourglass,
 		Plus,
-		Trash2,
+		Trash,
 		Bell,
 		BellOff,
 		Lock,
@@ -21,9 +21,9 @@
 		Pin,
 		PinOff,
 		CircleDot,
-		CircleCheck,
+		CheckCircle,
 		GitPullRequest
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import DateInput from '$lib/components/date-input.svelte';
@@ -462,7 +462,7 @@
 				class="size-3.5 shrink-0 {ref.state === IssueState.CLOSED ? 'text-done' : 'text-success'}"
 			/>
 		{:else if ref.state === IssueState.CLOSED}
-			<CircleCheck class="size-3.5 shrink-0 text-done" />
+			<CheckCircle class="size-3.5 shrink-0 text-done" />
 		{:else}
 			<CircleDot class="size-3.5 shrink-0 text-success" />
 		{/if}
@@ -545,7 +545,7 @@
 								aria-label="Edit project"
 								disabled={projectBusy}
 							>
-								<Settings2 />
+								<Sliders />
 							</Button>
 						{/snippet}
 					</PopoverTrigger>
@@ -589,7 +589,7 @@
 				})}
 				class="flex items-center gap-1.5 text-sm hover:text-primary"
 			>
-				<SquareKanban class="size-3.5 text-muted-foreground" />
+				<Kanban class="size-3.5 text-muted-foreground" />
 				<span class="truncate font-medium">{currentProject?.title ?? 'Project board'}</span>
 				{#if currentColumn}<span class="text-xs text-muted-foreground">/ {currentColumn.title}</span
 					>{/if}
@@ -612,9 +612,7 @@
 			{@render heading('Due date')}
 			{#if issue.dueDate}
 				<span class="flex items-center gap-1.5 text-sm {overdue ? 'text-destructive' : ''}"
-					><CalendarDays class="size-3.5" />{timestampDate(
-						issue.dueDate
-					).toLocaleDateString()}</span
+					><Calendar class="size-3.5" />{timestampDate(issue.dueDate).toLocaleDateString()}</span
 				>
 			{:else}
 				<span class="text-sm text-muted-foreground">No due date</span>
@@ -653,7 +651,7 @@
 										addDependency(depQuery.trim());
 								}}
 							/>
-							{#if depLoading}<Loader2 class="size-3.5 animate-spin text-muted-foreground" />{/if}
+							{#if depLoading}<Loader class="size-3.5 animate-spin text-muted-foreground" />{/if}
 						</div>
 						<div class="max-h-64 overflow-y-auto py-1">
 							{#if !depLoading && depResults.length === 0}
@@ -695,7 +693,7 @@
 						? 'mt-1'
 						: ''}"
 				>
-					<CircleCheck class="size-3 text-done" />{openBlockers.length
+					<CheckCircle class="size-3 text-done" />{openBlockers.length
 						? 'Resolved blockers'
 						: 'No longer blocked'}
 					<span class="ml-auto tabular-nums"
@@ -766,7 +764,7 @@
 							>Cancel</Button
 						>
 						<Button size="sm" onclick={addTime} disabled={timeBusy}>
-							{#if timeBusy}<Loader2 class="animate-spin" />{/if}
+							{#if timeBusy}<Loader class="animate-spin" />{/if}
 							{timeBusy ? 'Saving' : 'Log time'}
 						</Button>
 					</div>
@@ -809,7 +807,7 @@
 									class="shrink-0 hover:text-destructive"
 									title="Delete entry"
 									aria-label="Delete entry"
-									onclick={() => deleteTime(t)}><Trash2 /></Button
+									onclick={() => deleteTime(t)}><Trash /></Button
 								>
 							{/if}
 						</div>
@@ -866,7 +864,7 @@
 							>Cancel</Button
 						>
 						<Button size="sm" onclick={lock} disabled={modBusy}>
-							{#if modBusy}<Loader2 class="animate-spin" />{/if}
+							{#if modBusy}<Loader class="animate-spin" />{/if}
 							{modBusy ? 'Locking' : 'Lock conversation'}
 						</Button>
 					</div>
@@ -899,7 +897,7 @@
 				<button
 					type="button"
 					class="flex w-full items-center gap-2 py-1 text-sm text-destructive transition-colors hover:underline"
-					onclick={() => (deleteOpen = true)}><Trash2 class="size-3.5" />Delete {kind}</button
+					onclick={() => (deleteOpen = true)}><Trash class="size-3.5" />Delete {kind}</button
 				>
 			{/if}
 		</section>
@@ -912,7 +910,7 @@
 	confirmLabel="Delete"
 	onConfirm={deleteIssue}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This permanently deletes {kind} <strong>#{num}</strong> with every comment{isPull

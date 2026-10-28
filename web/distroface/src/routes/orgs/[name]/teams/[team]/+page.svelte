@@ -24,15 +24,15 @@
 		type UnitLevels
 	} from '$lib/components/git/team-permission-grid.svelte';
 	import {
-		UsersRound,
+		Users as UsersRound,
 		Users,
 		GitBranch,
 		Plus,
-		Trash2,
+		Trash,
 		Save,
 		ArrowLeft,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -463,7 +463,7 @@
 					<FormActions>
 						<Button onclick={savePermissions} disabled={saving || !editName.trim()}>
 							{#if saving}
-								<Loader2 class="animate-spin" />
+								<Loader class="animate-spin" />
 								Saving
 							{:else}
 								<Save />
@@ -490,7 +490,7 @@
 										class="shrink-0"
 										onclick={() => (deleteOpen = true)}
 									>
-										<Trash2 />
+										<Trash />
 										Delete
 									</Button>
 								</div>
@@ -533,7 +533,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Delete <strong>{team?.name}</strong>? Members lose the access it granted.

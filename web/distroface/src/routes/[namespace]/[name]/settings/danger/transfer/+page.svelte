@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { ArrowRightLeft, Loader2 } from '@lucide/svelte';
+	import { ArrowLeftRight, Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -58,7 +58,7 @@
 	<Skeleton class="h-72 w-full rounded-lg" />
 {:else if !gitRepoStore.isOwner}
 	<EmptyState
-		icon={ArrowRightLeft}
+		icon={ArrowLeftRight}
 		message="You cannot transfer this repository"
 		description="Only the repository owner can move it."
 	>
@@ -89,7 +89,7 @@
 
 		{#snippet footer()}
 			<Button variant="destructive" onclick={transfer} disabled={transferring || !canSubmit}>
-				{#if transferring}<Loader2 class="animate-spin" />{/if}
+				{#if transferring}<Loader class="animate-spin" />{/if}
 				{transferring ? 'Transferring' : 'Transfer repository'}
 			</Button>
 			<Button variant="ghost-muted" href={dangerHref}>Cancel</Button>

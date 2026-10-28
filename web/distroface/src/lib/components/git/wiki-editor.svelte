@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { BookOpen, Loader2 } from '@lucide/svelte';
+	import { BookOpen, Loader } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import FormCard from '$lib/components/form-card.svelte';
@@ -135,7 +135,7 @@
 		<Button variant="outline" onclick={onCancel} disabled={saving}>Cancel</Button>
 		<Button onclick={save} disabled={!ready}>
 			{#if saving}
-				<Loader2 class="animate-spin" />
+				<Loader class="animate-spin" />
 			{/if}
 			{saving ? 'Saving' : editing ? 'Save page' : 'Create page'}
 		</Button>

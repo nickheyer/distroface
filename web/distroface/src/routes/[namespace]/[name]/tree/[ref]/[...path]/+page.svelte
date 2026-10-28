@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { BookOpen, Code, ChevronDown, Plus, FilePlus, Upload } from '@lucide/svelte';
+	import { BookOpen, Code, ChevronDown, Plus, FilePlus, Upload } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import {

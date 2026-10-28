@@ -8,7 +8,7 @@
 		ArrowLeftRight,
 		GitCommit as GitCommitIcon,
 		FileDiff
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';

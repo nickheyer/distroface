@@ -7,9 +7,9 @@
 		FileText,
 		FileImage,
 		GitBranch,
-		Link2,
+		Link,
 		CornerLeftUp
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { relativeTime } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -51,7 +51,7 @@
 	function iconFor(entry: GitTreeEntry): Component<{ class?: string }> {
 		if (entry.isSubmodule || entry.type === 'commit') return GitBranch;
 		if (entry.type === 'tree') return Folder;
-		if (entry.mode === '120000') return Link2;
+		if (entry.mode === '120000') return Link;
 		const lower = entry.name.toLowerCase();
 		if (/\.(png|jpe?g|gif|svg|webp|ico|bmp)$/.test(lower)) return FileImage;
 		if (/\.(md|markdown|txt|rst|adoc)$/.test(lower) || lower === 'license' || lower === 'readme')

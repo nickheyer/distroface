@@ -8,7 +8,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import FormPage from '$lib/components/form-page.svelte';
-	import { Globe } from '@lucide/svelte';
+	import { Globe } from '$lib/icons';
 	import PortalForm from '../portal-form.svelte';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';

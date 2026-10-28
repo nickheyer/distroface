@@ -3,7 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import FormField from '$lib/components/form-field.svelte';
-	import { ArrowRight, ArrowLeft, Loader2, MailCheck } from '@lucide/svelte';
+	import { ArrowRight, ArrowLeft, Loader, MailCheck } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 
 	let identifier = $state('');
@@ -40,7 +40,7 @@
 <div class="flex min-h-screen items-center justify-center bg-muted/40 p-4">
 	<div class="w-full max-w-sm">
 		<div class="mb-6 text-center">
-			<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 size-10 rounded-lg" />
+			<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 h-10 w-auto" />
 			<h1 class="text-xl font-semibold tracking-tight">
 				{sent ? 'Check your email' : 'Forgot your password?'}
 			</h1>
@@ -89,7 +89,7 @@
 					</FormField>
 					<Button type="submit" size="lg" class="mt-2 w-full" disabled={submitting}>
 						{#if submitting}
-							<Loader2 class="animate-spin" />
+							<Loader class="animate-spin" />
 							Sending
 						{:else}
 							Send reset link

@@ -15,7 +15,7 @@
 		TableRow
 	} from '$lib/components/ui/table';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import { Activity, Users, Code2, GitCommit } from '@lucide/svelte';
+	import { Activity, Users, Code, GitCommit } from '$lib/icons';
 	import type {
 		GitActivityWeek,
 		GitContributor,
@@ -180,7 +180,7 @@
 			<section class="box self-start">
 				<div class="box-header">
 					<span class="flex items-center gap-2">
-						<Code2 class="size-4 text-muted-foreground" />
+						<Code class="size-4 text-muted-foreground" />
 						Languages
 					</span>
 				</div>

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { SvelteMap } from 'svelte/reactivity';
-	import { Settings2, Check, Search, Loader2 } from '@lucide/svelte';
+	import { Sliders, Check, Search, Loader } from '$lib/icons';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -119,7 +119,7 @@
 							title="Edit assignees"
 							aria-label="Edit assignees"
 						>
-							<Settings2 />
+							<Sliders />
 						</Button>
 					{/snippet}
 				</PopoverTrigger>
@@ -133,7 +133,7 @@
 							oninput={onQuery}
 						/>
 						{#if loading}
-							<Loader2 class="size-3.5 animate-spin text-muted-foreground" />
+							<Loader class="size-3.5 animate-spin text-muted-foreground" />
 						{/if}
 					</div>
 					<div class="max-h-72 overflow-y-auto py-1">

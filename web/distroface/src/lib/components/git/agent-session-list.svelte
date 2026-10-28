@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { Bot, Ban, RotateCcw, Loader2, Timer, GitPullRequest, CircleDot } from '@lucide/svelte';
+	import { Bot, Ban, RotateCcw, Loader, Timer, GitPullRequest, CircleDot } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -209,7 +209,7 @@
 										cancelOpen = true;
 									}}
 								>
-									{#if busy[s.id]}<Loader2 class="animate-spin" />{:else}<Ban />{/if}
+									{#if busy[s.id]}<Loader class="animate-spin" />{:else}<Ban />{/if}
 								</Button>
 							{:else}
 								<Button
@@ -220,7 +220,7 @@
 									disabled={!!busy[s.id]}
 									onclick={() => rerun(s)}
 								>
-									{#if busy[s.id]}<Loader2 class="animate-spin" />{:else}<RotateCcw />{/if}
+									{#if busy[s.id]}<Loader class="animate-spin" />{:else}<RotateCcw />{/if}
 								</Button>
 							{/if}
 						</div>

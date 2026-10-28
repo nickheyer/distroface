@@ -2,15 +2,7 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import {
-		SquareKanban,
-		ArrowLeft,
-		Pencil,
-		CircleCheck,
-		RotateCw,
-		Trash2,
-		Lock
-	} from '@lucide/svelte';
+	import { Kanban, ArrowLeft, Pencil, CheckCircle, RotateCw, Trash, Lock } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -89,7 +81,7 @@
 
 {#if notFound}
 	<EmptyState
-		icon={SquareKanban}
+		icon={Kanban}
 		message="Project not found"
 		description="This board does not exist or you cannot see it."
 	>
@@ -127,14 +119,14 @@
 				<div class="ml-auto flex flex-wrap items-center gap-1">
 					<Button variant="outline" href={settingsHref}><Pencil />Edit</Button>
 					<Button variant="outline" onclick={toggleClosed} disabled={toggling}>
-						{#if project.state === 'closed'}<RotateCw />Reopen{:else}<CircleCheck />Close{/if}
+						{#if project.state === 'closed'}<RotateCw />Reopen{:else}<CheckCircle />Close{/if}
 					</Button>
 					<Button
 						variant="ghost-muted"
 						size="icon"
 						class="text-destructive hover:text-destructive"
 						onclick={() => (deleteOpen = true)}
-						aria-label="Delete project"><Trash2 /></Button
+						aria-label="Delete project"><Trash /></Button
 					>
 				</div>
 			{/if}
@@ -150,7 +142,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This deletes <strong>{project?.title}</strong> and its columns. Issues stay in the repository.

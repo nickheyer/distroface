@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
-	import { Bell } from '@lucide/svelte';
+	import { Bell } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { notificationStore } from '$lib/stores/notification.svelte';
 

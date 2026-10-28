@@ -3,15 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getContext } from 'svelte';
-	import {
-		SquareKanban,
-		ArrowLeft,
-		Pencil,
-		CircleCheck,
-		RotateCw,
-		Trash2,
-		Lock
-	} from '@lucide/svelte';
+	import { Kanban, ArrowLeft, Pencil, CheckCircle, RotateCw, Trash, Lock } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -86,7 +78,7 @@
 
 {#if notFound}
 	<EmptyState
-		icon={SquareKanban}
+		icon={Kanban}
 		message="Project not found"
 		description="This board does not exist or you cannot see it."
 	>
@@ -143,7 +135,7 @@
 							<RotateCw />
 							Reopen
 						{:else}
-							<CircleCheck />
+							<CheckCircle />
 							Close
 						{/if}
 					</Button>
@@ -154,7 +146,7 @@
 						onclick={() => (deleteOpen = true)}
 						aria-label="Delete project"
 					>
-						<Trash2 />
+						<Trash />
 					</Button>
 				</div>
 			{/if}
@@ -175,7 +167,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This deletes <strong>{project?.title}</strong> and its columns. Issues stay in their repositories.

@@ -5,7 +5,7 @@
 	import { SvelteSet } from 'svelte/reactivity';
 	import {
 		CircleDot,
-		CircleCheck,
+		CheckCircle,
 		Plus,
 		Tag,
 		Milestone as MilestoneIcon,
@@ -14,12 +14,12 @@
 		ChevronDown,
 		Check,
 		Search,
-		Loader2,
-		CalendarDays,
+		Loader,
+		Calendar,
 		Users,
 		Blocks,
 		Lock
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -307,7 +307,7 @@
 						if (e.key === 'Enter' && userQuery.trim()) set(userQuery.trim());
 					}}
 				/>
-				{#if userLoading}<Loader2 class="size-3.5 animate-spin text-muted-foreground" />{/if}
+				{#if userLoading}<Loader class="size-3.5 animate-spin text-muted-foreground" />{/if}
 			</div>
 			<div class="max-h-64 overflow-y-auto py-1">
 				{#if value}
@@ -361,7 +361,7 @@
 			/>
 		{/if}
 		{#if i.state === IssueState.CLOSED}
-			<CircleCheck class="mt-0.5 size-4 shrink-0 text-done" />
+			<CheckCircle class="mt-0.5 size-4 shrink-0 text-done" />
 		{:else}
 			<CircleDot class="mt-0.5 size-4 shrink-0 text-success" />
 		{/if}
@@ -420,7 +420,7 @@
 				{/if}
 				{#if i.dueDate}
 					<span class="inline-flex items-center gap-0.5 {dueClass(i)}"
-						><CalendarDays class="size-3" />{timestampDate(i.dueDate).toLocaleDateString()}</span
+						><Calendar class="size-3" />{timestampDate(i.dueDate).toLocaleDateString()}</span
 					>
 				{/if}
 				{#if i.assignees.length}
@@ -547,7 +547,7 @@
 					)}
 					onclick={() => setTab('closed')}
 				>
-					<CircleCheck class="size-3.5" /><span class="tabular-nums">{closedCount}</span> Closed
+					<CheckCircle class="size-3.5" /><span class="tabular-nums">{closedCount}</span> Closed
 				</button>
 			</div>
 			<div class="flex flex-wrap items-center gap-0.5">
@@ -795,7 +795,7 @@
 	</Popover>
 	{#if stateTab === 'open'}
 		<Button variant="outline" disabled={bulkBusy} onclick={() => bulk({ state: IssueState.CLOSED })}
-			><CircleCheck />Close</Button
+			><CheckCircle />Close</Button
 		>
 	{:else}
 		<Button variant="outline" disabled={bulkBusy} onclick={() => bulk({ state: IssueState.OPEN })}

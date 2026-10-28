@@ -20,7 +20,7 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
-	import { Users, Plus, Trash2, Clock } from '@lucide/svelte';
+	import { Users, Plus, Trash, Clock } from '$lib/icons';
 	import { GitAccessLevel, type GitCollaborator } from '$lib/proto/distroface/v1/git_pb';
 
 	let { namespace, name, addHref }: { namespace: string; name: string; addHref: string } = $props();
@@ -191,7 +191,7 @@
 										removeOpen = true;
 									}}
 								>
-									<Trash2 />
+									<Trash />
 								</Button>
 							</TableCell>
 						</TableRow>
@@ -209,7 +209,7 @@
 	confirmLabel="Remove"
 	onConfirm={remove}
 	loading={removing}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		<strong>{removeTarget?.username}</strong> loses direct access to this repository.

@@ -12,7 +12,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import CodeEditor from '$lib/components/git/code-editor.svelte';
 	import CommitForm from '$lib/components/git/commit-form.svelte';
-	import { FilePlus, Lock, ChevronLeft } from '@lucide/svelte';
+	import { FilePlus, Lock, ChevronLeft } from '$lib/icons';
 	import { GitUnit, FileOperationKind } from '$lib/proto/distroface/v1/git_pb';
 	import { findTemplate, renderTemplate } from '$lib/components/git/workflow-templates';
 

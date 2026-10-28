@@ -7,7 +7,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import { UsersRound, Plus, GitBranch, Users, ChevronRight } from '@lucide/svelte';
+	import { Users as UsersRound, Plus, GitBranch, Users, ChevronRight } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { Pager } from '$lib/pager.svelte';
 	import type { Team } from '$lib/proto/distroface/v1/organization_pb';

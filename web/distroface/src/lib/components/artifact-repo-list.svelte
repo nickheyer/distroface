@@ -10,7 +10,7 @@
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import MirrorBadge from '$lib/components/mirror-badge.svelte';
-	import { Archive, Plus, Trash2, Lock, Globe, HardDrive, Clock } from '@lucide/svelte';
+	import { Archive, Plus, Trash, Lock, Globe, HardDrive, Clock } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -226,7 +226,7 @@
 							onclick={(e) => openDelete(repo, e)}
 							aria-label="Delete {repo.name}"
 						>
-							<Trash2 />
+							<Trash />
 						</Button>
 					{/if}
 				</div>

@@ -16,7 +16,7 @@
 		mirrorInit,
 		type MirrorForm
 	} from '$lib/components/mirror-config-fields.svelte';
-	import { Save, RefreshCw, Square, KeyRound, Info, Loader2 } from '@lucide/svelte';
+	import { Save, RefreshCw, Square, Key, Info, Loader } from '$lib/icons';
 	import { GitRepoType } from '$lib/proto/distroface/v1/types_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');
@@ -134,7 +134,7 @@
 		{#snippet actions()}
 			{#if syncing}
 				<Button variant="outline" onclick={stop} disabled={stopping}>
-					{#if stopping}<Loader2 class="animate-spin" />{:else}<Square />{/if}
+					{#if stopping}<Loader class="animate-spin" />{:else}<Square />{/if}
 					{stopping ? 'Stopping' : 'Stop sync'}
 				</Button>
 			{:else}
@@ -167,7 +167,7 @@
 			/>
 			{#snippet footer()}
 				<Button onclick={save} disabled={saving || !form.upstream.trim()}>
-					{#if saving}<Loader2 class="animate-spin" />{:else}<Save />{/if}
+					{#if saving}<Loader class="animate-spin" />{:else}<Save />{/if}
 					Save changes
 				</Button>
 			{/snippet}
@@ -197,7 +197,7 @@
 			{/if}
 			{#snippet footer()}
 				<Button variant="outline" onclick={generateKey} disabled={generating}>
-					{#if generating}<Loader2 class="animate-spin" />{:else}<KeyRound />{/if}
+					{#if generating}<Loader class="animate-spin" />{:else}<Key />{/if}
 					{generating ? 'Generating' : publicKey ? 'Regenerate key' : 'Generate key'}
 				</Button>
 			{/snippet}

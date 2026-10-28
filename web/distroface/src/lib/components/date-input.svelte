@@ -3,7 +3,7 @@
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import { inputClass } from '$lib/components/ui/input/input.svelte';
-	import { CalendarDays, X } from '@lucide/svelte';
+	import { Calendar as CalendarDays, X } from '$lib/icons';
 	import { cn } from '$lib/utils';
 	import {
 		DateFormatter,

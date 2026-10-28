@@ -9,7 +9,7 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import { SquareKanban, Plus, Trash2, CircleCheck, RotateCw, Lock } from '@lucide/svelte';
+	import { Kanban, Plus, Trash, CheckCircle, RotateCw, Lock } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -124,7 +124,7 @@
 		</div>
 	{:else if projects.length === 0}
 		<EmptyState
-			icon={SquareKanban}
+			icon={Kanban}
 			message={stateFilter === 'closed' ? 'No closed projects' : 'No open projects'}
 			description="Projects collect issues from any repository onto one board."
 		>
@@ -182,7 +182,7 @@
 									<RotateCw />
 									Reopen
 								{:else}
-									<CircleCheck />
+									<CheckCircle />
 									Close
 								{/if}
 							</Button>
@@ -196,7 +196,7 @@
 								}}
 								aria-label="Delete"
 							>
-								<Trash2 />
+								<Trash />
 							</Button>
 						</div>
 					{/if}
@@ -213,7 +213,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Delete <strong>{deleteTarget?.title}</strong>? Issues stay, only the board is removed.

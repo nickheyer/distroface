@@ -18,14 +18,14 @@
 	import {
 		Archive,
 		ArchiveRestore,
-		ArrowRightLeft,
+		ArrowLeftRight,
 		Pencil,
-		Trash2,
+		Trash,
 		Clock,
 		X,
 		Info,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import type { GitTransfer } from '$lib/proto/distroface/v1/git_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');
@@ -160,7 +160,7 @@
 								onclick={() => cancelTransfer(t)}
 								disabled={rejecting === t.id}
 							>
-								{#if rejecting === t.id}<Loader2 class="animate-spin" />{:else}<X />{/if}
+								{#if rejecting === t.id}<Loader class="animate-spin" />{:else}<X />{/if}
 								{rejecting === t.id ? 'Cancelling' : 'Cancel'}
 							</Button>
 						</div>
@@ -188,7 +188,7 @@
 						onclick={toggleArchive}
 						disabled={archiving}
 					>
-						{#if archiving}<Loader2 class="animate-spin" />{:else if repo.isArchived}<ArchiveRestore
+						{#if archiving}<Loader class="animate-spin" />{:else if repo.isArchived}<ArchiveRestore
 							/>{:else}<Archive />{/if}
 						{archiving ? 'Working' : repo.isArchived ? 'Unarchive' : 'Archive'}
 					</Button>
@@ -227,7 +227,7 @@
 						class="shrink-0 self-start sm:self-auto"
 						href={transferHref}
 					>
-						<ArrowRightLeft />Transfer
+						<ArrowLeftRight />Transfer
 					</Button>
 				</PermissionGate>
 			</div>
@@ -249,7 +249,7 @@
 							deleteOpen = true;
 						}}
 					>
-						<Trash2 />Delete
+						<Trash />Delete
 					</Button>
 				</PermissionGate>
 			</div>
@@ -264,7 +264,7 @@
 	confirmDisabled={!confirmMatches}
 	onConfirm={remove}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Removes every branch, issue, pull request, release, and wiki page of

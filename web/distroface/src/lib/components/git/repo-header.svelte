@@ -24,7 +24,7 @@
 		BellOff,
 		ChevronDown,
 		RefreshCw
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { importLabel, importTitle } from '$lib/git-import';
 	import { Badge } from '$lib/components/ui/badge';

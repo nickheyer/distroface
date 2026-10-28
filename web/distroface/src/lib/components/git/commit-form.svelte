@@ -6,7 +6,7 @@
 	import FormCard from '$lib/components/form-card.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
-	import { GitCommit, GitBranchPlus, GitBranch, Loader2 } from '@lucide/svelte';
+	import { GitCommit, GitBranchPlus, GitBranch, Loader } from '$lib/icons';
 
 	let {
 		summary = $bindable(''),
@@ -106,7 +106,7 @@
 		<Button variant="outline" onclick={onCancel} disabled={submitting}>Cancel</Button>
 		<Button onclick={onSubmit} disabled={!ready}>
 			{#if submitting}
-				<Loader2 class="animate-spin" />
+				<Loader class="animate-spin" />
 			{:else}
 				<GitCommit />
 			{/if}

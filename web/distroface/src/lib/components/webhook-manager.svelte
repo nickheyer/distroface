@@ -27,12 +27,12 @@
 		Webhook,
 		Plus,
 		Pencil,
-		Trash2,
+		Trash,
 		RotateCw,
-		CircleCheck,
-		CircleX,
+		CheckCircle,
+		XCircle,
 		ChevronDown
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 
 	let {
 		scope,
@@ -265,7 +265,7 @@
 										onclick={() => confirmDelete(wh)}
 										aria-label="Delete webhook"
 									>
-										<Trash2 />
+										<Trash />
 									</Button>
 								</div>
 							</TableCell>
@@ -292,9 +292,9 @@
 												{#each deliveries as d (d.id)}
 													<div class="flex items-center gap-3 px-3 py-2 text-xs">
 														{#if d.success}
-															<CircleCheck class="size-3.5 shrink-0 text-success" />
+															<CheckCircle class="size-3.5 shrink-0 text-success" />
 														{:else}
-															<CircleX class="size-3.5 shrink-0 text-destructive" />
+															<XCircle class="size-3.5 shrink-0 text-destructive" />
 														{/if}
 														<Badge variant="outline" class="font-mono"
 															>{webhookEventLabels[d.event] ?? 'unknown'}</Badge
@@ -343,7 +343,7 @@
 	confirmLabel="Delete"
 	onConfirm={doDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This permanently deletes <strong>{deleteTarget?.url}</strong> and its delivery history.

@@ -9,7 +9,7 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader } from '$lib/icons';
 	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { Act } from '$lib/act.svelte';
@@ -80,7 +80,7 @@
 		>
 			{#if gcStatus?.running}
 				<div class="flex items-center gap-2 text-sm">
-					<Loader2 class="size-4 animate-spin text-primary" />
+					<Loader class="size-4 animate-spin text-primary" />
 					<span class="font-medium">Collection in progress</span>
 				</div>
 			{:else if gcStatus?.lastRun}

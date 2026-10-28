@@ -6,16 +6,16 @@
 		Wrench,
 		ChevronRight,
 		AlertCircle,
-		CheckCircle2,
+		CheckCircle,
 		ShieldAlert,
 		ShieldCheck,
 		ShieldX,
 		Info,
-		Loader2,
+		Loader,
 		ArrowDown,
 		Terminal,
 		FileText
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import Markdown from '$lib/components/git/markdown.svelte';
@@ -225,7 +225,7 @@
 		<div class="ml-auto flex items-center gap-2">
 			{#if streaming && !finished}
 				<span class="inline-flex items-center gap-1 text-muted-foreground"
-					><Loader2 class="size-3 animate-spin" />Live</span
+					><Loader class="size-3 animate-spin" />Live</span
 				>
 			{/if}
 		</div>
@@ -338,9 +338,9 @@
 									>
 									<span class="ml-auto shrink-0">
 										{#if ok === undefined}
-											<Loader2 class="size-3.5 animate-spin text-warning" />
+											<Loader class="size-3.5 animate-spin text-warning" />
 										{:else if ok}
-											<CheckCircle2 class="size-3.5 text-success" />
+											<CheckCircle class="size-3.5 text-success" />
 										{:else}
 											<AlertCircle class="size-3.5 text-destructive" />
 										{/if}
@@ -427,7 +427,7 @@
 							<div
 								class="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-success/10 text-success"
 							>
-								<CheckCircle2 class="size-3.5" />
+								<CheckCircle class="size-3.5" />
 							</div>
 							<div
 								class="min-w-0 flex-1 rounded-lg border border-success/30 bg-success/5 px-3 py-2 text-sm"

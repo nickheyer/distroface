@@ -12,15 +12,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import {
-		Upload,
-		Plus,
-		Trash2,
-		RefreshCw,
-		AlertTriangle,
-		CheckCircle,
-		KeyRound
-	} from '@lucide/svelte';
+	import { Upload, Plus, Trash, RefreshCw, AlertTriangle, CheckCircle, Key } from '$lib/icons';
 	import type { GitPushMirror } from '$lib/proto/distroface/v1/git_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');
@@ -159,7 +151,7 @@
 							{/if}
 							<span>every {m.intervalMinutes} min</span>
 							{#if m.syncOnPush}<Badge variant="secondary">On push</Badge>{/if}
-							{#if m.useSshKey}<Badge variant="secondary"><KeyRound />SSH key</Badge>{/if}
+							{#if m.useSshKey}<Badge variant="secondary"><Key />SSH key</Badge>{/if}
 							{#if m.hasToken}<Badge variant="secondary">Token</Badge>{/if}
 						</div>
 						{#if m.lastError && !busy(m)}
@@ -186,7 +178,7 @@
 								deleteOpen = true;
 							}}
 						>
-							<Trash2 />
+							<Trash />
 						</Button>
 					</div>
 				</div>
@@ -201,7 +193,7 @@
 	confirmLabel="Remove"
 	onConfirm={remove}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Pushes to <strong class="font-mono break-all">{deleteTarget?.remoteUrl}</strong> stop. The remote

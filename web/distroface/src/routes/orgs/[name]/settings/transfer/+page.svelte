@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getContext } from 'svelte';
-	import { ArrowRightLeft, Loader2 } from '@lucide/svelte';
+	import { ArrowLeftRight, Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -53,7 +53,7 @@
 	<Skeleton class="h-72 w-full rounded-lg" />
 {:else if !ctx.canAdmin}
 	<EmptyState
-		icon={ArrowRightLeft}
+		icon={ArrowLeftRight}
 		message="You cannot transfer this organization"
 		description="Only the owner can hand it to another member."
 	>
@@ -103,7 +103,7 @@
 				onclick={() => (confirmOpen = true)}
 				disabled={transferring || !userId}
 			>
-				{#if transferring}<Loader2 class="animate-spin" />{/if}
+				{#if transferring}<Loader class="animate-spin" />{/if}
 				{transferring ? 'Transferring' : 'Transfer ownership'}
 			</Button>
 			<Button variant="ghost-muted" href={settingsHref}>Cancel</Button>
@@ -117,7 +117,7 @@
 	confirmLabel="Transfer ownership"
 	onConfirm={transfer}
 	loading={transferring}
-	icon={ArrowRightLeft}
+	icon={ArrowLeftRight}
 >
 	{#snippet description()}
 		<strong>{newOwner}</strong> becomes the owner of <strong>{orgName}</strong> and you become an admin.

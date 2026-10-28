@@ -9,10 +9,10 @@
 		Power,
 		PowerOff,
 		AlertCircle,
-		FileCode2,
+		FileCode,
 		Search,
 		Plus
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
@@ -396,7 +396,7 @@
 									})}
 									class="inline-flex min-w-0 items-center gap-1 font-mono hover:text-primary"
 								>
-									<FileCode2 class="size-3 shrink-0" /><span class="truncate"
+									<FileCode class="size-3 shrink-0" /><span class="truncate"
 										>{selectedWorkflow.path}</span
 									>
 								</a>

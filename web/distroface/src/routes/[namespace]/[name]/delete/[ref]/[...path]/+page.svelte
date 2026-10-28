@@ -9,7 +9,7 @@
 	import { Alert, AlertDescription } from '$lib/components/ui/alert';
 	import { Button } from '$lib/components/ui/button';
 	import CommitForm from '$lib/components/git/commit-form.svelte';
-	import { AlertTriangle, Lock, ChevronLeft, FileX } from '@lucide/svelte';
+	import { AlertTriangle, Lock, ChevronLeft, FileX } from '$lib/icons';
 	import { formatBytes } from '$lib/utils';
 	import { GitUnit, FileOperationKind } from '$lib/proto/distroface/v1/git_pb';
 	import { ConnectError } from '@connectrpc/connect';

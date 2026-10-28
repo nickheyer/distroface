@@ -9,12 +9,12 @@
 		Download,
 		ExternalLink,
 		Pencil,
-		Trash2,
+		Trash,
 		History,
 		WrapText,
 		Database,
 		AlertTriangle
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import CopyButton from '$lib/components/copy-button.svelte';
@@ -204,7 +204,7 @@
 					class="text-destructive hover:text-destructive"
 					href={deleteHref}
 				>
-					<Trash2 />Delete
+					<Trash />Delete
 				</Button>
 			{/if}
 		</div>

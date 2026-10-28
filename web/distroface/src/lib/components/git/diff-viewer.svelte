@@ -23,18 +23,18 @@
 	import {
 		ChevronLeft,
 		ChevronRight,
-		Columns2,
-		Rows3,
+		Columns,
+		Rows,
 		FileCode,
 		FolderTree,
 		PanelLeft,
 		Search,
 		X,
-		Loader2,
+		Loader,
 		FileDiff,
 		RefreshCw,
 		Eye
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -442,7 +442,7 @@
 			</span>
 		{/if}
 		{#if listing}
-			<Loader2 class="size-3.5 animate-spin text-muted-foreground" />
+			<Loader class="size-3.5 animate-spin text-muted-foreground" />
 		{/if}
 		<div class="ml-auto flex items-center gap-2">
 			{#if toolbar}
@@ -459,7 +459,7 @@
 					aria-label="Unified"
 					aria-pressed={mode === 'unified'}
 				>
-					<Rows3 class="size-3.5" />
+					<Rows class="size-3.5" />
 				</button>
 				<button
 					type="button"
@@ -471,7 +471,7 @@
 					aria-label="Split"
 					aria-pressed={mode === 'split'}
 				>
-					<Columns2 class="size-3.5" />
+					<Columns class="size-3.5" />
 				</button>
 			</div>
 		</div>

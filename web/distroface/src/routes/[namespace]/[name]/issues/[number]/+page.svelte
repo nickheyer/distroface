@@ -4,16 +4,16 @@
 	import { goto } from '$app/navigation';
 	import {
 		CircleDot,
-		CircleCheck,
+		CheckCircle,
 		Lock,
 		Pencil,
 		Blocks,
 		Pin,
-		MoreHorizontal,
-		Link2,
+		Ellipsis,
+		Link as Link2,
 		ArrowLeft,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
@@ -294,7 +294,7 @@
 						<Button variant="outline" onclick={() => (editingTitle = false)}>Cancel</Button>
 						<Button onclick={saveTitle} disabled={savingTitle || !titleDraft.trim()}>
 							{#if savingTitle}
-								<Loader2 class="animate-spin" />
+								<Loader class="animate-spin" />
 							{/if}
 							{savingTitle ? 'Saving' : 'Save'}
 						</Button>
@@ -325,7 +325,7 @@
 						<DropdownMenuTrigger>
 							{#snippet child({ props })}
 								<Button {...props} variant="outline" size="icon" class="shrink-0" aria-label="More"
-									><MoreHorizontal /></Button
+									><Ellipsis /></Button
 								>
 							{/snippet}
 						</DropdownMenuTrigger>
@@ -339,7 +339,7 @@
 				{#if isOpen}
 					<Badge variant="success"><CircleDot />Open</Badge>
 				{:else}
-					<Badge variant="done"><CircleCheck />Closed</Badge>
+					<Badge variant="done"><CheckCircle />Closed</Badge>
 				{/if}
 				{#if issue.author}
 					<a
@@ -481,7 +481,7 @@
 							disabled={commentsLoading}
 						>
 							{#if commentsLoading}
-								<Loader2 class="animate-spin" />
+								<Loader class="animate-spin" />
 							{/if}
 							{commentsLoading ? 'Loading' : 'Load more'}
 						</Button>
@@ -499,7 +499,7 @@
 											onclick={() => setState(IssueState.CLOSED)}
 											disabled={posting || issue?.blocked}
 										>
-											<CircleCheck class="text-done" />{draft.trim()
+											<CheckCircle class="text-done" />{draft.trim()
 												? 'Close with comment'
 												: 'Close issue'}
 										</Button>

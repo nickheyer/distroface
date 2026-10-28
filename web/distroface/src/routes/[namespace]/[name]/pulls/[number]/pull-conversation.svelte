@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { Pencil, Loader2, Lock } from '@lucide/svelte';
+	import { Pencil, Loader, Lock } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Alert, AlertDescription } from '$lib/components/ui/alert';
 	import { Switch } from '$lib/components/ui/switch';
@@ -327,7 +327,7 @@
 		{#if nextToken}
 			<div class="flex justify-center">
 				<Button variant="outline" onclick={() => loadTimeline(nextToken)} disabled={loadingMore}>
-					{#if loadingMore}<Loader2 class="animate-spin" />{/if}
+					{#if loadingMore}<Loader class="animate-spin" />{/if}
 					Load more
 				</Button>
 			</div>

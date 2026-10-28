@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Menubar as MenubarPrimitive } from 'bits-ui';
-	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import { ChevronRight as ChevronRightIcon } from '$lib/icons';
 	import { cn, type WithoutChild } from '$lib/utils.js';
 
 	let {

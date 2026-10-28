@@ -10,7 +10,7 @@
 		GitBranch,
 		Tag,
 		Users,
-		KeyRound,
+		Key as KeyRound,
 		Key,
 		Webhook,
 		Database,
@@ -19,9 +19,9 @@
 		Mail,
 		Play,
 		Bot,
-		LockKeyhole,
+		Lock,
 		AlertTriangle
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 
 	let { children } = $props();
 
@@ -71,7 +71,7 @@
 		{ route: '/[namespace]/[name]/settings/email', label: 'Email', icon: Mail },
 		{ route: '/[namespace]/[name]/settings/actions', label: 'Actions', icon: Play },
 		{ route: '/[namespace]/[name]/settings/agents', label: 'Agents', icon: Bot },
-		{ route: '/[namespace]/[name]/settings/secrets', label: 'Secrets', icon: LockKeyhole },
+		{ route: '/[namespace]/[name]/settings/secrets', label: 'Secrets', icon: Lock },
 		{
 			route: '/[namespace]/[name]/settings/danger',
 			label: 'Danger zone',

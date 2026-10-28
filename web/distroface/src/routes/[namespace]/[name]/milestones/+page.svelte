@@ -5,12 +5,12 @@
 		Milestone as MilestoneIcon,
 		Plus,
 		Pencil,
-		Trash2,
-		CircleCheck,
+		Trash,
+		CheckCircle,
 		RotateCw,
-		CalendarDays,
+		Calendar,
 		CircleDot
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';
@@ -156,7 +156,7 @@
 						: 'text-muted-foreground hover:text-foreground'
 				)}
 				aria-pressed={stateTab === 'closed'}
-				onclick={() => setTab('closed')}><CircleCheck class="size-3.5" />Closed</button
+				onclick={() => setTab('closed')}><CheckCircle class="size-3.5" />Closed</button
 			>
 		</div>
 		<span class="text-xs text-muted-foreground tabular-nums"
@@ -203,7 +203,7 @@
 						>
 						<div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
 							<span class={cn('inline-flex items-center gap-1', due.overdue && 'text-destructive')}
-								><CalendarDays class="size-3.5" />{due.text}</span
+								><Calendar class="size-3.5" />{due.text}</span
 							>
 							{#if m.state === IssueState.CLOSED && m.closedAt}
 								<span>Closed {relativeTime(timestampDate(m.closedAt))}</span>
@@ -248,7 +248,7 @@
 									disabled={toggling === m.id}
 									onclick={() => toggleState(m)}
 								>
-									{#if m.state === IssueState.CLOSED}<RotateCw />Reopen{:else}<CircleCheck
+									{#if m.state === IssueState.CLOSED}<RotateCw />Reopen{:else}<CheckCircle
 										/>Close{/if}
 								</Button>
 								<Button
@@ -259,7 +259,7 @@
 										deleteTarget = m;
 										deleteOpen = true;
 									}}
-									aria-label="Delete milestone"><Trash2 /></Button
+									aria-label="Delete milestone"><Trash /></Button
 								>
 							</div>
 						{/if}
@@ -277,7 +277,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Issues in <strong>{deleteTarget?.title}</strong> keep no milestone. This cannot be undone.

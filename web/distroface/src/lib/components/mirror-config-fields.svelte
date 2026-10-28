@@ -72,7 +72,7 @@
 	import PasswordInput from '$lib/components/password-input.svelte';
 	import LimitInput from '$lib/components/limit-input.svelte';
 	import DurationInput from '$lib/components/duration-input.svelte';
-	import { CheckCircle, AlertTriangle, Hourglass, Undo2 } from '@lucide/svelte';
+	import { CheckCircle, AlertTriangle, Hourglass, Undo } from '$lib/icons';
 	import { relativeTime } from '$lib/utils';
 	import { fetchMirrorLimits, type MirrorLimits } from '$lib/mirror';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -282,7 +282,7 @@
 				{#if tokenSet}
 					{#if form.clearToken}
 						<Button variant="outline" class="shrink-0" onclick={() => (form.clearToken = false)}>
-							<Undo2 />Keep token
+							<Undo />Keep token
 						</Button>
 					{:else}
 						<Button

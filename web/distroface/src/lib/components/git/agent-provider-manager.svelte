@@ -13,7 +13,7 @@
 	} from '$lib/components/ui/table';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import { Plug, Plus, Pencil, Trash2, PlugZap, Loader2 } from '@lucide/svelte';
+	import { Plug, Plus, Pencil, Trash, PlugZap, Loader } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import type { AgentProvider } from '$lib/proto/distroface/v1/agents_pb';
 	import { formatTokens, providerKinds } from './agents-state';
@@ -204,8 +204,7 @@
 												aria-label="Test {p.name}"
 												title="Test connection"
 											>
-												{#if testing === p.id}<Loader2 class="animate-spin" />{:else}<PlugZap
-													/>{/if}
+												{#if testing === p.id}<Loader class="animate-spin" />{:else}<PlugZap />{/if}
 											</Button>
 											<Button
 												variant="ghost-muted"
@@ -225,7 +224,7 @@
 												}}
 												aria-label="Remove {p.name}"
 											>
-												<Trash2 />
+												<Trash />
 											</Button>
 										</div>
 									{:else}
@@ -251,7 +250,7 @@
 	confirmLabel="Remove"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Remove <strong>{deleteTarget?.name}</strong>? Agents bound to it fall back to the scope default

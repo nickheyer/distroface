@@ -9,7 +9,7 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { Act, errText } from '$lib/act.svelte';
@@ -205,7 +205,7 @@
 										onclick={() => approve(domain)}
 									>
 										{#if approvalBusy === domain.id}
-											<Loader2 class="animate-spin" />
+											<Loader class="animate-spin" />
 										{:else}
 											Approve
 										{/if}

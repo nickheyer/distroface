@@ -16,13 +16,13 @@
 		AlertTriangle,
 		Info,
 		ChevronDown,
-		Loader2,
+		Loader,
 		Play,
 		Layers,
 		Container,
 		Pin,
 		Bot
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -410,7 +410,7 @@
 					<div class="flex flex-wrap items-center gap-2">
 						{#if run.needsApproval}
 							<Button onclick={() => act('approve')} disabled={!!busy}>
-								{#if busy === 'approve'}<Loader2 class="animate-spin" />{:else}<ShieldAlert
+								{#if busy === 'approve'}<Loader class="animate-spin" />{:else}<ShieldAlert
 									/>{/if}Approve and run
 							</Button>
 						{/if}
@@ -427,9 +427,8 @@
 								<DropdownMenuTrigger>
 									{#snippet child({ props })}
 										<Button {...props} variant="outline" disabled={!!busy}>
-											{#if busy.startsWith('rerun')}<Loader2
-													class="animate-spin"
-												/>{:else}<RotateCcw />{/if}Re-run<ChevronDown class="opacity-70" />
+											{#if busy.startsWith('rerun')}<Loader class="animate-spin" />{:else}<RotateCcw
+												/>{/if}Re-run<ChevronDown class="opacity-70" />
 										</Button>
 									{/snippet}
 								</DropdownMenuTrigger>

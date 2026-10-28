@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { GitCommit as GitCommitIcon, ChevronDown, ChevronUp } from '@lucide/svelte';
+	import { GitCommit as GitCommitIcon, ChevronDown, ChevronUp } from '$lib/icons';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import EmptyState from '$lib/components/empty-state.svelte';

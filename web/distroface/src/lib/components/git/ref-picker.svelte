@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { GitBranch, Tag, ChevronsUpDown, Check, Search, Loader2 } from '@lucide/svelte';
+	import { GitBranch, Tag, ChevronsUpDown, Check, Search, Loader } from '$lib/icons';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -152,7 +152,7 @@
 				oninput={onQuery}
 			/>
 			{#if loading}
-				<Loader2 class="size-3.5 animate-spin text-muted-foreground" />
+				<Loader class="size-3.5 animate-spin text-muted-foreground" />
 			{/if}
 		</div>
 		{#if kinds.length > 1}

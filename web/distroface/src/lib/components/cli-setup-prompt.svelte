@@ -9,7 +9,7 @@
 	import { Alert, AlertDescription } from '$lib/components/ui/alert';
 	import FormField from '$lib/components/form-field.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
-	import { Terminal, AlertTriangle, Loader2, X } from '@lucide/svelte';
+	import { Terminal, AlertTriangle, Loader, X } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
@@ -212,7 +212,7 @@
 					<Button variant="outline" onclick={dismiss}>Maybe later</Button>
 					<Button onclick={createToken} disabled={creating || !tokenName.trim()}>
 						{#if creating}
-							<Loader2 class="animate-spin" />
+							<Loader class="animate-spin" />
 						{/if}
 						{creating ? 'Generating' : 'Generate token'}
 					</Button>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GitBranch } from '@lucide/svelte';
+	import { GitBranch } from '$lib/icons';
 	import { configStore } from '$lib/stores/config.svelte';
 	import RepoExplore from '$lib/components/git/repo-explore.svelte';
 	import PageHeader from '$lib/components/page-header.svelte';

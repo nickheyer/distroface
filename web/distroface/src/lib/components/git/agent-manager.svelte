@@ -13,7 +13,7 @@
 	} from '$lib/components/ui/table';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import { Bot, Plus, Pencil, Trash2, FileCode2, AlertCircle } from '@lucide/svelte';
+	import { Bot, Plus, Pencil, Trash, FileCode, AlertCircle } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { AgentSource, type Agent } from '$lib/proto/distroface/v1/agents_pb';
 	import { kindLabels } from './agents-state';
@@ -157,7 +157,7 @@
 									>
 									{#if !a.enabled}<Badge variant="outline">Disabled</Badge>{/if}
 									{#if a.source === AgentSource.FILE}
-										<Badge variant="secondary" title={a.filePath}><FileCode2 />File</Badge>
+										<Badge variant="secondary" title={a.filePath}><FileCode />File</Badge>
 									{/if}
 									{#if a.error}
 										<span title={a.error} class="inline-flex"
@@ -211,7 +211,7 @@
 												}}
 												aria-label="Remove {a.name}"
 											>
-												<Trash2 />
+												<Trash />
 											</Button>
 										</div>
 									{:else}
@@ -235,7 +235,7 @@
 	confirmLabel="Remove"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Remove <strong>{deleteTarget?.name}</strong>? Past sessions stay readable. Its bot account is

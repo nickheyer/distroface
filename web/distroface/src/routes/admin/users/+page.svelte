@@ -21,7 +21,7 @@
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import BulkActionBar from '$lib/components/bulk-action-bar.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Plus } from '@lucide/svelte';
+	import { Plus } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';

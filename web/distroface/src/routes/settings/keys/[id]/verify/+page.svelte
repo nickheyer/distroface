@@ -4,7 +4,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { ConnectError } from '@connectrpc/connect';
-	import { CircleAlert, Fingerprint, Loader2, Terminal } from '@lucide/svelte';
+	import { AlertCircle, Fingerprint, Loader, Terminal } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { errText } from '$lib/act.svelte';
@@ -123,7 +123,7 @@
 		backLabel="Keys"
 	>
 		<Alert variant="warning">
-			<CircleAlert />
+			<AlertCircle />
 			<AlertDescription
 				>Until verified, commits signed with {key.keyId} show as unverified.</AlertDescription
 			>
@@ -157,7 +157,7 @@
 
 		{#snippet footer()}
 			<Button onclick={submit} disabled={verifying || !signature.trim() || !challenge}>
-				{#if verifying}<Loader2 class="animate-spin" />{/if}
+				{#if verifying}<Loader class="animate-spin" />{/if}
 				{verifying ? 'Verifying' : 'Verify key'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Later</Button>

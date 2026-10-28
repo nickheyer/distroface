@@ -22,13 +22,13 @@
 		Cpu,
 		Plus,
 		Pencil,
-		Trash2,
-		KeyRound,
+		Trash,
+		Key,
 		AlertTriangle,
 		Terminal,
 		CheckCircle,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
@@ -186,7 +186,7 @@
 		{#if canManage}
 			<Button class="shrink-0" onclick={newToken} disabled={creatingToken}>
 				{#if creatingToken}
-					<Loader2 class="animate-spin" />
+					<Loader class="animate-spin" />
 				{:else}
 					<Plus />
 				{/if}
@@ -265,7 +265,7 @@
 			{#snippet actions()}
 				{#if canManage}
 					<Button variant="outline" onclick={newToken} disabled={creatingToken}>
-						<KeyRound />
+						<Key />
 						New registration token
 					</Button>
 				{/if}
@@ -315,7 +315,7 @@
 										<div class="flex items-center justify-end gap-2 border-t pt-4">
 											<Button variant="outline" onclick={closeEdit}>Cancel</Button>
 											<Button onclick={saveEdit} disabled={savingEdit}>
-												{#if savingEdit}<Loader2 class="animate-spin" />{/if}
+												{#if savingEdit}<Loader class="animate-spin" />{/if}
 												{savingEdit ? 'Saving' : 'Save changes'}
 											</Button>
 										</div>
@@ -387,7 +387,7 @@
 													}}
 													aria-label="Remove {runner.name}"
 												>
-													<Trash2 />
+													<Trash />
 												</Button>
 											</div>
 										{:else}
@@ -416,7 +416,7 @@
 	confirmLabel="Remove"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Remove <strong>{deleteTarget?.name}</strong>? Its token stops working and running jobs fail.

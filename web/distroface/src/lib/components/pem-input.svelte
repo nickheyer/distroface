@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { Upload } from '@lucide/svelte';
+	import { Upload } from '$lib/icons';
 	import { cn } from '$lib/utils.js';
 
 	// Paste or upload, either way the bound value is plain pem text

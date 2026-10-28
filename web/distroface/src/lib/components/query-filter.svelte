@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Badge } from '$lib/components/ui/badge';
-	import { Search, X, CornerDownLeft } from '@lucide/svelte';
+	import { Search, X, CornerDownLeft } from '$lib/icons';
 	import { MatchKind } from '$lib/proto/distroface/v1/pagination_pb';
 	import type { QueryField, QueryFilter } from '$lib/query.svelte';
 	import { cn } from '$lib/utils';

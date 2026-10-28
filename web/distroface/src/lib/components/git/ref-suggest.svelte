@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { tick, type Component } from 'svelte';
-	import { CircleDot, CircleCheck, GitPullRequest, GitMerge, Users, Loader2 } from '@lucide/svelte';
+	import { CircleDot, CheckCircle, GitPullRequest, GitMerge, Users, Loader } from '$lib/icons';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -161,7 +161,7 @@
 			};
 		}
 		return i.state === IssueState.CLOSED
-			? { icon: CircleCheck, tone: 'text-done' }
+			? { icon: CheckCircle, tone: 'text-done' }
 			: { icon: CircleDot, tone: 'text-success' };
 	}
 
@@ -341,7 +341,7 @@
 	>
 		{#if items.length === 0}
 			<div class="flex h-8 items-center gap-2 px-2.5 text-xs text-muted-foreground">
-				<Loader2 class="size-3.5 animate-spin" />Searching
+				<Loader class="size-3.5 animate-spin" />Searching
 			</div>
 		{/if}
 		{#each items as it, i (it.key)}

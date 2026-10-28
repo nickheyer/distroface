@@ -11,7 +11,7 @@
 	import FormActions from '$lib/components/form-actions.svelte';
 	import LimitInput from '$lib/components/limit-input.svelte';
 	import PasswordInput from '$lib/components/password-input.svelte';
-	import { Loader2, PlugZap, Plus, Trash2, CheckCircle2, XCircle } from '@lucide/svelte';
+	import { Loader, PlugZap, Plus, Trash, CheckCircle, XCircle } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import {
 		AgentProviderKind,
@@ -348,7 +348,7 @@
 					aria-label="Remove header"
 					onclick={() => (headers = headers.filter((_, j) => j !== i))}
 				>
-					<Trash2 />
+					<Trash />
 				</Button>
 			</div>
 		{:else}
@@ -381,7 +381,7 @@
 
 {#if testResult}
 	<Alert variant={testResult.ok ? 'default' : 'destructive'}>
-		{#if testResult.ok}<CheckCircle2 />{:else}<XCircle />{/if}
+		{#if testResult.ok}<CheckCircle />{:else}<XCircle />{/if}
 		<AlertDescription>
 			<div class="space-y-1">
 				<p>{testResult.message}</p>
@@ -400,12 +400,12 @@
 
 <FormActions>
 	<Button onclick={save} disabled={saving || !nameValid || !urlValid}>
-		{#if saving}<Loader2 class="animate-spin" />{/if}
+		{#if saving}<Loader class="animate-spin" />{/if}
 		{saving ? 'Saving' : editing ? 'Save changes' : 'Add connector'}
 	</Button>
 	<Button variant="ghost-muted" href={cancelHref}>Cancel</Button>
 	<Button variant="outline" onclick={test} disabled={testing || !urlValid}>
-		{#if testing}<Loader2 class="animate-spin" />{:else}<PlugZap />{/if}
+		{#if testing}<Loader class="animate-spin" />{:else}<PlugZap />{/if}
 		{testing ? 'Testing' : 'Test connection'}
 	</Button>
 </FormActions>

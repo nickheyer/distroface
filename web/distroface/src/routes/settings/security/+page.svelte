@@ -6,7 +6,7 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
-	import { Lock, ShieldCheck, Check, Loader2, KeyRound, Globe } from '@lucide/svelte';
+	import { Lock, ShieldCheck, Check, Loader, Key, Globe } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -28,7 +28,7 @@
 		{
 			label: 'Local password',
 			description: 'Sign in with a username and password stored on this server',
-			icon: KeyRound,
+			icon: Key,
 			connected: !isOIDC,
 			show: true
 		},
@@ -192,7 +192,7 @@
 				<div class="flex flex-wrap items-center gap-2 pt-1">
 					<Button type="submit" disabled={saving || !currentPassword || !newPassword}>
 						{#if saving}
-							<Loader2 class="animate-spin" />
+							<Loader class="animate-spin" />
 							Changing password
 						{:else}
 							<Lock />

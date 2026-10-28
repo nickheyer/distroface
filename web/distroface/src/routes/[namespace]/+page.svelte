@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { UserRound, Calendar, Building2, Settings } from '@lucide/svelte';
+	import { UserAvatar, Calendar, Building, Settings } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { relativeTime } from '$lib/utils';
@@ -183,7 +183,7 @@
 			{#if isOwnProfile}
 				<div class="flex shrink-0 flex-wrap gap-2">
 					<Button variant="outline" href={resolve('/orgs')}>
-						<Building2 />
+						<Building />
 						Organizations
 					</Button>
 					<Button variant="outline" href={resolve('/settings/profile')}>
@@ -198,7 +198,7 @@
 			<div
 				class="flex size-14 items-center justify-center rounded-full border bg-muted text-muted-foreground"
 			>
-				<UserRound class="size-6" />
+				<UserAvatar class="size-6" />
 			</div>
 			<div>
 				<h1 class="text-2xl font-semibold tracking-tight">{username}</h1>

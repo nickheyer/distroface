@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getContext, onMount } from 'svelte';
-	import { GitBranch, Loader2 } from '@lucide/svelte';
+	import { GitBranch, Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { Button } from '$lib/components/ui/button';
@@ -108,7 +108,7 @@
 
 		{#snippet footer()}
 			<Button onclick={addRepo} disabled={adding || !repoName}>
-				{#if adding}<Loader2 class="animate-spin" />{/if}
+				{#if adding}<Loader class="animate-spin" />{/if}
 				{adding ? 'Adding' : 'Add repository'}
 			</Button>
 			<Button variant="ghost-muted" href={teamHref}>Cancel</Button>

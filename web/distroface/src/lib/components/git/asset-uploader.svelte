@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Upload, Check, X, Loader2, AlertTriangle } from '@lucide/svelte';
+	import { Upload, Check, X, Loader, AlertTriangle } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Progress } from '$lib/components/ui/progress';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
@@ -190,7 +190,7 @@
 						{:else if item.stage === 'error'}
 							<AlertTriangle class="size-3.5 shrink-0 text-destructive" />
 						{:else}
-							<Loader2 class="size-3.5 shrink-0 animate-spin text-muted-foreground" />
+							<Loader class="size-3.5 shrink-0 animate-spin text-muted-foreground" />
 						{/if}
 						<span class="min-w-0 truncate font-medium">{item.file.name}</span>
 						<span class="shrink-0 text-xs text-muted-foreground tabular-nums"

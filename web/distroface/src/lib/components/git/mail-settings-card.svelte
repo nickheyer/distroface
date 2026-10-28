@@ -12,7 +12,7 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import FormActions from '$lib/components/form-actions.svelte';
 	import PasswordInput from '$lib/components/password-input.svelte';
-	import { Save, Undo2, Send, Loader2 } from '@lucide/svelte';
+	import { Save, Undo, Send, Loader } from '$lib/icons';
 	import { Act, errText } from '$lib/act.svelte';
 	import {
 		isLocked,
@@ -521,7 +521,7 @@
 					class="shrink-0"
 				>
 					{#if testAct.busy}
-						<Loader2 class="animate-spin" />
+						<Loader class="animate-spin" />
 					{:else}
 						<Send />
 					{/if}
@@ -622,7 +622,7 @@
 	<FormActions>
 		<Button onclick={save} disabled={saving || resetting || !canEdit}>
 			{#if saving}
-				<Loader2 class="animate-spin" />
+				<Loader class="animate-spin" />
 			{:else}
 				<Save />
 			{/if}
@@ -631,9 +631,9 @@
 		{#if parentScope && overrideCount > 0}
 			<Button variant="ghost-muted" onclick={resetAll} disabled={resetting || saving || !canEdit}>
 				{#if resetting}
-					<Loader2 class="animate-spin" />
+					<Loader class="animate-spin" />
 				{:else}
-					<Undo2 />
+					<Undo />
 				{/if}
 				{resetting ? 'Resetting' : 'Reset to inherited'}
 			</Button>

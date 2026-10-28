@@ -6,15 +6,15 @@
 		Tag,
 		Users,
 		Milestone as MilestoneIcon,
-		CircleCheck,
+		CheckCircle,
 		CircleDot,
-		Link2,
+		Link as Link2,
 		Pencil,
 		Lock,
 		Unlock,
 		Pin,
 		PinOff,
-		CalendarDays,
+		Calendar,
 		Blocks,
 		Clock,
 		Eye,
@@ -26,14 +26,14 @@
 		GitPullRequestDraft,
 		GitPullRequest,
 		GitBranch,
-		SquareKanban,
+		Kanban,
 		MessageSquare,
-		Trash2,
-		MoreHorizontal,
+		Trash,
+		Ellipsis,
 		Mail,
-		CircleSlash,
+		Ban,
 		History
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
@@ -144,7 +144,7 @@
 			case CommentType.DEMILESTONED:
 				return { icon: MilestoneIcon, tone: '' };
 			case CommentType.CLOSED:
-				return { icon: CircleCheck, tone: 'bg-done/15 text-done' };
+				return { icon: CheckCircle, tone: 'bg-done/15 text-done' };
 			case CommentType.REOPENED:
 				return { icon: CircleDot, tone: 'bg-success/15 text-success' };
 			case CommentType.REFERENCED:
@@ -160,12 +160,12 @@
 			case CommentType.UNPINNED:
 				return { icon: PinOff, tone: '' };
 			case CommentType.DUE_DATE:
-				return { icon: CalendarDays, tone: '' };
+				return { icon: Calendar, tone: '' };
 			case CommentType.DEPENDENCY_ADDED:
 			case CommentType.DEPENDENCY_REMOVED:
 				return { icon: Blocks, tone: '' };
 			case CommentType.BLOCKER_CLOSED:
-				return { icon: CircleCheck, tone: 'bg-done/15 text-done' };
+				return { icon: CheckCircle, tone: 'bg-done/15 text-done' };
 			case CommentType.BLOCKER_REOPENED:
 				return { icon: CircleDot, tone: 'bg-warning/15 text-warning' };
 			case CommentType.TIME_TRACKED:
@@ -176,9 +176,9 @@
 				return { icon: EyeOff, tone: '' };
 			case CommentType.REVIEW:
 				return str(p, 'state') === 'approved'
-					? { icon: CircleCheck, tone: 'bg-success/15 text-success' }
+					? { icon: CheckCircle, tone: 'bg-success/15 text-success' }
 					: str(p, 'state') === 'changes_requested'
-						? { icon: CircleSlash, tone: 'bg-destructive/15 text-destructive' }
+						? { icon: Ban, tone: 'bg-destructive/15 text-destructive' }
 						: { icon: Eye, tone: '' };
 			case CommentType.REVIEW_DISMISSED:
 				return { icon: EyeOff, tone: '' };
@@ -198,7 +198,7 @@
 			case CommentType.BASE_CHANGED:
 				return { icon: GitBranch, tone: '' };
 			case CommentType.PROJECT_CHANGED:
-				return { icon: SquareKanban, tone: '' };
+				return { icon: Kanban, tone: '' };
 			default:
 				return { icon: History, tone: '' };
 		}
@@ -537,7 +537,7 @@
 				<DropdownMenuTrigger>
 					{#snippet child({ props })}
 						<Button {...props} variant="ghost-muted" size="icon-xs" aria-label="Comment actions">
-							<MoreHorizontal />
+							<Ellipsis />
 						</Button>
 					{/snippet}
 				</DropdownMenuTrigger>
@@ -550,7 +550,7 @@
 							onclick={() => {
 								deleteTarget = c.id;
 								deleteOpen = true;
-							}}><Trash2 />Delete</DropdownMenuItem
+							}}><Trash />Delete</DropdownMenuItem
 						>
 					{/if}
 				</DropdownMenuContent>
@@ -617,7 +617,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This removes the comment and its reactions permanently.

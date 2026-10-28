@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { onMount, getContext } from 'svelte';
-	import { Plus } from '@lucide/svelte';
+	import { Plus } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import GitRepoList from '$lib/components/git/git-repo-list.svelte';

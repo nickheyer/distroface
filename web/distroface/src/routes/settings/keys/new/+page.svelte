@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Fingerprint, KeyRound, Loader2 } from '@lucide/svelte';
+	import { Fingerprint, Key as KeyRound, Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { configStore } from '$lib/stores/config.svelte';
@@ -223,7 +223,7 @@
 
 	{#snippet footer()}
 		<Button onclick={add} disabled={adding || !canSubmit}>
-			{#if adding}<Loader2 class="animate-spin" />{/if}
+			{#if adding}<Loader class="animate-spin" />{/if}
 			{adding ? 'Adding' : 'Add key'}
 		</Button>
 		<Button variant="ghost-muted" href={listHref}>Cancel</Button>

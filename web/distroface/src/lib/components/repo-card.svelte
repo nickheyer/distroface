@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Lock, Eye, ArrowDown, Tags, HardDrive, Clock, Star } from '@lucide/svelte';
+	import { Lock, Eye, ArrowDown, Tags, HardDrive, Clock, Star } from '$lib/icons';
 	import { Badge } from '$lib/components/ui/badge';
 	import MirrorBadge from '$lib/components/mirror-badge.svelte';
 	import { RepositoryType, Visibility } from '$lib/proto/distroface/v1/types_pb';

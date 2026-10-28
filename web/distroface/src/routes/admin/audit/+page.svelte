@@ -15,7 +15,7 @@
 	} from '$lib/components/ui/table';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { ScrollText, RefreshCw, ArrowUp, ArrowDown, Loader2 } from '@lucide/svelte';
+	import { ScrollText, RefreshCw, ArrowUp, ArrowDown, Loader } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -235,7 +235,7 @@
 						<TableRow class="hover:bg-transparent">
 							<TableCell colspan={6}>
 								<div class="flex items-center justify-center gap-2 text-xs text-muted-foreground">
-									<Loader2 class="size-3.5 animate-spin" />
+									<Loader class="size-3.5 animate-spin" />
 									Loading more events
 								</div>
 							</TableCell>

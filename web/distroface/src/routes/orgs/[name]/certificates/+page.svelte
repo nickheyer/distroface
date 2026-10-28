@@ -29,7 +29,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import PemInput from '$lib/components/pem-input.svelte';
-	import { Lock, RefreshCw, Loader2, Globe, Pencil } from '@lucide/svelte';
+	import { Lock, RefreshCw, Loader, Globe, Pencil } from '$lib/icons';
 	import { certDate, certSourceLabels, certStateBadge } from '$lib/cert-utils';
 	import { effectiveAddress } from '$lib/portal-address';
 	import { Act, errText } from '$lib/act.svelte';
@@ -388,7 +388,7 @@
 			{#if orgCA}
 				<Button variant="outline" disabled={signAct.busy || !csrPem.trim()} onclick={signCsr}>
 					{#if signAct.busy}
-						<Loader2 class="animate-spin" />
+						<Loader class="animate-spin" />
 						Signing
 					{:else}
 						Sign request
@@ -561,7 +561,7 @@
 												onclick={() => renew(portal)}
 											>
 												{#if busy === portal.id}
-													<Loader2 class="animate-spin" />
+													<Loader class="animate-spin" />
 												{:else}
 													<RefreshCw />
 												{/if}

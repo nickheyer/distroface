@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Key, Loader2 } from '@lucide/svelte';
+	import { Key, Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -95,7 +95,7 @@
 
 		{#snippet footer()}
 			<Button onclick={createRole} disabled={creating || !name.trim()}>
-				{#if creating}<Loader2 class="animate-spin" />{/if}
+				{#if creating}<Loader class="animate-spin" />{/if}
 				{creating ? 'Creating' : 'Create role'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

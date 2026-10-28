@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { resolve } from '$app/paths';
-	import { Bot, Plus, Loader2, ChevronDown } from '@lucide/svelte';
+	import { Bot, Plus, Loader, ChevronDown } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
@@ -177,7 +177,7 @@
 						/>
 						<div class="flex justify-end">
 							<Button size="sm" onclick={start} disabled={starting || !selected}>
-								{#if starting}<Loader2 class="animate-spin" />{:else}<Bot />{/if}
+								{#if starting}<Loader class="animate-spin" />{:else}<Bot />{/if}
 								Start session
 							</Button>
 						</div>

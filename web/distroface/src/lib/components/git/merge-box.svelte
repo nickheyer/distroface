@@ -2,21 +2,21 @@
 	import { resolve } from '$app/paths';
 	import {
 		GitMerge,
-		CheckCircle2,
+		CheckCircle,
 		XCircle,
 		AlertCircle,
 		Clock,
-		Loader2,
+		Loader,
 		GitBranch,
 		ChevronDown,
-		Undo2,
+		Undo,
 		FileWarning,
 		ShieldAlert,
 		Zap,
-		Trash2,
+		Trash,
 		RotateCcw,
 		Eye
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -262,7 +262,7 @@
 	function checksIcon(s: CommitStatusState) {
 		switch (s) {
 			case CommitStatusState.SUCCESS:
-				return CheckCircle2;
+				return CheckCircle;
 			case CommitStatusState.FAILURE:
 			case CommitStatusState.ERROR:
 				return XCircle;
@@ -293,7 +293,7 @@
 	);
 </script>
 
-{#snippet row(Icon: typeof CheckCircle2, color: string, heading: string, detail: string)}
+{#snippet row(Icon: typeof CheckCircle, color: string, heading: string, detail: string)}
 	<div class="flex items-start gap-3 px-4 py-3">
 		<Icon class="mt-0.5 size-5 shrink-0 {color}" />
 		<div class="min-w-0 flex-1">
@@ -369,7 +369,7 @@
 		<div class="divide-y">
 			{#if reviews.approved > 0 && reviews.changesRequested === 0}
 				{@render row(
-					CheckCircle2,
+					CheckCircle,
 					'text-success',
 					`${reviews.approved} approving review${reviews.approved !== 1 ? 's' : ''}`,
 					reviews.awaiting > 0
@@ -414,7 +414,7 @@
 
 			{#if checking}
 				{@render row(
-					Loader2,
+					Loader,
 					'animate-spin text-muted-foreground',
 					'Checking for ability to merge automatically',
 					''
@@ -446,7 +446,7 @@
 				)}
 			{:else}
 				{@render row(
-					CheckCircle2,
+					CheckCircle,
 					'text-success',
 					'No conflicts with the base branch',
 					behind ? 'The head branch is behind the base' : 'Merging can be performed automatically'
@@ -485,7 +485,7 @@
 					</div>
 					{#if canMerge}
 						<Button variant="outline" class="shrink-0" onclick={cancelAuto} disabled={busy !== ''}>
-							{#if busy === 'cancel-auto'}<Loader2 class="animate-spin" />{/if}
+							{#if busy === 'cancel-auto'}<Loader class="animate-spin" />{/if}
 							Cancel auto-merge
 						</Button>
 					{/if}
@@ -522,12 +522,12 @@
 					<div class="flex flex-wrap items-center gap-2">
 						{#if mergeNow}
 							<Button onclick={merge} disabled={busy !== ''}>
-								{#if busy === 'merge'}<Loader2 class="animate-spin" />{:else}<GitMerge />{/if}
+								{#if busy === 'merge'}<Loader class="animate-spin" />{:else}<GitMerge />{/if}
 								Confirm {mergeMethodShort(method)}
 							</Button>
 						{:else}
 							<Button onclick={scheduleAuto} disabled={busy !== ''}>
-								{#if busy === 'auto'}<Loader2 class="animate-spin" />{:else}<Zap />{/if}
+								{#if busy === 'auto'}<Loader class="animate-spin" />{:else}<Zap />{/if}
 								Enable auto-merge
 							</Button>
 						{/if}
@@ -582,7 +582,7 @@
 					<DropdownMenuTrigger>
 						{#snippet child({ props })}
 							<Button {...props} variant="outline" disabled={busy !== ''}>
-								{#if busy === 'update'}<Loader2 class="animate-spin" />{:else}<GitBranch />{/if}
+								{#if busy === 'update'}<Loader class="animate-spin" />{:else}<GitBranch />{/if}
 								Update branch<ChevronDown class="opacity-60" />
 							</Button>
 						{/snippet}
@@ -597,20 +597,20 @@
 					</DropdownMenuContent>
 				</DropdownMenu>
 				<Button variant="outline" onclick={() => setDraft(true)} disabled={busy !== ''}>
-					{#if busy === 'draft'}<Loader2 class="animate-spin" />{:else}<FileWarning />{/if}
+					{#if busy === 'draft'}<Loader class="animate-spin" />{:else}<FileWarning />{/if}
 					Convert to draft
 				</Button>
 			{/if}
 			{#if status === 'draft' && canEdit}
 				<Button onclick={() => setDraft(false)} disabled={busy !== ''}>
-					{#if busy === 'draft'}<Loader2 class="animate-spin" />{:else}<Eye />{/if}
+					{#if busy === 'draft'}<Loader class="animate-spin" />{:else}<Eye />{/if}
 					Ready for review
 				</Button>
 				<DropdownMenu>
 					<DropdownMenuTrigger>
 						{#snippet child({ props })}
 							<Button {...props} variant="outline" disabled={busy !== ''}>
-								{#if busy === 'update'}<Loader2 class="animate-spin" />{:else}<GitBranch />{/if}
+								{#if busy === 'update'}<Loader class="animate-spin" />{:else}<GitBranch />{/if}
 								Update branch<ChevronDown class="opacity-60" />
 							</Button>
 						{/snippet}
@@ -633,7 +633,7 @@
 							onclick={() => close(false)}
 							disabled={busy !== ''}
 						>
-							{#if busy === 'close'}<Loader2 class="animate-spin" />{:else}<XCircle />{/if}
+							{#if busy === 'close'}<Loader class="animate-spin" />{:else}<XCircle />{/if}
 							Close pull request
 						</Button>
 					{:else}
@@ -641,7 +641,7 @@
 							<DropdownMenuTrigger>
 								{#snippet child({ props })}
 									<Button {...props} variant="outline-destructive" disabled={busy !== ''}>
-										{#if busy === 'close'}<Loader2 class="animate-spin" />{:else}<XCircle />{/if}
+										{#if busy === 'close'}<Loader class="animate-spin" />{:else}<XCircle />{/if}
 										Close<ChevronDown class="opacity-60" />
 									</Button>
 								{/snippet}
@@ -658,19 +658,19 @@
 			{/if}
 			{#if status === 'closed' && canEdit}
 				<Button variant="outline" onclick={reopen} disabled={busy !== ''}>
-					{#if busy === 'reopen'}<Loader2 class="animate-spin" />{:else}<Undo2 />{/if}
+					{#if busy === 'reopen'}<Loader class="animate-spin" />{:else}<Undo />{/if}
 					Reopen pull request
 				</Button>
 			{/if}
 			{#if (status === 'merged' || status === 'closed') && canEdit && !fork}
 				{#if pull.headDeleted}
 					<Button variant="outline" onclick={restoreBranch} disabled={busy !== ''}>
-						{#if busy === 'restore'}<Loader2 class="animate-spin" />{:else}<RotateCcw />{/if}
+						{#if busy === 'restore'}<Loader class="animate-spin" />{:else}<RotateCcw />{/if}
 						Restore branch
 					</Button>
 				{:else if canDeleteHead}
 					<Button variant="outline" onclick={deleteHeadBranch} disabled={busy !== ''}>
-						{#if busy === 'delete-branch'}<Loader2 class="animate-spin" />{:else}<Trash2 />{/if}
+						{#if busy === 'delete-branch'}<Loader class="animate-spin" />{:else}<Trash />{/if}
 						Delete branch
 					</Button>
 				{/if}

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { Check, Copy } from '@lucide/svelte';
+	import { Check, Copy } from '$lib/icons';
 	import { cn } from '$lib/utils';
 
 	let {

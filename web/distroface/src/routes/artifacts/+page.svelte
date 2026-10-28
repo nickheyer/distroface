@@ -12,7 +12,7 @@
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import PageHeader from '$lib/components/page-header.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Archive, Plus, Trash2, Lock, Globe, HardDrive, Clock, User } from '@lucide/svelte';
+	import { Archive, Plus, Trash, Lock, Globe, HardDrive, Clock, User } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { Code, ConnectError } from '@connectrpc/connect';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -257,7 +257,7 @@
 							onclick={(e) => openDelete(repo, e)}
 							aria-label="Delete {repo.namespace}/{repo.name}"
 						>
-							<Trash2 />
+							<Trash />
 						</Button>
 					{/if}
 				</div>

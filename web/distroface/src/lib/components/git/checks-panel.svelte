@@ -1,6 +1,6 @@
 <script lang="ts">
 	import {
-		CheckCircle2,
+		CheckCircle,
 		XCircle,
 		Clock,
 		AlertCircle,
@@ -9,7 +9,7 @@
 		ChevronRight,
 		RefreshCw,
 		CircleDashed
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { safeHref } from '$lib/utils';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -123,7 +123,7 @@
 	function icon(s: CommitStatusState) {
 		switch (s) {
 			case CommitStatusState.SUCCESS:
-				return CheckCircle2;
+				return CheckCircle;
 			case CommitStatusState.FAILURE:
 				return XCircle;
 			case CommitStatusState.ERROR:

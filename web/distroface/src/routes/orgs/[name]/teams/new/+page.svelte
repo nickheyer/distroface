@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getContext } from 'svelte';
-	import { UsersRound, Loader2 } from '@lucide/svelte';
+	import { Users, Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { Button } from '$lib/components/ui/button';
@@ -66,7 +66,7 @@
 
 {#if !ctx.canAdmin}
 	<EmptyState
-		icon={UsersRound}
+		icon={Users}
 		message="You cannot create teams"
 		description="Only organization owners and admins manage teams."
 	>
@@ -132,7 +132,7 @@
 
 		{#snippet footer()}
 			<Button onclick={createTeam} disabled={creating || !newName.trim()}>
-				{#if creating}<Loader2 class="animate-spin" />{/if}
+				{#if creating}<Loader class="animate-spin" />{/if}
 				{creating ? 'Creating' : 'Create team'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

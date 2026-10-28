@@ -9,7 +9,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import FormActions from '$lib/components/form-actions.svelte';
-	import { Save, Loader2 } from '@lucide/svelte';
+	import { Save, Loader } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { errText } from '$lib/act.svelte';
@@ -187,7 +187,7 @@
 		<FormActions>
 			<Button onclick={save} disabled={saving}>
 				{#if saving}
-					<Loader2 class="animate-spin" />
+					<Loader class="animate-spin" />
 				{:else}
 					<Save />
 				{/if}

@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { ChevronDown, ChevronRight, History } from '@lucide/svelte';
+	import { ChevronDown, ChevronRight, History } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';

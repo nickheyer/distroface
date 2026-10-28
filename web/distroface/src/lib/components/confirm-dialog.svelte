@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { Snippet, Component } from 'svelte';
 	import { Dialog as DialogPrimitive } from 'bits-ui';
-	import { AlertTriangle, Loader2 } from '@lucide/svelte';
+	import { AlertTriangle, Loader } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import * as Dialog from '$lib/components/ui/dialog';
 	import { dialogShellClass } from '$lib/components/ui/dialog/dialog-content.svelte';
@@ -75,7 +75,7 @@
 				>
 				<Button {variant} onclick={onConfirm} disabled={loading || confirmDisabled}>
 					{#if loading}
-						<Loader2 class="animate-spin" />
+						<Loader class="animate-spin" />
 					{/if}
 					{confirmLabel}
 				</Button>

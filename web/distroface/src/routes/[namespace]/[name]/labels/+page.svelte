@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { Tag, Plus, Pencil, Trash2, Building2, RotateCw, Loader2, X } from '@lucide/svelte';
+	import { Tag, Plus, Pencil, Trash, Building, RotateCw, Loader, X } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -252,7 +252,7 @@
 			<div class="flex items-center gap-2">
 				<Button variant="outline" onclick={closeForm}>Cancel</Button>
 				<Button onclick={save} disabled={saving || !fName.trim() || !colorValid}>
-					{#if saving}<Loader2 class="animate-spin" />{/if}
+					{#if saving}<Loader class="animate-spin" />{/if}
 					{saving ? 'Saving' : editing ? 'Save changes' : 'Create label'}
 				</Button>
 			</div>
@@ -316,7 +316,7 @@
 								deleteTarget = l;
 								deleteOpen = true;
 							}}
-							aria-label="Delete {l.name}"><Trash2 /></Button
+							aria-label="Delete {l.name}"><Trash /></Button
 						>
 					</div>
 				{/if}
@@ -398,7 +398,7 @@
 		{#if orgLabels.length}
 			<div class="space-y-2">
 				<div class="flex items-center gap-2 text-sm text-muted-foreground">
-					<Building2 class="size-3.5" />
+					<Building class="size-3.5" />
 					<span>Organization labels, managed at</span>
 					<a href={resolve('/orgs/[name]/labels', { name: namespace })} class="link">{namespace}</a>
 				</div>
@@ -422,7 +422,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This removes <strong>{deleteTarget?.name}</strong> from every issue and pull request.

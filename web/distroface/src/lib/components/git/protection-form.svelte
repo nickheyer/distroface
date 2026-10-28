@@ -84,7 +84,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import PrincipalPicker from '$lib/components/git/principal-picker.svelte';
-	import { X, Plus } from '@lucide/svelte';
+	import { X, Plus } from '$lib/icons';
 
 	let { form = $bindable(), orgId = '' }: { form: ProtectionForm; orgId?: string } = $props();
 

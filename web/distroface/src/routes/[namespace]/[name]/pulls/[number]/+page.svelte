@@ -9,12 +9,12 @@
 		Pencil,
 		Check,
 		X,
-		Loader2,
+		Loader,
 		MessageSquare,
 		GitCommit,
 		FileDiff,
 		Terminal
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -260,7 +260,7 @@
 							><X />Cancel</Button
 						>
 						<Button onclick={saveTitle} disabled={savingTitle || !titleDraft.trim()}>
-							{#if savingTitle}<Loader2 class="animate-spin" />{:else}<Check />{/if}
+							{#if savingTitle}<Loader class="animate-spin" />{:else}<Check />{/if}
 							Save
 						</Button>
 					</div>

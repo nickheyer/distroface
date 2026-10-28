@@ -8,11 +8,11 @@
 		FileText,
 		ClipboardList,
 		ArrowLeft,
-		SquareKanban,
+		Kanban,
 		Check,
-		Settings2,
-		Loader2
-	} from '@lucide/svelte';
+		Sliders,
+		Loader
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import DateInput from '$lib/components/date-input.svelte';
@@ -417,7 +417,7 @@
 						<Button variant="outline" href="{base}/issues">Cancel</Button>
 						<Button onclick={submit} disabled={submitting || !title.trim()}>
 							{#if submitting}
-								<Loader2 class="animate-spin" />
+								<Loader class="animate-spin" />
 							{/if}
 							{submitting ? 'Opening' : 'Open issue'}
 						</Button>
@@ -447,7 +447,7 @@
 											variant="ghost-muted"
 											size="icon-xs"
 											title="Choose project"
-											aria-label="Choose project"><Settings2 /></Button
+											aria-label="Choose project"><Sliders /></Button
 										>
 									{/snippet}
 								</PopoverTrigger>
@@ -490,7 +490,7 @@
 					</div>
 					{#if currentProject}
 						<span class="flex items-center gap-1.5 text-sm"
-							><SquareKanban class="size-3.5 text-muted-foreground" />{currentProject.title}</span
+							><Kanban class="size-3.5 text-muted-foreground" />{currentProject.title}</span
 						>
 					{:else}
 						<span class="text-xs text-muted-foreground">None</span>

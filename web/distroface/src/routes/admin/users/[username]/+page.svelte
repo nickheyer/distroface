@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { Loader2, UserPen } from '@lucide/svelte';
+	import { Loader, UserPen } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -174,7 +174,7 @@
 
 		{#snippet footer()}
 			<Button onclick={save} disabled={saving}>
-				{#if saving}<Loader2 class="animate-spin" />{/if}
+				{#if saving}<Loader class="animate-spin" />{/if}
 				{saving ? 'Saving' : 'Save changes'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

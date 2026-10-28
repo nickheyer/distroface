@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
-	import { Plus, Search, Tag } from '@lucide/svelte';
+	import { Plus, Search, Tag } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import PermissionGate from '$lib/components/permission-gate.svelte';

@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { Button } from '$lib/components/ui/button';
-	import { ArrowRight, Loader2, MailCheck, MailX } from '@lucide/svelte';
+	import { ArrowRight, Loader, MailCheck, MailX } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { errText } from '$lib/act.svelte';
@@ -48,7 +48,7 @@
 <div class="flex min-h-screen items-center justify-center bg-muted/40 p-4">
 	<div class="w-full max-w-sm">
 		<div class="mb-6 text-center">
-			<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 size-10 rounded-lg" />
+			<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 h-10 w-auto" />
 			<h1 class="text-xl font-semibold tracking-tight">
 				{phase === 'verifying'
 					? 'Verifying your email'
@@ -68,7 +68,7 @@
 		<div class="rounded-lg border bg-card p-6 shadow-sm">
 			<div class="flex flex-col items-center py-2 text-center">
 				{#if phase === 'verifying'}
-					<Loader2 class="mb-3 size-5 animate-spin text-muted-foreground" />
+					<Loader class="mb-3 size-5 animate-spin text-muted-foreground" />
 					<p class="text-sm text-muted-foreground">Please wait</p>
 				{:else if phase === 'ok'}
 					<MailCheck class="mb-4 size-6 text-success" />
@@ -94,7 +94,7 @@
 							disabled={resending || resent}
 						>
 							{#if resending}
-								<Loader2 class="animate-spin" />
+								<Loader class="animate-spin" />
 								Sending
 							{:else}
 								{resent ? 'Link sent' : 'Send a new link'}

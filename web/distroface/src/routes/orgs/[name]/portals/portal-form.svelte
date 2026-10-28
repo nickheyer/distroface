@@ -15,7 +15,7 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import FormActions from '$lib/components/form-actions.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
-	import { Info, Plus, X, Loader2 } from '@lucide/svelte';
+	import { Info, Plus, X, Loader } from '$lib/icons';
 	import { Act } from '$lib/act.svelte';
 	import { effectiveAddress, placementError, portalScheme } from '$lib/portal-address';
 	import { certDate, certSourceLabels, certStateBadge, isIssuableHostname } from '$lib/cert-utils';
@@ -869,7 +869,7 @@
 <FormActions>
 	<Button onclick={submit} disabled={submitAct.busy || !formValid || manualNeedsPems}>
 		{#if submitAct.busy}
-			<Loader2 class="animate-spin" />
+			<Loader class="animate-spin" />
 		{/if}
 		{#if portal}
 			{submitAct.busy ? 'Saving' : 'Save changes'}

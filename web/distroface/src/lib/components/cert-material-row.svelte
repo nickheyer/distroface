@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader } from '$lib/icons';
 	import { certDate } from '$lib/cert-utils';
 	import type { TLSMaterialInfo } from '$lib/proto/distroface/v1/certificate_pb';
 
@@ -51,7 +51,7 @@
 	</div>
 	<div class="flex shrink-0 items-center gap-1.5">
 		{#if busy}
-			<Loader2 class="size-4 animate-spin text-muted-foreground" />
+			<Loader class="size-4 animate-spin text-muted-foreground" />
 		{/if}
 		{#if material}
 			{#if onDownload}

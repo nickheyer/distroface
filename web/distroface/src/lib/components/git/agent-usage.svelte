@@ -11,7 +11,7 @@
 		TableRow
 	} from '$lib/components/ui/table';
 	import StatCard from '$lib/components/stat-card.svelte';
-	import { Bot, Coins, CheckCircle2, XCircle } from '@lucide/svelte';
+	import { Bot, Coins, CheckCircle, XCircle } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import type { AgentUsageBucket, GetAgentUsageResponse } from '$lib/proto/distroface/v1/agents_pb';
 	import { cacheShare, formatTokens } from './agents-state';
@@ -117,7 +117,7 @@
 					? `${cacheShare(totals.cacheReadTokens, totals.promptTokens)} served from cache`
 					: undefined}
 			/>
-			<StatCard label="Succeeded" value={Number(totals.succeeded)} icon={CheckCircle2} />
+			<StatCard label="Succeeded" value={Number(totals.succeeded)} icon={CheckCircle} />
 			<StatCard label="Failed" value={Number(totals.failed)} icon={XCircle} />
 		</div>
 		<div class="grid gap-4 lg:grid-cols-2">

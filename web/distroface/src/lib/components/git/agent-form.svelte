@@ -13,7 +13,7 @@
 	import FormActions from '$lib/components/form-actions.svelte';
 	import LimitInput from '$lib/components/limit-input.svelte';
 	import PrincipalPicker from '$lib/components/git/principal-picker.svelte';
-	import { Loader2, Undo2 } from '@lucide/svelte';
+	import { Loader, Undo } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import {
 		AgentApprovalPolicy,
@@ -473,7 +473,7 @@
 			disabled={presetApplied}
 			onclick={() => (flags = presetFlags(kind))}
 		>
-			<Undo2 />Reset to {kindLabel.toLowerCase()} defaults
+			<Undo />Reset to {kindLabel.toLowerCase()} defaults
 		</Button>
 	{/snippet}
 </FormSection>
@@ -546,7 +546,7 @@
 
 <FormActions>
 	<Button onclick={save} disabled={saving || !nameValid || !slugValid}>
-		{#if saving}<Loader2 class="animate-spin" />{/if}
+		{#if saving}<Loader class="animate-spin" />{/if}
 		{saving ? 'Saving' : editing ? 'Save changes' : 'Create agent'}
 	</Button>
 	<Button variant="ghost-muted" href={cancelHref}>Cancel</Button>

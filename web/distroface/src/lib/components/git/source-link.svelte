@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { GitBranch } from '@lucide/svelte';
+	import { GitBranch } from '$lib/icons';
 	import { cn } from '$lib/utils';
 
 	let {

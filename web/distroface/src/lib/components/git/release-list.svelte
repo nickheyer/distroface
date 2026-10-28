@@ -10,7 +10,7 @@
 		ChevronUp,
 		Download,
 		GitCommit
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';

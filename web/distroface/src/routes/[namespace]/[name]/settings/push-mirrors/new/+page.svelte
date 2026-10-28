@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { Button } from '$lib/components/ui/button';
@@ -132,7 +132,7 @@
 
 	{#snippet footer()}
 		<Button onclick={create} disabled={creating || !remoteUrl.trim()}>
-			{#if creating}<Loader2 class="animate-spin" />{/if}
+			{#if creating}<Loader class="animate-spin" />{/if}
 			{creating ? 'Adding' : 'Add mirror'}
 		</Button>
 		<Button variant="ghost-muted" href={listHref}>Cancel</Button>

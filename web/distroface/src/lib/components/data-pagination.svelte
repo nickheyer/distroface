@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
-	import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from '@lucide/svelte';
+	import { ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from '$lib/icons';
 	import type { Pager } from '$lib/pager.svelte';
 
 	let {

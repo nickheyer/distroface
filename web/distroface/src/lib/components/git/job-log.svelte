@@ -8,8 +8,8 @@
 		Clock,
 		Download,
 		ArrowDown,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import RunStatusIcon from '$lib/components/git/run-status-icon.svelte';
@@ -567,7 +567,7 @@
 		<div class="ml-auto flex items-center gap-1">
 			{#if streaming && !finished}
 				<span class="mr-1 inline-flex items-center gap-1 text-muted-foreground"
-					><Loader2 class="size-3 animate-spin" />Live</span
+					><Loader class="size-3 animate-spin" />Live</span
 				>
 			{/if}
 			<span class="mr-1 hidden min-w-30 text-right text-muted-foreground tabular-nums sm:inline"

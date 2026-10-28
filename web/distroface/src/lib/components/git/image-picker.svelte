@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { Container, Pin, Link2, Unlink, Loader2, Search } from '@lucide/svelte';
+	import { Container, Pin, Link, Unlink, Loader, Search } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -283,11 +283,11 @@
 								onclick={() => attach(t)}
 							>
 								{#if busyKey === key}
-									<Loader2 class="animate-spin" />
+									<Loader class="animate-spin" />
 								{:else if done}
 									Attached
 								{:else}
-									<Link2 />Attach
+									<Link />Attach
 								{/if}
 							</Button>
 						</li>

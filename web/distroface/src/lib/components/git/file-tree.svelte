@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChevronRight, ChevronLeft, Folder, FolderOpen, MessageSquare } from '@lucide/svelte';
+	import { ChevronRight, ChevronLeft, Folder, FolderOpen, MessageSquare } from '$lib/icons';
 	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Button } from '$lib/components/ui/button';
 	import { DiffStatus } from '$lib/proto/distroface/v1/git_pb';

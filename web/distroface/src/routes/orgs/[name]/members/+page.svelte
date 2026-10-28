@@ -11,7 +11,7 @@
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Users, Plus } from '@lucide/svelte';
+	import { Users, Plus } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';

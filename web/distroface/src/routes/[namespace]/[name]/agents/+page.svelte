@@ -3,7 +3,7 @@
 	import { replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { Bot, Plus, AlertCircle, Plug, FileCode2 } from '@lucide/svelte';
+	import { Bot, Plus, AlertCircle, Plug, FileCode } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -319,7 +319,7 @@
 									)}>{a.name}</span
 								>
 								{#if a.source === AgentSource.FILE}
-									<FileCode2 class="size-3 shrink-0 text-muted-foreground" />
+									<FileCode class="size-3 shrink-0 text-muted-foreground" />
 								{/if}
 								{#if !a.enabled}
 									<Badge variant="outline" class="shrink-0">Disabled</Badge>

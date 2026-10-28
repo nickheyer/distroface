@@ -20,14 +20,14 @@
 		MailOpen,
 		CircleDot,
 		GitPullRequest,
-		GitCommitHorizontal,
+		GitCommit,
 		Tag,
 		GitBranch,
 		Users,
-		ArrowRightLeft,
+		ArrowLeftRight,
 		Search,
 		Bot
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -42,11 +42,11 @@
 	const kindIcons: Record<string, typeof Bell> = {
 		issue: CircleDot,
 		pull: GitPullRequest,
-		commit: GitCommitHorizontal,
+		commit: GitCommit,
 		release: Tag,
 		repository: GitBranch,
 		collaboration: Users,
-		transfer: ArrowRightLeft,
+		transfer: ArrowLeftRight,
 		agent_session: Bot
 	};
 
@@ -237,7 +237,7 @@
 		<div class="box divide-y">
 			{#each transfers as t (t.id)}
 				<div class="flex flex-wrap items-center gap-3 px-4 py-3">
-					<ArrowRightLeft class="size-4 shrink-0 text-muted-foreground" />
+					<ArrowLeftRight class="size-4 shrink-0 text-muted-foreground" />
 					<div class="min-w-48 flex-1 text-sm">
 						<span class="font-medium">{t.requestedBy}</span> wants to transfer
 						<span class="font-medium">{t.fullName}</span>

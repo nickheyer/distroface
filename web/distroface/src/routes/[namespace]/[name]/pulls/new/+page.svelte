@@ -7,12 +7,12 @@
 		GitPullRequest,
 		GitCompare,
 		ArrowLeft,
-		Loader2,
+		Loader,
 		GitFork,
 		GitCommit as GitCommitIcon,
 		FileDiff,
 		AlertTriangle
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
@@ -358,7 +358,7 @@
 				</span>
 			{/if}
 			{#if comparing}
-				<Loader2 class="size-3.5 animate-spin text-muted-foreground" />
+				<Loader class="size-3.5 animate-spin text-muted-foreground" />
 			{/if}
 		</div>
 
@@ -448,7 +448,7 @@
 						{#snippet footer()}
 							<Button variant="outline" href="/{namespace}/{name}/pulls">Cancel</Button>
 							<Button onclick={submit} disabled={!canSubmit}>
-								{#if submitting}<Loader2 class="animate-spin" />{/if}
+								{#if submitting}<Loader class="animate-spin" />{/if}
 								{submitting
 									? 'Creating'
 									: draft

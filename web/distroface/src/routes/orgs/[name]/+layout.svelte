@@ -6,7 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import {
-		Building2,
+		Building,
 		Package,
 		Archive,
 		Users,
@@ -15,14 +15,14 @@
 		ShieldCheck,
 		Settings,
 		GitBranch,
-		UsersRound,
+		Users as UsersRound,
 		Tag,
-		SquareKanban,
+		Kanban,
 		Play,
 		Bot,
-		KeyRound,
+		Key,
 		Mail
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { OrgContext, ORG_CONTEXT_KEY } from '$lib/org-context.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import SideNav from '$lib/components/side-nav.svelte';
@@ -64,11 +64,11 @@
 					{
 						href: resolve('/orgs/[name]/projects', { name }),
 						label: 'Projects',
-						icon: SquareKanban
+						icon: Kanban
 					},
 					{ href: resolve('/orgs/[name]/actions', { name }), label: 'Actions', icon: Play },
 					{ href: resolve('/orgs/[name]/agents', { name }), label: 'Agents', icon: Bot },
-					{ href: resolve('/orgs/[name]/secrets', { name }), label: 'Secrets', icon: KeyRound }
+					{ href: resolve('/orgs/[name]/secrets', { name }), label: 'Secrets', icon: Key }
 				);
 			}
 			items.push(
@@ -113,7 +113,7 @@
 			<div
 				class="flex size-12 shrink-0 items-center justify-center rounded-lg border bg-muted text-muted-foreground"
 			>
-				<Building2 class="size-5" />
+				<Building class="size-5" />
 			</div>
 			<div class="min-w-0 flex-1">
 				<h1 class="truncate text-xl leading-7 font-semibold tracking-tight">
@@ -145,7 +145,7 @@
 		</div>
 	{:else}
 		<div class="flex flex-col items-center rounded-lg border bg-card px-6 py-14 text-center">
-			<Building2 class="mb-3 size-6 text-muted-foreground/70" />
+			<Building class="mb-3 size-6 text-muted-foreground/70" />
 			<h2 class="text-sm font-semibold">Organization not found</h2>
 			<p class="mt-1 text-sm text-muted-foreground">
 				{ctx.name} does not exist or you don't have access.

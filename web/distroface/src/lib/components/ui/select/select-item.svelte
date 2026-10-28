@@ -1,5 +1,5 @@
 <script lang="ts">
-	import CheckIcon from '@lucide/svelte/icons/check';
+	import { Check as CheckIcon } from '$lib/icons';
 	import { Select as SelectPrimitive } from 'bits-ui';
 	import { cn, type WithoutChild } from '$lib/utils.js';
 
@@ -26,7 +26,7 @@
 	{#snippet children({ selected, highlighted })}
 		<span class="absolute right-2 flex size-3.5 items-center justify-center">
 			{#if selected}
-				<CheckIcon class="size-3.5 text-primary" strokeWidth={2.5} />
+				<CheckIcon class="size-3.5 text-primary" />
 			{/if}
 		</span>
 		{#if childrenProp}

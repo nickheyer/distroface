@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Terminal, Download, FileArchive } from '@lucide/svelte';
+	import { Terminal, Download, FileArchive } from '$lib/icons';
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { portalStore } from '$lib/stores/portal.svelte';

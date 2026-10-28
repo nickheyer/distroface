@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { SquareKanban, Loader2, Lock, Eye } from '@lucide/svelte';
+	import { Kanban, Loader, Lock, Eye } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -89,7 +89,7 @@
 
 {#if !canEdit}
 	<EmptyState
-		icon={SquareKanban}
+		icon={Kanban}
 		message="You cannot create projects"
 		description={repo.isArchived
 			? 'This repository is archived and read only.'
@@ -171,7 +171,7 @@
 
 		{#snippet footer()}
 			<Button onclick={createProject} disabled={creating || !newTitle.trim()}>
-				{#if creating}<Loader2 class="animate-spin" />{/if}
+				{#if creating}<Loader class="animate-spin" />{/if}
 				{creating ? 'Creating' : 'Create project'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

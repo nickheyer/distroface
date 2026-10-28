@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Package } from '@lucide/svelte';
+	import { Package } from '$lib/icons';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import RepoCard from './repo-card.svelte';
 	import EmptyState from './empty-state.svelte';

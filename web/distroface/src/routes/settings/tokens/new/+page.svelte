@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { AlertTriangle, Key, Loader2, Terminal } from '@lucide/svelte';
+	import { AlertTriangle, Key, Loader, Terminal } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -153,7 +153,7 @@
 				<Button href={listHref}>Back to tokens</Button>
 			{:else}
 				<Button onclick={createToken} disabled={creating || !tokenName.trim()}>
-					{#if creating}<Loader2 class="animate-spin" />{/if}
+					{#if creating}<Loader class="animate-spin" />{/if}
 					{creating ? 'Creating' : 'Create token'}
 				</Button>
 				<Button variant="ghost-muted" href={listHref}>Cancel</Button>

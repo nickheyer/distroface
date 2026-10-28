@@ -9,7 +9,7 @@
 		Archive,
 		LayoutTemplate,
 		HardDrive
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { resolve } from '$app/paths';
 	import { Badge } from '$lib/components/ui/badge';
 	import MirrorBadge from '$lib/components/mirror-badge.svelte';

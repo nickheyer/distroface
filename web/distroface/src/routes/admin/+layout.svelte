@@ -21,7 +21,7 @@
 		Mail,
 		Play,
 		Bot
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import PageHeader from '$lib/components/page-header.svelte';
 	import SideNav from '$lib/components/side-nav.svelte';
 

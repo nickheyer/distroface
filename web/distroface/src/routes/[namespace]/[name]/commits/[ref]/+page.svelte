@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { ChevronLeft, ChevronRight, X, Search } from '@lucide/svelte';
+	import { ChevronLeft, ChevronRight, X, Search } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import RefPicker from '$lib/components/git/ref-picker.svelte';

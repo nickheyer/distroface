@@ -33,14 +33,14 @@
 		Package,
 		GitBranch,
 		Settings,
-		Building2,
+		Building,
 		User,
 		Menu,
 		Shield,
 		Archive,
 		ExternalLink,
 		BookOpen
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { toggleMode, mode } from 'mode-watcher';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
@@ -115,7 +115,7 @@
 			? [{ href: '/git', label: 'Git', icon: GitBranch } satisfies NavLink]
 			: []),
 		...(authStore.isAuthenticated && !portalStore.isPortal
-			? [{ href: '/orgs', label: 'Organizations', icon: Building2 } satisfies NavLink]
+			? [{ href: '/orgs', label: 'Organizations', icon: Building } satisfies NavLink]
 			: []),
 		...(authStore.canAccessAdmin && !portalStore.isPortal
 			? [{ href: '/admin', label: 'Admin', icon: Shield } satisfies NavLink]
@@ -173,17 +173,20 @@
 			<div class="mx-auto flex h-13 max-w-7xl items-center gap-5 px-4 sm:px-6">
 				<a
 					href={resolve('/')}
-					class="flex shrink-0 items-center gap-2.5 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+					class="flex shrink-0 items-center gap-2.5 rounded-md transition-opacity outline-none hover:opacity-75 focus-visible:ring-2 focus-visible:ring-ring/50"
 				>
-					<img src="/adaptive-icon.png" alt={brandName} class="size-6 rounded-md" />
-					<span class="hidden text-sm font-semibold tracking-tight sm:inline">{brandName}</span>
+					<img src="/Df-dark-dark-grey.png" alt={brandName} class="mr-2 h-7 w-auto dark:hidden" />
+					<img src="/Df-light-grey.png" alt={brandName} class="mr-2 hidden h-7 w-auto dark:block" />
 					{#if portalStore.isPortal}
+						<span class="hidden text-sm font-semibold tracking-tight sm:inline">{brandName}</span>
 						<span
 							class="rounded-full border px-1.5 py-px text-2xs font-medium text-muted-foreground"
 							>Portal</span
 						>
 					{/if}
 				</a>
+
+				<span class="hidden h-5 w-px bg-border md:block" aria-hidden="true"></span>
 
 				<nav class="hidden h-full items-stretch gap-1 md:flex" aria-label="Primary">
 					{#each navLinks as link (link.href)}

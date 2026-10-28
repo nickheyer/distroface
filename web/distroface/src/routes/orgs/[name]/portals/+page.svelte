@@ -13,7 +13,7 @@
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Globe, Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Globe, Plus, Pencil, Trash } from '$lib/icons';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime } from '$lib/utils';
 	import { Pager } from '$lib/pager.svelte';
@@ -271,7 +271,7 @@
 							onclick={() => confirmDelete(portal)}
 							aria-label="Delete portal"
 						>
-							<Trash2 />
+							<Trash />
 						</Button>
 					</div>
 				</div>
@@ -287,7 +287,7 @@
 	confirmLabel="Delete"
 	onConfirm={doDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Delete <strong>{deleteTarget?.name}</strong> at

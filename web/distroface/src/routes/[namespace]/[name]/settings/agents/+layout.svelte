@@ -11,7 +11,7 @@
 		RepoAgentsContext,
 		REPO_AGENTS_CONTEXT_KEY
 	} from '$lib/components/git/repo-agents-context.svelte';
-	import { Info } from '@lucide/svelte';
+	import { Info } from '$lib/icons';
 
 	let { children } = $props();
 

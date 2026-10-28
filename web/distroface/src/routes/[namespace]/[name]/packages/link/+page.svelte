@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -153,7 +153,7 @@
 
 		{#snippet footer()}
 			<Button onclick={link} disabled={linking || !packageName}>
-				{#if linking}<Loader2 class="animate-spin" />{/if}
+				{#if linking}<Loader class="animate-spin" />{/if}
 				{linking ? 'Linking' : 'Link package'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

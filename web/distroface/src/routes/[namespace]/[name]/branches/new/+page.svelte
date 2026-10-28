@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { GitBranch, Loader2 } from '@lucide/svelte';
+	import { GitBranch, Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -102,7 +102,7 @@
 
 		{#snippet footer()}
 			<Button onclick={createBranch} disabled={creating || !branch.trim()}>
-				{#if creating}<Loader2 class="animate-spin" />{/if}
+				{#if creating}<Loader class="animate-spin" />{/if}
 				{creating ? 'Creating' : 'Create branch'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

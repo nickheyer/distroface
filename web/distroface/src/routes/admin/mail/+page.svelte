@@ -18,7 +18,7 @@
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import FormPage from '$lib/components/form-page.svelte';
 	import MailSettingsCard from '$lib/components/git/mail-settings-card.svelte';
-	import { Mail, RotateCw, Send } from '@lucide/svelte';
+	import { Mail, RotateCw, Send } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';

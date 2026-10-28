@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ShieldCheck, ShieldAlert, ShieldQuestion } from '@lucide/svelte';
+	import { ShieldCheck, ShieldAlert, ShieldQuestion } from '$lib/icons';
 	import { Badge } from '$lib/components/ui/badge';
 	import { GitVerificationState } from '$lib/proto/distroface/v1/git_pb';
 	import type { GitVerification } from '$lib/proto/distroface/v1/git_pb';

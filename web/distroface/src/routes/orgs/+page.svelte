@@ -8,7 +8,7 @@
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
-	import { Building2, Plus, Users, ShieldCheck, ChevronRight } from '@lucide/svelte';
+	import { Building, Plus, Users, ShieldCheck, ChevronRight } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
@@ -55,7 +55,7 @@
 	onMount(loadOrgs);
 </script>
 
-<PageHeader title="Organizations" subtitle="Shared namespaces for teams" icon={Building2}>
+<PageHeader title="Organizations" subtitle="Shared namespaces for teams" icon={Building}>
 	{#snippet actions()}
 		<PermissionGate resource="organizations" action="create">
 			<Button href={newHref}>
@@ -85,7 +85,7 @@
 		</div>
 	{:else if orgs.length === 0}
 		<EmptyState
-			icon={Building2}
+			icon={Building}
 			message={filter.active ? 'No matching organizations' : 'No organizations yet'}
 			description={filter.active
 				? 'Try a different search.'
@@ -110,7 +110,7 @@
 					<div
 						class="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground"
 					>
-						<Building2 class="size-4" />
+						<Building class="size-4" />
 					</div>
 					<div class="min-w-0 flex-1">
 						<div class="flex flex-wrap items-center gap-x-2 gap-y-1">

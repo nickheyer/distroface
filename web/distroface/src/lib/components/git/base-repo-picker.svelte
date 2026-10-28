@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GitFork } from '@lucide/svelte';
+	import { GitFork } from '$lib/icons';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 

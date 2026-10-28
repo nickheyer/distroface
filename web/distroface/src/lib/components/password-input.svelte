@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Input } from '$lib/components/ui/input';
-	import { Eye, EyeOff } from '@lucide/svelte';
+	import { Eye, EyeOff } from '$lib/icons';
 	import { cn } from '$lib/utils';
 	import type { HTMLInputAttributes } from 'svelte/elements';
 

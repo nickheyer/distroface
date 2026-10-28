@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Building2, Loader2 } from '@lucide/svelte';
+	import { Building, Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -48,7 +48,7 @@
 
 {#if !canCreate}
 	<EmptyState
-		icon={Building2}
+		icon={Building}
 		message="You cannot create organizations"
 		description="Ask an administrator for the organizations permission."
 	>
@@ -102,7 +102,7 @@
 
 		{#snippet footer()}
 			<Button onclick={createOrg} disabled={creating || !nameValid}>
-				{#if creating}<Loader2 class="animate-spin" />{/if}
+				{#if creating}<Loader class="animate-spin" />{/if}
 				{creating ? 'Creating' : 'Create organization'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

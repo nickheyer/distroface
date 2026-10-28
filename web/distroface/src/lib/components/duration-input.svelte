@@ -44,7 +44,7 @@
 	import { untrack } from 'svelte';
 	import { Select as SelectPrimitive } from 'bits-ui';
 	import { SelectContent, SelectItem } from '$lib/components/ui/select';
-	import { ChevronDown } from '@lucide/svelte';
+	import { ChevronDown } from '$lib/icons';
 	import { cn } from '$lib/utils';
 	import type { HTMLInputAttributes } from 'svelte/elements';
 

@@ -4,7 +4,7 @@
 	import CopyButton from './copy-button.svelte';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { ChevronRight } from '@lucide/svelte';
+	import { ChevronRight } from '$lib/icons';
 
 	let {
 		descriptor,

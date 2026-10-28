@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { CheckCircle2, XCircle, MessageSquare, Ban, FileDiff } from '@lucide/svelte';
+	import { CheckCircle, XCircle, MessageSquare, Ban, FileDiff } from '$lib/icons';
 	import { Badge } from '$lib/components/ui/badge';
 	import Markdown from '$lib/components/git/markdown.svelte';
 	import { ReviewState } from '$lib/proto/distroface/v1/pull_pb';
@@ -68,7 +68,7 @@
 		if (dismissed) return Ban;
 		switch (s) {
 			case ReviewState.APPROVED:
-				return CheckCircle2;
+				return CheckCircle;
 			case ReviewState.CHANGES_REQUESTED:
 				return XCircle;
 			default:

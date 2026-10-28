@@ -15,15 +15,7 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import {
-		KeyRound,
-		Variable as VariableIcon,
-		Plus,
-		Pencil,
-		Trash2,
-		Loader2,
-		X
-	} from '@lucide/svelte';
+	import { Key, Variable as VariableIcon, Plus, Pencil, Trash, Loader, X } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -181,7 +173,7 @@
 			<Button variant="outline" onclick={closeForm}>Cancel</Button>
 			<Button onclick={() => save(kind)} disabled={saving || !nameValid || !formValue}>
 				{#if saving}
-					<Loader2 class="animate-spin" />
+					<Loader class="animate-spin" />
 				{/if}
 				{saving
 					? 'Saving'
@@ -236,7 +228,7 @@
 		{:else if secrets.length === 0}
 			{#if creating !== 'secret'}
 				<EmptyState
-					icon={KeyRound}
+					icon={Key}
 					message="No secrets yet"
 					description={scope.kind === 'org'
 						? 'Repository secrets override these by name.'
@@ -296,7 +288,7 @@
 													onclick={() => openDelete('secret', secret.name)}
 													aria-label="Delete {secret.name}"
 												>
-													<Trash2 />
+													<Trash />
 												</Button>
 											</div>
 										</TableCell>
@@ -411,7 +403,7 @@
 													onclick={() => openDelete('variable', variable.name)}
 													aria-label="Delete {variable.name}"
 												>
-													<Trash2 />
+													<Trash />
 												</Button>
 											</div>
 										</TableCell>
@@ -432,7 +424,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDelete}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Delete <strong class="font-mono">{deleteName}</strong>? Workflows referencing it fail at the

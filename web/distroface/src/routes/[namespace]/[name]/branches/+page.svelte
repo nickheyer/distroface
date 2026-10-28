@@ -5,13 +5,13 @@
 		GitBranch,
 		Plus,
 		Shield,
-		Trash2,
+		Trash,
 		Pencil,
 		GitPullRequest,
 		GitCompare,
 		Search,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
@@ -183,7 +183,7 @@
 				</FormField>
 				<div class="flex flex-wrap items-center gap-2">
 					<Button onclick={renameBranch} disabled={renaming || !renameValid}>
-						{#if renaming}<Loader2 class="animate-spin" />{/if}
+						{#if renaming}<Loader class="animate-spin" />{/if}
 						{renaming ? 'Renaming' : 'Rename branch'}
 					</Button>
 					<Button variant="ghost-muted" onclick={closeRename} disabled={renaming}>Cancel</Button>
@@ -289,7 +289,7 @@
 							title="Delete"
 							disabled={b.isProtected}
 						>
-							<Trash2 />
+							<Trash />
 						</Button>
 					{/if}
 				</PermissionGate>
@@ -363,7 +363,7 @@
 	confirmLabel="Delete"
 	onConfirm={deleteBranch}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This deletes <strong class="font-mono">{deleteTarget}</strong>. Commits not reachable from

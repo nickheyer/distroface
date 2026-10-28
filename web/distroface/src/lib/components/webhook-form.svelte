@@ -13,7 +13,7 @@
 	import { WebhookEvent, WebhookScope } from '$lib/proto/distroface/v1/types_pb';
 	import type { Webhook as WebhookType } from '$lib/proto/distroface/v1/types_pb';
 	import isURL from 'validator/lib/isURL';
-	import { Loader2, Zap } from '@lucide/svelte';
+	import { Loader, Zap } from '$lib/icons';
 	import { mode } from 'mode-watcher';
 	import CodeMirror from 'svelte-codemirror-editor';
 	import { json } from '@codemirror/lang-json';
@@ -331,7 +331,7 @@
 
 <FormActions>
 	<Button onclick={submit} disabled={saving || !canSubmit}>
-		{#if saving}<Loader2 class="animate-spin" />{/if}
+		{#if saving}<Loader class="animate-spin" />{/if}
 		{saving ? 'Saving' : editing ? 'Save changes' : 'Create webhook'}
 	</Button>
 	<Button variant="ghost-muted" href={cancelHref}>Cancel</Button>

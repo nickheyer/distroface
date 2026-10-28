@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from '$lib/components/ui/button';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader } from '$lib/icons';
 	import PemInput from '$lib/components/pem-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import { errText } from '$lib/act.svelte';
@@ -90,7 +90,7 @@
 			<div class="flex items-center justify-end gap-2 border-t pt-4">
 				<Button variant="outline" onclick={() => (open = false)} disabled={busy}>Cancel</Button>
 				<Button onclick={submit} disabled={busy || !certPem.trim() || !keyPem.trim()}>
-					{#if busy}<Loader2 class="animate-spin" />{/if}
+					{#if busy}<Loader class="animate-spin" />{/if}
 					{busy ? 'Uploading' : 'Upload'}
 				</Button>
 			</div>

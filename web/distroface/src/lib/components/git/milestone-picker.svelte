@@ -1,13 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import {
-		Settings2,
-		Check,
-		Search,
-		Loader2,
-		Milestone as MilestoneIcon,
-		CalendarDays
-	} from '@lucide/svelte';
+	import { Sliders, Check, Search, Loader, Milestone as MilestoneIcon, Calendar } from '$lib/icons';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
@@ -135,7 +128,7 @@
 							title="Edit milestone"
 							aria-label="Edit milestone"
 						>
-							<Settings2 />
+							<Sliders />
 						</Button>
 					{/snippet}
 				</PopoverTrigger>
@@ -148,7 +141,7 @@
 							bind:value={query}
 						/>
 						{#if loading}
-							<Loader2 class="size-3.5 animate-spin text-muted-foreground" />
+							<Loader class="size-3.5 animate-spin text-muted-foreground" />
 						{/if}
 					</div>
 					<div class="max-h-72 overflow-y-auto py-1">
@@ -190,7 +183,7 @@
 			</span>
 			{#if due(current)}
 				<span class="mt-1 flex items-center gap-1 text-xs text-muted-foreground"
-					><CalendarDays class="size-3" />Due {due(current)}</span
+					><Calendar class="size-3" />Due {due(current)}</span
 				>
 			{/if}
 		</a>

@@ -9,7 +9,7 @@
 	import LimitInput from '$lib/components/limit-input.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
-	import { Save, Undo2, Loader2 } from '@lucide/svelte';
+	import { Save, Undo, Loader } from '$lib/icons';
 	import { Act } from '$lib/act.svelte';
 	import { orgScope, patchSettings, systemScope, tierOf } from '$lib/settings-utils';
 	import {
@@ -383,7 +383,7 @@
 		{#snippet footer()}
 			<Button onclick={save} disabled={saving || resetting}>
 				{#if saving}
-					<Loader2 class="animate-spin" />
+					<Loader class="animate-spin" />
 					Saving
 				{:else}
 					<Save />
@@ -393,10 +393,10 @@
 			{#if overrideCount > 0}
 				<Button variant="ghost-muted" onclick={resetAll} disabled={resetting || saving}>
 					{#if resetting}
-						<Loader2 class="animate-spin" />
+						<Loader class="animate-spin" />
 						Resetting
 					{:else}
-						<Undo2 />
+						<Undo />
 						Reset to defaults
 					{/if}
 				</Button>

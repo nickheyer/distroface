@@ -9,7 +9,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
-	import { Shield, Plus, Pencil, Trash2 } from '@lucide/svelte';
+	import { Shield, Plus, Pencil, Trash } from '$lib/icons';
 	import type { GitBranchProtection } from '$lib/proto/distroface/v1/git_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');
@@ -172,7 +172,7 @@
 								deleteOpen = true;
 							}}
 						>
-							<Trash2 />
+							<Trash />
 						</Button>
 					</div>
 				</div>
@@ -187,7 +187,7 @@
 	confirmLabel="Delete"
 	onConfirm={remove}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Branches matching <strong class="font-mono">{deleteTarget?.pattern}</strong> lose this protection.

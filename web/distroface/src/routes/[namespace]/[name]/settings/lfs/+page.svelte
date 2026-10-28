@@ -11,7 +11,7 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import StatCard from '$lib/components/stat-card.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
-	import { Info } from '@lucide/svelte';
+	import { Info } from '$lib/icons';
 	import { Act } from '$lib/act.svelte';
 	import { formatBytes } from '$lib/utils';
 

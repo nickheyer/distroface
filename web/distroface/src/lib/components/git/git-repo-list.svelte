@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GitBranch } from '@lucide/svelte';
+	import { GitBranch } from '$lib/icons';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import GitRepoCard from './git-repo-card.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';

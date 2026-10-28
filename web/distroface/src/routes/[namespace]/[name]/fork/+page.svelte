@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { GitFork, Loader2 } from '@lucide/svelte';
+	import { GitFork, Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -148,7 +148,7 @@
 
 		{#snippet footer()}
 			<Button onclick={fork} disabled={forking || !nameValid}>
-				{#if forking}<Loader2 class="animate-spin" />{/if}
+				{#if forking}<Loader class="animate-spin" />{/if}
 				{forking ? 'Forking' : 'Create fork'}
 			</Button>
 			<Button variant="ghost-muted" href={repoHref}>Cancel</Button>

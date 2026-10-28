@@ -4,16 +4,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import StatCard from '$lib/components/stat-card.svelte';
-	import {
-		Users,
-		Package,
-		Building2,
-		Key,
-		Shield,
-		Globe,
-		HardDrive,
-		Archive
-	} from '@lucide/svelte';
+	import { Users, Package, Building, Key, Shield, Globe, HardDrive, Archive } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { relativeTime, formatBytes } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
@@ -111,7 +102,7 @@
 		<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 			<StatCard label="Users" value={userCount} icon={Users} href="/admin/users" />
 			<StatCard label="Image repositories" value={repoCount} icon={Package} />
-			<StatCard label="Organizations" value={orgCount} icon={Building2} />
+			<StatCard label="Organizations" value={orgCount} icon={Building} />
 			<StatCard label="Roles" value={roleCount} icon={Key} href="/admin/roles" />
 		</div>
 

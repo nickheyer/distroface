@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
-	import { Tag, Plus, Trash2, Search, Rocket } from '@lucide/svelte';
+	import { Tag, Plus, Trash, Search, Rocket } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Badge } from '$lib/components/ui/badge';
@@ -213,7 +213,7 @@
 										onclick={() => openDelete(t)}
 										title="Delete tag"
 									>
-										<Trash2 />
+										<Trash />
 									</Button>
 								</PermissionGate>
 							</TableCell>
@@ -232,7 +232,7 @@
 	confirmLabel="Delete"
 	onConfirm={deleteTag}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This deletes <strong class="font-mono">{deleteTarget}</strong>. Releases pointing at it keep

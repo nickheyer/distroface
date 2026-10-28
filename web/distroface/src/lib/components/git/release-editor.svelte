@@ -4,13 +4,13 @@
 		Sparkles,
 		Eye,
 		Pencil,
-		Loader2,
+		Loader,
 		Rocket,
-		Trash2,
+		Trash,
 		Download,
 		Package,
 		Container
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
@@ -264,7 +264,7 @@
 	<div class="rounded-lg border border-dashed px-5 py-6 text-center">
 		<p class="text-sm text-muted-foreground">Save a draft to {what}</p>
 		<Button variant="outline" class="mt-3" onclick={saveDraft} disabled={!ready}>
-			{#if saving}<Loader2 class="animate-spin" />{/if}
+			{#if saving}<Loader class="animate-spin" />{/if}
 			{saving ? 'Saving' : 'Save draft'}
 		</Button>
 	</div>
@@ -352,7 +352,7 @@
 							disabled={generating || !tag.trim()}
 						>
 							{#if generating}
-								<Loader2 class="animate-spin" />
+								<Loader class="animate-spin" />
 							{:else}
 								<Sparkles />
 							{/if}
@@ -395,12 +395,12 @@
 				<Button variant="outline" onclick={onCancel} disabled={saving || publishing}>Cancel</Button>
 			{/if}
 			<Button variant={canPublish ? 'outline' : 'default'} onclick={save} disabled={!ready}>
-				{#if saving}<Loader2 class="animate-spin" />{/if}
+				{#if saving}<Loader class="animate-spin" />{/if}
 				{saving ? 'Saving' : draft ? 'Save draft' : editing ? 'Save changes' : 'Create release'}
 			</Button>
 			{#if canPublish}
 				<Button onclick={publish} disabled={!ready}>
-					{#if publishing}<Loader2 class="animate-spin" />{:else}<Rocket />{/if}
+					{#if publishing}<Loader class="animate-spin" />{:else}<Rocket />{/if}
 					{publishing ? 'Publishing' : 'Publish release'}
 				</Button>
 			{/if}
@@ -433,7 +433,7 @@
 									title="Remove asset"
 									aria-label="Remove asset"
 								>
-									{#if detaching === a.artifactId}<Loader2 class="animate-spin" />{:else}<Trash2
+									{#if detaching === a.artifactId}<Loader class="animate-spin" />{:else}<Trash
 										/>{/if}
 								</Button>
 							</li>

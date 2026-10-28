@@ -17,14 +17,14 @@
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import {
-		KeyRound,
+		Key as KeyRound,
 		Fingerprint,
 		Plus,
-		Trash2,
+		Trash,
 		ShieldCheck,
-		CircleAlert,
+		AlertCircle,
 		Info
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { toast } from 'svelte-sonner';
@@ -236,7 +236,7 @@
 											}}
 											aria-label="Delete"
 										>
-											<Trash2 />
+											<Trash />
 										</Button>
 									</TableCell>
 								</TableRow>
@@ -314,7 +314,7 @@
 											</Badge>
 										{:else}
 											<Badge variant="warning">
-												<CircleAlert />
+												<AlertCircle />
 												Unverified
 											</Badge>
 										{/if}
@@ -344,7 +344,7 @@
 												}}
 												aria-label="Delete"
 											>
-												<Trash2 />
+												<Trash />
 											</Button>
 										</div>
 									</TableCell>
@@ -365,7 +365,7 @@
 	confirmLabel="Remove"
 	onConfirm={confirmDeleteSsh}
 	loading={deletingSsh}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Remove <strong>{deleteSsh?.title}</strong>? Clients using it stop authenticating immediately.
@@ -378,7 +378,7 @@
 	confirmLabel="Remove"
 	onConfirm={confirmDeleteGpg}
 	loading={deletingGpg}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Remove <strong class="font-mono">{deleteGpg?.keyId}</strong>? Commits it signed show as

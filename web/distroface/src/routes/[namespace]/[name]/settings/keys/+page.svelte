@@ -23,7 +23,7 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
-	import { KeyRound, Plus, Trash2, Lock, PenLine, Info } from '@lucide/svelte';
+	import { Key as KeyRound, Plus, Trash, Lock, PenLine, Info } from '$lib/icons';
 	import type { SSHKey } from '$lib/proto/distroface/v1/keys_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');
@@ -180,7 +180,7 @@
 										deleteOpen = true;
 									}}
 								>
-									<Trash2 />
+									<Trash />
 								</Button>
 							</TableCell>
 						</TableRow>
@@ -198,7 +198,7 @@
 	confirmLabel="Remove"
 	onConfirm={remove}
 	loading={deleting}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		<strong>{deleteTarget?.title}</strong> stops authenticating immediately.

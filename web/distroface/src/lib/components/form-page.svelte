@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { ArrowLeft } from '@lucide/svelte';
+	import { ArrowLeft } from '$lib/icons';
 	import FormActions from '$lib/components/form-actions.svelte';
 	import SectionTabs, { type SectionTab } from '$lib/components/section-tabs.svelte';
 	import { cn } from '$lib/utils';

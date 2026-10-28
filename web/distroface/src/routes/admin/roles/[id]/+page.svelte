@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { Key, Loader2, ShieldAlert } from '@lucide/svelte';
+	import { Key, Loader, ShieldAlert } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -341,7 +341,7 @@
 						onclick={saveDetails}
 						disabled={savingDetails || !detailsChanged || !name.trim()}
 					>
-						{#if savingDetails}<Loader2 class="animate-spin" />{/if}
+						{#if savingDetails}<Loader class="animate-spin" />{/if}
 						{savingDetails ? 'Saving' : 'Save details'}
 					</Button>
 				{/if}
@@ -549,7 +549,7 @@
 
 		{#snippet footer()}
 			<Button onclick={savePermissions} disabled={savingPermissions || fullAccess}>
-				{#if savingPermissions}<Loader2 class="animate-spin" />{/if}
+				{#if savingPermissions}<Loader class="animate-spin" />{/if}
 				{savingPermissions ? 'Saving' : `Save permissions (${totalPermCount})`}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

@@ -11,7 +11,7 @@
 	import FormCard from '$lib/components/form-card.svelte';
 	import CodeEditor from '$lib/components/git/code-editor.svelte';
 	import CommitForm from '$lib/components/git/commit-form.svelte';
-	import { FileCode, AlertTriangle, Lock, ChevronLeft } from '@lucide/svelte';
+	import { FileCode, AlertTriangle, Lock, ChevronLeft } from '$lib/icons';
 	import { formatBytes } from '$lib/utils';
 	import { GitUnit, FileOperationKind } from '$lib/proto/distroface/v1/git_pb';
 	import { ConnectError } from '@connectrpc/connect';

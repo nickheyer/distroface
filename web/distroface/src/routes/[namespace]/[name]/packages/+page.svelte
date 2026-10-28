@@ -12,7 +12,7 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import { Package, Archive, Link2, Unlink, Download, Lock } from '@lucide/svelte';
+	import { Package, Archive, Link as Link2, Unlink, Download, Lock } from '$lib/icons';
 	import { LinkedRepositoryKind, type LinkedRepository } from '$lib/proto/distroface/v1/git_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');

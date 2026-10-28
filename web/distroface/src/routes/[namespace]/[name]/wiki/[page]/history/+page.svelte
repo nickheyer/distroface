@@ -8,8 +8,8 @@
 		Eye,
 		X,
 		GitCommit as GitCommitIcon,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -226,7 +226,7 @@
 							onclick={() => view(c)}
 							disabled={viewLoading === c.sha}
 						>
-							{#if viewLoading === c.sha}<Loader2 class="animate-spin" />{:else}<Eye />{/if}
+							{#if viewLoading === c.sha}<Loader class="animate-spin" />{:else}<Eye />{/if}
 							{viewLoading === c.sha ? 'Loading' : viewingSha === c.sha ? 'Viewing' : 'View'}
 						</Button>
 					</li>

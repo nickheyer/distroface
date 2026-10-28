@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { getContext } from 'svelte';
-	import { Loader2, Users } from '@lucide/svelte';
+	import { Loader, Users } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { Button } from '$lib/components/ui/button';
@@ -104,7 +104,7 @@
 
 		{#snippet footer()}
 			<Button onclick={addMember} disabled={adding || !userId}>
-				{#if adding}<Loader2 class="animate-spin" />{/if}
+				{#if adding}<Loader class="animate-spin" />{/if}
 				{adding ? 'Adding' : 'Add member'}
 			</Button>
 			<Button variant="ghost-muted" href={listHref}>Cancel</Button>

@@ -12,8 +12,8 @@
 		Pencil,
 		Check,
 		X,
-		Trash2,
-		MoreHorizontal,
+		Trash,
+		Ellipsis,
 		EyeOff,
 		ChevronRight,
 		Tags,
@@ -24,8 +24,8 @@
 		Square,
 		GitBranch,
 		Rocket,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
@@ -542,7 +542,7 @@
 							aria-label="Save description"
 						>
 							{#if savingDescription}
-								<Loader2 class="animate-spin" />
+								<Loader class="animate-spin" />
 							{:else}
 								<Check />
 							{/if}
@@ -639,7 +639,7 @@
 						<DropdownMenuTrigger>
 							{#snippet child({ props })}
 								<Button {...props} variant="outline" size="icon" aria-label="More actions">
-									<MoreHorizontal />
+									<Ellipsis />
 								</Button>
 							{/snippet}
 						</DropdownMenuTrigger>
@@ -656,7 +656,7 @@
 							<PermissionGate allowed={canDeleteRepo}>
 								<DropdownMenuSeparator />
 								<DropdownMenuItem variant="destructive" onclick={() => (deleteRepoOpen = true)}>
-									<Trash2 />Delete repository
+									<Trash />Delete repository
 								</DropdownMenuItem>
 							</PermissionGate>
 						</DropdownMenuContent>
@@ -802,7 +802,7 @@
 							onclick={saveMirrorSettings}
 							disabled={savingMirror || !mirrorForm.upstream.trim()}
 						>
-							{#if savingMirror}<Loader2 class="animate-spin" />{/if}
+							{#if savingMirror}<Loader class="animate-spin" />{/if}
 							{savingMirror ? 'Validating' : 'Save changes'}
 						</Button>
 					</div>
@@ -957,7 +957,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDeleteRepo}
 	loading={deletingRepo}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		This permanently deletes <strong>{namespace}/{name}</strong> and all its tags and images.

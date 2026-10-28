@@ -3,7 +3,7 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
-	import { GitBranch, Loader2 } from '@lucide/svelte';
+	import { GitBranch, Loader } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';
@@ -97,7 +97,7 @@
 			<Skeleton class="h-64 w-full rounded-lg" />
 			{#if redirecting}
 				<p class="flex items-center gap-2 text-sm text-muted-foreground">
-					<Loader2 class="size-3.5 animate-spin" />Looking up {namespace}/{name}
+					<Loader class="size-3.5 animate-spin" />Looking up {namespace}/{name}
 				</p>
 			{/if}
 		</div>

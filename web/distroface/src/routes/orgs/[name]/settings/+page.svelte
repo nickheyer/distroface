@@ -12,7 +12,7 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import OrgSettingsManager from '$lib/components/org-settings-manager.svelte';
-	import { Save, Trash2, ArrowRightLeft, Loader2 } from '@lucide/svelte';
+	import { Save, Trash, ArrowLeftRight, Loader } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
@@ -96,7 +96,7 @@
 			{#snippet footer()}
 				<Button onclick={saveOrg} disabled={savingOrg}>
 					{#if savingOrg}
-						<Loader2 class="animate-spin" />
+						<Loader class="animate-spin" />
 						Saving
 					{:else}
 						<Save />
@@ -118,7 +118,7 @@
 						</p>
 					</div>
 					<Button variant="outline-destructive" class="shrink-0" href={transferHref}>
-						<ArrowRightLeft />
+						<ArrowLeftRight />
 						Transfer
 					</Button>
 				</div>
@@ -135,7 +135,7 @@
 							class="shrink-0"
 							onclick={() => (deleteOrgOpen = true)}
 						>
-							<Trash2 />
+							<Trash />
 							Delete
 						</Button>
 					</div>
@@ -151,7 +151,7 @@
 	confirmLabel="Delete"
 	onConfirm={confirmDeleteOrg}
 	loading={deletingOrg}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Deletes <strong>{orgName}</strong> and every repository and artifact under it, permanently.

@@ -14,10 +14,10 @@
 		ShieldAlert,
 		ShieldCheck,
 		ShieldX,
-		Loader2,
+		Loader,
 		MessageSquarePlus,
-		GitCommitHorizontal
-	} from '@lucide/svelte';
+		GitCommit
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -381,7 +381,7 @@
 						{/if}
 						{#if session.resultCommits.length > 0}
 							<span class="inline-flex items-center gap-1 text-muted-foreground"
-								><GitCommitHorizontal class="size-3.5" />{session.resultCommits.length} commit{session
+								><GitCommit class="size-3.5" />{session.resultCommits.length} commit{session
 									.resultCommits.length === 1
 									? ''
 									: 's'}</span
@@ -404,7 +404,7 @@
 							</Button>
 						{:else}
 							<Button variant="outline" onclick={rerun} disabled={!!busy}>
-								{#if busy === 'rerun'}<Loader2 class="animate-spin" />{:else}<RotateCcw />{/if}
+								{#if busy === 'rerun'}<Loader class="animate-spin" />{:else}<RotateCcw />{/if}
 								Run again
 							</Button>
 						{/if}
@@ -445,16 +445,15 @@
 							/>
 							<div class="flex flex-wrap items-center gap-2">
 								<Button onclick={() => resolveApproval(true)} disabled={!!busy}>
-									{#if busy === 'approve'}<Loader2 class="animate-spin" />{:else}<ShieldCheck
-										/>{/if}
+									{#if busy === 'approve'}<Loader class="animate-spin" />{:else}<ShieldCheck />{/if}
 									Approve
 								</Button>
 								<Button variant="outline" onclick={() => resolveApproval(false)} disabled={!!busy}>
-									{#if busy === 'reject'}<Loader2 class="animate-spin" />{:else}<ShieldX />{/if}
+									{#if busy === 'reject'}<Loader class="animate-spin" />{:else}<ShieldX />{/if}
 									Reject and continue
 								</Button>
 								<Button variant="ghost-muted" onclick={rejectAndStop} disabled={!!busy}>
-									{#if busy === 'stop'}<Loader2 class="animate-spin" />{:else}<Ban />{/if}
+									{#if busy === 'stop'}<Loader class="animate-spin" />{:else}<Ban />{/if}
 									Reject and stop
 								</Button>
 							</div>
@@ -481,7 +480,7 @@
 					/>
 					<div class="mt-2 flex justify-end">
 						<Button onclick={sendFollowUp} disabled={!!busy || !followUp.trim()}>
-							{#if busy === 'continue'}<Loader2 class="animate-spin" />{:else}<Bot />{/if}
+							{#if busy === 'continue'}<Loader class="animate-spin" />{:else}<Bot />{/if}
 							Continue session
 						</Button>
 					</div>

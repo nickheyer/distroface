@@ -2,19 +2,19 @@
 	import { resolve } from '$app/paths';
 	import {
 		Plus,
-		MoreHorizontal,
+		Ellipsis,
 		Pencil,
-		Trash2,
+		Trash,
 		ArrowLeft,
 		ArrowRight,
 		Star,
 		X,
 		CircleDot,
-		CircleCheck,
+		CheckCircle,
 		GitPullRequest,
 		Search,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
@@ -405,7 +405,7 @@
 							>Cancel</Button
 						>
 						<Button size="sm" onclick={saveRename} disabled={columnBusy || !renameTitle.trim()}>
-							{#if columnBusy}<Loader2 class="animate-spin" />{/if}
+							{#if columnBusy}<Loader class="animate-spin" />{/if}
 							{columnBusy ? 'Saving' : 'Save'}
 						</Button>
 					</div>
@@ -443,7 +443,7 @@
 											{...props}
 											variant="ghost-muted"
 											size="icon-xs"
-											aria-label="Column actions"><MoreHorizontal /></Button
+											aria-label="Column actions"><Ellipsis /></Button
 										>
 									{/snippet}
 								</DropdownMenuTrigger>
@@ -473,7 +473,7 @@
 											deleteColumnOpen = true;
 										}}
 									>
-										<Trash2 />Delete column
+										<Trash />Delete column
 									</DropdownMenuItem>
 								</DropdownMenuContent>
 							</DropdownMenu>
@@ -497,7 +497,7 @@
 								if (e.key === 'Escape') closeAdd();
 							}}
 						/>
-						{#if addLoading}<Loader2
+						{#if addLoading}<Loader
 								class="absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 animate-spin text-muted-foreground"
 							/>{/if}
 					</div>
@@ -554,7 +554,7 @@
 										: 'text-success'}"
 								/>
 							{:else if card.state === 'closed'}
-								<CircleCheck class="mt-0.5 size-3.5 shrink-0 text-done" />
+								<CheckCircle class="mt-0.5 size-3.5 shrink-0 text-done" />
 							{:else}
 								<CircleDot class="mt-0.5 size-3.5 shrink-0 text-success" />
 							{/if}
@@ -650,7 +650,7 @@
 	confirmLabel="Delete"
 	onConfirm={deleteColumn}
 	loading={deletingColumn}
-	icon={Trash2}
+	icon={Trash}
 >
 	{#snippet description()}
 		Cards in <strong>{deleteColumnTarget?.title}</strong> move to the default column.

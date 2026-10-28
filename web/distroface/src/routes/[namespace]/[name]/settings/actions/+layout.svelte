@@ -6,7 +6,7 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
-	import { Info } from '@lucide/svelte';
+	import { Info } from '$lib/icons';
 
 	let { children } = $props();
 

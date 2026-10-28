@@ -10,7 +10,7 @@
 		Info,
 		Play,
 		ListChecks
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';

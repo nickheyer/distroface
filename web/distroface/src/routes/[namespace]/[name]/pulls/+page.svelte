@@ -7,13 +7,13 @@
 		GitPullRequestClosed,
 		GitMerge,
 		MessageSquare,
-		CheckCircle2,
+		CheckCircle,
 		XCircle,
 		Clock,
 		Plus,
 		Lock,
 		GitPullRequestDraft
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -133,7 +133,7 @@
 		if (latest.some((r) => r.state === ReviewState.CHANGES_REQUESTED))
 			return { icon: XCircle, color: 'text-destructive', title: 'Changes requested' };
 		if (latest.some((r) => r.state === ReviewState.APPROVED))
-			return { icon: CheckCircle2, color: 'text-success', title: 'Approved' };
+			return { icon: CheckCircle, color: 'text-success', title: 'Approved' };
 		if (p.reviewRequests.some((r) => !r.fulfilled))
 			return { icon: Clock, color: 'text-warning', title: 'Review requested' };
 		return null;
@@ -142,7 +142,7 @@
 	function checksIcon(p: PullRequest) {
 		switch (p.status) {
 			case CommitStatusState.SUCCESS:
-				return { icon: CheckCircle2, color: 'text-success', title: 'Checks passed' };
+				return { icon: CheckCircle, color: 'text-success', title: 'Checks passed' };
 			case CommitStatusState.FAILURE:
 			case CommitStatusState.ERROR:
 				return { icon: XCircle, color: 'text-destructive', title: 'Checks failed' };

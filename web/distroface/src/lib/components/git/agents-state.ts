@@ -1,5 +1,5 @@
 import type { Component } from 'svelte';
-import { Code, MessageSquare, SearchCheck, Tags, Wrench } from '@lucide/svelte';
+import { Code, MessageSquare, SearchCheck, Tags, Wrench } from '$lib/icons';
 import {
 	AgentApprovalPolicy,
 	AgentKind,

@@ -2,18 +2,18 @@
 	import { resolve } from '$app/paths';
 	import {
 		CircleDot,
-		CircleCheck,
+		CheckCircle,
 		GitPullRequest,
 		GitPullRequestDraft,
 		GitMerge,
 		GitCommit,
 		GitBranch,
 		Tag,
-		CalendarDays,
-		CheckCircle2,
+		Calendar,
+		CheckCircle as CheckCircle2,
 		XCircle,
 		Clock
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import LabelChip from '$lib/components/git/label-chip.svelte';
@@ -207,7 +207,7 @@
 			if (i.pull?.draft) return GitPullRequestDraft;
 			return GitPullRequest;
 		}
-		return i.state === IssueState.CLOSED ? CircleCheck : CircleDot;
+		return i.state === IssueState.CLOSED ? CheckCircle : CircleDot;
 	}
 
 	function issueTone(i: Issue): string {
@@ -301,7 +301,7 @@
 					<p class="truncate text-xs text-muted-foreground">@{u.username}</p>
 					{#if u.createdAt}
 						<p class="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
-							<CalendarDays class="size-3" />Joined {relativeTime(timestampDate(u.createdAt))}
+							<Calendar class="size-3" />Joined {relativeTime(timestampDate(u.createdAt))}
 						</p>
 					{/if}
 				</div>

@@ -9,7 +9,7 @@
 		Rocket,
 		Eye,
 		SmilePlus
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import { badgeVariants } from '$lib/components/ui/badge';

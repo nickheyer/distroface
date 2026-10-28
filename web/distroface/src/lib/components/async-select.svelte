@@ -2,7 +2,7 @@
 	import { SvelteMap } from 'svelte/reactivity';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Check, ChevronsUpDown, X, Loader2, Search } from '@lucide/svelte';
+	import { Check, ChevronsUpDown, X, Loader, Search } from '$lib/icons';
 	import { cn } from '$lib/utils';
 
 	type Option = { value: string; label: string; description?: string };
@@ -207,7 +207,7 @@
 			{/if}
 			{#if loading}
 				<div class="flex items-center justify-center py-3">
-					<Loader2 class="size-4 animate-spin text-muted-foreground" />
+					<Loader class="size-4 animate-spin text-muted-foreground" />
 				</div>
 			{/if}
 		</div>

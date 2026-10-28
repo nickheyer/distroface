@@ -1,17 +1,17 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import {
-		Settings2,
+		Sliders,
 		X,
 		RotateCcw,
 		Ban,
-		Loader2,
+		Loader,
 		Users,
 		Clock,
-		CheckCircle2,
+		CheckCircle,
 		XCircle,
 		MessageSquare
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
@@ -167,7 +167,7 @@
 		if (r.dismissed) return Ban;
 		switch (r.state) {
 			case ReviewState.APPROVED:
-				return CheckCircle2;
+				return CheckCircle;
 			case ReviewState.CHANGES_REQUESTED:
 				return XCircle;
 			default:
@@ -216,7 +216,7 @@
 							title="Request reviewers"
 							aria-label="Request reviewers"
 						>
-							<Settings2 />
+							<Sliders />
 						</Button>
 					{/snippet}
 				</PopoverTrigger>
@@ -227,7 +227,7 @@
 					<div class="flex justify-end gap-2">
 						<Button variant="outline" onclick={() => (pickerOpen = false)}>Cancel</Button>
 						<Button onclick={request} disabled={saving || selected.length === 0}>
-							{#if saving}<Loader2 class="animate-spin" />{/if}
+							{#if saving}<Loader class="animate-spin" />{/if}
 							Request
 						</Button>
 					</div>

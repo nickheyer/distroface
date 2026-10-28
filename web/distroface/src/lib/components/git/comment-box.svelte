@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { Bold, Italic, Code, Link, List, ListChecks, Quote, Loader2 } from '@lucide/svelte';
+	import { Bold, Italic, Code, Link, List, ListChecks, Quote, Loader } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import Markdown from '$lib/components/git/markdown.svelte';
 	import RefSuggest from '$lib/components/git/ref-suggest.svelte';
@@ -164,7 +164,7 @@
 			{#if !hideSubmit}
 				<Button onclick={() => void onSubmit()} disabled={!canSubmit}>
 					{#if submitting}
-						<Loader2 class="animate-spin" />
+						<Loader class="animate-spin" />
 					{/if}
 					{submitting ? 'Saving' : submitLabel}
 				</Button>

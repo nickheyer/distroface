@@ -11,7 +11,7 @@
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import GitRepoCard from '$lib/components/git/git-repo-card.svelte';
-	import { GitFork } from '@lucide/svelte';
+	import { GitFork } from '$lib/icons';
 	import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');

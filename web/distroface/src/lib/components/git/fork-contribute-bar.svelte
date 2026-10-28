@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { GitPullRequest, GitCompare, Loader2 } from '@lucide/svelte';
+	import { GitPullRequest, GitCompare, Loader } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -73,7 +73,7 @@
 		<span class="min-w-0 flex-1">
 			{#if loading}
 				<span class="inline-flex items-center gap-1.5 text-muted-foreground"
-					><Loader2 class="size-3.5 animate-spin" />Comparing with upstream</span
+					><Loader class="size-3.5 animate-spin" />Comparing with upstream</span
 				>
 			{:else if failed || !result}
 				<span class="text-muted-foreground">

@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { FileX } from '@lucide/svelte';
+	import { FileX } from '$lib/icons';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import RefPicker from '$lib/components/git/ref-picker.svelte';

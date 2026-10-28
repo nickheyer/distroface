@@ -14,7 +14,7 @@
 		Image,
 		Table,
 		Minus,
-		Heading2,
+		Heading as Heading2,
 		CircleHelp,
 		Hash,
 		BookOpen,
@@ -22,8 +22,8 @@
 		Pencil,
 		Plus,
 		Search,
-		Loader2
-	} from '@lucide/svelte';
+		Loader
+	} from '$lib/icons';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import Markdown from '$lib/components/git/markdown.svelte';
@@ -363,7 +363,7 @@
 									placeholder="Find a page"
 									bind:value={pageQuery}
 								/>
-								{#if pagesLoading}<Loader2
+								{#if pagesLoading}<Loader
 										class="size-3.5 animate-spin text-muted-foreground"
 									/>{/if}
 							</div>
@@ -429,9 +429,7 @@
 										);
 								}}
 							/>
-							{#if issuesLoading}<Loader2
-									class="size-3.5 animate-spin text-muted-foreground"
-								/>{/if}
+							{#if issuesLoading}<Loader class="size-3.5 animate-spin text-muted-foreground" />{/if}
 						</div>
 						<div class="max-h-64 overflow-y-auto py-1">
 							{#if !issuesLoading && issues.length === 0}

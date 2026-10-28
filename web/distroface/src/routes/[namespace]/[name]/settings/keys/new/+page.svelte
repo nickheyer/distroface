@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { Button } from '$lib/components/ui/button';
@@ -120,7 +120,7 @@
 
 	{#snippet footer()}
 		<Button onclick={add} disabled={adding || !title.trim() || !keyLooksValid}>
-			{#if adding}<Loader2 class="animate-spin" />{/if}
+			{#if adding}<Loader class="animate-spin" />{/if}
 			{adding ? 'Adding' : 'Add key'}
 		</Button>
 		<Button variant="ghost-muted" href={listHref}>Cancel</Button>

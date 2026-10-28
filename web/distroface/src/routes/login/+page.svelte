@@ -10,7 +10,7 @@
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { toast } from 'svelte-sonner';
-	import { Shield, Globe, ArrowRight, Loader2 } from '@lucide/svelte';
+	import { Shield, Globe, ArrowRight, Loader } from '$lib/icons';
 	import PasswordInput from '$lib/components/password-input.svelte';
 	import PasswordStrength from '$lib/components/password-strength.svelte';
 
@@ -221,7 +221,7 @@
 		<div class="mb-6 text-center">
 			{#if portalStore.isPortal}
 				<div class="mb-5 inline-flex items-center gap-3">
-					<img src="/adaptive-icon.png" alt={portalStore.displayName} class="size-9 rounded-lg" />
+					<img src="/adaptive-icon.png" alt={portalStore.displayName} class="h-9 w-auto" />
 					<div class="h-8 w-px bg-border"></div>
 					<div class="text-left leading-tight">
 						<div class="flex items-center gap-2">
@@ -235,7 +235,7 @@
 					</div>
 				</div>
 			{:else}
-				<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 size-10 rounded-lg" />
+				<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 h-10 w-auto" />
 			{/if}
 			{#if processingOidc}
 				<h1 class="text-xl font-semibold tracking-tight">Signing you in</h1>
@@ -249,7 +249,7 @@
 		<div class="rounded-lg border bg-card p-6 shadow-sm">
 			{#if processingOidc}
 				<div class="flex flex-col items-center justify-center py-10">
-					<Loader2 class="mb-3 size-5 animate-spin text-muted-foreground" />
+					<Loader class="mb-3 size-5 animate-spin text-muted-foreground" />
 					<p class="text-sm text-muted-foreground">Please wait</p>
 				</div>
 			{:else}
@@ -337,7 +337,7 @@
 						</div>
 						<Button type="submit" size="lg" class="mt-2 w-full" disabled={isSubmitting}>
 							{#if isSubmitting}
-								<Loader2 class="animate-spin" />
+								<Loader class="animate-spin" />
 								Signing in
 							{:else}
 								Sign in
@@ -386,11 +386,23 @@
 			{/if}
 		</div>
 
-		<p class="mt-8 text-center text-2xs text-muted-foreground/70">
+		<p class="mt-4 text-center text-2xs text-muted-foreground/70">
 			{#if portalStore.isPortal}
-				Portal managed by {portalStore.displayName} &middot; Powered by Distroface
+				Portal managed by {portalStore.displayName} &middot; Powered by
+				<a
+					href="https://github.com/nickheyer/distroface"
+					target="_blank"
+					rel="noopener noreferrer"
+					class="underline-offset-2 hover:text-foreground hover:underline">Distroface</a
+				>
 			{:else}
-				Distroface &middot; Container image registry
+				<a
+					href="https://github.com/nickheyer/distroface"
+					target="_blank"
+					rel="noopener noreferrer"
+					class="underline-offset-2 hover:text-foreground hover:underline">DistroFace</a
+				>
+				&middot; Blob Distribution & Storage
 			{/if}
 		</p>
 	</div>
@@ -504,7 +516,7 @@
 		</FormField>
 		<Button type="submit" size="lg" class="mt-2 w-full" disabled={isSubmitting}>
 			{#if isSubmitting}
-				<Loader2 class="animate-spin" />
+				<Loader class="animate-spin" />
 				Creating account
 			{:else if authStore.firstUserSetup}
 				Create admin account

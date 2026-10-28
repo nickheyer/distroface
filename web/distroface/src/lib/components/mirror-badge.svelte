@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Badge } from '$lib/components/ui/badge';
-	import { HardDriveDownload, AlertTriangle, RefreshCw } from '@lucide/svelte';
+	import { HardDriveDownload, AlertTriangle, RefreshCw } from '$lib/icons';
 
 	let {
 		label,

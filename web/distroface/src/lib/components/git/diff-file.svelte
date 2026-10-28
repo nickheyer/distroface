@@ -123,7 +123,7 @@
 </script>
 
 <script lang="ts">
-	import { ChevronUp, ChevronDown, UnfoldVertical, Loader2 } from '@lucide/svelte';
+	import { ChevronUp, ChevronDown, UnfoldVertical, Loader } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { DiffLineKind, DiffStatus } from '$lib/proto/distroface/v1/git_pb';
 	import type { DiffHunk } from '$lib/proto/distroface/v1/git_pb';
@@ -508,7 +508,7 @@
 					{#if canExpand}
 						<span class="diff-expand" aria-busy={busy}>
 							{#if busy}
-								<Loader2 class="size-3 animate-spin" />
+								<Loader class="size-3 animate-spin" />
 							{:else}
 								{#if stepped && !gap.leading}
 									<button
@@ -644,7 +644,7 @@
 		bind:this={sentinel}
 		class="flex items-center justify-center gap-2 border-t py-3 text-xs text-muted-foreground"
 	>
-		<Loader2 class="size-3.5 animate-spin" />
+		<Loader class="size-3.5 animate-spin" />
 		{remaining} more row{remaining !== 1 ? 's' : ''}
 	</div>
 {/if}

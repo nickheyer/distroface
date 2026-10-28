@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { History } from '@lucide/svelte';
+	import { History } from '$lib/icons';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import CommitBadge from './commit-badge.svelte';

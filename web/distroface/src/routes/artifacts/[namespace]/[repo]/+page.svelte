@@ -40,7 +40,7 @@
 		HardDriveDownload,
 		Lock,
 		Globe,
-		Loader2,
+		Loader,
 		Package,
 		Pencil,
 		Play,
@@ -51,14 +51,14 @@
 		Square,
 		Tag,
 		Tags,
-		Trash2,
+		Trash,
 		Upload,
 		User,
 		X,
 		GitBranch,
 		Rocket,
 		Workflow
-	} from '@lucide/svelte';
+	} from '$lib/icons';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import { rpcClient } from '$lib/api/rpc-client';
@@ -522,7 +522,7 @@
 								</FormField>
 								<div class="flex flex-wrap items-center gap-2">
 									<Button onclick={saveProps} disabled={savingProps}>
-										{#if savingProps}<Loader2 class="animate-spin" />{/if}
+										{#if savingProps}<Loader class="animate-spin" />{/if}
 										{savingProps ? 'Saving' : 'Save properties'}
 									</Button>
 									<Button variant="ghost-muted" onclick={closeEdit} disabled={savingProps}
@@ -544,7 +544,7 @@
 								</FormField>
 								<div class="flex flex-wrap items-center gap-2">
 									<Button onclick={saveRename} disabled={renaming || !renamePath.trim()}>
-										{#if renaming}<Loader2 class="animate-spin" />{/if}
+										{#if renaming}<Loader class="animate-spin" />{/if}
 										{renaming ? 'Saving' : 'Save changes'}
 									</Button>
 									<Button variant="ghost-muted" onclick={closeEdit} disabled={renaming}
@@ -624,7 +624,7 @@
 										aria-label="Delete"
 										onclick={() => openDelete(artifact)}
 									>
-										<Trash2 />
+										<Trash />
 									</Button>
 								{/if}
 							</div>

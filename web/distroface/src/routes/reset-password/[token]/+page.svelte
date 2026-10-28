@@ -4,7 +4,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Alert, AlertDescription } from '$lib/components/ui/alert';
 	import FormField from '$lib/components/form-field.svelte';
-	import { ArrowRight, AlertTriangle, Loader2, Lock, CircleCheck } from '@lucide/svelte';
+	import { ArrowRight, AlertTriangle, Loader, Lock, CheckCircle } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { errText } from '$lib/act.svelte';
 	import PasswordInput from '$lib/components/password-input.svelte';
@@ -61,7 +61,7 @@
 <div class="flex min-h-screen items-center justify-center bg-muted/40 p-4">
 	<div class="w-full max-w-sm">
 		<div class="mb-6 text-center">
-			<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 size-10 rounded-lg" />
+			<img src="/adaptive-icon.png" alt="Distroface" class="mx-auto mb-5 h-10 w-auto" />
 			<h1 class="text-xl font-semibold tracking-tight">
 				{done ? 'Password updated' : 'Choose a new password'}
 			</h1>
@@ -75,7 +75,7 @@
 		<div class="rounded-lg border bg-card p-6 shadow-sm">
 			{#if done}
 				<div class="flex flex-col items-center py-2 text-center">
-					<CircleCheck class="mb-4 size-6 text-success" />
+					<CheckCircle class="mb-4 size-6 text-success" />
 					<Button size="lg" class="w-full" href={resolve('/login')}>
 						Sign in
 						<ArrowRight />
@@ -137,7 +137,7 @@
 						disabled={saving || !newPassword || !confirmPassword}
 					>
 						{#if saving}
-							<Loader2 class="animate-spin" />
+							<Loader class="animate-spin" />
 							Updating password
 						{:else}
 							<Lock />

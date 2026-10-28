@@ -13,7 +13,7 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import CertMaterialRow from '$lib/components/cert-material-row.svelte';
 	import CertUploadPanel from '$lib/components/cert-upload-panel.svelte';
-	import { Loader2 } from '@lucide/svelte';
+	import { Loader } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { Act, errText } from '$lib/act.svelte';
@@ -351,7 +351,7 @@
 													onclick={() => setAcmeEnabled(true)}
 												>
 													{#if acmeSwitchAct.busy}
-														<Loader2 class="animate-spin" />
+														<Loader class="animate-spin" />
 													{:else}
 														Turn on ACME
 													{/if}
@@ -366,7 +366,7 @@
 													onclick={issueApp}
 												>
 													{#if issueAppAct.busy}
-														<Loader2 class="animate-spin" />
+														<Loader class="animate-spin" />
 													{:else}
 														{primaryHealth.issued ? 'Renew certificate' : 'Issue certificate'}
 													{/if}

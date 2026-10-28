@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { Loader2, Pencil } from '@lucide/svelte';
+	import { Loader, Pencil } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -105,7 +105,7 @@
 
 		{#snippet footer()}
 			<Button variant="destructive" onclick={rename} disabled={renaming || !nameValid}>
-				{#if renaming}<Loader2 class="animate-spin" />{/if}
+				{#if renaming}<Loader class="animate-spin" />{/if}
 				{renaming ? 'Renaming' : 'Rename repository'}
 			</Button>
 			<Button variant="ghost-muted" href={dangerHref}>Cancel</Button>

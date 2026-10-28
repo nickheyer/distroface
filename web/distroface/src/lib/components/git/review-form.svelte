@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Loader2, MessageSquareText, ChevronDown } from '@lucide/svelte';
+	import { Loader, MessageSquare, ChevronDown } from '$lib/icons';
 	import { Popover, PopoverContent, PopoverTrigger } from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -144,7 +144,7 @@
 	<PopoverTrigger>
 		{#snippet child({ props })}
 			<Button {...props} {disabled}>
-				<MessageSquareText />
+				<MessageSquare />
 				Review changes
 				{#if pendingCount > 0}
 					<Badge variant="secondary" class="tabular-nums">{pendingCount}</Badge>
@@ -195,12 +195,12 @@
 					onclick={() => (discardOpen = true)}
 					disabled={discarding || submitting}
 				>
-					{#if discarding}<Loader2 class="animate-spin" />{/if}
+					{#if discarding}<Loader class="animate-spin" />{/if}
 					Discard pending
 				</Button>
 			{/if}
 			<Button class="ml-auto" onclick={submit} disabled={!canSubmit}>
-				{#if submitting}<Loader2 class="animate-spin" />{/if}
+				{#if submitting}<Loader class="animate-spin" />{/if}
 				Submit review
 			</Button>
 		</div>
