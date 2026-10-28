@@ -357,7 +357,12 @@ git push -u origin {ref || 'main'}</pre>
 						</a>
 					</div>
 					<div class="overflow-x-auto px-4 py-4 sm:px-6 sm:py-5">
-						<Markdown source={readmeText} baseHref={readmeBase} rawBase={readmeRaw} />
+						<Markdown
+							source={readmeText}
+							baseHref={readmeBase}
+							rawBase={readmeRaw}
+							class="markdown-readme"
+						/>
 					</div>
 				</div>
 			{/if}

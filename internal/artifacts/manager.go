@@ -18,6 +18,9 @@ import (
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
+// Property flagging an artifact as a release asset of the linked git repository
+const ReleaseProperty = "release"
+
 // Resolved retention rules for a single repo
 type RetentionPolicy struct {
 	Enabled       bool

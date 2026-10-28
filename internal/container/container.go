@@ -16,6 +16,7 @@ import (
 
 	"github.com/distribution/distribution/v3/registry/handlers"
 	"github.com/nickheyer/distroface/internal/actions"
+	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/agents"
 	"github.com/nickheyer/distroface/internal/artifacts"
@@ -295,7 +296,12 @@ func New() (*App, error) {
 	registry.SetImageRecorder(actionsManager)
 	registry.SetJobChecker(actionsManager)
 	mailService.SetInboundHandler(forgeManager.HandleInboundMail)
-	gitManager.Subscribe(forgeManager.OnRefUpdate, actionsManager.OnRefUpdate, mirrorMonitor.OnRefUpdate)
+	activityRecorder := activity.NewRecorder(store, log)
+	activityRecorder.SetGit(gitManager)
+	activityRecorder.Start(ctx)
+	forgeManager.SetActivity(activityRecorder.ForgeHook())
+	registry.SetActivityRecorder(activityRecorder)
+	gitManager.Subscribe(forgeManager.OnRefUpdate, actionsManager.OnRefUpdate, mirrorMonitor.OnRefUpdate, activityRecorder.OnRefUpdate)
 	if err := actionsManager.ResealLegacy(ctx); err != nil {
 		log.Error("resealing action secrets: %v", err)
 	}
@@ -355,6 +361,7 @@ func New() (*App, error) {
 		Runners:             runners,
 		AgentsManager:       agentsManager,
 		MailService:         mailService,
+		Activity:            activityRecorder,
 	})
 
 	// Embedded runner calls the handler directly, follows settings

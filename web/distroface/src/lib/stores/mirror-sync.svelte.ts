@@ -7,6 +7,8 @@ const RETRY_MS = 5000;
 // Live mirror sync state pushed from the server
 class MirrorSyncStore {
 	active = $state<Record<string, boolean>>({});
+	// Last start frame per running sync, names the repository behind a key
+	activeEvents = $state<Record<string, SyncEvent>>({});
 	lastFinished = $state<SyncEvent | null>(null);
 	finishedSeq = $state(0);
 	private running = false;
@@ -56,6 +58,7 @@ class MirrorSyncStore {
 				}
 			}
 			this.active = {};
+			this.activeEvents = {};
 			if (!this.running) break;
 			await new Promise((r) => setTimeout(r, RETRY_MS));
 		}
@@ -65,9 +68,11 @@ class MirrorSyncStore {
 		const key = `${ev.kind}:${ev.repoId}`;
 		if (ev.phase === SyncPhase.STARTED) {
 			this.active[key] = true;
+			this.activeEvents[key] = ev;
 			if (ev.message) this.messages[key] = ev.message;
 		} else if (ev.phase === SyncPhase.COMPLETED || ev.phase === SyncPhase.FAILED) {
 			delete this.active[key];
+			delete this.activeEvents[key];
 			delete this.messages[key];
 			this.lastFinished = ev;
 			this.finishedSeq++;

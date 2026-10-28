@@ -3,6 +3,20 @@ import type { Permission, User } from '$lib/proto/distroface/v1/types_pb';
 
 const SESSION_KEY = 'distroface_session';
 
+// Thirty days, the server validates the token on every use anyway
+const COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
+
+// Browser loads of raw files, archives, and avatars carry no bearer header
+function writeSessionCookie(token: string | null) {
+	if (typeof document === 'undefined') return;
+	const secure = location.protocol === 'https:' ? '; Secure' : '';
+	if (token) {
+		document.cookie = `${SESSION_KEY}=${token}; Path=/; Max-Age=${COOKIE_MAX_AGE}; SameSite=Strict${secure}`;
+	} else {
+		document.cookie = `${SESSION_KEY}=; Path=/; Max-Age=0; SameSite=Strict${secure}`;
+	}
+}
+
 function checkPermission(
 	permissions: Permission[],
 	resource: string,
@@ -111,6 +125,7 @@ class AuthStore {
 			const resp = await rpcClient.auth.getCurrentUser({}, silentCallOptions);
 			this.user = resp.user ?? null;
 			this.permissions = resp.permissions;
+			writeSessionCookie(this.token);
 		} catch {
 			this.clearSession();
 		} finally {
@@ -126,6 +141,7 @@ class AuthStore {
 	setToken(token: string) {
 		this.token = token;
 		localStorage.setItem(SESSION_KEY, token);
+		writeSessionCookie(token);
 	}
 
 	async login(identifier: string, password: string) {
@@ -169,6 +185,7 @@ class AuthStore {
 		this.user = user;
 		this.permissions = permissions;
 		localStorage.setItem(SESSION_KEY, token);
+		writeSessionCookie(token);
 	}
 
 	private clearSession() {
@@ -176,6 +193,12 @@ class AuthStore {
 		this.user = null;
 		this.permissions = [];
 		localStorage.removeItem(SESSION_KEY);
+		writeSessionCookie(null);
+	}
+
+	// Swaps in a freshly returned user row, settings pages call it after edits
+	applyUser(user: User | undefined) {
+		if (user) this.user = user;
 	}
 }
 

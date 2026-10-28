@@ -23,6 +23,12 @@ export class OrgContext {
 		);
 	}
 
+	// Any role at all, settings shows the leave card for these
+	get isMember(): boolean {
+		const role = this.org?.currentUserRole;
+		return role !== undefined && role !== OrgRole.UNSPECIFIED;
+	}
+
 	get canDelete(): boolean {
 		const id = this.org?.id ?? '';
 		return (

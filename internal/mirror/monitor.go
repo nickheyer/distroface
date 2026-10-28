@@ -431,6 +431,14 @@ func (m *Monitor) execImageSync(ctx context.Context, repo *db.Repository, cfg *v
 	} else if syncErr != nil {
 		m.log.Error("mirror sync for image repo %s/%s: %v", repo.Namespace, repo.Name, syncErr)
 	}
+	// One shot copies settle into plain repositories
+	if state.ImportOnce && syncErr == nil {
+		if err := m.store.FinishRepositoryImport(statusCtx(ctx), repo.ID); err != nil {
+			m.log.Error("import finish for image repo %s: %v", repo.ID, err)
+		}
+		m.endSync(key, ev, nil)
+		return
+	}
 	if err := m.store.SetRepositoryMirrorStatus(statusCtx(ctx), repo.ID, time.Now().UTC(), msg, state.Encode()); err != nil {
 		m.log.Error("mirror status update for image repo %s: %v", repo.ID, err)
 	}
@@ -532,7 +540,7 @@ func (m *Monitor) syncArtifactRepo(ctx context.Context, repo *db.ArtifactReposit
 				errs = append(errs, fmt.Errorf("%s@%s exceeds the size limit", a.name, rel.version))
 				continue
 			}
-			if err := m.ingestAsset(ctx, repo, cfg, rel.version, a); err != nil {
+			if err := m.ingestAsset(ctx, repo, cfg, rel.version, a, mirrorAssetProps(repo, cfg)); err != nil {
 				errs = append(errs, fmt.Errorf("%s@%s: %w", a.name, rel.version, err))
 				// A rate limit taints every further request, stop now
 				if _, limited := RetryAfter(err); limited {
@@ -576,11 +584,23 @@ func describeEmptySync(listed, kept, attachments, badTags, badNames, unmatched i
 	}
 }
 
+// Properties stamped on mirrored assets, linked packages flag them as release assets
+func mirrorAssetProps(repo *db.ArtifactRepository, cfg *v1.MirrorConfig) map[string]string {
+	props := map[string]string{
+		"mirror.source":   sourceLabel(repo.Type),
+		"mirror.upstream": cfg.GetUpstream(),
+	}
+	if repo.GitRepoID != nil && *repo.GitRepoID != "" {
+		props[artifacts.ReleaseProperty] = "true"
+	}
+	return props
+}
+
 // Streams one upstream asset into the blob store as an artifact
-func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, cfg *v1.MirrorConfig, version string, a asset) error {
+func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, cfg *v1.MirrorConfig, version string, a asset, props map[string]string) error {
 	var lastErr error
 	for _, src := range a.sources {
-		err := m.downloadAsset(ctx, repo, cfg, version, a, src)
+		err := m.downloadAsset(ctx, repo, version, a, src, props)
 		if err == nil {
 			return nil
 		}
@@ -604,7 +624,7 @@ func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, 
 	return lastErr
 }
 
-func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository, cfg *v1.MirrorConfig, version string, a asset, src assetSource) error {
+func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository, version string, a asset, src assetSource, props map[string]string) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.url, nil)
 	if err != nil {
 		return err
@@ -636,10 +656,6 @@ func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository
 	}
 
 	meta, _ := json.Marshal(map[string]string{"mirror_url": src.url})
-	props := map[string]string{
-		"mirror.source":   sourceLabel(repo.Type),
-		"mirror.upstream": cfg.GetUpstream(),
-	}
 	_, err = m.artifacts.CompleteUpload(ctx, repo, uploadID, version, a.name, string(meta), props)
 	return err
 }

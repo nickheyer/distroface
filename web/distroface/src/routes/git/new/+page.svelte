@@ -106,9 +106,12 @@
 		username: '',
 		authToken: '',
 		metadata: true,
+		releases: true,
 		wiki: true,
 		lfs: true
 	});
+	let newImportPackages = $state(false);
+	let newImportImages = $state('');
 	let newTemplate = $state('');
 	let newIncludeLabels = $state(true);
 	let creating = $state(false);
@@ -185,8 +188,15 @@
 								username: newImport.username.trim(),
 								...(newImport.authToken ? { authToken: newImport.authToken } : {}),
 								metadata: newImport.metadata,
+								releases: newImport.releases,
 								wiki: newImport.wiki,
-								lfs: newImport.lfs
+								lfs: newImport.lfs,
+								images: newImportPackages
+									? newImportImages
+											.split(/\n+/)
+											.map((s) => s.trim())
+											.filter(Boolean)
+									: []
 							}
 						: undefined,
 					autoInit: createKind === 'standard' && newAutoInit,
@@ -501,12 +511,41 @@
 				description="Branches and tags always come over. Once the import finishes the repository is yours to push to."
 			>
 				<FormField
-					label="Issues, pull requests, labels, milestones, and releases"
+					label="Issues, pull requests, labels, and milestones"
 					layout="toggle"
 					help="Needs a GitHub, GitLab, Gitea, or Forgejo upstream, skipped anywhere else"
 				>
 					<Switch bind:checked={newImport.metadata} />
 				</FormField>
+				<FormField
+					label="Releases and their assets"
+					layout="toggle"
+					help="Release notes land on the releases page, uploaded assets are copied once into a linked artifact package"
+				>
+					<Switch bind:checked={newImport.releases} />
+				</FormField>
+				<FormField
+					label="Container images"
+					layout="toggle"
+					help="Copies upstream images once into linked image repositories, they stand alone afterwards"
+				>
+					<Switch bind:checked={newImportPackages} />
+				</FormField>
+				{#if newImportPackages}
+					<FormField
+						label="Image references"
+						id="git-repo-import-images"
+						help="One upstream image per line, such as ghcr.io/owner/app"
+					>
+						<Textarea
+							id="git-repo-import-images"
+							bind:value={newImportImages}
+							rows={3}
+							class="font-mono"
+							placeholder="ghcr.io/owner/app"
+						/>
+					</FormField>
+				{/if}
 				<FormField
 					label="Wiki"
 					layout="toggle"

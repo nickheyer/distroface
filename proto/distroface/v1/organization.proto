@@ -253,6 +253,8 @@ message GetOrganizationResponse {
 // ListOrganizationsRequest supports pagination and name search.
 message ListOrganizationsRequest {
   PageRequest page = 1;
+  // Restricts the page to organizations this user belongs to
+  string username = 2;
 }
 
 // ListOrganizationsResponse contains a page of organizations.

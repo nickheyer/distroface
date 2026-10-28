@@ -150,9 +150,9 @@ func gitLoadExtras(ctx context.Context, store *stores.Store, user *auth.Authenti
 	}
 	ex := &gitRepoExtras{}
 	ex.topics, _ = store.GetGitTopics(ctx, ids)
-	ex.stars, _ = store.GetGitStarCounts(ctx, ids)
+	ex.stars, _ = store.StarCounts(ctx, storage.StarKindGit, ids)
 	if user != nil && !user.IsAnonymous() {
-		ex.starred, _ = store.GetGitStarredSet(ctx, user.ID, ids)
+		ex.starred, _ = store.StarredSet(ctx, user.ID, storage.StarKindGit, ids)
 	}
 	ex.issues, ex.pulls, _ = store.CountOpenGitIssues(ctx, ids)
 	ex.releases, _ = store.CountGitReleases(ctx, ids)

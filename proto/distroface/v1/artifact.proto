@@ -47,6 +47,13 @@ service ArtifactService {
   rpc SetArtifactProperties(SetArtifactPropertiesRequest) returns (SetArtifactPropertiesResponse) {}
   // DeleteArtifact removes an artifact (and its blob when unreferenced).
   rpc DeleteArtifact(DeleteArtifactRequest) returns (DeleteArtifactResponse) {}
+
+  // StarArtifactRepository stars a repository for the current user.
+  rpc StarArtifactRepository(StarArtifactRepositoryRequest) returns (StarArtifactRepositoryResponse) {}
+  // UnstarArtifactRepository removes the current user's star.
+  rpc UnstarArtifactRepository(UnstarArtifactRepositoryRequest) returns (UnstarArtifactRepositoryResponse) {}
+  // ListStarredArtifactRepositories returns repositories a user starred, newest star first.
+  rpc ListStarredArtifactRepositories(ListStarredArtifactRepositoriesRequest) returns (ListStarredArtifactRepositoriesResponse) {}
 }
 
 // CreateArtifactRepositoryRequest is the request to create an artifact repository.
@@ -293,3 +300,38 @@ message DeleteArtifactRequest {
 
 // DeleteArtifactResponse is the response after deleting an artifact.
 message DeleteArtifactResponse {}
+
+// StarArtifactRepositoryRequest identifies a repository.
+message StarArtifactRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// StarArtifactRepositoryResponse contains the new star count.
+message StarArtifactRepositoryResponse {
+  int64 star_count = 1;
+}
+
+// UnstarArtifactRepositoryRequest identifies a repository.
+message UnstarArtifactRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// UnstarArtifactRepositoryResponse contains the new star count.
+message UnstarArtifactRepositoryResponse {
+  int64 star_count = 1;
+}
+
+// ListStarredArtifactRepositoriesRequest pages one user's stars.
+message ListStarredArtifactRepositoriesRequest {
+  PageRequest page = 1;
+  // Empty lists the caller's stars
+  string username = 2;
+}
+
+// ListStarredArtifactRepositoriesResponse contains a page of starred repositories.
+message ListStarredArtifactRepositoriesResponse {
+  repeated ArtifactRepository repositories = 1;
+  PageInfo page = 2;
+}

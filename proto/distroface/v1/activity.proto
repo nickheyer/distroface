@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// ActivityService lists the event stream behind the home feed and profile pages.
+service ActivityService {
+  // ListActivity pages events of one feed, newest first.
+  rpc ListActivity(ListActivityRequest) returns (ListActivityResponse) {}
+}
+
+// Which events a feed collects
+enum ActivityFeed {
+  ACTIVITY_FEED_UNSPECIFIED = 0;
+  // Public events across the instance
+  ACTIVITY_FEED_PUBLIC = 1;
+  // The caller's namespaces, organizations, and starred or watched repositories
+  ACTIVITY_FEED_HOME = 2;
+  // Events the caller performed
+  ACTIVITY_FEED_MINE = 3;
+  // Events one user performed, actor names the user
+  ACTIVITY_FEED_ACTOR = 4;
+  // Events under one namespace, namespace names it
+  ACTIVITY_FEED_NAMESPACE = 5;
+}
+
+// What an event touched
+enum ActivityTargetKind {
+  ACTIVITY_TARGET_KIND_UNSPECIFIED = 0;
+  ACTIVITY_TARGET_KIND_GIT = 1;
+  ACTIVITY_TARGET_KIND_IMAGE = 2;
+  ACTIVITY_TARGET_KIND_ARTIFACT = 3;
+  ACTIVITY_TARGET_KIND_ORGANIZATION = 4;
+}
+
+// ActivityEvent is one thing someone did on the instance.
+message ActivityEvent {
+  string id = 1;
+  // push, branch, tag, image_push, artifact_upload, release, issue_opened, issue_closed, pull_opened, pull_merged, pull_closed, star, fork, created, joined
+  string kind = 2;
+  string actor = 3;
+  string actor_display_name = 4;
+  string actor_avatar_url = 5;
+  ActivityTargetKind target_kind = 6;
+  string namespace = 7;
+  string name = 8;
+  // Branch, tag, issue number, version, or image tag the event concerns
+  string subject = 9;
+  // Title or message shown under the headline
+  string summary = 10;
+  // Json object with kind specific extras such as commit counts
+  string detail = 11;
+  bool is_public = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+// ListActivityRequest selects a feed and pages it.
+message ListActivityRequest {
+  PageRequest page = 1;
+  // Unspecified behaves as public
+  ActivityFeed feed = 2;
+  // Username for the actor feed
+  string actor = 3;
+  // Namespace for the namespace feed
+  string namespace = 4;
+  // Empty keeps every kind
+  repeated string kinds = 5;
+}
+
+// ListActivityResponse contains a page of events.
+message ListActivityResponse {
+  repeated ActivityEvent events = 1;
+  PageInfo page = 2;
+}

@@ -986,6 +986,9 @@ func (m *Manager) dispatchIssue(ctx context.Context, repo *db.GitRepository, iss
 		}
 	}
 	m.git.DispatchGit(ctx, event, repo, payload)
+	if comment == nil {
+		m.recordActivity(ctx, ActivityEvent{Repo: repo, Actor: actor.User, Action: action, Issue: issue})
+	}
 }
 
 // Notifies participants and watchers about an issue action

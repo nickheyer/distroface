@@ -9,6 +9,7 @@ import (
 	"connectrpc.com/connect/v2/connecthttp"
 	"connectrpc.com/grpcreflect/v2"
 	"github.com/nickheyer/distroface/internal/actions"
+	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/admin"
 	"github.com/nickheyer/distroface/internal/agents"
 	"github.com/nickheyer/distroface/internal/artifacts"
@@ -67,6 +68,7 @@ type ServerDeps struct {
 	Runners             *runner.Registry
 	AgentsManager       *agents.Manager
 	MailService         *mailer.Service
+	Activity            *activity.Recorder // Nil keeps the feed quiet
 }
 
 // Largest request message any procedure accepts, uploads stream over plain http
@@ -144,23 +146,33 @@ func (s *Server) setupHandler() {
 		mux.Handle(ghapi.Prefix+"/", http.StripPrefix(ghapi.Prefix, ghapi.New(s.Store, s.AuthManager, s.GitManager, s.ForgeManager, s.ArtifactManager, s.Enforcer, s.Log)))
 	}
 
+	// Uploaded profile images, cached and public
+	mux.Handle("GET /api/avatars/{id}", s.avatarHandler())
+
 	// Register RPC services
 	distrofacev1connect.RegisterHealthServiceHandler(rpcServer, services.NewHealthService(s.Log))
 	distrofacev1connect.RegisterAuthServiceHandler(rpcServer, services.NewAuthService(s.Store, s.AuthManager, s.Enforcer, s.OIDCHandler, s.MailService, s.Log))
 	distrofacev1connect.RegisterUserServiceHandler(rpcServer, services.NewUserService(s.Store, s.AuthManager, s.Enforcer, s.GitManager, s.Log))
-	distrofacev1connect.RegisterRepositoryServiceHandler(rpcServer, services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.MirrorMonitor, s.GitManager, s.Log))
+	repoService := services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.MirrorMonitor, s.GitManager, s.Log)
+	repoService.SetActivity(s.Activity)
+	distrofacev1connect.RegisterRepositoryServiceHandler(rpcServer, repoService)
 	distrofacev1connect.RegisterSettingsServiceHandler(rpcServer, services.NewSettingsService(s.Store, s.Resolver, s.Enforcer, s.GitManager, s.GitSSH, s.Log))
 	distrofacev1connect.RegisterRoleServiceHandler(rpcServer, services.NewRoleService(s.Store, s.Enforcer, s.Log))
 	distrofacev1connect.RegisterTokenServiceHandler(rpcServer, services.NewTokenService(s.AuthManager, s.Enforcer, s.GitManager, s.Log))
-	distrofacev1connect.RegisterOrganizationServiceHandler(rpcServer, services.NewOrganizationService(s.Store, s.RegistryAccess, s.Enforcer, s.Resolver, s.GitManager, s.Log))
+	orgService := services.NewOrganizationService(s.Store, s.RegistryAccess, s.Enforcer, s.Resolver, s.GitManager, s.Log)
+	orgService.SetActivity(s.Activity)
+	distrofacev1connect.RegisterOrganizationServiceHandler(rpcServer, orgService)
 	distrofacev1connect.RegisterWebhookServiceHandler(rpcServer, services.NewWebhookService(s.Store, s.Enforcer, s.WebhookDispatcher, s.GitManager, s.Log))
+	distrofacev1connect.RegisterActivityServiceHandler(rpcServer, services.NewActivityService(s.Store, s.GitManager, s.Enforcer, s.Log))
 
 	if s.PortalService != nil {
 		distrofacev1connect.RegisterPortalServiceHandler(rpcServer, s.PortalService)
 	}
 
 	if s.ArtifactManager != nil {
-		distrofacev1connect.RegisterArtifactServiceHandler(rpcServer, services.NewArtifactService(s.Store, s.ArtifactManager, s.Enforcer, s.MirrorMonitor, s.GitManager, s.Log))
+		artifactService := services.NewArtifactService(s.Store, s.ArtifactManager, s.Enforcer, s.MirrorMonitor, s.GitManager, s.Log)
+		artifactService.SetActivity(s.Activity)
+		distrofacev1connect.RegisterArtifactServiceHandler(rpcServer, artifactService)
 	}
 
 	if s.MirrorMonitor != nil {
@@ -175,7 +187,9 @@ func (s *Server) setupHandler() {
 
 	// Git hosting and the forge features ride on the git manager
 	if s.GitManager != nil {
-		distrofacev1connect.RegisterGitServiceHandler(rpcServer, services.NewGitService(s.Store, s.GitManager, s.ForgeManager, s.MirrorMonitor, s.Enforcer, s.Log))
+		gitService := services.NewGitService(s.Store, s.GitManager, s.ForgeManager, s.MirrorMonitor, s.Enforcer, s.Log)
+		gitService.SetActivity(s.Activity)
+		distrofacev1connect.RegisterGitServiceHandler(rpcServer, gitService)
 		distrofacev1connect.RegisterGitRefServiceHandler(rpcServer, services.NewGitRefService(s.Store, s.GitManager, s.Log))
 		distrofacev1connect.RegisterGitFileServiceHandler(rpcServer, services.NewGitFileService(s.Store, s.GitManager, s.Log))
 		distrofacev1connect.RegisterWikiServiceHandler(rpcServer, services.NewWikiService(s.Store, s.GitManager, s.Log))

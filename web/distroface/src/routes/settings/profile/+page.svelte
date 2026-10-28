@@ -4,29 +4,27 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import UserAvatar from '$lib/components/user-avatar.svelte';
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
-	import { Save, Loader } from '$lib/icons';
+	import { Save, Loader, Upload, Trash } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
+
+	// Matches the server cap
+	const AVATAR_MAX_BYTES = 1024 * 1024;
 
 	let displayName = $state('');
 	let email = $state('');
 	let loading = $state(true);
 	let saving = $state(false);
+	let avatarBusy = $state(false);
+	let fileInput = $state<HTMLInputElement | null>(null);
 
-	function getInitials(): string {
-		const name = displayName || authStore.user?.username || '?';
-		return name
-			.split(/[\s-]+/)
-			.map((w) => w[0])
-			.join('')
-			.toUpperCase()
-			.slice(0, 2);
-	}
+	const isLocal = $derived(authStore.user?.authProvider === 'local');
+	const avatarUrl = $derived(authStore.user?.avatarUrl ?? '');
 
 	async function load() {
 		loading = true;
@@ -61,6 +59,41 @@
 		}
 	}
 
+	async function uploadAvatar(ev: Event) {
+		const input = ev.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		if (file.size > AVATAR_MAX_BYTES) {
+			toast.error('Pick an image under 1 MB');
+			return;
+		}
+		avatarBusy = true;
+		try {
+			const data = new Uint8Array(await file.arrayBuffer());
+			const resp = await rpcClient.user.setAvatar({ data, contentType: file.type });
+			authStore.applyUser(resp.user);
+			toast.success('Picture updated');
+		} catch {
+			// error interceptor
+		} finally {
+			avatarBusy = false;
+		}
+	}
+
+	async function removeAvatar() {
+		avatarBusy = true;
+		try {
+			const resp = await rpcClient.user.removeAvatar({});
+			authStore.applyUser(resp.user);
+			toast.success('Picture removed');
+		} catch {
+			// error interceptor
+		} finally {
+			avatarBusy = false;
+		}
+	}
+
 	onMount(load);
 </script>
 
@@ -81,11 +114,70 @@
 			<Skeleton class="h-48 w-full rounded-lg" />
 		</div>
 	{:else}
+		<FormSection
+			title="Picture"
+			description={isLocal
+				? 'Shown beside your name across the instance.'
+				: 'Your identity provider supplies your picture.'}
+		>
+			<div class="flex flex-wrap items-center gap-5 rounded-lg border bg-card p-4">
+				<UserAvatar
+					username={authStore.user?.username ?? ''}
+					{displayName}
+					{avatarUrl}
+					class="size-20 ring-1 ring-border"
+					fallbackClass="text-2xl"
+				/>
+				<div class="min-w-0 flex-1 space-y-2">
+					{#if isLocal}
+						<p class="text-sm text-muted-foreground">
+							PNG, JPEG, GIF, or WebP, up to 1 MB. Square images look best.
+						</p>
+						<div class="flex flex-wrap gap-2">
+							<input
+								bind:this={fileInput}
+								type="file"
+								accept="image/png,image/jpeg,image/gif,image/webp"
+								class="hidden"
+								onchange={uploadAvatar}
+							/>
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={() => fileInput?.click()}
+								disabled={avatarBusy}
+							>
+								{#if avatarBusy}
+									<Loader class="animate-spin" />
+								{:else}
+									<Upload />
+								{/if}
+								{avatarUrl ? 'Replace' : 'Upload'}
+							</Button>
+							{#if avatarUrl}
+								<Button
+									variant="ghost-muted"
+									size="sm"
+									onclick={removeAvatar}
+									disabled={avatarBusy}
+								>
+									<Trash />
+									Remove
+								</Button>
+							{/if}
+						</div>
+					{:else}
+						<p class="text-sm text-muted-foreground">
+							Change it with your {authStore.user?.authProvider} account and sign in again to refresh
+							it here.
+						</p>
+					{/if}
+				</div>
+			</div>
+		</FormSection>
+
 		<FormSection title="Account" description="Sign-in method and roles granted to you.">
 			<div class="flex items-center gap-4 rounded-lg border bg-card p-4">
-				<Avatar class="size-12">
-					<AvatarFallback class="text-base">{getInitials()}</AvatarFallback>
-				</Avatar>
 				<div class="min-w-0 flex-1">
 					<p class="text-sm font-semibold">{authStore.user?.username}</p>
 					<div class="mt-1 flex flex-wrap items-center gap-1.5">

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/pkg/pages"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -115,11 +114,24 @@ func (s *Store) ListRepositories(ctx context.Context, opts RepoListOptions) ([]*
 }
 
 func (s *Store) DeleteRepository(ctx context.Context, namespace, name string) error {
-	return s.db.WithContext(ctx).Delete(&db.Repository{}, "namespace = ? AND name = ?", namespace, name).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("kind = ? AND target_id IN (SELECT id FROM repositories WHERE namespace = ? AND name = ?)", db.StarKindImage, namespace, name).Delete(&db.Star{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&db.Repository{}, "namespace = ? AND name = ?", namespace, name).Error
+	})
 }
 
 func (s *Store) UpdateRepository(ctx context.Context, repo *db.Repository) error {
 	return s.db.WithContext(ctx).Save(repo).Error
+}
+
+// Drops the upstream once a one shot copy landed, a plain repository remains
+func (s *Store) FinishRepositoryImport(ctx context.Context, id string) error {
+	return s.db.WithContext(ctx).Model(&db.Repository{}).Where("id = ?", id).Updates(map[string]any{
+		"type": v1.RepositoryType_REPOSITORY_TYPE_STANDARD, "mirror_config": "", "mirror_state": "",
+		"mirror_last_error": "", "mirror_last_sync": time.Now().UTC(), "updated_at": time.Now().UTC(),
+	}).Error
 }
 
 // Targeted write so syncs never clobber concurrent edits
@@ -153,76 +165,26 @@ func (s *Store) IncrementPushCount(ctx context.Context, namespace, name string) 
 		}).Error
 }
 
-// ── Star operations ──────────────────────────────────────────────────────
+// ── Stars ────────────────────────────────────────────────────────────────
 
-func (s *Store) StarRepository(ctx context.Context, userID, repoID string) error {
-	var existing db.Star
-	err := s.db.WithContext(ctx).First(&existing, "user_id = ? AND repo_id = ?", userID, repoID).Error
-	if err == nil {
-		return nil // Already starred
-	}
-	star := &db.Star{ID: uuid.New().String(), UserID: userID, RepoID: repoID}
-	return s.db.WithContext(ctx).Create(star).Error
-}
-
-func (s *Store) UnstarRepository(ctx context.Context, userID, repoID string) error {
-	return s.db.WithContext(ctx).Where("user_id = ? AND repo_id = ?", userID, repoID).Delete(&db.Star{}).Error
-}
-
-func (s *Store) CountStars(ctx context.Context, repoID string) (int64, error) {
-	var count int64
-	err := s.db.WithContext(ctx).Model(&db.Star{}).Where("repo_id = ?", repoID).Count(&count).Error
-	return count, err
-}
-
-// Star counts for many repos in one query
-func (s *Store) GetStarCounts(ctx context.Context, repoIDs []string) (map[string]int64, error) {
-	counts := make(map[string]int64)
-	if len(repoIDs) == 0 {
-		return counts, nil
-	}
-	var rows []struct {
-		RepoID string
-		Count  int64
-	}
-	err := s.db.WithContext(ctx).Model(&db.Star{}).
-		Select("repo_id, COUNT(*) as count").
-		Where("repo_id IN ?", repoIDs).
-		Group("repo_id").
-		Scan(&rows).Error
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range rows {
-		counts[r.RepoID] = r.Count
-	}
-	return counts, nil
-}
-
-// Which of these repos the user starred
-func (s *Store) GetStarredSet(ctx context.Context, userID string, repoIDs []string) (map[string]bool, error) {
-	starred := make(map[string]bool)
-	if userID == "" || len(repoIDs) == 0 {
-		return starred, nil
-	}
-	var ids []string
-	err := s.db.WithContext(ctx).Model(&db.Star{}).
-		Where("user_id = ? AND repo_id IN ?", userID, repoIDs).
-		Pluck("repo_id", &ids).Error
-	if err != nil {
-		return nil, err
-	}
-	for _, id := range ids {
-		starred[id] = true
-	}
-	return starred, nil
-}
-
-// Newest starred first
-func (s *Store) ListStarredRepositories(ctx context.Context, userID string, limit, offset int) ([]*db.Repository, int64, error) {
+// Newest starred first, optional visibility bounds from the viewer
+func (s *Store) ListStarredRepositories(ctx context.Context, userID string, opts RepoListOptions) ([]*db.Repository, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Repository{}).
-		Joins("JOIN stars ON stars.repo_id = repositories.id").
-		Where("stars.user_id = ?", userID)
+		Joins("JOIN stars ON stars.target_id = repositories.id AND stars.kind = ? AND stars.user_id = ?", db.StarKindImage, userID).
+		Scopes(packageScope(opts.OnlyRepo, opts.OnlyNamespace))
+	if !opts.IncludePrivate {
+		if opts.ViewerID != "" {
+			conditions := "repositories.is_private = ? OR repositories.owner_id = ? OR repositories.namespace IN (SELECT o.name FROM organizations o JOIN org_members om ON o.id = om.org_id WHERE om.user_id = ?)"
+			args := []any{false, opts.ViewerID, opts.ViewerID}
+			if len(opts.GrantedRepos) > 0 {
+				conditions += " OR (repositories.namespace || '/' || repositories.name) IN ?"
+				args = append(args, opts.GrantedRepos)
+			}
+			tx = tx.Where(conditions, args...)
+		} else {
+			tx = tx.Where("repositories.is_private = ?", false)
+		}
+	}
 
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
@@ -230,7 +192,7 @@ func (s *Store) ListStarredRepositories(ctx context.Context, userID string, limi
 	}
 
 	var repos []*db.Repository
-	err := tx.Order("stars.created_at DESC").Limit(limit).Offset(offset).Find(&repos).Error
+	err := tx.Order("stars.created_at DESC").Limit(opts.Limit).Offset(opts.Offset).Find(&repos).Error
 	return repos, total, err
 }
 

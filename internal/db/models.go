@@ -26,6 +26,7 @@ type User struct {
 	MustChangePassword bool       `json:"must_change_password" gorm:"not null;default:false;column:must_change_password"`
 	LastLogin          *time.Time `json:"last_login" gorm:"column:last_login"`
 	EmailVerifiedAt    *time.Time `json:"email_verified_at" gorm:"column:email_verified_at"`
+	AvatarURL          string     `json:"avatar_url" gorm:"not null;default:'';column:avatar_url"`
 	CreatedAt          time.Time  `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt          time.Time  `json:"updated_at" gorm:"autoUpdateTime"`
 }
@@ -125,13 +126,55 @@ type Repository struct {
 	UpdatedAt       time.Time         `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
+// Star target kinds
+const (
+	StarKindImage    = "image"
+	StarKindGit      = "git"
+	StarKindArtifact = "artifact"
+)
+
+// One user's star on an image, git, or artifact repository
 type Star struct {
-	ID        string      `json:"id" gorm:"primaryKey"`
-	UserID    string      `json:"user_id" gorm:"not null;uniqueIndex:idx_star_user_repo;column:user_id"`
-	RepoID    string      `json:"repo_id" gorm:"not null;uniqueIndex:idx_star_user_repo;index;column:repo_id"`
-	CreatedAt time.Time   `json:"created_at" gorm:"autoCreateTime"`
-	User      *User       `json:"-" gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
-	Repo      *Repository `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+	ID        string    `json:"id" gorm:"primaryKey"`
+	UserID    string    `json:"user_id" gorm:"not null;uniqueIndex:idx_star_user_target;column:user_id"`
+	Kind      string    `json:"kind" gorm:"not null;default:'image';uniqueIndex:idx_star_user_target;index:idx_star_target,priority:1"`
+	TargetID  string    `json:"target_id" gorm:"not null;default:'';uniqueIndex:idx_star_user_target;index:idx_star_target,priority:2;column:target_id"`
+	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`
+	User      *User     `json:"-" gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+// Uploaded profile image of a local account
+type UserAvatar struct {
+	UserID      string    `gorm:"primaryKey;column:user_id"`
+	ContentType string    `gorm:"not null;column:content_type"`
+	Data        []byte    `gorm:"not null"`
+	UpdatedAt   time.Time `gorm:"autoUpdateTime"`
+	User        *User     `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
+}
+
+// Activity target kinds
+const (
+	ActivityTargetGit      = "git"
+	ActivityTargetImage    = "image"
+	ActivityTargetArtifact = "artifact"
+	ActivityTargetOrg      = "org"
+)
+
+// One thing someone did, the feed reads these newest first
+type ActivityEvent struct {
+	ID         string    `gorm:"primaryKey"`
+	ActorID    string    `gorm:"not null;default:'';index:idx_activity_actor,priority:1;column:actor_id"`
+	Actor      string    `gorm:"not null;default:''"`
+	Kind       string    `gorm:"not null;index"`
+	TargetKind string    `gorm:"not null;default:'';index:idx_activity_target,priority:1;column:target_kind"`
+	TargetID   string    `gorm:"not null;default:'';index:idx_activity_target,priority:2;column:target_id"`
+	Namespace  string    `gorm:"not null;default:'';index:idx_activity_namespace,priority:1"`
+	Name       string    `gorm:"not null;default:''"`
+	Subject    string    `gorm:"not null;default:''"`
+	Summary    string    `gorm:"type:text;not null;default:''"`
+	Detail     string    `gorm:"type:text;not null;default:'{}'"`
+	IsPublic   bool      `gorm:"not null;default:true;index:idx_activity_public,priority:1;column:is_public"`
+	CreatedAt  time.Time `gorm:"autoCreateTime;index:idx_activity_actor,priority:2;index:idx_activity_namespace,priority:2;index:idx_activity_public,priority:2"`
 }
 
 // Webhook scope constants
@@ -393,15 +436,6 @@ type GitTopic struct {
 	RepoID string         `gorm:"primaryKey"`
 	Topic  string         `gorm:"primaryKey;index"`
 	Repo   *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
-}
-
-type GitStar struct {
-	ID        string         `gorm:"primaryKey"`
-	UserID    string         `gorm:"not null;uniqueIndex:idx_git_star_user_repo"`
-	RepoID    string         `gorm:"not null;uniqueIndex:idx_git_star_user_repo;index"`
-	CreatedAt time.Time      `gorm:"autoCreateTime"`
-	User      *User          `gorm:"foreignKey:UserID;constraint:OnDelete:CASCADE"`
-	Repo      *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
 }
 
 type GitWatch struct {

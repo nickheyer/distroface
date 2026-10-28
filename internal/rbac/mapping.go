@@ -52,13 +52,15 @@ var PublicProcedures = map[string]bool{
 // Mutations outside the resource action heuristic that read only portals refuse
 var PortalWriteProcedures = map[string]bool{
 	// Stars, watches, and subscriptions change state through the portal host
-	distrofacev1connect.RepositoryServiceStarRepositoryProcedure:   true,
-	distrofacev1connect.RepositoryServiceUnstarRepositoryProcedure: true,
-	distrofacev1connect.GitServiceStarGitRepositoryProcedure:       true,
-	distrofacev1connect.GitServiceUnstarGitRepositoryProcedure:     true,
-	distrofacev1connect.GitServiceWatchGitRepositoryProcedure:      true,
-	distrofacev1connect.IssueServiceSubscribeIssueProcedure:        true,
-	distrofacev1connect.IssueServiceUnsubscribeIssueProcedure:      true,
+	distrofacev1connect.RepositoryServiceStarRepositoryProcedure:         true,
+	distrofacev1connect.RepositoryServiceUnstarRepositoryProcedure:       true,
+	distrofacev1connect.GitServiceStarGitRepositoryProcedure:             true,
+	distrofacev1connect.GitServiceUnstarGitRepositoryProcedure:           true,
+	distrofacev1connect.ArtifactServiceStarArtifactRepositoryProcedure:   true,
+	distrofacev1connect.ArtifactServiceUnstarArtifactRepositoryProcedure: true,
+	distrofacev1connect.GitServiceWatchGitRepositoryProcedure:            true,
+	distrofacev1connect.IssueServiceSubscribeIssueProcedure:              true,
+	distrofacev1connect.IssueServiceUnsubscribeIssueProcedure:            true,
 	// Ownership and membership changes
 	distrofacev1connect.GitServiceAcceptTransferProcedure:      true,
 	distrofacev1connect.GitServiceRejectTransferProcedure:      true,
@@ -114,6 +116,8 @@ var IdentityProcedures = map[string]bool{
 	distrofacev1connect.MirrorServiceWatchSyncsProcedure: true,
 	// Public profile fields, private fields gated in-service
 	distrofacev1connect.UserServiceGetUserProcedure: true,
+	// Feed rows carry their own visibility, private targets are checked in-service
+	distrofacev1connect.ActivityServiceListActivityProcedure: true,
 	// Boards and labels are read through their repo or org in-service
 	distrofacev1connect.ProjectServiceGetProjectProcedure:   true,
 	distrofacev1connect.ProjectServiceListProjectsProcedure: true,
@@ -130,6 +134,8 @@ var AuthenticatedOnlyProcedures = map[string]bool{
 	// User - self-service
 	distrofacev1connect.UserServiceUpdateUserProcedure:     true,
 	distrofacev1connect.UserServiceChangePasswordProcedure: true,
+	distrofacev1connect.UserServiceSetAvatarProcedure:      true,
+	distrofacev1connect.UserServiceRemoveAvatarProcedure:   true,
 	// Public profile subset only, powers member pickers
 	distrofacev1connect.UserServiceSearchUsersProcedure: true,
 
@@ -137,6 +143,8 @@ var AuthenticatedOnlyProcedures = map[string]bool{
 	distrofacev1connect.RepositoryServiceStarRepositoryProcedure:          true,
 	distrofacev1connect.RepositoryServiceUnstarRepositoryProcedure:        true,
 	distrofacev1connect.RepositoryServiceListStarredRepositoriesProcedure: true,
+	distrofacev1connect.ArtifactServiceStarArtifactRepositoryProcedure:    true,
+	distrofacev1connect.ArtifactServiceUnstarArtifactRepositoryProcedure:  true,
 
 	// Org slug resolution, object scoped read enforced in-service
 	distrofacev1connect.OrganizationServiceGetOrganizationProcedure: true,
@@ -316,22 +324,23 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.AuditServiceListAuditEventsProcedure: {Resource: ResourceSettings, Action: ActionRead},
 
 	// ── ArtifactService ───────────────────────────────────────────────
-	distrofacev1connect.ArtifactServiceCreateArtifactRepositoryProcedure:   {Resource: ResourceArtifacts, Action: ActionCreate},
-	distrofacev1connect.ArtifactServiceGetArtifactRepositoryProcedure:      {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "namespace+name"},
-	distrofacev1connect.ArtifactServiceListArtifactRepositoriesProcedure:   {Resource: ResourceArtifacts, Action: ActionRead},
-	distrofacev1connect.ArtifactServiceUpdateArtifactRepositoryProcedure:   {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+name"},
-	distrofacev1connect.ArtifactServiceSyncArtifactRepositoryProcedure:     {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+name"},
-	distrofacev1connect.ArtifactServiceStopArtifactRepositorySyncProcedure: {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+name"},
-	distrofacev1connect.ArtifactServiceDeleteArtifactRepositoryProcedure:   {Resource: ResourceArtifacts, Action: ActionDelete, ObjectIDField: "namespace+name"},
-	distrofacev1connect.ArtifactServiceInitiateArtifactUploadProcedure:     {Resource: ResourceArtifacts, Action: ActionPush, ObjectIDField: "namespace+repo_name"},
-	distrofacev1connect.ArtifactServiceCompleteArtifactUploadProcedure:     {Resource: ResourceArtifacts, Action: ActionPush, ObjectIDField: "namespace+repo_name"},
-	distrofacev1connect.ArtifactServiceGetArtifactProcedure:                {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "namespace+repo_name"},
-	distrofacev1connect.ArtifactServiceListArtifactsProcedure:              {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "namespace+repo_name"},
-	distrofacev1connect.ArtifactServiceListArtifactVersionsProcedure:       {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "namespace+repo_name"},
-	distrofacev1connect.ArtifactServiceSearchArtifactsProcedure:            {Resource: ResourceArtifacts, Action: ActionRead},
-	distrofacev1connect.ArtifactServiceUpdateArtifactProcedure:             {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+repo_name"},
-	distrofacev1connect.ArtifactServiceSetArtifactPropertiesProcedure:      {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+repo_name"},
-	distrofacev1connect.ArtifactServiceDeleteArtifactProcedure:             {Resource: ResourceArtifacts, Action: ActionDelete, ObjectIDField: "namespace+repo_name"},
+	distrofacev1connect.ArtifactServiceCreateArtifactRepositoryProcedure:        {Resource: ResourceArtifacts, Action: ActionCreate},
+	distrofacev1connect.ArtifactServiceGetArtifactRepositoryProcedure:           {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "namespace+name"},
+	distrofacev1connect.ArtifactServiceListArtifactRepositoriesProcedure:        {Resource: ResourceArtifacts, Action: ActionRead},
+	distrofacev1connect.ArtifactServiceUpdateArtifactRepositoryProcedure:        {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+name"},
+	distrofacev1connect.ArtifactServiceSyncArtifactRepositoryProcedure:          {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+name"},
+	distrofacev1connect.ArtifactServiceStopArtifactRepositorySyncProcedure:      {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+name"},
+	distrofacev1connect.ArtifactServiceDeleteArtifactRepositoryProcedure:        {Resource: ResourceArtifacts, Action: ActionDelete, ObjectIDField: "namespace+name"},
+	distrofacev1connect.ArtifactServiceInitiateArtifactUploadProcedure:          {Resource: ResourceArtifacts, Action: ActionPush, ObjectIDField: "namespace+repo_name"},
+	distrofacev1connect.ArtifactServiceCompleteArtifactUploadProcedure:          {Resource: ResourceArtifacts, Action: ActionPush, ObjectIDField: "namespace+repo_name"},
+	distrofacev1connect.ArtifactServiceGetArtifactProcedure:                     {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "namespace+repo_name"},
+	distrofacev1connect.ArtifactServiceListArtifactsProcedure:                   {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "namespace+repo_name"},
+	distrofacev1connect.ArtifactServiceListArtifactVersionsProcedure:            {Resource: ResourceArtifacts, Action: ActionRead, ObjectIDField: "namespace+repo_name"},
+	distrofacev1connect.ArtifactServiceSearchArtifactsProcedure:                 {Resource: ResourceArtifacts, Action: ActionRead},
+	distrofacev1connect.ArtifactServiceListStarredArtifactRepositoriesProcedure: {Resource: ResourceArtifacts, Action: ActionRead, AnyGrant: true},
+	distrofacev1connect.ArtifactServiceUpdateArtifactProcedure:                  {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+repo_name"},
+	distrofacev1connect.ArtifactServiceSetArtifactPropertiesProcedure:           {Resource: ResourceArtifacts, Action: ActionUpdate, ObjectIDField: "namespace+repo_name"},
+	distrofacev1connect.ArtifactServiceDeleteArtifactProcedure:                  {Resource: ResourceArtifacts, Action: ActionDelete, ObjectIDField: "namespace+repo_name"},
 
 	// ── RepositoryService and ArtifactService moves ───────────────────
 	distrofacev1connect.RepositoryServiceMoveRepositoryProcedure:       {Resource: ResourceRepositories, Action: ActionUpdate, ObjectIDField: "namespace+name"},

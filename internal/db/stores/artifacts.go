@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,6 +84,7 @@ type ArtifactRepoListOptions struct {
 	OnlyRepo       string      // Credential scope, same name or linked source
 	OnlyNamespace  string      // Credential scope, exact namespace
 	Query          pages.Query // Structured filter against ArtifactReposQuery
+	StarredBy      string      // Only repos this user starred, newest star first
 	Limit          int         // Zero means no limit
 	Offset         int
 }
@@ -103,6 +105,9 @@ func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoL
 		q = q.Where("namespace = ?", opts.Namespace)
 	}
 	q = q.Scopes(packageScope(opts.OnlyRepo, opts.OnlyNamespace))
+	if opts.StarredBy != "" {
+		q = q.Joins("JOIN stars ON stars.target_id = CAST(artifact_repositories.id AS TEXT) AND stars.kind = ? AND stars.user_id = ?", db.StarKindArtifact, opts.StarredBy)
+	}
 	if !opts.IncludePrivate {
 		if opts.ViewerID != "" {
 			cond := "is_private = ? OR owner_id = ? " +
@@ -129,8 +134,12 @@ func (s *Store) ListArtifactRepositories(ctx context.Context, opts ArtifactRepoL
 		q = q.Limit(opts.Limit).Offset(opts.Offset)
 	}
 
+	order := "artifact_repositories.name ASC"
+	if opts.StarredBy != "" {
+		order = "stars.created_at DESC"
+	}
 	var repos []*db.ArtifactRepository
-	if err := q.Order("name ASC").Find(&repos).Error; err != nil {
+	if err := q.Order(order).Find(&repos).Error; err != nil {
 		return nil, 0, err
 	}
 	return repos, total, nil
@@ -164,6 +173,7 @@ func (s *Store) DeleteArtifactRepository(ctx context.Context, id int64) ([]strin
 	if err := s.db.WithContext(ctx).Delete(&db.ArtifactRepository{}, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
+	_ = s.DeleteStarsFor(ctx, db.StarKindArtifact, strconv.FormatInt(id, 10))
 	return digests, nil
 }
 

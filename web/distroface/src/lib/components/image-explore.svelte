@@ -84,13 +84,7 @@
 	});
 </script>
 
-<PageHeader
-	title="Images"
-	subtitle={authStore.isAuthenticated
-		? `Welcome back, ${authStore.user?.displayName || authStore.user?.username}`
-		: 'Browse container images'}
-	icon={Package}
->
+<PageHeader title="Images" subtitle="Container image repositories on this instance" icon={Package}>
 	{#snippet actions()}
 		{#if !repoLoading && repoPager.totalCount > 0}
 			<span class="text-xs text-muted-foreground tabular-nums">

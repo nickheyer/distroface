@@ -12,8 +12,9 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import OrgSettingsManager from '$lib/components/org-settings-manager.svelte';
-	import { Save, Trash, ArrowLeftRight, Loader } from '$lib/icons';
+	import { Save, Trash, ArrowLeftRight, Loader, LogOut } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
+	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
 	import { ORG_CONTEXT_KEY, type OrgContext } from '$lib/org-context.svelte';
 
@@ -29,11 +30,28 @@
 	let deleteOrgOpen = $state(false);
 	let deletingOrg = $state(false);
 
+	// Outsiders have nothing to change here
 	$effect(() => {
-		if (!ctx.loading && ctx.org && !ctx.canAdmin) {
+		if (!ctx.loading && ctx.org && !ctx.canAdmin && !ctx.isMember) {
 			goto(resolve('/orgs/[name]', { name: orgName }));
 		}
 	});
+
+	let leaveOpen = $state(false);
+	let leaving = $state(false);
+
+	async function confirmLeave() {
+		leaving = true;
+		try {
+			await rpcClient.organization.removeOrgMember({ orgId, userId: authStore.user?.id ?? '' });
+			toast.success(`You left ${orgName}`);
+			goto(resolve('/orgs'));
+		} catch {
+			// error interceptor
+		} finally {
+			leaving = false;
+		}
+	}
 
 	$effect(() => {
 		if (ctx.org) {
@@ -108,8 +126,29 @@
 
 		<OrgSettingsManager {orgId} />
 
-		<FormSection title="Danger zone" description="Ownership and deletion of {orgName}.">
+		<FormSection
+			title="Danger zone"
+			description="Membership, ownership, and deletion of {orgName}."
+		>
 			<div class="box divide-y border-destructive/40">
+				{#if ctx.isMember}
+					<div class="flex items-center justify-between gap-4 px-4 py-3">
+						<div class="min-w-0">
+							<p class="text-sm font-medium">Leave this organization</p>
+							<p class="mt-0.5 text-sm text-muted-foreground">
+								You lose access to its private repositories. The last owner cannot leave.
+							</p>
+						</div>
+						<Button
+							variant="outline-destructive"
+							class="shrink-0"
+							onclick={() => (leaveOpen = true)}
+						>
+							<LogOut />
+							Leave
+						</Button>
+					</div>
+				{/if}
 				<div class="flex items-center justify-between gap-4 px-4 py-3">
 					<div class="min-w-0">
 						<p class="text-sm font-medium">Transfer ownership</p>
@@ -143,7 +182,40 @@
 			</div>
 		</FormSection>
 	</FormPage>
+{:else if ctx.isMember}
+	<FormPage level="section" title="Membership" description="Your place in {orgName}.">
+		<FormSection title="Danger zone" description="Leaving is immediate.">
+			<div class="box border-destructive/40">
+				<div class="flex items-center justify-between gap-4 px-4 py-3">
+					<div class="min-w-0">
+						<p class="text-sm font-medium">Leave this organization</p>
+						<p class="mt-0.5 text-sm text-muted-foreground">
+							You lose access to its private repositories and teams. An admin can add you back.
+							Memberships synced from an identity provider cannot be left here.
+						</p>
+					</div>
+					<Button variant="outline-destructive" class="shrink-0" onclick={() => (leaveOpen = true)}>
+						<LogOut />
+						Leave
+					</Button>
+				</div>
+			</div>
+		</FormSection>
+	</FormPage>
 {/if}
+
+<ConfirmDialog
+	bind:open={leaveOpen}
+	title="Leave organization"
+	confirmLabel="Leave"
+	onConfirm={confirmLeave}
+	loading={leaving}
+	icon={LogOut}
+>
+	{#snippet description()}
+		You will no longer be a member of <strong>{orgName}</strong>.
+	{/snippet}
+</ConfirmDialog>
 
 <ConfirmDialog
 	bind:open={deleteOrgOpen}

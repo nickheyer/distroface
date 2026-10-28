@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"connectrpc.com/connect/v2"
+	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -31,8 +32,12 @@ type OrganizationService struct {
 	enforcer *rbac.Enforcer
 	res      *settings.Resolver
 	git      *gitrepo.Manager
+	activity *activity.Recorder
 	log      *logger.Logger
 }
+
+// Installs the activity recorder, nil keeps the feed quiet
+func (s *OrganizationService) SetActivity(rec *activity.Recorder) { s.activity = rec }
 
 func NewOrganizationService(store *stores.Store, registry *registry.RegistryAccess, enforcer *rbac.Enforcer, res *settings.Resolver, git *gitrepo.Manager, log *logger.Logger) *OrganizationService {
 	return &OrganizationService{store: store, registry: registry, enforcer: enforcer, res: res, log: log, git: git}
@@ -91,6 +96,9 @@ func (s *OrganizationService) CreateOrganization(ctx context.Context, req *v1.Cr
 	}
 	if _, err := s.store.EnsureDefaultTeam(ctx, org.ID); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	if s.activity != nil {
+		s.activity.Org(org, user, activity.KindOrgCreated)
 	}
 
 	return &v1.CreateOrganizationResponse{
@@ -164,7 +172,19 @@ func (s *OrganizationService) ListOrganizations(ctx context.Context, req *v1.Lis
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
-	orgs, total, err := s.store.ListOrganizations(ctx, userID, canManage, q, limit, offset)
+	memberOf := ""
+	if req.Username != "" {
+		target, err := s.store.GetUserByUsername(ctx, req.Username)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		}
+		if target == nil {
+			return nil, connect.Errorf(connect.CodeNotFound, "user not found")
+		}
+		memberOf = target.ID
+	}
+
+	orgs, total, err := s.store.ListOrganizations(ctx, userID, canManage, memberOf, q, limit, offset)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -363,6 +383,9 @@ func (s *OrganizationService) AddOrgMember(ctx context.Context, req *v1.AddOrgMe
 	if err := s.store.AddOrgMember(ctx, member); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	if s.activity != nil {
+		s.activity.Org(org, &auth.AuthenticatedUser{ID: targetUser.ID, Username: targetUser.Username}, activity.KindJoined)
+	}
 
 	member.User = targetUser
 
@@ -386,8 +409,10 @@ func (s *OrganizationService) RemoveOrgMember(ctx context.Context, req *v1.Remov
 		return nil, connect.NewError(connect.CodeNotFound, "")
 	}
 
+	// Members may leave on their own, everyone else needs admin standing
+	leaving := req.UserId == user.ID
 	canManage, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID)
-	if !canManage {
+	if !canManage && !leaving {
 		requesterMember, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
 		if requesterMember == nil || (requesterMember.Role != storage.OrgRoleOwner && requesterMember.Role != storage.OrgRoleAdmin) {
 			return nil, connect.NewError(connect.CodePermissionDenied, "")
@@ -402,6 +427,11 @@ func (s *OrganizationService) RemoveOrgMember(ctx context.Context, req *v1.Remov
 	member, _ := s.store.GetOrgMember(ctx, org.ID, targetUser.ID)
 	if member == nil {
 		return nil, connect.Errorf(connect.CodeNotFound, "user is not a member")
+	}
+
+	// Identity provider memberships return at the next sign in, leaving is pointless
+	if leaving && !canManage && member.Source != "local" && member.Source != "" {
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "this membership is managed by your identity provider")
 	}
 
 	// Last owner cannot be removed
@@ -584,6 +614,8 @@ func orgMemberToProto(m *storage.OrgMember) *v1.OrgMember {
 	}
 	if m.User != nil {
 		proto.Username = m.User.Username
+		proto.DisplayName = m.User.DisplayName
+		proto.AvatarUrl = m.User.AvatarURL
 	}
 	return proto
 }

@@ -27,6 +27,7 @@ type Manager struct {
 
 	trigger        TriggerFunc
 	releaseCreated ReleaseHook
+	activity       ActivityHook
 	// Key behind signed notification tokens, none means none are issued or accepted
 	tokenKey []byte
 	// In flight notification fan outs and stat refreshes
@@ -126,6 +127,28 @@ type ReleaseHook func(ctx context.Context, repo *db.GitRepository, rel *db.GitRe
 
 // Installs the release created hook, set once at startup
 func (m *Manager) SetReleaseCreated(fn ReleaseHook) { m.releaseCreated = fn }
+
+// One forge event the activity feed may record
+type ActivityEvent struct {
+	Repo    *db.GitRepository
+	Actor   *auth.AuthenticatedUser
+	Action  string
+	Issue   *db.GitIssue
+	Release *db.GitRelease
+}
+
+// Receives issue, pull, and release events, installed by the activity recorder
+type ActivityHook func(ctx context.Context, ev ActivityEvent)
+
+// Installs the activity hook, set once at startup
+func (m *Manager) SetActivity(fn ActivityHook) { m.activity = fn }
+
+// Hands an event to the activity hook when one is installed
+func (m *Manager) recordActivity(ctx context.Context, ev ActivityEvent) {
+	if m.activity != nil {
+		m.activity(ctx, ev)
+	}
+}
 
 // Fires a forge event into actions when a trigger is installed
 func (m *Manager) Trigger(ctx context.Context, repo *db.GitRepository, event, action, ref, sha string, actor *auth.AuthenticatedUser, payload map[string]any) {

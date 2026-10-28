@@ -17,7 +17,7 @@
 		DropdownMenuSeparator,
 		DropdownMenuTrigger
 	} from '$lib/components/ui/dropdown-menu';
-	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import UserAvatar from '$lib/components/user-avatar.svelte';
 	import {
 		Sheet,
 		SheetContent,
@@ -63,21 +63,9 @@
 	);
 	const isChangePasswordPage = $derived(page.url.pathname === '/change-password');
 
-	function getUserInitials(user: typeof authStore.user): string {
-		if (!user) return '?';
-		const name = user.displayName || user.username;
-		return name
-			.split(/[\s-]+/)
-			.map((w) => w[0])
-			.join('')
-			.toUpperCase()
-			.slice(0, 2);
-	}
-
 	function isActive(path: string): boolean {
 		const current = page.url.pathname;
-		if (path === '/') return current === '/' || current.startsWith('/images');
-		return current.startsWith(path);
+		return current === path || current.startsWith(`${path}/`);
 	}
 
 	onMount(async () => {
@@ -109,7 +97,7 @@
 	type NavLink = { href: Pathname; label: string; icon: typeof Package };
 
 	const navLinks: NavLink[] = $derived([
-		{ href: '/', label: 'Images', icon: Package },
+		{ href: '/images', label: 'Images', icon: Package },
 		{ href: '/artifacts', label: 'Artifacts', icon: Archive },
 		...(configStore.gitEnabled
 			? [{ href: '/git', label: 'Git', icon: GitBranch } satisfies NavLink]
@@ -256,9 +244,12 @@
 										class="ml-1 flex items-center rounded-full ring-offset-2 ring-offset-background outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
 										aria-label="Account menu"
 									>
-										<Avatar class="size-7 ring-1 ring-border">
-											<AvatarFallback>{getUserInitials(authStore.user)}</AvatarFallback>
-										</Avatar>
+										<UserAvatar
+											username={authStore.user?.username ?? ''}
+											displayName={authStore.user?.displayName ?? ''}
+											avatarUrl={authStore.user?.avatarUrl ?? ''}
+											class="size-7 ring-1 ring-border"
+										/>
 									</button>
 								{/snippet}
 							</DropdownMenuTrigger>

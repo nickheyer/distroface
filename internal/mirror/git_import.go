@@ -16,9 +16,11 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -447,7 +449,7 @@ func (m *Monitor) runImport(ctx context.Context, repo *db.GitRepository, imp *db
 				err = m.importPulls(ctx, repo, cfg, up, drv, f, st, progress)
 			}
 		case importPhaseReleases:
-			if drv != nil {
+			if drv != nil && (st.Options.Metadata || st.Options.Releases) {
 				err = m.importReleases(ctx, repo, drv, f, st)
 			}
 		default:
@@ -1256,6 +1258,19 @@ func releaseRow(repoID string, rel forgeRelease, authorID, targetSHA string) *db
 }
 
 func (m *Monitor) importReleases(ctx context.Context, repo *db.GitRepository, drv forgeDriver, f forgeCtx, st *importState) error {
+	// Assets land in the linked package, listed once through the release api
+	var pkg *db.ArtifactRepository
+	assets := map[string][]asset{}
+	if st.Options.Releases {
+		var err error
+		if pkg, err = m.importReleasePackage(ctx, repo); err != nil {
+			return err
+		}
+		if assets, err = m.upstreamAssets(ctx, f); err != nil {
+			st.note("release assets not imported, %v", err)
+			pkg = nil
+		}
+	}
 	for page := max(st.Cursor["releases"], 1); page <= importMaxPages; page++ {
 		items, more, err := drv.releases(ctx, f, page)
 		if err != nil {
@@ -1269,19 +1284,106 @@ func (m *Monitor) importReleases(ctx context.Context, repo *db.GitRepository, dr
 			if err != nil {
 				return err
 			}
-			if existing != nil {
-				continue
+			if existing == nil {
+				row := releaseRow(repo.ID, rel, "", m.tagCommit(repo, rel.Tag, rel.TargetSHA))
+				if err := m.store.CreateGitRelease(ctx, row); err != nil {
+					return err
+				}
+				st.Counts["releases"]++
 			}
-			row := releaseRow(repo.ID, rel, "", m.tagCommit(repo, rel.Tag, rel.TargetSHA))
-			if err := m.store.CreateGitRelease(ctx, row); err != nil {
-				return err
+			if pkg != nil && !rel.Draft {
+				if err := m.importAssets(ctx, pkg, f, rel.Tag, assets[rel.Tag], st); err != nil {
+					return err
+				}
 			}
-			st.Counts["releases"]++
 		}
 		st.Cursor["releases"] = page + 1
 		if !more {
 			break
 		}
+	}
+	return nil
+}
+
+// Artifact package of the repository, created and linked on demand
+func (m *Monitor) importReleasePackage(ctx context.Context, repo *db.GitRepository) (*db.ArtifactRepository, error) {
+	pkg, err := m.store.GetArtifactRepository(ctx, repo.Namespace, repo.Name)
+	if err != nil {
+		return nil, err
+	}
+	if pkg != nil {
+		if pkg.GitRepoID == nil {
+			if err := m.store.SetArtifactRepositoryGitRepo(ctx, pkg.ID, &repo.ID); err != nil {
+				return nil, err
+			}
+			pkg.GitRepoID = &repo.ID
+		}
+		return pkg, nil
+	}
+	pkg = &db.ArtifactRepository{
+		Namespace: repo.Namespace, Name: repo.Name, Description: "Release assets of " + repo.Namespace + "/" + repo.Name,
+		OwnerID: repo.OwnerID, IsPrivate: repo.IsPrivate, Type: v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE, GitRepoID: &repo.ID,
+	}
+	if err := m.store.CreateArtifactRepository(ctx, pkg); err != nil {
+		return nil, err
+	}
+	return pkg, nil
+}
+
+// Every upstream asset keyed by tag, read through the release mirror driver
+func (m *Monitor) upstreamAssets(ctx context.Context, f forgeCtx) (map[string][]asset, error) {
+	t := releaseTypeFor(f.up.Forge)
+	drv := driverFor(t)
+	if drv == nil {
+		return nil, fmt.Errorf("%s has no release api", f.up.Host)
+	}
+	cfg := &v1.MirrorConfig{Upstream: f.up.releaseUpstream(), IncludePrereleases: true}
+	if f.token != "" {
+		cfg.AuthToken = proto.String(f.token)
+	}
+	list, err := drv.releases(ctx, m.client, cfg, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string][]asset, len(list.releases))
+	for _, rel := range list.releases {
+		out[rel.version] = rel.assets
+	}
+	return out, nil
+}
+
+// Copies the assets of one release into the package, skipping what already landed
+func (m *Monitor) importAssets(ctx context.Context, pkg *db.ArtifactRepository, f forgeCtx, tag string, items []asset, st *importState) error {
+	if len(items) == 0 || artifacts.ValidateVersion(tag) != nil {
+		return nil
+	}
+	props := map[string]string{
+		artifacts.ReleaseProperty: "true",
+		"import.source":           f.up.Forge,
+		"import.upstream":         f.up.releaseUpstream(),
+	}
+	maxBytes := m.artifacts.EffectiveMaxFileSizeBytes(ctx, pkg.Namespace)
+	for _, a := range items {
+		if artifacts.ValidatePath(a.name) != nil {
+			st.note("asset %s of %s skipped, unusable name", a.name, tag)
+			continue
+		}
+		existing, err := m.store.GetArtifactByPathVersion(ctx, pkg.ID, tag, a.name)
+		if err == nil && existing != nil && (a.size == 0 || existing.Size == a.size) {
+			continue
+		}
+		if maxBytes > 0 && a.size > maxBytes {
+			st.note("asset %s of %s skipped, over the size limit", a.name, tag)
+			continue
+		}
+		if err := m.ingestAsset(ctx, pkg, nil, tag, a, props); err != nil {
+			if _, limited := RetryAfter(err); limited {
+				return err
+			}
+			st.note("asset %s of %s failed, %v", a.name, tag, err)
+			continue
+		}
+		st.Counts["assets"]++
 	}
 	return nil
 }

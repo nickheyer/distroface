@@ -14,7 +14,7 @@
 		XCircle,
 		Clock
 	} from '$lib/icons';
-	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import UserAvatar from '$lib/components/user-avatar.svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import LabelChip from '$lib/components/git/label-chip.svelte';
 	import { rpcClient, backgroundCallOptions } from '$lib/api/rpc-client';
@@ -192,15 +192,6 @@
 		height = box?.offsetHeight ?? 0;
 	});
 
-	function initials(s: string): string {
-		return s
-			.split(/[\s-]+/)
-			.map((w) => w[0])
-			.join('')
-			.toUpperCase()
-			.slice(0, 2);
-	}
-
 	function issueIcon(i: Issue) {
 		if (i.isPull) {
 			if (i.pull?.merged) return GitMerge;
@@ -290,9 +281,12 @@
 		{:else if card.kind === 'user'}
 			{@const u = card.user}
 			<div class="flex items-start gap-3">
-				<Avatar class="size-10">
-					<AvatarFallback>{initials(u.displayName || u.username)}</AvatarFallback>
-				</Avatar>
+				<UserAvatar
+					username={u.username}
+					displayName={u.displayName}
+					avatarUrl={u.avatarUrl}
+					class="size-10"
+				/>
 				<div class="min-w-0 flex-1">
 					<a
 						href={resolve('/[namespace]', { namespace: u.username })}

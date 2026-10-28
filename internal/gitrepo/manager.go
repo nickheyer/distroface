@@ -298,7 +298,7 @@ func (m *Manager) Create(ctx context.Context, user *auth.AuthenticatedUser, p Cr
 		Namespace: p.Namespace, Name: p.Name, Description: p.Description, Website: p.Website,
 		OwnerID: ownerID, IsPrivate: p.Private, IsOrgNamespace: isOrg, DefaultBranch: p.DefaultBranch,
 		ObjectFormat: p.ObjectFormat, Type: p.Type, MirrorConfig: p.MirrorConfig,
-		LFSEnabled: gs.GetLfsEnabled(), Units: EncodeUnits(UnitsOf(nil)), MergeSettings: EncodeMergeSettings(MergeSettingsOf(nil)),
+		LFSEnabled: gs.GetLfsEnabled(), Units: EncodeUnits(DefaultUnits(gs, isOrg)), MergeSettings: EncodeMergeSettings(MergeSettingsOf(nil)),
 	}
 	if p.ForkOf != nil {
 		id := p.ForkOf.ID

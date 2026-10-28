@@ -106,6 +106,32 @@ func (s *Store) migrateTables() error {
 		}
 	}
 
+	// Stars become polymorphic, git stars fold into the same table
+	if s.db.Migrator().HasTable("stars") && s.db.Migrator().HasColumn(&db.Star{}, "repo_id") {
+		stmts := []string{
+			`CREATE TABLE stars_v2 (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'image', target_id TEXT NOT NULL DEFAULT '', created_at DATETIME, CONSTRAINT fk_stars_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE)`,
+			`INSERT OR IGNORE INTO stars_v2 (id, user_id, kind, target_id, created_at) SELECT id, user_id, 'image', repo_id, created_at FROM stars`,
+		}
+		if s.db.Migrator().HasTable("git_stars") {
+			stmts = append(stmts, `INSERT OR IGNORE INTO stars_v2 (id, user_id, kind, target_id, created_at) SELECT id, user_id, 'git', repo_id, created_at FROM git_stars`)
+		}
+		stmts = append(stmts, `DROP TABLE stars`, `ALTER TABLE stars_v2 RENAME TO stars`, `DROP TABLE IF EXISTS git_stars`)
+		for _, stmt := range stmts {
+			if err := s.db.Exec(stmt).Error; err != nil {
+				return fmt.Errorf("failed to migrate stars: %w", err)
+			}
+		}
+	} else if s.db.Migrator().HasTable("git_stars") {
+		if s.db.Migrator().HasTable("stars") {
+			if err := s.db.Exec(`INSERT OR IGNORE INTO stars (id, user_id, kind, target_id, created_at) SELECT id, user_id, 'git', repo_id, created_at FROM git_stars`).Error; err != nil {
+				return fmt.Errorf("failed to fold git stars: %w", err)
+			}
+		}
+		if err := s.db.Exec(`DROP TABLE git_stars`).Error; err != nil {
+			return fmt.Errorf("failed to drop git stars: %w", err)
+		}
+	}
+
 	// Identity index gains props_hash, drop stale three column version
 	if s.db.Migrator().HasTable(&db.Artifact{}) && !s.db.Migrator().HasColumn(&db.Artifact{}, "props_hash") {
 		if err := s.db.Exec("DROP INDEX IF EXISTS idx_artifact_identity").Error; err != nil {
@@ -157,6 +183,8 @@ func (s *Store) migrateTables() error {
 		&db.OrgMember{},
 		&db.Repository{},
 		&db.Star{},
+		&db.UserAvatar{},
+		&db.ActivityEvent{},
 		&db.SystemSetting{},
 		&db.SettingsRow{},
 		&db.RegistrationInvite{},
@@ -175,7 +203,6 @@ func (s *Store) migrateTables() error {
 		&db.GitRedirect{},
 		&db.GitTransfer{},
 		&db.GitTopic{},
-		&db.GitStar{},
 		&db.GitWatch{},
 		&db.GitCollaborator{},
 		&db.OrgTeam{},

@@ -34,6 +34,7 @@ import { KeyService } from '$lib/proto/distroface/v1/keys_pb';
 import { MailService } from '$lib/proto/distroface/v1/mail_pb';
 import { ActionsService } from '$lib/proto/distroface/v1/actions_pb';
 import { AgentsService } from '$lib/proto/distroface/v1/agents_pb';
+import { ActivityService } from '$lib/proto/distroface/v1/activity_pb';
 import { toast } from 'svelte-sonner';
 import { networkStore } from '$lib/stores/network.svelte';
 
@@ -116,6 +117,7 @@ export class RpcClient {
 	public readonly mail: Client<typeof MailService>;
 	public readonly actions: Client<typeof ActionsService>;
 	public readonly agents: Client<typeof AgentsService>;
+	public readonly activity: Client<typeof ActivityService>;
 
 	constructor() {
 		this.health = createClient(HealthService, transport);
@@ -146,6 +148,7 @@ export class RpcClient {
 		this.mail = createClient(MailService, transport);
 		this.actions = createClient(ActionsService, transport);
 		this.agents = createClient(AgentsService, transport);
+		this.activity = createClient(ActivityService, transport);
 	}
 }
 

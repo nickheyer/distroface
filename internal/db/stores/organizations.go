@@ -57,9 +57,13 @@ var OrgsQuery = pages.Spec{
 	Text: []string{"name", "display_name"},
 }
 
-func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, q pages.Query, limit, offset int) ([]*db.Organization, int64, error) {
+func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, memberOf string, q pages.Query, limit, offset int) ([]*db.Organization, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Organization{}).Scopes(OrgsQuery.Scope(q))
 
+	// Narrows to one user's memberships on top of the viewer's own bounds
+	if memberOf != "" {
+		tx = tx.Where("id IN (SELECT org_id FROM org_members WHERE user_id = ?)", memberOf)
+	}
 	if !canManage && userID != "" {
 		tx = tx.Where("id IN (SELECT org_id FROM org_members WHERE user_id = ?)", userID)
 	} else if !canManage {
@@ -98,6 +102,9 @@ func (s *Store) DeleteOrganization(ctx context.Context, id, orgName string) ([]d
 		}
 		return tx.Delete(&db.Organization{}, "id = ?", id).Error
 	})
+	if err == nil {
+		_ = s.PruneOrphanStars(ctx)
+	}
 	return deletedRepos, err
 }
 
@@ -155,6 +162,15 @@ func (s *Store) ListOrgMembers(ctx context.Context, orgID string, q pages.Query,
 	var members []*db.OrgMember
 	err := base().Preload("User").Limit(limit).Offset(offset).Find(&members).Error
 	return members, total, err
+}
+
+// Names of every organization the user belongs to
+func (s *Store) ListUserOrgNames(ctx context.Context, userID string) ([]string, error) {
+	var names []string
+	err := s.db.WithContext(ctx).Model(&db.Organization{}).
+		Where("id IN (SELECT org_id FROM org_members WHERE user_id = ?)", userID).
+		Order("name ASC").Pluck("name", &names).Error
+	return names, err
 }
 
 // Caller's role per org id, single query

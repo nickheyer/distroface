@@ -10,7 +10,7 @@
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import MirrorBadge from '$lib/components/mirror-badge.svelte';
-	import { Archive, Plus, Trash, Lock, Globe, HardDrive, Clock } from '$lib/icons';
+	import { Archive, Plus, Trash, Lock, Globe, HardDrive, Clock, Star } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -211,6 +211,13 @@
 							<span class="flex items-center gap-1">
 								<HardDrive class="size-3.5" />{formatBytes(Number(repo.totalSize))}
 							</span>
+							{#if Number(repo.starCount) > 0}
+								<span class="flex items-center gap-1 tabular-nums">
+									<Star
+										class="size-3.5 {repo.isStarred ? 'fill-warning text-warning' : ''}"
+									/>{Number(repo.starCount)}
+								</span>
+							{/if}
 							{#if repo.createdAt}
 								<span class="flex items-center gap-1">
 									<Clock class="size-3.5" />Created {relativeTime(timestampDate(repo.createdAt))}

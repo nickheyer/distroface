@@ -218,6 +218,8 @@ message UnstarRepositoryResponse {
 // ListStarredRepositoriesRequest contains pagination parameters.
 message ListStarredRepositoriesRequest {
   PageRequest page = 1;
+  // Empty lists the caller's stars
+  string username = 2;
 }
 
 // ListStarredRepositoriesResponse contains a page of starred repositories.

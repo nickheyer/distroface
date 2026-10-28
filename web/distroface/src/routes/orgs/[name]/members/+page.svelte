@@ -5,7 +5,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
+	import UserAvatar from '$lib/components/user-avatar.svelte';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
@@ -149,9 +149,12 @@
 		<div class="box divide-y transition-opacity duration-200 {loading ? 'opacity-60' : ''}">
 			{#each members as member (member.userId)}
 				<div class="flex items-center gap-3 px-4 py-3">
-					<Avatar class="size-7">
-						<AvatarFallback>{member.username.slice(0, 2)}</AvatarFallback>
-					</Avatar>
+					<UserAvatar
+						username={member.username}
+						displayName={member.displayName}
+						avatarUrl={member.avatarUrl}
+						class="size-7"
+					/>
 					<div class="min-w-0 flex-1">
 						<a
 							href={resolve('/[namespace]', { namespace: member.username })}

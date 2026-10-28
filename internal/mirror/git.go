@@ -179,6 +179,8 @@ type ImportOptions struct {
 	Metadata bool `json:"metadata"`
 	Wiki     bool `json:"wiki"`
 	LFS      bool `json:"lfs"`
+	// Release entries plus their assets into a linked package
+	Releases bool `json:"releases"`
 }
 
 // Import sources ride in the mirror config column meanwhile
@@ -315,7 +317,34 @@ func (m *Monitor) SetupCompositeMirror(ctx context.Context, repo *db.GitReposito
 		}
 	}
 	for _, ref := range images {
-		if err := m.createImageMirror(ctx, repo, cfg, up, ref); err != nil {
+		if err := m.createImageMirror(ctx, repo, cfg, up, ref, false); err != nil {
+			errs = append(errs, fmt.Errorf("image %s: %w", ref, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Creates linked image repositories that copy the upstream once and then stand alone
+func (m *Monitor) SetupImportImages(ctx context.Context, repo *db.GitRepository, images []string) error {
+	if m.git == nil {
+		return ErrGitUnavailable
+	}
+	cfg, err := m.Config(repo.MirrorConfig)
+	if err != nil {
+		return err
+	}
+	up, err := parseGitUpstream(cfg.GetUpstream())
+	if err != nil {
+		return err
+	}
+	if up.Forge == "" {
+		if forge, err := m.detectForge(ctx, up); err == nil {
+			up.Forge = forge
+		}
+	}
+	var errs []error
+	for _, ref := range images {
+		if err := m.createImageMirror(ctx, repo, cfg, up, ref, true); err != nil {
 			errs = append(errs, fmt.Errorf("image %s: %w", ref, err))
 		}
 	}
@@ -393,7 +422,7 @@ func (m *Monitor) createReleasePackage(ctx context.Context, repo *db.GitReposito
 	return nil
 }
 
-func (m *Monitor) createImageMirror(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, entry string) error {
+func (m *Monitor) createImageMirror(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, entry string, once bool) error {
 	if m.oci == nil {
 		return fmt.Errorf("%w: registry mirroring is unavailable", ErrInvalid)
 	}
@@ -436,6 +465,10 @@ func (m *Monitor) createImageMirror(ctx context.Context, repo *db.GitRepository,
 		Type:           v1.RepositoryType_REPOSITORY_TYPE_MIRROR,
 		MirrorConfig:   raw,
 		GitRepoID:      &gitID,
+	}
+	if once {
+		row.Description = "Imported from " + upstream
+		row.MirrorState = SyncState{ImportOnce: true}.Encode()
 	}
 	if err := m.store.CreateRepository(ctx, row); err != nil {
 		return err

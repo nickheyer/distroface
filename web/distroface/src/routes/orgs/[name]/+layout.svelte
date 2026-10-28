@@ -26,6 +26,9 @@
 	import { OrgContext, ORG_CONTEXT_KEY } from '$lib/org-context.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import SideNav from '$lib/components/side-nav.svelte';
+	import { timestampDate } from '@bufbuild/protobuf/wkt';
+	import { relativeTime } from '$lib/utils';
+	import { LayoutDashboard, Calendar } from '$lib/icons';
 
 	let { children } = $props();
 
@@ -43,7 +46,8 @@
 		const name = page.params.name ?? '';
 		const git = configStore.gitEnabled;
 		const items: NavItem[] = [
-			{ href: resolve('/orgs/[name]', { name }), label: 'Images', icon: Package },
+			{ href: resolve('/orgs/[name]', { name }), label: 'Overview', icon: LayoutDashboard },
+			{ href: resolve('/orgs/[name]/images', { name }), label: 'Images', icon: Package },
 			{ href: resolve('/orgs/[name]/artifacts', { name }), label: 'Artifacts', icon: Archive }
 		];
 		if (git) {
@@ -82,6 +86,12 @@
 				},
 				{ href: resolve('/orgs/[name]/settings', { name }), label: 'Settings', icon: Settings }
 			);
+		} else if (ctx.isMember) {
+			items.push({
+				href: resolve('/orgs/[name]/settings', { name }),
+				label: 'Membership',
+				icon: Settings
+			});
 		}
 		return items;
 	});
@@ -111,24 +121,45 @@
 	{:else if ctx.org}
 		<div class="flex items-start gap-4 border-b pb-5">
 			<div
-				class="flex size-12 shrink-0 items-center justify-center rounded-lg border bg-muted text-muted-foreground"
+				class="flex size-16 shrink-0 items-center justify-center rounded-xl border bg-muted text-lg font-semibold text-muted-foreground uppercase"
+				aria-hidden="true"
 			>
-				<Building class="size-5" />
+				{ctx.org.name.slice(0, 2)}
 			</div>
 			<div class="min-w-0 flex-1">
-				<h1 class="truncate text-xl leading-7 font-semibold tracking-tight">
-					{ctx.org.displayName || ctx.org.name}
-				</h1>
-				<div
-					class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground"
-				>
-					{#if ctx.org.description}
-						<span class="truncate">{ctx.org.description}</span>
+				<div class="flex flex-wrap items-baseline gap-x-2">
+					<h1 class="truncate text-xl leading-7 font-semibold tracking-tight">
+						{ctx.org.displayName || ctx.org.name}
+					</h1>
+					{#if ctx.org.displayName && ctx.org.displayName !== ctx.org.name}
+						<span class="truncate text-sm text-muted-foreground">{ctx.org.name}</span>
 					{/if}
-					<span class="flex shrink-0 items-center gap-1">
+				</div>
+				{#if ctx.org.description}
+					<p class="mt-0.5 line-clamp-2 text-sm text-muted-foreground">{ctx.org.description}</p>
+				{/if}
+				<div
+					class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground"
+				>
+					<a
+						href={resolve('/orgs/[name]/members', { name: ctx.org.name })}
+						class="flex shrink-0 items-center gap-1 hover:text-foreground"
+					>
 						<Users class="size-3.5" />
 						{ctx.org.memberCount} member{ctx.org.memberCount !== 1 ? 's' : ''}
-					</span>
+					</a>
+					{#if ctx.org.teamsCount > 0}
+						<span class="flex shrink-0 items-center gap-1">
+							<Building class="size-3.5" />
+							{ctx.org.teamsCount} team{ctx.org.teamsCount !== 1 ? 's' : ''}
+						</span>
+					{/if}
+					{#if ctx.org.createdAt}
+						<span class="flex shrink-0 items-center gap-1">
+							<Calendar class="size-3.5" />
+							Created {relativeTime(timestampDate(ctx.org.createdAt))}
+						</span>
+					{/if}
 				</div>
 			</div>
 		</div>

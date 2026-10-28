@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/gitrepo"
@@ -17,7 +18,7 @@ import (
 )
 
 // Property marking an artifact as a release asset
-const ReleaseAssetProperty = "release"
+const ReleaseAssetProperty = artifacts.ReleaseProperty
 
 // Fields of a release
 type ReleaseInput struct {
@@ -509,4 +510,5 @@ func (m *Manager) announceRelease(ctx context.Context, repo *db.GitRepository, a
 		URL:     m.ReleaseURL(ctx, repo, rel),
 	})
 	m.dispatchRelease(ctx, repo, actor, rel, action)
+	m.recordActivity(ctx, ActivityEvent{Repo: repo, Actor: actor.User, Action: action, Release: rel})
 }

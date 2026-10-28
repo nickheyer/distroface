@@ -51,6 +51,8 @@ message User {
   bool is_active = 10;
   bool must_change_password = 11;
   bool oidc_linked = 12;
+  // Uploaded image route or the identity provider picture, empty shows initials
+  string avatar_url = 13;
 }
 
 // Reports a per-item failure in a bulk operation.
@@ -88,6 +90,8 @@ message OrgMember {
   string username = 2;
   OrgRole role = 3;
   google.protobuf.Timestamp joined_at = 4;
+  string display_name = 5;
+  string avatar_url = 6;
 }
 
 // APIToken represents a personal access token (metadata only, no secret).
@@ -402,6 +406,8 @@ message ArtifactRepository {
   // Workflow run uploads, counted apart from the package contents
   int64 workflow_artifact_count = 19;
   int64 workflow_total_size = 20;
+  int64 star_count = 21;
+  bool is_starred = 22;
 }
 
 // Artifact is a single stored artifact (file) within an artifact repository.

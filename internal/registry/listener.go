@@ -31,6 +31,7 @@ var listenerDeps struct {
 	recorder   *audit.Recorder
 	linker     SourceLinker
 	images     ImageRecorder
+	activity   ActivityRecorder
 }
 
 // Links an image repo to the git repo its source label names
@@ -46,6 +47,16 @@ type ImageRecorder interface {
 // Run attribution of job token pushes
 func SetImageRecorder(r ImageRecorder) {
 	listenerDeps.images = r
+}
+
+// Feeds tag pushes into the activity stream
+type ActivityRecorder interface {
+	ImagePushed(ctx context.Context, repo *storage.Repository, actor, tag, digest string)
+}
+
+// SetActivityRecorder installs the activity feed hook
+func SetActivityRecorder(r ActivityRecorder) {
+	listenerDeps.activity = r
 }
 
 // SetSourceLinker enables linking by the opencontainers source label
@@ -76,6 +87,7 @@ func init() {
 			recorder:   listenerDeps.recorder,
 			linker:     listenerDeps.linker,
 			images:     listenerDeps.images,
+			activity:   listenerDeps.activity,
 		}}, nil
 	})
 	if err != nil {
@@ -91,6 +103,7 @@ type observer struct {
 	recorder   *audit.Recorder
 	linker     SourceLinker
 	images     ImageRecorder
+	activity   ActivityRecorder
 }
 
 type observedRepo struct {
@@ -226,6 +239,9 @@ func (o *observer) manifestPushed(ctx context.Context, dist distribution.Reposit
 		o.dispatcher.Dispatch(ctx, "push", namespace, name, tag, dgst)
 	}
 	o.audit(ctx, "push", namespace, name, tag, dgst)
+	if o.activity != nil {
+		o.activity.ImagePushed(ctx, r, subjectOf(ctx), tag, dgst)
+	}
 	if tag != "" && o.images != nil {
 		if jobID, _, ok := auth.ParseJobSubject(subjectOf(ctx)); ok {
 			o.images.RecordJobImage(ctx, jobID, r, tag, dgst)

@@ -165,7 +165,7 @@ func (s *Store) ListGitRepositories(ctx context.Context, opts GitRepoListOptions
 		}
 	}
 	if opts.StarredBy != "" {
-		q = q.Joins("JOIN git_stars ON git_stars.repo_id = git_repositories.id AND git_stars.user_id = ?", opts.StarredBy)
+		q = q.Joins("JOIN stars ON stars.target_id = git_repositories.id AND stars.kind = ? AND stars.user_id = ?", db.StarKindGit, opts.StarredBy)
 	}
 	q = q.Scopes(gitVisibilityScope(opts), GitReposQuery.Scope(opts.Query))
 
@@ -177,11 +177,11 @@ func (s *Store) ListGitRepositories(ctx context.Context, opts GitRepoListOptions
 	order := opts.OrderBy
 	switch {
 	case order == "" && opts.StarredBy != "":
-		order = "git_stars.created_at DESC"
+		order = "stars.created_at DESC"
 	case order == "":
 		order = "git_repositories.updated_at DESC"
 	case order == "stars ASC" || order == "stars DESC":
-		order = "(SELECT COUNT(*) FROM git_stars gs WHERE gs.repo_id = git_repositories.id) " + order[len("stars "):]
+		order = "(SELECT COUNT(*) FROM stars gs WHERE gs.kind = '" + db.StarKindGit + "' AND gs.target_id = git_repositories.id) " + order[len("stars "):]
 	default:
 		order = "git_repositories." + order
 	}
@@ -265,6 +265,9 @@ func (s *Store) DeleteGitRepository(ctx context.Context, repo *db.GitRepository)
 			}
 		}
 		if err := tx.Where("scope_type = ? AND scope_id = ?", int32(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO), repo.ID).Delete(&db.SettingsRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("kind = ? AND target_id = ?", db.StarKindGit, repo.ID).Delete(&db.Star{}).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&db.GitRepository{}, "id = ?", repo.ID).Error
@@ -400,55 +403,7 @@ func (s *Store) GetGitTopics(ctx context.Context, repoIDs []string) (map[string]
 	return out, nil
 }
 
-// ── Stars and watches ────────────────────────────────────────────────────
-
-func (s *Store) StarGitRepository(ctx context.Context, userID, repoID string) error {
-	var existing db.GitStar
-	if err := s.db.WithContext(ctx).First(&existing, "user_id = ? AND repo_id = ?", userID, repoID).Error; err == nil {
-		return nil
-	}
-	return s.db.WithContext(ctx).Create(&db.GitStar{ID: uuid.New().String(), UserID: userID, RepoID: repoID}).Error
-}
-
-func (s *Store) UnstarGitRepository(ctx context.Context, userID, repoID string) error {
-	return s.db.WithContext(ctx).Where("user_id = ? AND repo_id = ?", userID, repoID).Delete(&db.GitStar{}).Error
-}
-
-func (s *Store) GetGitStarCounts(ctx context.Context, repoIDs []string) (map[string]int64, error) {
-	counts := make(map[string]int64)
-	if len(repoIDs) == 0 {
-		return counts, nil
-	}
-	var rows []struct {
-		RepoID string
-		Count  int64
-	}
-	err := s.db.WithContext(ctx).Model(&db.GitStar{}).Select("repo_id, COUNT(*) as count").
-		Where("repo_id IN ?", repoIDs).Group("repo_id").Scan(&rows).Error
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range rows {
-		counts[r.RepoID] = r.Count
-	}
-	return counts, nil
-}
-
-func (s *Store) GetGitStarredSet(ctx context.Context, userID string, repoIDs []string) (map[string]bool, error) {
-	starred := make(map[string]bool)
-	if userID == "" || len(repoIDs) == 0 {
-		return starred, nil
-	}
-	var ids []string
-	err := s.db.WithContext(ctx).Model(&db.GitStar{}).Where("user_id = ? AND repo_id IN ?", userID, repoIDs).Pluck("repo_id", &ids).Error
-	if err != nil {
-		return nil, err
-	}
-	for _, id := range ids {
-		starred[id] = true
-	}
-	return starred, nil
-}
+// ── Watches ──────────────────────────────────────────────────────────────
 
 func (s *Store) SetGitWatch(ctx context.Context, userID, repoID, mode string) error {
 	var existing db.GitWatch

@@ -117,6 +117,16 @@ func UnitsOf(repo *db.GitRepository) *v1.GitRepoUnits {
 	return units
 }
 
+// Units a new repository starts with, user namespaces follow the instance for actions and agents
+func DefaultUnits(gs *v1.GitSettings, orgNamespace bool) *v1.GitRepoUnits {
+	units := UnitsOf(nil)
+	if !orgNamespace {
+		units.Actions = gs.GetActions().GetEnabled()
+		units.Agents = gs.GetAgents().GetEnabled()
+	}
+	return units
+}
+
 // Serializes units for storage
 func EncodeUnits(u *v1.GitRepoUnits) string {
 	b, err := protojson.Marshal(u)

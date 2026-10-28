@@ -375,10 +375,14 @@ message GitImportSource {
   // Basic auth pair for private https upstreams
   string username = 2;
   optional string auth_token = 3;
-  // Issues, pulls, labels, milestones, and releases from known forges
+  // Issues, pulls, labels, and milestones from known forges
   bool metadata = 4;
   bool wiki = 5;
   bool lfs = 6;
+  // Release entries and their assets, copied into a linked artifact package
+  bool releases = 7;
+  // Upstream container images copied once into linked image repositories
+  repeated string images = 8;
 }
 
 // GitImportStatus describes a one time import of a repository

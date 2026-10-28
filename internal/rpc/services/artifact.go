@@ -7,10 +7,12 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"connectrpc.com/connect/v2"
+	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
@@ -31,13 +33,17 @@ var _ distrofacev1connect.ArtifactServiceHandler = (*ArtifactService)(nil)
 var artifactRepoNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 
 type ArtifactService struct {
-	store   *stores.Store
-	manager *artifacts.Manager
-	access  *artifacts.Access
-	mirrors *mirror.Monitor
-	git     *gitrepo.Manager
-	log     *logger.Logger
+	store    *stores.Store
+	manager  *artifacts.Manager
+	access   *artifacts.Access
+	mirrors  *mirror.Monitor
+	git      *gitrepo.Manager
+	activity *activity.Recorder
+	log      *logger.Logger
 }
+
+// Installs the activity recorder, nil keeps the feed quiet
+func (s *ArtifactService) SetActivity(rec *activity.Recorder) { s.activity = rec }
 
 func NewArtifactService(store *stores.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, git *gitrepo.Manager, log *logger.Logger) *ArtifactService {
 	access := artifacts.NewAccess(store, enforcer)
@@ -110,6 +116,9 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *v1.
 	if s.git != nil {
 		s.git.LinkArtifactByName(ctx, repo)
 	}
+	if s.activity != nil {
+		s.activity.Artifact(repo, user, activity.KindCreated, "", "")
+	}
 
 	return &v1.CreateArtifactRepositoryResponse{
 		Repository: s.repoToProto(ctx, repo, nil),
@@ -128,9 +137,9 @@ func (s *ArtifactService) GetArtifactRepository(ctx context.Context, req *v1.Get
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return &v1.GetArtifactRepositoryResponse{
-		Repository: s.repoToProto(ctx, repo, stats),
-	}, nil
+	out := s.repoToProto(ctx, repo, stats)
+	s.attachStars(ctx, []*v1.ArtifactRepository{out})
+	return &v1.GetArtifactRepositoryResponse{Repository: out}, nil
 }
 
 func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *v1.ListArtifactRepositoriesRequest) (*v1.ListArtifactRepositoriesResponse, error) {
@@ -166,11 +175,115 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *v1.
 	for i, r := range repos {
 		protoRepos[i] = s.repoToProto(ctx, r, stats)
 	}
+	s.attachStars(ctx, protoRepos)
 
 	return &v1.ListArtifactRepositoriesResponse{
 		Repositories: protoRepos,
 		Page:         pages.Info(offset, limit, total),
 	}, nil
+}
+
+// ── Stars ────────────────────────────────────────────────────────────────
+
+// Fills star counts and the caller's starred flags
+func (s *ArtifactService) attachStars(ctx context.Context, repos []*v1.ArtifactRepository) {
+	if len(repos) == 0 {
+		return
+	}
+	ids := make([]string, len(repos))
+	for i, r := range repos {
+		ids[i] = strconv.FormatInt(r.Id, 10)
+	}
+	counts, err := s.store.StarCounts(ctx, storage.StarKindArtifact, ids)
+	if err != nil {
+		s.log.Error("loading artifact star counts: %v", err)
+		return
+	}
+	var starred map[string]bool
+	if user := auth.UserFromContext(ctx); user != nil && !user.IsAnonymous() {
+		if starred, err = s.store.StarredSet(ctx, user.ID, storage.StarKindArtifact, ids); err != nil {
+			s.log.Error("loading artifact starred set: %v", err)
+		}
+	}
+	for i, r := range repos {
+		r.StarCount = counts[ids[i]]
+		r.IsStarred = starred[ids[i]]
+	}
+}
+
+func (s *ArtifactService) star(ctx context.Context, namespace, name string, star bool) (int64, error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil || user.IsAnonymous() {
+		return 0, connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	repo, err := s.visibleRepo(ctx, user, namespace, name)
+	if err != nil {
+		return 0, err
+	}
+	id := strconv.FormatInt(repo.ID, 10)
+	if star {
+		created, err := s.store.Star(ctx, user.ID, storage.StarKindArtifact, id)
+		if err != nil {
+			return 0, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		}
+		if created && s.activity != nil {
+			s.activity.Artifact(repo, user, activity.KindStar, "", "")
+		}
+	} else if err := s.store.Unstar(ctx, user.ID, storage.StarKindArtifact, id); err != nil {
+		return 0, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	n, err := s.store.CountStars(ctx, storage.StarKindArtifact, id)
+	if err != nil {
+		return 0, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	return n, nil
+}
+
+func (s *ArtifactService) StarArtifactRepository(ctx context.Context, req *v1.StarArtifactRepositoryRequest) (*v1.StarArtifactRepositoryResponse, error) {
+	n, err := s.star(ctx, req.Namespace, req.Name, true)
+	if err != nil {
+		return nil, err
+	}
+	return &v1.StarArtifactRepositoryResponse{StarCount: n}, nil
+}
+
+func (s *ArtifactService) UnstarArtifactRepository(ctx context.Context, req *v1.UnstarArtifactRepositoryRequest) (*v1.UnstarArtifactRepositoryResponse, error) {
+	n, err := s.star(ctx, req.Namespace, req.Name, false)
+	if err != nil {
+		return nil, err
+	}
+	return &v1.UnstarArtifactRepositoryResponse{StarCount: n}, nil
+}
+
+func (s *ArtifactService) ListStarredArtifactRepositories(ctx context.Context, req *v1.ListStarredArtifactRepositoriesRequest) (*v1.ListStarredArtifactRepositoriesResponse, error) {
+	user := auth.UserFromContext(ctx)
+	targetID, err := starredTarget(ctx, s.store, user, req.Username)
+	if err != nil {
+		return nil, err
+	}
+	limit, offset := pages.Parse(req.Page)
+	opts := s.access.ListOptions(user, "")
+	opts.StarredBy = targetID
+	opts.Limit = limit
+	opts.Offset = offset
+	repos, total, err := s.store.ListArtifactRepositories(ctx, opts)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	ids := make([]int64, len(repos))
+	for i, r := range repos {
+		ids[i] = r.ID
+	}
+	stats, err := s.store.GetArtifactRepoStats(ctx, ids)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	out := make([]*v1.ArtifactRepository, len(repos))
+	for i, r := range repos {
+		out[i] = s.repoToProto(ctx, r, stats)
+	}
+	s.attachStars(ctx, out)
+	return &v1.ListStarredArtifactRepositoriesResponse{Repositories: out, Page: pages.Info(offset, limit, total)}, nil
 }
 
 func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *v1.UpdateArtifactRepositoryRequest) (*v1.UpdateArtifactRepositoryResponse, error) {
@@ -285,6 +398,9 @@ func (s *ArtifactService) CompleteArtifactUpload(ctx context.Context, req *v1.Co
 	artifact, err := s.manager.CompleteUpload(ctx, repo, msg.UploadId, msg.Version, msg.Path, msg.Metadata, msg.Properties)
 	if err != nil {
 		return nil, mapArtifactErr(err)
+	}
+	if s.activity != nil {
+		s.activity.Artifact(repo, user, activity.KindArtifactUpload, artifact.Version, artifact.Path)
 	}
 
 	return &v1.CompleteArtifactUploadResponse{

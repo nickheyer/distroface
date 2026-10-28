@@ -49,6 +49,7 @@
 		Search,
 		Settings,
 		Square,
+		Star,
 		Tag,
 		Tags,
 		Trash,
@@ -365,6 +366,30 @@
 	}
 
 	// ── Sync now ─────────────────────────────────────────────────────────
+
+	let starPending = $state(false);
+	async function toggleStar() {
+		if (!repo || starPending) return;
+		starPending = true;
+		try {
+			if (repo.isStarred) {
+				const resp = await rpcClient.artifact.unstarArtifactRepository({
+					namespace,
+					name: repoName
+				});
+				repo.isStarred = false;
+				repo.starCount = resp.starCount;
+			} else {
+				const resp = await rpcClient.artifact.starArtifactRepository({ namespace, name: repoName });
+				repo.isStarred = true;
+				repo.starCount = resp.starCount;
+			}
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			starPending = false;
+		}
+	}
 
 	let syncing = $state(false);
 	let stopping = $state(false);
@@ -749,6 +774,15 @@
 				</div>
 			</div>
 			<div class="flex shrink-0 items-center gap-2">
+				{#if authStore.isAuthenticated}
+					<Button variant="outline" onclick={toggleStar} disabled={starPending}>
+						<Star class={repo.isStarred ? 'fill-warning text-warning' : ''} />
+						{repo.isStarred ? 'Starred' : 'Star'}
+						{#if Number(repo.starCount) > 0}
+							<span class="text-muted-foreground tabular-nums">{Number(repo.starCount)}</span>
+						{/if}
+					</Button>
+				{/if}
 				{#if repoIsMirror && canMutate}
 					{#if syncActive}
 						<Button variant="outline" onclick={stopSync} disabled={stopping}>

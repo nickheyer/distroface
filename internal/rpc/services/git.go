@@ -10,6 +10,7 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"github.com/go-git/go-git/v6/plumbing"
+	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -41,6 +42,7 @@ type GitService struct {
 	forge    *forge.Manager
 	mirrors  *mirror.Monitor
 	enforcer *rbac.Enforcer
+	feed     *activity.Recorder
 	log      *logger.Logger
 
 	insights  *gitrepo.Memo[repoInsights]
@@ -68,6 +70,16 @@ func NewGitService(store *stores.Store, manager *gitrepo.Manager, fm *forge.Mana
 }
 
 func (s *GitService) access() *gitrepo.Access { return s.manager.Access() }
+
+// Installs the activity recorder, nil keeps the feed quiet
+func (s *GitService) SetActivity(rec *activity.Recorder) { s.feed = rec }
+
+// Queues a repository event when a recorder is installed
+func (s *GitService) record(repo *storage.GitRepository, user *auth.AuthenticatedUser, kind string, detail map[string]any) {
+	if s.feed != nil {
+		s.feed.GitRepo(repo, user, kind, detail)
+	}
+}
 
 func (s *GitService) requireEnabled(ctx context.Context) error {
 	if !s.manager.Enabled(ctx) {
@@ -210,11 +222,17 @@ func (s *GitService) CreateGitRepository(ctx context.Context, req *v1.CreateGitR
 	}
 	if importing {
 		src := req.ImportSource
-		opts := &mirror.ImportOptions{Metadata: src.GetMetadata(), Wiki: src.GetWiki(), LFS: src.GetLfs()}
+		opts := &mirror.ImportOptions{Metadata: src.GetMetadata(), Wiki: src.GetWiki(), LFS: src.GetLfs(), Releases: src.GetReleases()}
 		if err := s.mirrors.StartGitImport(repo, opts); err != nil {
 			s.log.Error("import start for %s/%s: %v", repo.Namespace, repo.Name, err)
 		}
+		if len(src.GetImages()) > 0 {
+			if err := s.mirrors.SetupImportImages(ctx, repo, src.GetImages()); err != nil {
+				s.log.Error("image import setup for %s/%s: %v", repo.Namespace, repo.Name, err)
+			}
+		}
 	}
+	s.record(repo, user, activity.KindCreated, map[string]any{"type": repoType.String(), "import": importing})
 	if repoType == v1.GitRepoType_GIT_REPO_TYPE_MIRROR && s.mirrors != nil {
 		if req.MirrorReleases || len(req.MirrorImages) > 0 {
 			if err := s.setupCompositeMirror(ctx, repo, req.MirrorReleases, req.MirrorImages); err != nil {
@@ -607,6 +625,11 @@ func (s *GitService) ForkGitRepository(ctx context.Context, req *v1.ForkGitRepos
 	if err != nil {
 		return nil, mapGitErr(err)
 	}
+	if s.feed != nil {
+		ev := activity.Event{Actor: user, Kind: activity.KindFork, TargetKind: storage.ActivityTargetGit, TargetID: parent.ID,
+			Namespace: parent.Namespace, Name: parent.Name, Subject: fork.Namespace + "/" + fork.Name, Public: !parent.IsPrivate && !fork.IsPrivate}
+		s.feed.Record(ev)
+	}
 	return &v1.ForkGitRepositoryResponse{Repository: s.gitRepoToProto(ctx, user, fork, nil, true)}, nil
 }
 
@@ -799,15 +822,22 @@ func (s *GitService) star(ctx context.Context, namespace, name string, star bool
 		return 0, err
 	}
 	if star {
-		err = s.store.StarGitRepository(ctx, user.ID, repo.ID)
+		var created bool
+		created, err = s.store.Star(ctx, user.ID, storage.StarKindGit, repo.ID)
+		if err == nil && created {
+			s.record(repo, user, activity.KindStar, nil)
+		}
 	} else {
-		err = s.store.UnstarGitRepository(ctx, user.ID, repo.ID)
+		err = s.store.Unstar(ctx, user.ID, storage.StarKindGit, repo.ID)
 	}
 	if err != nil {
 		return 0, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
-	counts, _ := s.store.GetGitStarCounts(ctx, []string{repo.ID})
-	return counts[repo.ID], nil
+	n, err := s.store.CountStars(ctx, storage.StarKindGit, repo.ID)
+	if err != nil {
+		return 0, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	return n, nil
 }
 
 func (s *GitService) StarGitRepository(ctx context.Context, req *v1.StarGitRepositoryRequest) (*v1.StarGitRepositoryResponse, error) {

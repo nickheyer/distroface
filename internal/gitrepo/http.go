@@ -87,11 +87,11 @@ func (h *HTTP) serve(w http.ResponseWriter, r *http.Request, namespace, name str
 		return
 	}
 	if repo == nil {
-		h.notFound(w, r, hasCreds)
+		h.notFound(w, r, suffix, hasCreds)
 		return
 	}
 	if portal.ForeignRef(ctx, repo.Namespace) {
-		h.notFound(w, r, hasCreds)
+		h.notFound(w, r, suffix, hasCreds)
 		return
 	}
 	req := &gitRequest{repo: repo, user: user, wiki: wiki, suffix: suffix}
@@ -106,11 +106,11 @@ func (h *HTTP) serve(w http.ResponseWriter, r *http.Request, namespace, name str
 	}
 	if !h.manager.Access().Can(ctx, user, repo, unit, action) {
 		if !h.manager.Access().CanSee(ctx, user, repo) {
-			h.notFound(w, r, hasCreds)
+			h.notFound(w, r, suffix, hasCreds)
 			return
 		}
 		if !hasCreds && (user == nil || user.IsAnonymous()) {
-			h.challenge(w, r)
+			h.challenge(w, r, suffix)
 			return
 		}
 		http.Error(w, "forbidden", http.StatusForbidden)
@@ -190,10 +190,18 @@ func (h *HTTP) identify(w http.ResponseWriter, r *http.Request, repo *db.GitRepo
 	}
 	header := r.Header.Get("Authorization")
 	if header == "" {
+		// Browser loads of raw files and downloads ride the spa session cookie
+		if browseRoute(suffix) {
+			if token := auth.ExtractToken(r.Header); token != "" {
+				if user, err := h.authMgr.ValidateSession(ctx, token); err == nil {
+					return user, true, true
+				}
+			}
+		}
 		if portal.AnonymousAllowed(ctx, h.authMgr.IsAnonymousAccessEnabled()) {
 			return h.authMgr.AnonymousUser(), false, true
 		}
-		h.challenge(w, r)
+		h.challenge(w, r, suffix)
 		return nil, false, false
 	}
 	if h.authLimiter != nil && h.authLimiter.Blocked(clientIP) {
@@ -206,7 +214,7 @@ func (h *HTTP) identify(w http.ResponseWriter, r *http.Request, repo *db.GitRepo
 			h.authLimiter.Record(clientIP)
 		}
 		h.manager.Audit(ctx, audit.Event{Action: "Git/auth", Resource: "auth", Outcome: audit.OutcomeDenied, SourceIP: clientIP, Detail: r.URL.Path})
-		h.challenge(w, r)
+		h.challenge(w, r, suffix)
 		return nil, true, false
 	}
 	scheme, value, _ := strings.Cut(header, " ")
@@ -300,15 +308,26 @@ func (h *HTTP) resetLimiter(ip string) {
 	}
 }
 
-func (h *HTTP) challenge(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("WWW-Authenticate", `Basic realm="distroface"`)
+// Paths browsers open directly, never git or lfs clients
+func browseRoute(suffix string) bool {
+	return strings.HasPrefix(suffix, "-/raw/") || strings.HasPrefix(suffix, "-/archive/") ||
+		strings.HasPrefix(suffix, "-/releases/") || strings.HasPrefix(suffix, "-/actions/artifacts/")
+}
+
+// Git clients get a basic challenge, browser routes a bearer one so no prompt pops
+func (h *HTTP) challenge(w http.ResponseWriter, _ *http.Request, suffix string) {
+	if browseRoute(suffix) {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="distroface"`)
+	} else {
+		w.Header().Set("WWW-Authenticate", `Basic realm="distroface"`)
+	}
 	http.Error(w, "authentication required", http.StatusUnauthorized)
 }
 
 // Existence never leaks to the unauthenticated
-func (h *HTTP) notFound(w http.ResponseWriter, r *http.Request, hasCreds bool) {
+func (h *HTTP) notFound(w http.ResponseWriter, r *http.Request, suffix string, hasCreds bool) {
 	if !hasCreds {
-		h.challenge(w, r)
+		h.challenge(w, r, suffix)
 		return
 	}
 	http.Error(w, "repository not found", http.StatusNotFound)

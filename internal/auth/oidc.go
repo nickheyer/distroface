@@ -276,6 +276,13 @@ func (h *OIDCHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
 		return
 	}
+	// The provider owns the picture of every oidc account
+	if picture, _ := claims["picture"].(string); user.AuthProvider == "oidc" && utils.IsWebURL(picture) && picture != user.AvatarURL {
+		user.AvatarURL = picture
+		if err := h.store.UpdateUser(ctx, user); err != nil {
+			h.log.Warn("OIDC: picture update for %s: %v", user.Username, err)
+		}
+	}
 
 	// Map claims to roles and orgs
 	h.mapClaimsToRoles(ctx, user.ID, claims)

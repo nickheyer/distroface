@@ -10,6 +10,7 @@ import (
 
 	"connectrpc.com/connect/v2"
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -35,8 +36,12 @@ type RepositoryService struct {
 	access   *auth.RepoAccess
 	mirrors  *mirror.Monitor
 	git      *gitrepo.Manager
+	activity *activity.Recorder
 	log      *logger.Logger
 }
+
+// Installs the activity recorder, nil keeps the feed quiet
+func (s *RepositoryService) SetActivity(rec *activity.Recorder) { s.activity = rec }
 
 func NewRepositoryService(store *stores.Store, reg *registry.RegistryAccess, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, git *gitrepo.Manager, log *logger.Logger) *RepositoryService {
 	return &RepositoryService{
@@ -142,6 +147,9 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, req *v1.Create
 	}
 	if s.git != nil {
 		s.git.LinkImageByName(ctx, repo)
+	}
+	if s.activity != nil {
+		s.activity.Image(repo, user, activity.KindCreated, "", nil)
 	}
 
 	proto := s.repoToProto(repo)
@@ -479,11 +487,15 @@ func (s *RepositoryService) StarRepository(ctx context.Context, req *v1.StarRepo
 	}
 
 	user := auth.UserFromContext(ctx)
-	if err := s.store.StarRepository(ctx, user.ID, repo.ID); err != nil {
+	created, err := s.store.Star(ctx, user.ID, storage.StarKindImage, repo.ID)
+	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	if created && s.activity != nil {
+		s.activity.Image(repo, user, activity.KindStar, "", nil)
+	}
 
-	count, err := s.store.CountStars(ctx, repo.ID)
+	count, err := s.store.CountStars(ctx, storage.StarKindImage, repo.ID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -497,11 +509,11 @@ func (s *RepositoryService) UnstarRepository(ctx context.Context, req *v1.Unstar
 	}
 
 	user := auth.UserFromContext(ctx)
-	if err := s.store.UnstarRepository(ctx, user.ID, repo.ID); err != nil {
+	if err := s.store.Unstar(ctx, user.ID, storage.StarKindImage, repo.ID); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	count, err := s.store.CountStars(ctx, repo.ID)
+	count, err := s.store.CountStars(ctx, storage.StarKindImage, repo.ID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -510,13 +522,23 @@ func (s *RepositoryService) UnstarRepository(ctx context.Context, req *v1.Unstar
 
 func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *v1.ListStarredRepositoriesRequest) (*v1.ListStarredRepositoriesResponse, error) {
 	user := auth.UserFromContext(ctx)
-	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, "")
+	targetID, err := starredTarget(ctx, s.store, user, req.Username)
+	if err != nil {
+		return nil, err
 	}
 
 	limit, offset := pages.Parse(req.Page)
+	opts := stores.RepoListOptions{Limit: limit, Offset: offset}
+	if user != nil {
+		opts.ViewerID = user.ID
+		opts.IncludePrivate, _ = s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, "*")
+		if !opts.IncludePrivate {
+			opts.GrantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceRepositories, rbac.ActionRead)
+		}
+		opts.OnlyRepo, opts.OnlyNamespace = user.ListingScope()
+	}
 
-	repos, total, err := s.store.ListStarredRepositories(ctx, user.ID, limit, offset)
+	repos, total, err := s.store.ListStarredRepositories(ctx, targetID, opts)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -544,6 +566,24 @@ func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *v1
 		Repositories: protoRepos,
 		Page:         pages.Info(offset, limit, total),
 	}, nil
+}
+
+// Resolves whose stars a listing shows, the caller's when no username is given
+func starredTarget(ctx context.Context, store *stores.Store, user *auth.AuthenticatedUser, username string) (string, error) {
+	if username == "" || (user != nil && username == user.Username) {
+		if user == nil || user.IsAnonymous() {
+			return "", connect.NewError(connect.CodeUnauthenticated, "")
+		}
+		return user.ID, nil
+	}
+	u, err := store.GetUserByUsername(ctx, username)
+	if err != nil {
+		return "", connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	if u == nil {
+		return "", connect.Errorf(connect.CodeNotFound, "user not found")
+	}
+	return u.ID, nil
 }
 
 // Validates auth and read access for star mutations
@@ -575,7 +615,7 @@ func (s *RepositoryService) attachStars(ctx context.Context, repos []*v1.Reposit
 		ids[i] = r.Id
 	}
 
-	counts, err := s.store.GetStarCounts(ctx, ids)
+	counts, err := s.store.StarCounts(ctx, storage.StarKindImage, ids)
 	if err != nil {
 		s.log.Error("loading star counts: %v", err)
 		return
@@ -583,7 +623,7 @@ func (s *RepositoryService) attachStars(ctx context.Context, repos []*v1.Reposit
 
 	var starred map[string]bool
 	if user := auth.UserFromContext(ctx); user != nil {
-		if starred, err = s.store.GetStarredSet(ctx, user.ID, ids); err != nil {
+		if starred, err = s.store.StarredSet(ctx, user.ID, storage.StarKindImage, ids); err != nil {
 			s.log.Error("loading starred set: %v", err)
 		}
 	}

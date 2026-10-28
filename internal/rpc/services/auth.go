@@ -522,6 +522,7 @@ func publicUserToProto(u *storage.User) *v1.User {
 		Id:          u.ID,
 		Username:    u.Username,
 		DisplayName: u.DisplayName,
+		AvatarUrl:   u.AvatarURL,
 		CreatedAt:   timestamppb.New(u.CreatedAt),
 		UpdatedAt:   timestamppb.New(u.UpdatedAt),
 	}
@@ -555,6 +556,7 @@ func userToProto(u *storage.User, roles []*storage.Role) *v1.User {
 		IsActive:           u.IsActive,
 		MustChangePassword: u.MustChangePassword,
 		OidcLinked:         u.OIDCSubject != "",
+		AvatarUrl:          u.AvatarURL,
 		CreatedAt:          timestamppb.New(u.CreatedAt),
 		UpdatedAt:          timestamppb.New(u.UpdatedAt),
 	}

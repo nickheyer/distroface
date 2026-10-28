@@ -3,6 +3,8 @@ package services
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"time"
 
 	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -475,4 +477,79 @@ func (s *UserService) AdminBulkDeleteUsers(ctx context.Context, req *v1.AdminBul
 
 	resp.DeletedCount = int32(len(targets))
 	return resp, nil
+}
+
+// ── Avatars ──────────────────────────────────────────────────────────────
+
+// Largest accepted upload
+const avatarMaxBytes = 1 << 20
+
+// Route the uploaded image is served from, versioned so caches refresh
+func avatarRoute(userID string, at time.Time) string {
+	return fmt.Sprintf("/api/avatars/%s?v=%d", userID, at.Unix())
+}
+
+func (s *UserService) SetAvatar(ctx context.Context, req *v1.SetAvatarRequest) (*v1.SetAvatarResponse, error) {
+	current := auth.UserFromContext(ctx)
+	if current == nil || current.IsAnonymous() {
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	user, err := s.store.GetUserByID(ctx, current.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	if user == nil {
+		return nil, connect.NewError(connect.CodeNotFound, "")
+	}
+	if user.AuthProvider != "local" {
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "your picture comes from your identity provider")
+	}
+	if len(req.Data) == 0 {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "an image is required")
+	}
+	if len(req.Data) > avatarMaxBytes {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "images must be under 1 MB")
+	}
+	ct := http.DetectContentType(req.Data)
+	switch ct {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+	default:
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "use a png, jpeg, gif, or webp image")
+	}
+	now := time.Now().UTC()
+	if err := s.store.SetUserAvatar(ctx, &storage.UserAvatar{UserID: user.ID, ContentType: ct, Data: req.Data, UpdatedAt: now}); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	user.AvatarURL = avatarRoute(user.ID, now)
+	if err := s.store.UpdateUser(ctx, user); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	roles, _ := s.store.GetUserRoles(ctx, user.ID)
+	return &v1.SetAvatarResponse{User: userToProto(user, roles)}, nil
+}
+
+func (s *UserService) RemoveAvatar(ctx context.Context, _ *v1.RemoveAvatarRequest) (*v1.RemoveAvatarResponse, error) {
+	current := auth.UserFromContext(ctx)
+	if current == nil || current.IsAnonymous() {
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	user, err := s.store.GetUserByID(ctx, current.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	if user == nil {
+		return nil, connect.NewError(connect.CodeNotFound, "")
+	}
+	if user.AuthProvider != "local" {
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "your picture comes from your identity provider")
+	}
+	if err := s.store.DeleteUserAvatar(ctx, user.ID); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	user.AvatarURL = ""
+	if err := s.store.UpdateUser(ctx, user); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	roles, _ := s.store.GetUserRoles(ctx, user.ID)
+	return &v1.RemoveAvatarResponse{User: userToProto(user, roles)}, nil
 }

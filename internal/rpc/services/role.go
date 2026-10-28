@@ -278,7 +278,7 @@ func (s *RoleService) ListScopeableObjects(ctx context.Context, req *v1.ListScop
 			})
 		}
 	case rbac.ResourceOrganizations:
-		orgs, t, err := s.store.ListOrganizations(ctx, "", true, query, limit, offset)
+		orgs, t, err := s.store.ListOrganizations(ctx, "", true, "", query, limit, offset)
 		if err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
