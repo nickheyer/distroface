@@ -10,7 +10,7 @@ import "google/protobuf/timestamp.proto";
 option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
 
 // ReleaseService manages releases, their assets, and their images.
-// Assets are artifacts in the repository's artifact package at the tag version.
+// Asset files upload by streaming to POST /<ns>/<name>/-/releases/<tag>/assets?name=<file>.
 service ReleaseService {
   // CreateRelease creates a release for a tag, creating the tag when it does not exist.
   rpc CreateRelease(CreateReleaseRequest) returns (CreateReleaseResponse) {}
@@ -24,10 +24,10 @@ service ReleaseService {
   rpc DeleteRelease(DeleteReleaseRequest) returns (DeleteReleaseResponse) {}
   // PublishRelease turns a draft into a published release.
   rpc PublishRelease(PublishReleaseRequest) returns (PublishReleaseResponse) {}
-  // AttachReleaseAsset attaches an uploaded artifact as a release asset.
-  rpc AttachReleaseAsset(AttachReleaseAssetRequest) returns (AttachReleaseAssetResponse) {}
-  // DetachReleaseAsset removes an asset and its artifact.
-  rpc DetachReleaseAsset(DetachReleaseAssetRequest) returns (DetachReleaseAssetResponse) {}
+  // UpdateReleaseAsset renames or relabels an asset.
+  rpc UpdateReleaseAsset(UpdateReleaseAssetRequest) returns (UpdateReleaseAssetResponse) {}
+  // DeleteReleaseAsset removes an asset and its file.
+  rpc DeleteReleaseAsset(DeleteReleaseAssetRequest) returns (DeleteReleaseAssetResponse) {}
   // AttachReleaseImage pins an image reference to a release.
   rpc AttachReleaseImage(AttachReleaseImageRequest) returns (AttachReleaseImageResponse) {}
   // DetachReleaseImage removes a pinned image.
@@ -40,16 +40,19 @@ service ReleaseService {
 
 // One file attached to a release
 message ReleaseAsset {
-  // Artifact id in the artifact package
-  string artifact_id = 1;
+  string id = 1;
   string name = 2;
-  int64 size = 3;
-  string digest = 4;
-  string content_type = 5;
-  string download_url = 6;
-  // Page of the artifact package version
-  string artifact_url = 7;
-  google.protobuf.Timestamp created_at = 8;
+  // Display label shown instead of the name when set
+  string label = 3;
+  int64 size = 4;
+  string digest = 5;
+  string content_type = 6;
+  // Browser download at /<ns>/<name>/releases/download/<tag>/<name>
+  string download_url = 7;
+  int64 download_count = 8;
+  string uploader = 9;
+  google.protobuf.Timestamp created_at = 10;
+  google.protobuf.Timestamp updated_at = 11;
 }
 
 // One container image belonging to a release
@@ -174,29 +177,31 @@ message PublishReleaseResponse {
   Release release = 1;
 }
 
-// AttachReleaseAssetRequest attaches an artifact already uploaded to the package.
-message AttachReleaseAssetRequest {
+// UpdateReleaseAssetRequest renames or relabels an asset.
+message UpdateReleaseAssetRequest {
   string namespace = 1;
   string name = 2;
   string tag = 3;
-  string artifact_id = 4;
+  string asset_id = 4;
+  optional string asset_name = 5;
+  optional string label = 6;
 }
 
-// AttachReleaseAssetResponse contains the asset.
-message AttachReleaseAssetResponse {
+// UpdateReleaseAssetResponse contains the asset.
+message UpdateReleaseAssetResponse {
   ReleaseAsset asset = 1;
 }
 
-// DetachReleaseAssetRequest removes an asset.
-message DetachReleaseAssetRequest {
+// DeleteReleaseAssetRequest removes an asset.
+message DeleteReleaseAssetRequest {
   string namespace = 1;
   string name = 2;
   string tag = 3;
-  string artifact_id = 4;
+  string asset_id = 4;
 }
 
-// DetachReleaseAssetResponse is empty on success.
-message DetachReleaseAssetResponse {}
+// DeleteReleaseAssetResponse is empty on success.
+message DeleteReleaseAssetResponse {}
 
 // AttachReleaseImageRequest pins an image reference.
 message AttachReleaseImageRequest {

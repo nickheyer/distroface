@@ -218,6 +218,7 @@ func (s *Store) migrateTables() error {
 		&db.LFSLock{},
 		&db.GitRelease{},
 		&db.GitReleaseImage{},
+		&db.GitReleaseAsset{},
 		&db.GitPushMirror{},
 		&db.GitImport{},
 		&db.GitIssue{},

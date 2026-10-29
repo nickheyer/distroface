@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,10 +26,11 @@ import (
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/utils"
 	"golang.org/x/crypto/bcrypt"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Project path plus a smart http, lfs, or browse suffix
-var gitPath = regexp.MustCompile(`^/([^/]+)/([^/]+?)(\.wiki)?(\.git)?/(info/refs|git-upload-pack|git-receive-pack|git-upload-archive|HEAD|objects/.+|info/lfs(?:/.*)?|-/.*)$`)
+var gitPath = regexp.MustCompile(`^/([^/]+)/([^/]+?)(\.wiki)?(\.git)?/(info/refs|git-upload-pack|git-receive-pack|git-upload-archive|HEAD|objects/.+|info/lfs(?:/.*)?|-/.*|releases/download/.+)$`)
 
 // Audience of lfs bearer tokens
 const LFSAudience = "distroface-git"
@@ -36,7 +38,12 @@ const LFSAudience = "distroface-git"
 // Chunk size for streamed pack responses
 const flushChunk = 64 << 10
 
-// HTTP serves smart http, lfs, raw, and archive routes ahead of the spa
+// RepoArtifactServer streams workflow run artifacts of a repository
+type RepoArtifactServer interface {
+	ServeRepoArtifact(w http.ResponseWriter, r *http.Request, repo *db.GitRepository, id string)
+}
+
+// HTTP serves smart http, lfs, raw, archive, and release asset routes ahead of the spa
 type HTTP struct {
 	manager     *Manager
 	authMgr     *auth.Manager
@@ -45,8 +52,12 @@ type HTTP struct {
 	pullLimiter *admin.Limiter
 	anonLimiter *admin.Limiter
 	lfs         *LFS
+	artifacts   RepoArtifactServer
 	log         *logger.Logger
 }
+
+// SetArtifactServer installs the run artifact streamer, set once at startup
+func (h *HTTP) SetArtifactServer(s RepoArtifactServer) { h.artifacts = s }
 
 func NewHTTP(manager *Manager, authMgr *auth.Manager, tokens *auth.TokenService, authLimiter, pullLimiter, anonLimiter *admin.Limiter, log *logger.Logger) *HTTP {
 	h := &HTTP{manager: manager, authMgr: authMgr, tokens: tokens, authLimiter: authLimiter, pullLimiter: pullLimiter, anonLimiter: anonLimiter, log: log}
@@ -96,8 +107,13 @@ func (h *HTTP) serve(w http.ResponseWriter, r *http.Request, namespace, name str
 	}
 	req := &gitRequest{repo: repo, user: user, wiki: wiki, suffix: suffix}
 	unit := db.GitUnitCode
-	if wiki {
+	switch {
+	case wiki:
 		unit = db.GitUnitWiki
+	case releaseRoute(suffix):
+		unit = db.GitUnitReleases
+	case strings.HasPrefix(suffix, "-/actions/artifacts/"):
+		unit = db.GitUnitActions
 	}
 	push := h.isPushIntent(r, suffix)
 	action := rbac.ActionPull
@@ -160,7 +176,9 @@ func (h *HTTP) serve(w http.ResponseWriter, r *http.Request, namespace, name str
 		}
 		h.lfs.ServeObject(w, r, repo, strings.TrimPrefix(suffix, "-/lfs/"))
 	case strings.HasPrefix(suffix, "-/releases/"):
-		h.releaseAsset(w, r, req, strings.TrimPrefix(suffix, "-/releases/"))
+		h.releaseRoute(w, r, req, strings.TrimPrefix(suffix, "-/releases/"))
+	case strings.HasPrefix(suffix, "releases/download/"):
+		h.releaseDownload(w, r, req, strings.TrimPrefix(suffix, "releases/download/"))
 	case strings.HasPrefix(suffix, "-/actions/artifacts/"):
 		h.actionsArtifact(w, r, req, strings.TrimPrefix(suffix, "-/actions/artifacts/"))
 	default:
@@ -177,8 +195,15 @@ func (h *HTTP) isPushIntent(r *http.Request, suffix string) bool {
 		return r.URL.Query().Get("service") == transport.ReceivePackService
 	case strings.HasPrefix(suffix, "info/lfs"):
 		return h.lfs.IsWrite(r, strings.TrimPrefix(strings.TrimPrefix(suffix, "info/lfs"), "/"))
+	case strings.HasPrefix(suffix, "-/releases/"):
+		return r.Method != http.MethodGet && r.Method != http.MethodHead
 	}
 	return false
+}
+
+// Release asset routes, the GitHub shaped download and the upload endpoint
+func releaseRoute(suffix string) bool {
+	return strings.HasPrefix(suffix, "-/releases/") || strings.HasPrefix(suffix, "releases/download/")
 }
 
 // Resolves basic, bearer token, or lfs jwt credentials
@@ -311,7 +336,7 @@ func (h *HTTP) resetLimiter(ip string) {
 // Paths browsers open directly, never git or lfs clients
 func browseRoute(suffix string) bool {
 	return strings.HasPrefix(suffix, "-/raw/") || strings.HasPrefix(suffix, "-/archive/") ||
-		strings.HasPrefix(suffix, "-/releases/") || strings.HasPrefix(suffix, "-/actions/artifacts/")
+		releaseRoute(suffix) || strings.HasPrefix(suffix, "-/actions/artifacts/")
 }
 
 // Git clients get a basic challenge, browser routes a bearer one so no prompt pops
@@ -615,35 +640,140 @@ func (h *HTTP) archive(w http.ResponseWriter, r *http.Request, req *gitRequest, 
 	_, _ = io.Copy(w, rc)
 }
 
-// Redirects a release asset link to the artifact download
-func (h *HTTP) releaseAsset(w http.ResponseWriter, r *http.Request, req *gitRequest, rest string) {
-	tag, asset, ok := strings.Cut(rest, "/")
-	if !ok || asset == "" {
+// Release of a tag the caller may see, drafts show to writers alone
+func (h *HTTP) visibleRelease(w http.ResponseWriter, r *http.Request, req *gitRequest, tag string) *db.GitRelease {
+	tag, err := url.PathUnescape(tag)
+	if err != nil || tag == "" {
 		http.NotFound(w, r)
-		return
+		return nil
 	}
-	art, err := h.manager.Store().GetArtifactRepository(r.Context(), req.repo.Namespace, req.repo.Name)
-	if err != nil || art == nil {
+	rel, err := h.manager.Store().GetGitRelease(r.Context(), req.repo.ID, tag)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil
+	}
+	if rel == nil || (rel.Draft && h.manager.Access().Level(r.Context(), req.user, req.repo, db.GitUnitReleases) < LevelWrite) {
 		http.NotFound(w, r)
-		return
+		return nil
 	}
-	http.Redirect(w, r, fmt.Sprintf("/api/v1/artifacts/_ns/%s/%s/%s/%s", req.repo.Namespace, req.repo.Name, tag, asset), http.StatusFound)
+	return rel
 }
 
-// Redirects a workflow artifact link to the artifact download
-func (h *HTTP) actionsArtifact(w http.ResponseWriter, r *http.Request, req *gitRequest, id string) {
-	art, err := h.manager.Store().GetArtifact(r.Context(), id)
-	if err != nil || art == nil {
+// Upload at <tag>/assets, download at <tag>/<file>
+func (h *HTTP) releaseRoute(w http.ResponseWriter, r *http.Request, req *gitRequest, rest string) {
+	if req.wiki {
 		http.NotFound(w, r)
 		return
 	}
-	// Only files inside a package linked to this repository
-	pkg, err := h.manager.Store().GetArtifactRepositoryByID(r.Context(), art.RepoID)
-	if err != nil || pkg == nil || pkg.GitRepoID == nil || *pkg.GitRepoID != req.repo.ID {
+	tag, name, ok := strings.Cut(rest, "/")
+	if !ok || name == "" || strings.Contains(name, "/") {
 		http.NotFound(w, r)
 		return
 	}
-	http.Redirect(w, r, fmt.Sprintf("/api/v1/artifacts/_ns/%s/%s/%s/%s", pkg.Namespace, pkg.Name, art.Version, art.Path), http.StatusFound)
+	if name == "assets" {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", http.MethodPost)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.uploadReleaseAsset(w, r, req, tag)
+		return
+	}
+	h.serveReleaseAsset(w, r, req, tag, name)
+}
+
+// GitHub shaped browser link, releases/download/<tag>/<file>
+func (h *HTTP) releaseDownload(w http.ResponseWriter, r *http.Request, req *gitRequest, rest string) {
+	tag, name, ok := strings.Cut(rest, "/")
+	if req.wiki || !ok || name == "" || strings.Contains(name, "/") {
+		http.NotFound(w, r)
+		return
+	}
+	h.serveReleaseAsset(w, r, req, tag, name)
+}
+
+func (h *HTTP) serveReleaseAsset(w http.ResponseWriter, r *http.Request, req *gitRequest, tag, name string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	rel := h.visibleRelease(w, r, req, tag)
+	if rel == nil {
+		return
+	}
+	name, err := url.PathUnescape(name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	a, err := h.manager.Store().GetGitReleaseAssetByName(r.Context(), rel.ID, name)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if a == nil {
+		http.NotFound(w, r)
+		return
+	}
+	h.manager.ServeReleaseAsset(w, r, a)
+}
+
+// Streams the request body onto the release and answers the asset as json
+func (h *HTTP) uploadReleaseAsset(w http.ResponseWriter, r *http.Request, req *gitRequest, tag string) {
+	rel := h.visibleRelease(w, r, req, tag)
+	if rel == nil {
+		return
+	}
+	q := r.URL.Query()
+	name := strings.TrimSpace(q.Get("name"))
+	if name == "" {
+		http.Error(w, "the name query parameter is required", http.StatusBadRequest)
+		return
+	}
+	uploader := ""
+	if req.user != nil {
+		uploader = req.user.ID
+	}
+	a, err := h.manager.StoreReleaseAsset(r.Context(), req.repo, rel, ReleaseAssetInput{
+		Name: name, Label: q.Get("label"), ContentType: r.Header.Get("Content-Type"), UploaderID: uploader, Body: r.Body,
+		Replace: q.Get("replace") == "1" || q.Get("replace") == "true",
+	})
+	if err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, ErrAssetTooLarge):
+			status = http.StatusRequestEntityTooLarge
+		case errors.Is(err, ErrInvalid):
+			status = http.StatusUnprocessableEntity
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	h.manager.recordAssetUpload(r.Context(), req, rel, a)
+	body, err := protojson.Marshal(h.manager.ReleaseAssetProto(r.Context(), req.repo, rel, a))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_, _ = w.Write(body)
+}
+
+// Session authenticated run artifact download, <id>/<name>.zip
+func (h *HTTP) actionsArtifact(w http.ResponseWriter, r *http.Request, req *gitRequest, rest string) {
+	id, _, _ := strings.Cut(rest, "/")
+	if h.artifacts == nil || id == "" || req.wiki {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	h.artifacts.ServeRepoArtifact(w, r, req.repo, id)
 }
 
 // Flushes after every write so pack data streams, records when the status committed

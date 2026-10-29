@@ -50,9 +50,6 @@ func (m *Manager) onPushReleases(ctx context.Context, ev gitrepo.RefEvent) {
 			m.log.Debug("release draft for %s: %v", tag, err)
 			continue
 		}
-		if _, err := m.ReleasePackage(ctx, repo, true); err != nil {
-			m.log.Debug("release package for %s/%s: %v", repo.Namespace, repo.Name, err)
-		}
 		m.dispatchRelease(ctx, repo, actor, rel, "created")
 	}
 }

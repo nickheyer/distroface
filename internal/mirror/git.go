@@ -297,7 +297,7 @@ func (m *Monitor) clearImportSource(ctx context.Context, repo *db.GitRepository)
 	return nil
 }
 
-// Creates linked release package and image mirrors
+// Turns on release mirroring and creates linked image mirrors
 func (m *Monitor) SetupCompositeMirror(ctx context.Context, repo *db.GitRepository, releases bool, images []string) error {
 	if m.git == nil {
 		return ErrGitUnavailable
@@ -312,8 +312,15 @@ func (m *Monitor) SetupCompositeMirror(ctx context.Context, repo *db.GitReposito
 	}
 	var errs []error
 	if releases {
-		if err := m.createReleasePackage(ctx, repo, cfg, up); err != nil {
-			errs = append(errs, fmt.Errorf("release package: %w", err))
+		if up.Forge == "" {
+			if forge, err := m.detectForge(ctx, up); err == nil {
+				up.Forge = forge
+			}
+		}
+		if forgeDriverFor(up.Forge) == nil {
+			errs = append(errs, fmt.Errorf("releases: %w: cannot tell which forge hosts %s", ErrInvalid, up.Host))
+		} else if err := m.EnableReleaseMirroring(ctx, repo); err != nil {
+			errs = append(errs, fmt.Errorf("releases: %w", err))
 		}
 	}
 	for _, ref := range images {
@@ -373,53 +380,6 @@ func forgeForType(t v1.ArtifactRepoType) string {
 		return forgeGitea
 	}
 	return ""
-}
-
-func (m *Monitor) createReleasePackage(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream) error {
-	t := releaseTypeFor(up.Forge)
-	if t == v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_UNSPECIFIED {
-		return fmt.Errorf("%w: cannot tell which forge hosts %s", ErrInvalid, up.Host)
-	}
-	existing, err := m.store.GetArtifactRepository(ctx, repo.Namespace, repo.Name)
-	if err != nil {
-		return err
-	}
-	if existing != nil {
-		if existing.Type == t {
-			return nil
-		}
-		return fmt.Errorf("artifact package %s/%s already exists with type %v", repo.Namespace, repo.Name, existing.Type)
-	}
-	rc := &v1.MirrorConfig{
-		Upstream:            up.releaseUpstream(),
-		AuthToken:           cfg.AuthToken,
-		IncludePrereleases:  true,
-		SyncIntervalMinutes: cfg.GetSyncIntervalMinutes(),
-		Paused:              cfg.GetPaused(),
-	}
-	if err := m.ValidateArtifactMirror(ctx, t, rc); err != nil {
-		return err
-	}
-	raw, err := EncodeConfig(rc)
-	if err != nil {
-		return err
-	}
-	gitID := repo.ID
-	row := &db.ArtifactRepository{
-		Namespace:    repo.Namespace,
-		Name:         repo.Name,
-		Description:  "Release assets mirrored from " + cfg.GetUpstream(),
-		OwnerID:      repo.OwnerID,
-		IsPrivate:    repo.IsPrivate,
-		Type:         t,
-		MirrorConfig: raw,
-		GitRepoID:    &gitID,
-	}
-	if err := m.store.CreateArtifactRepository(ctx, row); err != nil {
-		return err
-	}
-	_ = m.SyncArtifactRepoNow(row)
-	return nil
 }
 
 func (m *Monitor) createImageMirror(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, entry string, once bool) error {

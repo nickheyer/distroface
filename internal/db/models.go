@@ -271,17 +271,13 @@ type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v
 	UpdatedAt       time.Time           `json:"updated_at" gorm:"autoUpdateTime"`
 }
 
-// Rows a workflow run uploaded, listed apart from package contents
-const ArtifactKindWorkflow = "workflow"
-
 type Artifact struct {
 	ID         string              `json:"id" gorm:"primaryKey"`
-	RepoID     int64               `json:"repo_id" gorm:"not null;index;uniqueIndex:idx_artifact_identity;index:idx_artifact_repo_kind,priority:1;column:repo_id"`
+	RepoID     int64               `json:"repo_id" gorm:"not null;index;uniqueIndex:idx_artifact_identity;column:repo_id"`
 	Name       string              `json:"name" gorm:"not null"`
 	Path       string              `json:"path" gorm:"not null;uniqueIndex:idx_artifact_identity"`
 	UploadID   string              `json:"upload_id" gorm:"not null;column:upload_id"`
 	Version    string              `json:"version" gorm:"not null;uniqueIndex:idx_artifact_identity"`
-	Kind       string              `json:"kind" gorm:"not null;default:'';index:idx_artifact_repo_kind,priority:2"`          // Empty or ArtifactKindWorkflow
 	PropsHash  string              `json:"-" gorm:"not null;default:'';uniqueIndex:idx_artifact_identity;column:props_hash"` // Property set fingerprint, fourth identity component
 	Digest     string              `json:"digest" gorm:"not null;index"`                                                     // Full sha256 content address
 	Size       int64               `json:"size" gorm:"not null"`
@@ -396,6 +392,7 @@ type GitRepository struct {
 	MergeSettings   string         `json:"merge_settings" gorm:"type:text;not null;default:'{}'"` // Protojson GitMergeSettings
 	IssueCounter    int64          `json:"issue_counter" gorm:"not null;default:0"`
 	RunCounter      int64          `json:"run_counter" gorm:"not null;default:0"`
+	ArtifactCounter int64          `json:"artifact_counter" gorm:"not null;default:0"` // Numbers run artifacts per repository
 	AgentCounter    int64          `json:"agent_counter" gorm:"not null;default:0;column:agent_counter"`
 	SizeBytes       int64          `json:"size_bytes" gorm:"not null;default:0"`
 	LFSSizeBytes    int64          `json:"lfs_size_bytes" gorm:"not null;default:0;column:lfs_size_bytes"`
@@ -617,6 +614,21 @@ type GitReleaseImage struct {
 	CreatedAt   time.Time   `gorm:"autoCreateTime"`
 	Release     *GitRelease `gorm:"foreignKey:ReleaseID;constraint:OnDelete:CASCADE"`
 	ImageRepo   *Repository `gorm:"foreignKey:ImageRepoID;constraint:OnDelete:CASCADE"`
+}
+
+type GitReleaseAsset struct {
+	ID            string      `gorm:"primaryKey"`
+	ReleaseID     string      `gorm:"not null;uniqueIndex:idx_release_asset_name;index"`
+	Name          string      `gorm:"not null;uniqueIndex:idx_release_asset_name"`
+	Label         string      `gorm:"not null;default:''"`
+	Size          int64       `gorm:"not null;default:0"`
+	Digest        string      `gorm:"not null;index"`
+	ContentType   string      `gorm:"not null;default:'application/octet-stream'"`
+	UploaderID    string      `gorm:"not null;default:''"`
+	DownloadCount int64       `gorm:"not null;default:0"`
+	CreatedAt     time.Time   `gorm:"autoCreateTime"`
+	UpdatedAt     time.Time   `gorm:"autoUpdateTime"`
+	Release       *GitRelease `gorm:"foreignKey:ReleaseID;constraint:OnDelete:CASCADE"`
 }
 
 type GitPushMirror struct {
@@ -1026,34 +1038,53 @@ type ActionsRun struct {
 }
 
 type ActionsJob struct {
-	ID             string `gorm:"primaryKey"`
-	RunID          string `gorm:"not null;index"`
-	Name           string `gorm:"not null"`
-	JobKey         string `gorm:"not null"` // Key in the jobs map plus matrix suffix
-	RunsOn         string `gorm:"type:text;not null;default:'[]'"`
-	Needs          string `gorm:"type:text;not null;default:'[]'"`
-	Matrix         string `gorm:"type:text;not null;default:'{}'"`
-	MatrixGroup    string `gorm:"not null;default:''"` // Job key before the matrix suffix
-	MaxParallel    int    `gorm:"not null;default:0"`
-	Concurrency    string `gorm:"not null;default:'';index"` // Job level concurrency group
-	Status         string `gorm:"not null;default:'waiting';index"`
-	Conclusion     string `gorm:"not null;default:''"`
-	RunnerID       string `gorm:"not null;default:'';index"`
-	Attempt        int    `gorm:"not null;default:1"`
-	Steps          string `gorm:"type:text;not null;default:'[]'"`
-	Outputs        string `gorm:"type:text;not null;default:'{}'"`
-	Annotations    string `gorm:"type:text;not null;default:'[]'"`
-	Definition     string `gorm:"type:text;not null;default:'{}'"` // Resolved job definition as json
-	TokenID        string `gorm:"not null;default:'';index"`
-	LogChunks      int    `gorm:"not null;default:0"`
-	LogBytes       int64  `gorm:"not null;default:0"`
-	LogDigest      string `gorm:"not null;default:''"`    // Compacted log blob after completion
-	Interactive    bool   `gorm:"not null;default:false"` // Serves commands over FetchExec after its steps
-	CloseRequested bool   `gorm:"not null;default:false"` // Owner asked the job to finish after the current command
-	StartedAt      *time.Time
-	FinishedAt     *time.Time
-	CreatedAt      time.Time   `gorm:"autoCreateTime"`
-	Run            *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
+	ID                   string `gorm:"primaryKey"`
+	RunID                string `gorm:"not null;index"`
+	Name                 string `gorm:"not null"`
+	JobKey               string `gorm:"not null"`                      // Job id plus its matrix suffix
+	WorkflowJobID        string `gorm:"not null;default:''"`           // Job id in the workflow file
+	WorkflowPayload      string `gorm:"type:text;not null;default:''"` // Single job workflow the runner executes
+	RunsOn               string `gorm:"type:text;not null;default:'[]'"`
+	Needs                string `gorm:"type:text;not null;default:'[]'"`
+	Matrix               string `gorm:"type:text;not null;default:'{}'"`
+	MatrixGroup          string `gorm:"not null;default:''"` // Job id shared by every matrix leg
+	MaxParallel          int    `gorm:"not null;default:0"`
+	FailFast             bool   `gorm:"not null"` // No default, gorm would swap a stored false for it
+	ContinueOnError      bool   `gorm:"not null;default:false"`
+	TimeoutMinutes       int    `gorm:"not null;default:0"`
+	Concurrency          string `gorm:"not null;default:'';index"` // Job level concurrency group
+	ConcurrencyCancel    bool   `gorm:"not null;default:false"`
+	ConcurrencyEvaluated bool   `gorm:"not null;default:false"`
+	ReadOnly             bool   `gorm:"not null;default:false"`        // Permissions grant neither contents nor packages write
+	Deferred             bool   `gorm:"not null;default:false"`        // Expands once needed jobs finish
+	Error                string `gorm:"type:text;not null;default:''"` // Planning failure, fails the job on advance
+	ParentJobID          string `gorm:"not null;default:'';index"`     // Caller this job was expanded from
+	IsReusableCaller     bool   `gorm:"not null;default:false"`
+	IsExpanded           bool   `gorm:"not null;default:false"`
+	CallUses             string `gorm:"not null;default:''"`
+	CallSecrets          string `gorm:"type:text;not null;default:''"`   // inherit or json alias to name map
+	CallInputs           string `gorm:"type:text;not null;default:'{}'"` // Evaluated with values as json
+	CallContent          string `gorm:"type:text;not null;default:''"`   // Called workflow source
+	CallSourceRepoID     string `gorm:"not null;default:''"`             // Local repository the called workflow was read from
+	CallSourceRepo       string `gorm:"not null;default:''"`             // owner/repo the called workflow came from
+	CallSourceRef        string `gorm:"not null;default:''"`             // Commit or ref the called workflow was read at
+	Status               string `gorm:"not null;default:'waiting';index"`
+	Conclusion           string `gorm:"not null;default:''"`
+	RunnerID             string `gorm:"not null;default:'';index"`
+	Attempt              int    `gorm:"not null;default:1"`
+	Steps                string `gorm:"type:text;not null;default:'[]'"`
+	Outputs              string `gorm:"type:text;not null;default:'{}'"`
+	Annotations          string `gorm:"type:text;not null;default:'[]'"`
+	TokenID              string `gorm:"not null;default:'';index"`
+	LogChunks            int    `gorm:"not null;default:0"`
+	LogBytes             int64  `gorm:"not null;default:0"`
+	LogDigest            string `gorm:"not null;default:''"`    // Compacted log blob after completion
+	Interactive          bool   `gorm:"not null;default:false"` // Serves commands over FetchExec after its steps
+	CloseRequested       bool   `gorm:"not null;default:false"` // Owner asked the job to finish after the current command
+	StartedAt            *time.Time
+	FinishedAt           *time.Time
+	CreatedAt            time.Time   `gorm:"autoCreateTime"`
+	Run                  *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
 }
 
 type ActionsJobLog struct {
@@ -1081,16 +1112,20 @@ type ActionsVariable struct {
 	UpdatedAt time.Time `gorm:"autoUpdateTime"`
 }
 
+// Unique run and name index comes from migration 202610280002
 type ActionsArtifact struct {
-	ID         string      `gorm:"primaryKey"`
-	RunID      string      `gorm:"not null;index"`
-	JobID      string      `gorm:"not null;default:''"`
-	ArtifactID string      `gorm:"not null;index"`
-	Name       string      `gorm:"not null"`
-	FileCount  int32       `gorm:"not null;default:0"` // Files inside the zip, zero on legacy per file rows
-	ExpiresAt  *time.Time  `gorm:"index"`
-	CreatedAt  time.Time   `gorm:"autoCreateTime"`
-	Run        *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
+	ID          string      `gorm:"primaryKey"`
+	RunID       string      `gorm:"not null;index"`
+	JobID       string      `gorm:"not null;default:''"`
+	Number      int64       `gorm:"not null;default:0;index"` // Per repository id GitHub style clients use
+	Name        string      `gorm:"not null"`
+	Digest      string      `gorm:"not null;default:'';index"`
+	Size        int64       `gorm:"not null;default:0"`
+	ContentType string      `gorm:"not null;default:'application/zip'"`
+	Status      string      `gorm:"not null;default:'pending';index"` // pending, confirmed
+	ExpiresAt   *time.Time  `gorm:"index"`
+	CreatedAt   time.Time   `gorm:"autoCreateTime"`
+	Run         *ActionsRun `gorm:"foreignKey:RunID;constraint:OnDelete:CASCADE"`
 }
 
 type ActionsRunImage struct {

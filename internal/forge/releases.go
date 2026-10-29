@@ -2,23 +2,21 @@ package forge
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/google/uuid"
-	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/webhook"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
-
-// Property marking an artifact as a release asset
-const ReleaseAssetProperty = artifacts.ReleaseProperty
 
 // Fields of a release
 type ReleaseInput struct {
@@ -42,50 +40,115 @@ func (m *Manager) Release(ctx context.Context, repo *db.GitRepository, tag strin
 	return rel, nil
 }
 
-// Artifact package of a repository, created and linked on demand
-func (m *Manager) ReleasePackage(ctx context.Context, repo *db.GitRepository, create bool) (*db.ArtifactRepository, error) {
-	pkg, err := m.store.GetArtifactRepository(ctx, repo.Namespace, repo.Name)
-	if err != nil {
-		return nil, err
-	}
-	if pkg != nil {
-		if pkg.GitRepoID == nil {
-			_ = m.store.SetArtifactRepositoryGitRepo(ctx, pkg.ID, &repo.ID)
-			pkg.GitRepoID = &repo.ID
-		}
-		return pkg, nil
-	}
-	if !create {
-		return nil, nil
-	}
-	pkg = &db.ArtifactRepository{
-		Namespace: repo.Namespace, Name: repo.Name, Description: "Release assets of " + repo.Namespace + "/" + repo.Name,
-		OwnerID: repo.OwnerID, IsPrivate: repo.IsPrivate, Type: v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE, GitRepoID: &repo.ID,
-	}
-	if err := m.store.CreateArtifactRepository(ctx, pkg); err != nil {
-		return nil, err
-	}
-	return pkg, nil
+// Assets attached to a release, by name
+func (m *Manager) ReleaseAssets(ctx context.Context, rel *db.GitRelease) ([]*db.GitReleaseAsset, error) {
+	return m.store.ListGitReleaseAssets(ctx, rel.ID)
 }
 
-// Assets attached to a release, artifacts at the tag version flagged as release
-func (m *Manager) ReleaseAssets(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease) ([]*db.Artifact, *db.ArtifactRepository, error) {
-	pkg, err := m.ReleasePackage(ctx, repo, false)
-	if err != nil || pkg == nil {
-		return nil, pkg, err
-	}
-	rows, _, err := m.store.ListArtifacts(ctx, pkg.ID, rel.Tag, stores.KindRegular, 0, 0)
+// ReleaseAsset loads one asset of a release by row id
+func (m *Manager) ReleaseAsset(ctx context.Context, rel *db.GitRelease, id string) (*db.GitReleaseAsset, error) {
+	a, err := m.store.GetGitReleaseAsset(ctx, id)
 	if err != nil {
-		return nil, pkg, err
+		return nil, err
 	}
-	out := rows[:0]
-	for _, a := range rows {
-		if a.Properties[ReleaseAssetProperty] == "true" {
-			out = append(out, a)
+	if a == nil || a.ReleaseID != rel.ID {
+		return nil, fmt.Errorf("%w: asset", ErrNotFound)
+	}
+	return a, nil
+}
+
+// ReleaseAssetByName loads one asset of a release by file name
+func (m *Manager) ReleaseAssetByName(ctx context.Context, rel *db.GitRelease, name string) (*db.GitReleaseAsset, error) {
+	a, err := m.store.GetGitReleaseAssetByName(ctx, rel.ID, name)
+	if err != nil {
+		return nil, err
+	}
+	if a == nil {
+		return nil, fmt.Errorf("%w: asset %s", ErrNotFound, name)
+	}
+	return a, nil
+}
+
+// AssetDownloadURL is the browser link of an asset, GitHub shaped
+func (m *Manager) AssetDownloadURL(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, a *db.GitReleaseAsset) string {
+	return m.git.HTMLURL(ctx, repo) + "/releases/download/" + url.PathEscape(rel.Tag) + "/" + url.PathEscape(a.Name)
+}
+
+// AssetUploadURL is where a client streams a new asset of a release
+func (m *Manager) AssetUploadURL(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease) string {
+	return m.git.HTMLURL(ctx, repo) + "/-/releases/" + url.PathEscape(rel.Tag) + "/assets"
+}
+
+// UploadReleaseAsset streams one file onto a release
+func (m *Manager) UploadReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, name, label, contentType string, body io.Reader) (*db.GitReleaseAsset, error) {
+	if !actor.CanWrite {
+		return nil, ErrForbidden
+	}
+	if repo.IsArchived {
+		return nil, gitrepo.ErrArchived
+	}
+	a, err := m.git.StoreReleaseAsset(ctx, repo, rel, gitrepo.ReleaseAssetInput{Name: name, Label: label, ContentType: contentType, UploaderID: actor.id(), Body: body})
+	if err != nil {
+		return nil, mapAssetErr(err)
+	}
+	m.dispatchRelease(ctx, repo, actor, rel, "edited")
+	return a, nil
+}
+
+// UpdateReleaseAsset renames or relabels an asset
+func (m *Manager) UpdateReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, a *db.GitReleaseAsset, name, label *string) error {
+	if !actor.CanWrite {
+		return ErrForbidden
+	}
+	if repo.IsArchived {
+		return gitrepo.ErrArchived
+	}
+	if name != nil && strings.TrimSpace(*name) != a.Name {
+		newName := strings.TrimSpace(*name)
+		if err := gitrepo.ValidateAssetName(newName); err != nil {
+			return mapAssetErr(err)
 		}
+		if other, _ := m.store.GetGitReleaseAssetByName(ctx, rel.ID, newName); other != nil {
+			return fmt.Errorf("%w: an asset named %s already exists", ErrConflict, newName)
+		}
+		a.Name = newName
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out, pkg, nil
+	if label != nil {
+		a.Label = strings.TrimSpace(*label)
+	}
+	if err := m.store.UpdateGitReleaseAsset(ctx, a); err != nil {
+		return err
+	}
+	m.dispatchRelease(ctx, repo, actor, rel, "edited")
+	return nil
+}
+
+// DeleteReleaseAsset removes an asset and its file
+func (m *Manager) DeleteReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, a *db.GitReleaseAsset) error {
+	if !actor.CanWrite {
+		return ErrForbidden
+	}
+	if repo.IsArchived {
+		return gitrepo.ErrArchived
+	}
+	if err := m.git.DeleteReleaseAsset(ctx, a); err != nil {
+		return err
+	}
+	m.dispatchRelease(ctx, repo, actor, rel, "edited")
+	return nil
+}
+
+// Storage errors mapped onto the forge vocabulary
+func mapAssetErr(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, gitrepo.ErrInvalid):
+		return fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(err.Error(), gitrepo.ErrInvalid.Error()+": "))
+	case errors.Is(err, gitrepo.ErrAssetTooLarge):
+		return fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+	}
+	return err
 }
 
 // Tag tip and tag object sha when the tag exists
@@ -170,9 +233,6 @@ func (m *Manager) CreateRelease(ctx context.Context, repo *db.GitRepository, act
 	if err := m.store.CreateGitRelease(ctx, rel); err != nil {
 		return nil, err
 	}
-	if _, err := m.ReleasePackage(ctx, repo, true); err != nil {
-		m.log.Debug("release package for %s/%s: %v", repo.Namespace, repo.Name, err)
-	}
 	if !rel.Draft {
 		m.announceRelease(ctx, repo, actor, rel, "published")
 	} else {
@@ -232,10 +292,13 @@ func (m *Manager) PublishRelease(ctx context.Context, repo *db.GitRepository, ac
 	return m.UpdateRelease(ctx, repo, actor, rel, ReleaseInput{Draft: &f})
 }
 
-// Deletes a release, its tag when asked, and the asset flags
+// Deletes a release, its asset files, and its tag when asked
 func (m *Manager) DeleteRelease(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, deleteTag bool) error {
 	if !actor.CanWrite {
 		return ErrForbidden
+	}
+	if err := m.git.DeleteReleaseAssets(ctx, rel); err != nil {
+		return err
 	}
 	if err := m.store.DeleteGitRelease(ctx, rel.ID); err != nil {
 		return err
@@ -254,62 +317,6 @@ func (m *Manager) DeleteRelease(ctx context.Context, repo *db.GitRepository, act
 	}
 	m.dispatchRelease(ctx, repo, actor, rel, "deleted")
 	return nil
-}
-
-// Flags an uploaded artifact as a release asset
-func (m *Manager) AttachReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, artifactID string) (*db.Artifact, error) {
-	if !actor.CanWrite {
-		return nil, ErrForbidden
-	}
-	pkg, err := m.ReleasePackage(ctx, repo, true)
-	if err != nil {
-		return nil, err
-	}
-	art, err := m.store.GetArtifact(ctx, artifactID)
-	if err != nil {
-		return nil, err
-	}
-	if art == nil || art.RepoID != pkg.ID {
-		return nil, fmt.Errorf("%w: artifact in package %s/%s", ErrNotFound, pkg.Namespace, pkg.Name)
-	}
-	if art.Version != rel.Tag {
-		return nil, fmt.Errorf("%w: upload release assets at version %s", ErrInvalid, rel.Tag)
-	}
-	props := map[string]string{}
-	for k, v := range art.Properties {
-		props[k] = v
-	}
-	props[ReleaseAssetProperty] = "true"
-	if err := m.store.SetArtifactProperties(ctx, art.ID, props); err != nil {
-		return nil, err
-	}
-	art.Properties = props
-	return art, nil
-}
-
-// Removes the release flag from an asset, the artifact stays in the package
-func (m *Manager) DetachReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, artifactID string) error {
-	if !actor.CanWrite {
-		return ErrForbidden
-	}
-	pkg, err := m.ReleasePackage(ctx, repo, false)
-	if err != nil {
-		return err
-	}
-	art, err := m.store.GetArtifact(ctx, artifactID)
-	if err != nil {
-		return err
-	}
-	if pkg == nil || art == nil || art.RepoID != pkg.ID || art.Version != rel.Tag {
-		return fmt.Errorf("%w: asset", ErrNotFound)
-	}
-	props := map[string]string{}
-	for k, v := range art.Properties {
-		if k != ReleaseAssetProperty {
-			props[k] = v
-		}
-	}
-	return m.store.SetArtifactProperties(ctx, art.ID, props)
 }
 
 // Image repository of the namespace the release may pin, linked here or managed by the actor
@@ -479,9 +486,9 @@ func (m *Manager) ReleaseURL(ctx context.Context, repo *db.GitRepository, rel *d
 
 func (m *Manager) releasePayload(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease) *webhook.ReleasePayload {
 	p := &webhook.ReleasePayload{Tag: rel.Tag, Name: rel.Name, Body: rel.Body, Draft: rel.Draft, Prerelease: rel.Prerelease, URL: m.ReleaseURL(ctx, repo, rel), Assets: []string{}, Images: []string{}}
-	if assets, _, err := m.ReleaseAssets(ctx, repo, rel); err == nil {
+	if assets, err := m.ReleaseAssets(ctx, rel); err == nil {
 		for _, a := range assets {
-			p.Assets = append(p.Assets, a.Path)
+			p.Assets = append(p.Assets, a.Name)
 		}
 	}
 	if images, err := m.store.ListGitReleaseImages(ctx, rel.ID); err == nil {

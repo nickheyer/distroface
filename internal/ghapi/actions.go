@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"strconv"
 	"time"
 
 	"github.com/go-git/go-git/v6/plumbing"
@@ -14,6 +15,15 @@ import (
 )
 
 const runScanCap = 2000
+
+// Artifact routes answer 503 instead of pretending an empty instance
+func (q *request) actionsReady() bool {
+	if q.h.actions == nil {
+		q.fail(http.StatusServiceUnavailable, "actions are not enabled on this instance")
+		return false
+	}
+	return true
+}
 
 // Run by row id or by the integer GitHub consumers echo back
 func (q *request) runByPath(repo *db.GitRepository) (*db.ActionsRun, bool) {
@@ -27,7 +37,7 @@ func (q *request) runByPath(repo *db.GitRepository) (*db.ActionsRun, bool) {
 		return nil, false
 	}
 	for _, run := range rows {
-		if idMatches(id, run.ID) || fmt.Sprint(run.Number) == id {
+		if idMatches(id, run.ID) || strconv.FormatInt(actions.NumericID(run.ID), 10) == id || fmt.Sprint(run.Number) == id {
 			return run, true
 		}
 	}
@@ -161,4 +171,125 @@ func (q *request) listRunJobs() {
 	p := parsePage(q.r)
 	q.paginate(p, int64(len(rows)))
 	q.json(http.StatusOK, obj{"total_count": len(rows), "jobs": pageSlice(rows, p)})
+}
+
+func (q *request) artifactJSON(repo *db.GitRepository, run *db.ActionsRun, a *db.ActionsArtifact) obj {
+	api := q.repoAPI(repo) + "/actions/artifacts/" + strconv.FormatInt(a.Number, 10)
+	expired := a.ExpiresAt != nil && a.ExpiresAt.Before(time.Now())
+	return obj{
+		"id": a.Number, "node_id": "", "name": a.Name, "size_in_bytes": a.Size, "url": api, "archive_download_url": api + "/zip",
+		"expired": expired, "created_at": ts(a.CreatedAt), "updated_at": ts(a.CreatedAt), "expires_at": tsPtr(a.ExpiresAt),
+		"workflow_run": obj{"id": numID(run.ID), "repository_id": numID(repo.ID), "head_repository_id": numID(repo.ID), "head_branch": plumbing.ReferenceName(run.Ref).Short(), "head_sha": run.SHA},
+		"_distroface":  obj{"artifact_id": a.ID, "run_id": run.ID},
+	}
+}
+
+// Artifact by the number in the path, scoped to the repository
+func (q *request) artifactByPath(repo *db.GitRepository) (*db.ActionsArtifact, *db.ActionsRun, bool) {
+	number, ok := q.pathInt("artifact_id")
+	if !ok {
+		return nil, nil, false
+	}
+	a, err := q.h.store.GetActionsArtifactByNumber(q.ctx, repo.ID, number)
+	if err != nil {
+		q.failErr(err)
+		return nil, nil, false
+	}
+	if a == nil || a.Status != actions.ArtifactConfirmed {
+		q.notFound()
+		return nil, nil, false
+	}
+	run, err := q.h.store.GetActionsRunByID(q.ctx, a.RunID)
+	if err != nil {
+		q.failErr(err)
+		return nil, nil, false
+	}
+	if run == nil {
+		q.notFound()
+		return nil, nil, false
+	}
+	return a, run, true
+}
+
+func (q *request) listRunArtifacts() {
+	repo, ok := q.repo()
+	if !ok || !q.readable(repo, db.GitUnitActions) || !q.actionsReady() {
+		return
+	}
+	run, ok := q.runByPath(repo)
+	if !ok {
+		return
+	}
+	rows, err := q.h.actions.RunArtifacts(q.ctx, run)
+	if err != nil {
+		q.failErr(err)
+		return
+	}
+	name := q.query("name")
+	list := make([]obj, 0, len(rows))
+	for _, a := range rows {
+		if name != "" && a.Name != name {
+			continue
+		}
+		list = append(list, q.artifactJSON(repo, run, a))
+	}
+	p := parsePage(q.r)
+	q.paginate(p, int64(len(list)))
+	q.json(http.StatusOK, obj{"total_count": len(list), "artifacts": pageSlice(list, p)})
+}
+
+func (q *request) listRepoArtifacts() {
+	repo, ok := q.repo()
+	if !ok || !q.readable(repo, db.GitUnitActions) || !q.actionsReady() {
+		return
+	}
+	p := parsePage(q.r)
+	rows, total, err := q.h.store.ListLiveActionsArtifactsForRepo(q.ctx, repo.ID, q.query("name"), time.Now(), p.perPage, p.offset())
+	if err != nil {
+		q.failErr(err)
+		return
+	}
+	runs := map[string]*db.ActionsRun{}
+	list := make([]obj, 0, len(rows))
+	for _, a := range rows {
+		run := runs[a.RunID]
+		if run == nil {
+			if run, _ = q.h.store.GetActionsRunByID(q.ctx, a.RunID); run == nil {
+				continue
+			}
+			runs[a.RunID] = run
+		}
+		list = append(list, q.artifactJSON(repo, run, a))
+	}
+	q.paginate(p, total)
+	q.json(http.StatusOK, obj{"total_count": total, "artifacts": list})
+}
+
+func (q *request) getArtifact() {
+	repo, ok := q.repo()
+	if !ok || !q.readable(repo, db.GitUnitActions) || !q.actionsReady() {
+		return
+	}
+	a, run, ok := q.artifactByPath(repo)
+	if !ok {
+		return
+	}
+	q.json(http.StatusOK, q.artifactJSON(repo, run, a))
+}
+
+// Octokit follows the redirect to the signed zip
+func (q *request) downloadArtifact() {
+	repo, ok := q.repo()
+	if !ok || !q.readable(repo, db.GitUnitActions) || !q.actionsReady() {
+		return
+	}
+	a, _, ok := q.artifactByPath(repo)
+	if !ok {
+		return
+	}
+	if actions.ArtifactExpired(a) {
+		q.fail(http.StatusGone, "Artifact has expired")
+		return
+	}
+	http.Redirect(q.w, q.r, q.h.actions.ArtifactDownloadURL(q.ctx, a), http.StatusFound)
 }

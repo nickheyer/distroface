@@ -3,8 +3,6 @@ package runner
 import (
 	"context"
 	"errors"
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -88,68 +86,6 @@ func (c *Client) AppendLog(ctx context.Context, jobID string, index int, data []
 func (c *Client) CompleteTask(ctx context.Context, jobID string, conclusion v1.ActionsConclusion, steps []*v1.JobStep, outputs, annotations string) error {
 	_, err := c.rpc.CompleteTask(ctx, &v1.CompleteTaskRequest{JobId: jobID, Conclusion: conclusion, Steps: steps, Outputs: outputs, Annotations: annotations})
 	return rpcErr(err)
-}
-
-// Streams one file through an upload session
-// Uploads one zipped artifact for the job's run
-func (c *Client) UploadArtifact(ctx context.Context, jobID, jobToken, name string, body io.Reader, fileCount, retentionDays int32, overwrite bool) (*v1.RunArtifact, error) {
-	begin, err := c.rpc.UploadTaskArtifact(ctx, &v1.UploadTaskArtifactRequest{JobId: jobID, ArtifactName: name, Overwrite: overwrite})
-	if err != nil {
-		return nil, rpcErr(err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, c.BaseURL+begin.UploadUrl, body)
-	if err != nil {
-		return nil, err
-	}
-	if jobToken != "" {
-		req.Header.Set("Authorization", "Bearer "+jobToken)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("upload %s: %w", name, err)
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		return nil, fmt.Errorf("upload %s: server returned %d", name, resp.StatusCode)
-	}
-	fin, err := c.rpc.FinishTaskArtifact(ctx, &v1.FinishTaskArtifactRequest{
-		JobId: jobID, ArtifactName: name, UploadId: begin.UploadId, FileCount: fileCount, RetentionDays: retentionDays, Overwrite: overwrite,
-	})
-	if err != nil {
-		return nil, rpcErr(err)
-	}
-	return fin.Artifact, nil
-}
-
-// Artifacts the job's run has uploaded so far
-func (c *Client) ListTaskArtifacts(ctx context.Context, jobID string) ([]*v1.RunArtifact, error) {
-	resp, err := c.rpc.ListTaskArtifacts(ctx, &v1.ListTaskArtifactsRequest{JobId: jobID})
-	if err != nil {
-		return nil, rpcErr(err)
-	}
-	return resp.Artifacts, nil
-}
-
-// Streams an artifact zip from its data plane path
-func (c *Client) DownloadArtifact(ctx context.Context, jobToken, downloadPath string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+downloadPath, nil)
-	if err != nil {
-		return nil, err
-	}
-	if jobToken != "" {
-		req.Header.Set("Authorization", "Bearer "+jobToken)
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode >= 400 {
-		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		resp.Body.Close()
-		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode, strings.TrimSpace(string(msg)))
-	}
-	return resp.Body, nil
 }
 
 // Connect errors already carry the code and stay matchable

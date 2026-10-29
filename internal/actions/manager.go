@@ -83,8 +83,16 @@ type Manager struct {
 	execMu   sync.Mutex
 	execWake map[string]chan struct{}
 
+	// Serializes advanceRun per run, entries live while held
+	runMu    sync.Mutex
+	runLocks map[string]*runLock
+
 	// Observes finished runs, installed by the agents manager
 	runCompleted RunCompletedHook
+
+	// Parent of the starter workflow checkout
+	dataDir   string
+	starterMu sync.Mutex
 }
 
 // RunCompletedHook receives every run after it finishes
@@ -101,14 +109,16 @@ func NewManager(store *stores.Store, git *gitrepo.Manager, fm *forge.Manager, am
 		schedCache:      map[string]*scheduleEntry{},
 		jobStatus:       map[string]jobStatusEntry{},
 		execWake:        map[string]chan struct{}{},
+		runLocks:        map[string]*runLock{},
 	}
 }
 
-// Starts the scheduler, stale job reaper, and retention loops
+// Starts the scheduler, stale job reaper, retention, and starter loops
 func (m *Manager) Start(ctx context.Context) {
 	go m.scheduleLoop(ctx)
 	go m.reaperLoop(ctx)
 	go m.retentionLoop(ctx)
+	go m.starterLoop(ctx)
 }
 
 // Enqueues workflow runs for push and tag events

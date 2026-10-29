@@ -70,10 +70,12 @@ func (m *Manager) dropJobLogs(ctx context.Context, job *db.ActionsJob) {
 	digest := job.LogDigest
 	job.LogDigest = ""
 	_ = m.store.UpdateActionsJobColumns(ctx, job.ID, map[string]any{"log_digest": "", "log_chunks": 0})
-	if n, _ := m.store.CountActionsJobsByLogDigest(ctx, digest); n > 0 {
+	referenced, err := m.store.BlobReferenced(ctx, digest)
+	if err != nil {
+		m.log.Warn("actions: count references of log blob %s: %v", digest, err)
 		return
 	}
-	if n, _ := m.store.CountArtifactsByDigest(ctx, digest); n > 0 {
+	if referenced {
 		return
 	}
 	if err := m.artifacts.Blobs().DeleteBlob(digest); err != nil {

@@ -143,53 +143,6 @@ func (s *RunnerService) CompleteTask(ctx context.Context, req *v1.CompleteTaskRe
 	return &v1.CompleteTaskResponse{}, nil
 }
 
-func (s *RunnerService) UploadTaskArtifact(ctx context.Context, req *v1.UploadTaskArtifactRequest) (*v1.UploadTaskArtifactResponse, error) {
-	runner, err := s.runner(ctx)
-	if err != nil {
-		return nil, err
-	}
-	uploadID, pkg, err := s.actions.BeginArtifactUpload(ctx, runner, req.JobId, req.ArtifactName, req.Overwrite)
-	if err != nil {
-		return nil, mapActionsErr(err)
-	}
-	return &v1.UploadTaskArtifactResponse{UploadId: uploadID, UploadUrl: artifactUploadURL(nil, pkg.Namespace, pkg.Name, uploadID)}, nil
-}
-
-func (s *RunnerService) FinishTaskArtifact(ctx context.Context, req *v1.FinishTaskArtifactRequest) (*v1.FinishTaskArtifactResponse, error) {
-	runner, err := s.runner(ctx)
-	if err != nil {
-		return nil, err
-	}
-	art, err := s.actions.FinishArtifactUpload(ctx, runner, req.JobId, req.ArtifactName, req.UploadId, req.FileCount, req.RetentionDays, req.Overwrite)
-	if err != nil {
-		var cerr *connect.Error
-		if errors.As(err, &cerr) {
-			return nil, err
-		}
-		if mapped := mapArtifactErr(err); connect.CodeOf(mapped) != connect.CodeInternal {
-			return nil, mapped
-		}
-		return nil, mapActionsErr(err)
-	}
-	return &v1.FinishTaskArtifactResponse{Artifact: actionsArtifactProto(art, nil)}, nil
-}
-
-func (s *RunnerService) ListTaskArtifacts(ctx context.Context, req *v1.ListTaskArtifactsRequest) (*v1.ListTaskArtifactsResponse, error) {
-	runner, err := s.runner(ctx)
-	if err != nil {
-		return nil, err
-	}
-	groups, err := s.actions.TaskArtifacts(ctx, runner, req.JobId)
-	if err != nil {
-		return nil, mapActionsErr(err)
-	}
-	out := make([]*v1.RunArtifact, 0, len(groups))
-	for _, g := range groups {
-		out = append(out, actionsArtifactProto(g, nil))
-	}
-	return &v1.ListTaskArtifactsResponse{Artifacts: out}, nil
-}
-
 func (s *RunnerService) FetchExec(ctx context.Context, req *v1.FetchExecRequest) (*v1.FetchExecResponse, error) {
 	runner, err := s.runner(ctx)
 	if err != nil {

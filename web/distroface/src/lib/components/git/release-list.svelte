@@ -172,16 +172,16 @@
 								<span class="tabular-nums">({r.assets.length})</span>
 							</h4>
 							<ul class="divide-y">
-								{#each r.assets as a (a.artifactId)}
+								{#each r.assets as a (a.id)}
 									<li class="flex min-w-0 items-center gap-2 py-1.5 text-sm">
 										<!-- eslint-disable svelte/no-navigation-without-resolve -->
 										<a
 											href={a.downloadUrl}
 											download={a.name}
-											onclick={primeDownload}
+											onclick={() => primeDownload(namespace, name)}
 											class="link inline-flex min-w-0 items-center gap-1.5 truncate font-medium"
 										>
-											<Download class="size-3.5 shrink-0" />{a.name}
+											<Download class="size-3.5 shrink-0" />{a.label || a.name}
 										</a>
 										<!-- eslint-enable svelte/no-navigation-without-resolve -->
 										<span class="shrink-0 text-xs text-muted-foreground tabular-nums"

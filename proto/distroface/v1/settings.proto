@@ -249,6 +249,7 @@ message GitSettings {
   optional bool private_by_default = 8;
   optional string default_branch = 9;
   optional bool release_on_tag = 10; // Annotated tags create draft releases
+  optional int64 max_release_asset_mb = 17; // Per file cap on release assets, zero unlimited
   optional int32 max_concurrent_transfers = 11; // System only
   optional bool allow_forks = 12;
   GitGCSettings gc = 13;
@@ -276,6 +277,8 @@ message GitActionsSettings {
   optional bool run_on_mirror = 4; // Mirror fetches trigger workflows too
   optional string default_runs_on = 5; // Label used when a job names none
   BuiltinRunnerSettings builtin_runner = 6; // System only
+  optional string default_actions_url = 7; // Host that uses references without one resolve against, system only
+  optional string starter_workflows_url = 8; // Repository the workflow starter cards come from, system only
 }
 
 // Runner the server process operates itself, jobs run as sibling containers on its docker socket

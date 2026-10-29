@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -123,6 +124,83 @@ func (s *ActionsService) DispatchWorkflow(ctx context.Context, req *v1.DispatchW
 		return nil, mapActionsErr(err)
 	}
 	return &v1.DispatchWorkflowResponse{Run: s.actionsRunProto(ctx, repo, run, true)}, nil
+}
+
+// Source icons travel as image data urls so their markup never runs
+func actionsTemplateProto(t *actions.WorkflowTemplate, withContent bool) *v1.WorkflowTemplate {
+	out := &v1.WorkflowTemplate{
+		Id: t.ID, Name: t.Name, Description: t.Description, Category: t.Category, Categories: t.Categories,
+		FilePatterns: t.FilePatterns, IconName: t.IconName, Creator: t.Creator, FileName: t.FileName,
+	}
+	if t.IconSVG != "" {
+		out.IconDataUrl = "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(t.IconSVG))
+	}
+	if withContent {
+		out.Content = t.Content
+	}
+	return out
+}
+
+func (s *ActionsService) ListWorkflowTemplates(ctx context.Context, req *v1.ListWorkflowTemplatesRequest) (*v1.ListWorkflowTemplatesResponse, error) {
+	if _, _, err := s.actionsRepo(ctx, req.Namespace, req.Name, gitrepo.LevelRead); err != nil {
+		return nil, err
+	}
+	catalog, err := s.actions.WorkflowTemplates(ctx)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, err.Error()).WithCause(err)
+	}
+	out := &v1.ListWorkflowTemplatesResponse{
+		Source: catalog.Source, RefreshError: catalog.RefreshError,
+		Templates: make([]*v1.WorkflowTemplate, 0, len(catalog.Templates)),
+	}
+	if !catalog.FetchedAt.IsZero() {
+		out.FetchedAt = timestamppb.New(catalog.FetchedAt)
+	}
+	for _, t := range catalog.Templates {
+		out.Templates = append(out.Templates, actionsTemplateProto(t, false))
+	}
+	return out, nil
+}
+
+func (s *ActionsService) GetWorkflowTemplate(ctx context.Context, req *v1.GetWorkflowTemplateRequest) (*v1.GetWorkflowTemplateResponse, error) {
+	repo, _, err := s.actionsRepo(ctx, req.Namespace, req.Name, gitrepo.LevelRead)
+	if err != nil {
+		return nil, err
+	}
+	if req.Id == "" {
+		return nil, connect.Errorf(connect.CodeInvalidArgument, "template id is required")
+	}
+	t, err := s.actions.WorkflowTemplate(ctx, req.Id)
+	if err != nil {
+		if errors.Is(err, actions.ErrNotFound) {
+			return nil, connect.NewError(connect.CodeNotFound, err.Error())
+		}
+		return nil, connect.NewError(connect.CodeUnavailable, err.Error()).WithCause(err)
+	}
+	base := s.manager.BaseURL(ctx)
+	render := actions.TemplateRender{
+		DefaultBranch: repo.DefaultBranch,
+		RegistryHost:  strings.TrimPrefix(strings.TrimPrefix(base, "https://"), "http://"),
+	}
+	protections, err := s.store.ListGitBranchProtections(ctx, repo.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	for _, p := range protections {
+		render.ProtectedBranches = append(render.ProtectedBranches, p.Pattern)
+	}
+	if actions.TemplateNeedsCodeQL(t.Content) {
+		wctx, cancel := insightContext(ctx)
+		defer cancel()
+		langs, err := s.actions.CodeQLLanguages(wctx, repo)
+		if err != nil {
+			return nil, mapGitErr(err)
+		}
+		render.CodeQLLanguages = langs
+	}
+	out := actionsTemplateProto(t, true)
+	out.Content = actions.RenderWorkflowTemplate(t.Content, render)
+	return &v1.GetWorkflowTemplateResponse{Template: out}, nil
 }
 
 // ── Runs ─────────────────────────────────────────────────────────────────
@@ -285,11 +363,11 @@ func (s *ActionsService) StreamJobLog(ctx context.Context, req *v1.StreamJobLogR
 }
 
 func (s *ActionsService) ListRunArtifacts(ctx context.Context, req *v1.ListRunArtifactsRequest) (*v1.ListRunArtifactsResponse, error) {
-	_, run, err := s.actionsRun(ctx, req.Namespace, req.Name, req.RunId, gitrepo.LevelRead)
+	repo, run, err := s.actionsRun(ctx, req.Namespace, req.Name, req.RunId, gitrepo.LevelRead)
 	if err != nil {
 		return nil, err
 	}
-	groups, err := s.actions.RunArtifacts(ctx, run)
+	rows, err := s.actions.RunArtifacts(ctx, run)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -299,9 +377,9 @@ func (s *ActionsService) ListRunArtifacts(ctx context.Context, req *v1.ListRunAr
 			jobNames[j.ID] = j.Name
 		}
 	}
-	out := make([]*v1.RunArtifact, 0, len(groups))
-	for _, g := range groups {
-		out = append(out, actionsArtifactProto(g, jobNames))
+	out := make([]*v1.RunArtifact, 0, len(rows))
+	for _, a := range rows {
+		out = append(out, s.actionsArtifactProto(ctx, repo, a, jobNames))
 	}
 	return &v1.ListRunArtifactsResponse{Artifacts: out}, nil
 }
@@ -753,18 +831,14 @@ func (w *actionsWorkflowSet) proto(f *actions.WorkflowFile) *v1.Workflow {
 		out.Name = f.Path
 		return out
 	}
-	wf := f.Workflow
-	out.Name = wf.Name
-	if out.Name == "" {
-		out.Name = f.Path
-	}
-	out.Triggers = wf.Events()
-	if inputs, order, ok := wf.DispatchInputs(); ok {
-		list := make([]map[string]any, 0, len(order))
-		for _, name := range order {
-			in := inputs[name]
+	out.Name = f.Name
+	out.Triggers = f.EventNames()
+	if f.Event("workflow_dispatch") != nil {
+		inputs := f.DispatchInputs()
+		list := make([]map[string]any, 0, len(inputs))
+		for _, in := range inputs {
 			list = append(list, map[string]any{
-				"name": name, "type": in.Type, "description": in.Description,
+				"name": in.Name, "type": in.Type, "description": in.Description,
 				"default": in.Default, "required": in.Required, "options": in.Options,
 			})
 		}
@@ -881,14 +955,13 @@ func actionsRunnerProto(r *storage.ActionsRunner, scope *v1.ActionsScope) *v1.Ru
 	return out
 }
 
-func actionsArtifactProto(a *actions.RunArtifact, jobNames map[string]string) *v1.RunArtifact {
-	row := a.Row
+func (s *ActionsService) actionsArtifactProto(ctx context.Context, repo *storage.GitRepository, a *storage.ActionsArtifact, jobNames map[string]string) *v1.RunArtifact {
 	out := &v1.RunArtifact{
-		Id: row.ID, Name: row.Name, Size: a.Size, FileCount: a.FileCount, JobId: row.JobID, JobName: jobNames[row.JobID],
-		DownloadUrl: a.DownloadPath(), CreatedAt: timestamppb.New(row.CreatedAt),
+		Id: a.ID, Number: a.Number, Name: a.Name, Size: a.Size, JobId: a.JobID, JobName: jobNames[a.JobID],
+		DownloadUrl: s.actions.ArtifactPageURL(ctx, repo, a), CreatedAt: timestamppb.New(a.CreatedAt),
 	}
-	if row.ExpiresAt != nil {
-		out.ExpiresAt = timestamppb.New(*row.ExpiresAt)
+	if a.ExpiresAt != nil {
+		out.ExpiresAt = timestamppb.New(*a.ExpiresAt)
 	}
 	return out
 }

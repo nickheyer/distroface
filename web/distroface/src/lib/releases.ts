@@ -12,10 +12,24 @@ export function pullLine(img: ReleaseImage): string {
 	);
 }
 
-// Scoped cookie carries auth for a direct asset download
-export function primeDownload() {
+// Short lived cookie scoped to the repository so a direct download carries the session
+export function primeDownload(namespace: string, name: string) {
 	const token = localStorage.getItem(SESSION_KEY);
 	if (!token) return;
 	const secure = location.protocol === 'https:' ? '; Secure' : '';
-	document.cookie = `${SESSION_KEY}=${token}; Path=/api/v1/artifacts; Max-Age=60; SameSite=Strict${secure}`;
+	const path = `/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/`;
+	document.cookie = `${SESSION_KEY}=${token}; Path=${path}; Max-Age=60; SameSite=Strict${secure}`;
+}
+
+// Where a new asset of a release streams to
+export function assetUploadUrl(
+	namespace: string,
+	name: string,
+	tag: string,
+	file: string,
+	label = ''
+): string {
+	const q = new URLSearchParams({ name: file });
+	if (label) q.set('label', label);
+	return `/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/-/releases/${encodeURIComponent(tag)}/assets?${q}`;
 }

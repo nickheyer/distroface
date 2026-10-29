@@ -49,7 +49,9 @@
 		builtinEnabled: 'git.actions.builtin_runner.enabled',
 		builtinLabels: 'git.actions.builtin_runner.labels',
 		builtinConcurrency: 'git.actions.builtin_runner.concurrency',
-		builtinImage: 'git.actions.builtin_runner.image'
+		builtinImage: 'git.actions.builtin_runner.image',
+		actionsUrl: 'git.actions.default_actions_url',
+		startersUrl: 'git.actions.starter_workflows_url'
 	} as const;
 	type Path = (typeof P)[keyof typeof P];
 
@@ -70,10 +72,12 @@
 		P.builtinConcurrency,
 		P.builtinImage
 	];
+	// Where actions and starter workflows come from is instance wide
+	const sourcePaths: Path[] = [P.actionsUrl, P.startersUrl];
 	const paths = $derived.by((): Path[] => {
 		const defaults: Path[] = [P.runsOn, P.runOnMirror, P.artifactDays, P.logDays];
 		if (isRepo) return defaults;
-		if (isSystem) return [P.enabled, ...defaults, ...builtinPaths];
+		if (isSystem) return [P.enabled, ...defaults, ...sourcePaths, ...builtinPaths];
 		return [P.enabled, ...defaults];
 	});
 
@@ -92,6 +96,8 @@
 	let builtinLabels = $state('ubuntu-latest');
 	let builtinConcurrency = $state(2);
 	let builtinImage = $state('');
+	let actionsUrl = $state('https://github.com');
+	let startersUrl = $state('https://github.com/actions/starter-workflows');
 
 	const overridden = (path: string) => !!parentScope && tierOf(prov, path) === ownTier;
 	const tag = (path: string) => (overridden(path) ? 'Custom' : undefined);
@@ -127,6 +133,8 @@
 		builtinLabels = b?.labels || 'ubuntu-latest';
 		builtinConcurrency = b?.concurrency || 2;
 		builtinImage = b?.image ?? '';
+		actionsUrl = a?.defaultActionsUrl || 'https://github.com';
+		startersUrl = a?.starterWorkflowsUrl || 'https://github.com/actions/starter-workflows';
 	}
 
 	function valuesOf(s: Settings | null): Record<Path, unknown> {
@@ -140,7 +148,9 @@
 			[P.builtinEnabled]: a?.builtinRunner?.enabled ?? false,
 			[P.builtinLabels]: a?.builtinRunner?.labels ?? 'ubuntu-latest',
 			[P.builtinConcurrency]: a?.builtinRunner?.concurrency ?? 2,
-			[P.builtinImage]: a?.builtinRunner?.image ?? ''
+			[P.builtinImage]: a?.builtinRunner?.image ?? '',
+			[P.actionsUrl]: a?.defaultActionsUrl ?? '',
+			[P.startersUrl]: a?.starterWorkflowsUrl ?? ''
 		};
 	}
 
@@ -157,7 +167,10 @@
 				1,
 				Math.min(64, Math.round(Number(builtinConcurrency) || 2))
 			),
-			[P.builtinImage]: builtinImage.trim()
+			[P.builtinImage]: builtinImage.trim(),
+			[P.actionsUrl]: actionsUrl.trim().replace(/\/+$/, '') || 'https://github.com',
+			[P.startersUrl]:
+				startersUrl.trim().replace(/\/+$/, '') || 'https://github.com/actions/starter-workflows'
 		};
 	}
 
@@ -171,6 +184,8 @@
 					...(has(P.runOnMirror) ? { runOnMirror: f[P.runOnMirror] as boolean } : {}),
 					...(has(P.artifactDays) ? { artifactRetentionDays: f[P.artifactDays] as number } : {}),
 					...(has(P.logDays) ? { logRetentionDays: f[P.logDays] as number } : {}),
+					...(has(P.actionsUrl) ? { defaultActionsUrl: f[P.actionsUrl] as string } : {}),
+					...(has(P.startersUrl) ? { starterWorkflowsUrl: f[P.startersUrl] as string } : {}),
 					...(builtinPaths.some(has)
 						? {
 								builtinRunner: {
@@ -305,6 +320,46 @@
 			</FormField>
 		{/if}
 	</FormSection>
+
+	{#if isSystem}
+		<FormSection
+			title="Sources"
+			description="Where uses references without a host resolve and where the starter workflow cards come from."
+		>
+			<FormField
+				label="Actions host"
+				id="actions-source-url"
+				help={locked(P.actionsUrl)
+					? 'Pinned by the config file'
+					: 'A reference such as actions/checkout@v4 clones from this host'}
+				span="half"
+			>
+				<Input
+					id="actions-source-url"
+					bind:value={actionsUrl}
+					placeholder="https://github.com"
+					class="font-mono"
+					disabled={!canEdit || locked(P.actionsUrl)}
+				/>
+			</FormField>
+			<FormField
+				label="Starter workflows"
+				id="actions-starters-url"
+				help={locked(P.startersUrl)
+					? 'Pinned by the config file'
+					: 'Repository laid out like actions/starter-workflows, fetched once a day'}
+				span="half"
+			>
+				<Input
+					id="actions-starters-url"
+					bind:value={startersUrl}
+					placeholder="https://github.com/actions/starter-workflows"
+					class="font-mono"
+					disabled={!canEdit || locked(P.startersUrl)}
+				/>
+			</FormField>
+		</FormSection>
+	{/if}
 
 	<FormSection title="Retention" description="How long job artifacts and logs are stored.">
 		<FormField

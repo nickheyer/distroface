@@ -37,27 +37,6 @@ func PropsFingerprint(properties map[string]string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// KindFilter picks which artifact rows a listing sees
-type KindFilter int
-
-const (
-	KindRegular  KindFilter = iota // Package contents, the default
-	KindWorkflow                   // Files workflow runs uploaded
-	KindAny
-)
-
-func kindScope(k KindFilter) func(*gorm.DB) *gorm.DB {
-	return func(tx *gorm.DB) *gorm.DB {
-		switch k {
-		case KindRegular:
-			return tx.Where("artifacts.kind = ''")
-		case KindWorkflow:
-			return tx.Where("artifacts.kind = ?", db.ArtifactKindWorkflow)
-		}
-		return tx
-	}
-}
-
 // ── Artifact repository operations ───────────────────────────────────────
 
 func (s *Store) CreateArtifactRepository(ctx context.Context, repo *db.ArtifactRepository) error {
@@ -178,13 +157,10 @@ func (s *Store) DeleteArtifactRepository(ctx context.Context, id int64) ([]strin
 }
 
 // Artifact count and total size per repo
-// Package contents and workflow uploads counted apart
 type ArtifactRepoStats struct {
-	RepoID        int64
-	Count         int64
-	Size          int64
-	WorkflowCount int64
-	WorkflowSize  int64
+	RepoID int64
+	Count  int64
+	Size   int64
 }
 
 func (s *Store) GetArtifactRepoStats(ctx context.Context, repoIDs []int64) (map[int64]ArtifactRepoStats, error) {
@@ -194,28 +170,19 @@ func (s *Store) GetArtifactRepoStats(ctx context.Context, repoIDs []int64) (map[
 	}
 	var rows []struct {
 		RepoID int64
-		Kind   string
 		Count  int64
 		Size   int64
 	}
 	err := s.db.WithContext(ctx).Model(&db.Artifact{}).
-		Select("repo_id AS repo_id, kind AS kind, COUNT(*) AS count, COALESCE(SUM(size),0) AS size").
+		Select("repo_id AS repo_id, COUNT(*) AS count, COALESCE(SUM(size),0) AS size").
 		Where("repo_id IN ?", repoIDs).
-		Group("repo_id, kind").
+		Group("repo_id").
 		Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 	for _, r := range rows {
-		st := stats[r.RepoID]
-		st.RepoID = r.RepoID
-		if r.Kind == db.ArtifactKindWorkflow {
-			st.WorkflowCount, st.WorkflowSize = r.Count, r.Size
-		} else {
-			st.Count += r.Count
-			st.Size += r.Size
-		}
-		stats[r.RepoID] = st
+		stats[r.RepoID] = ArtifactRepoStats{RepoID: r.RepoID, Count: r.Count, Size: r.Size}
 	}
 	return stats, nil
 }
@@ -329,8 +296,8 @@ func (s *Store) GetArtifactByIdentity(ctx context.Context, repoID int64, version
 	return &artifact, nil
 }
 
-func (s *Store) ListArtifacts(ctx context.Context, repoID int64, version string, kind KindFilter, limit, offset int) ([]*db.Artifact, int64, error) {
-	q := s.db.WithContext(ctx).Model(&db.Artifact{}).Where("repo_id = ?", repoID).Scopes(kindScope(kind))
+func (s *Store) ListArtifacts(ctx context.Context, repoID int64, version string, limit, offset int) ([]*db.Artifact, int64, error) {
+	q := s.db.WithContext(ctx).Model(&db.Artifact{}).Where("repo_id = ?", repoID)
 	if version != "" {
 		q = q.Where("version = ?", version)
 	}
@@ -355,10 +322,10 @@ func (s *Store) ListArtifacts(ctx context.Context, repoID int64, version string,
 }
 
 // Pages distinct versions, byVersion sorts naturally else by newest artifact
-func (s *Store) ListArtifactVersionPage(ctx context.Context, repoID int64, kind KindFilter, byVersion, desc bool, limit, offset int) ([]string, int64, error) {
+func (s *Store) ListArtifactVersionPage(ctx context.Context, repoID int64, byVersion, desc bool, limit, offset int) ([]string, int64, error) {
 	var total int64
 	if err := s.db.WithContext(ctx).Model(&db.Artifact{}).
-		Where("repo_id = ?", repoID).Scopes(kindScope(kind)).
+		Where("repo_id = ?", repoID).
 		Distinct("version").
 		Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -368,7 +335,7 @@ func (s *Store) ListArtifactVersionPage(ctx context.Context, repoID int64, kind 
 		// Natural version order needs the full set in memory
 		var versions []string
 		if err := s.db.WithContext(ctx).Model(&db.Artifact{}).
-			Where("repo_id = ?", repoID).Scopes(kindScope(kind)).
+			Where("repo_id = ?", repoID).
 			Distinct().Pluck("version", &versions).Error; err != nil {
 			return nil, 0, err
 		}
@@ -393,7 +360,7 @@ func (s *Store) ListArtifactVersionPage(ctx context.Context, repoID int64, kind 
 	}
 	q := s.db.WithContext(ctx).Model(&db.Artifact{}).
 		Select("version, MAX(created_at) AS latest").
-		Where("repo_id = ?", repoID).Scopes(kindScope(kind)).
+		Where("repo_id = ?", repoID).
 		Group("version").
 		Order("latest " + dir)
 	if limit > 0 {
@@ -414,13 +381,13 @@ func (s *Store) ListArtifactVersionPage(ctx context.Context, repoID int64, kind 
 }
 
 // All artifacts for the given versions, newest first
-func (s *Store) ListArtifactsByVersions(ctx context.Context, repoID int64, kind KindFilter, versions []string) ([]*db.Artifact, error) {
+func (s *Store) ListArtifactsByVersions(ctx context.Context, repoID int64, versions []string) ([]*db.Artifact, error) {
 	if len(versions) == 0 {
 		return nil, nil
 	}
 	var artifacts []*db.Artifact
 	err := s.db.WithContext(ctx).Model(&db.Artifact{}).
-		Where("repo_id = ? AND version IN ?", repoID, versions).Scopes(kindScope(kind)).
+		Where("repo_id = ? AND version IN ?", repoID, versions).
 		Order("created_at DESC").
 		Find(&artifacts).Error
 	if err != nil {
@@ -435,7 +402,6 @@ func (s *Store) ListArtifactsByVersions(ctx context.Context, repoID int64, kind 
 type ArtifactSearchCriteria struct {
 	RepoID     *int64
 	RepoIDs    []int64     // Visibility filter, empty means unrestricted
-	Kind       KindFilter  // Zero value lists package contents only
 	Query      pages.Query // Structured filter against ArtifactsQuery
 	Properties map[string]string
 	OrderBy    string // Preresolved "column direction", defaults created_at DESC
@@ -467,7 +433,7 @@ func (s *Store) SearchArtifacts(ctx context.Context, criteria ArtifactSearchCrit
 	if len(criteria.RepoIDs) > 0 {
 		q = q.Where("repo_id IN ?", criteria.RepoIDs)
 	}
-	q = q.Scopes(ArtifactsQuery.Scope(criteria.Query), kindScope(criteria.Kind))
+	q = q.Scopes(ArtifactsQuery.Scope(criteria.Query))
 	for k, v := range criteria.Properties {
 		q = q.Where("EXISTS (SELECT 1 FROM artifact_properties p WHERE p.artifact_id = artifacts.id AND p.key = ? AND p.value = ?)", k, v)
 	}

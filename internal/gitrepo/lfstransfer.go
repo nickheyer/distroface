@@ -351,14 +351,7 @@ func (l *LFS) ownerName(ctx context.Context, id string) string {
 }
 
 func (l *LFS) dropUnreferenced(ctx context.Context, digest string) {
-	oid := strings.TrimPrefix(digest, "sha256:")
-	if count, _ := l.manager.Store().CountArtifactsByDigest(ctx, digest); count > 0 {
-		return
-	}
-	if links, _ := l.manager.Store().CountLFSLinksByOID(ctx, oid); links > 0 {
-		return
-	}
-	_ = l.manager.Blobs().DeleteBlob(digest)
+	l.manager.ReapBlob(ctx, digest)
 }
 
 // Streams reader bytes as data pkt-lines

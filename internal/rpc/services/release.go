@@ -68,18 +68,8 @@ func (s *ReleaseService) release(ctx context.Context, namespace, name, tag strin
 	return repo, actor, rel, nil
 }
 
-func (s *ReleaseService) assetProto(ctx context.Context, pkg *storage.ArtifactRepository, a *storage.Artifact) *v1.ReleaseAsset {
-	base := s.manager.BaseURL(ctx)
-	return &v1.ReleaseAsset{
-		ArtifactId:  a.ID,
-		Name:        a.Path,
-		Size:        a.Size,
-		Digest:      a.Digest,
-		ContentType: a.MimeType,
-		DownloadUrl: fmt.Sprintf("%s/api/v1/artifacts/_ns/%s/%s/%s/%s", base, pkg.Namespace, pkg.Name, a.Version, a.Path),
-		ArtifactUrl: fmt.Sprintf("%s/artifacts/%s/%s?version=%s", base, pkg.Namespace, pkg.Name, a.Version),
-		CreatedAt:   timestamppb.New(a.CreatedAt),
-	}
+func (s *ReleaseService) assetProto(ctx context.Context, repo *storage.GitRepository, rel *storage.GitRelease, a *storage.GitReleaseAsset) *v1.ReleaseAsset {
+	return s.manager.ReleaseAssetProto(ctx, repo, rel, a)
 }
 
 // Images of a release, tag matches on linked repos plus pinned references
@@ -147,9 +137,9 @@ func (s *ReleaseService) toProto(ctx context.Context, repo *storage.GitRepositor
 		}
 		r.Close()
 	}
-	if assets, pkg, err := s.forge.ReleaseAssets(ctx, repo, rel); err == nil && pkg != nil {
+	if assets, err := s.forge.ReleaseAssets(ctx, rel); err == nil {
 		for _, a := range assets {
-			out.Assets = append(out.Assets, s.assetProto(ctx, pkg, a))
+			out.Assets = append(out.Assets, s.assetProto(ctx, repo, rel, a))
 		}
 	}
 	out.Images = s.images(ctx, repo, rel)
@@ -236,28 +226,34 @@ func (s *ReleaseService) PublishRelease(ctx context.Context, req *v1.PublishRele
 	return &v1.PublishReleaseResponse{Release: s.toProto(ctx, repo, rel)}, nil
 }
 
-func (s *ReleaseService) AttachReleaseAsset(ctx context.Context, req *v1.AttachReleaseAssetRequest) (*v1.AttachReleaseAssetResponse, error) {
+func (s *ReleaseService) UpdateReleaseAsset(ctx context.Context, req *v1.UpdateReleaseAssetRequest) (*v1.UpdateReleaseAssetResponse, error) {
 	repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
-	art, err := s.forge.AttachReleaseAsset(ctx, repo, actor, rel, req.ArtifactId)
+	a, err := s.forge.ReleaseAsset(ctx, rel, req.AssetId)
 	if err != nil {
 		return nil, mapForgeErr(err)
 	}
-	pkg, _ := s.forge.ReleasePackage(ctx, repo, false)
-	return &v1.AttachReleaseAssetResponse{Asset: s.assetProto(ctx, pkg, art)}, nil
+	if err := s.forge.UpdateReleaseAsset(ctx, repo, actor, rel, a, req.AssetName, req.Label); err != nil {
+		return nil, mapForgeErr(err)
+	}
+	return &v1.UpdateReleaseAssetResponse{Asset: s.assetProto(ctx, repo, rel, a)}, nil
 }
 
-func (s *ReleaseService) DetachReleaseAsset(ctx context.Context, req *v1.DetachReleaseAssetRequest) (*v1.DetachReleaseAssetResponse, error) {
+func (s *ReleaseService) DeleteReleaseAsset(ctx context.Context, req *v1.DeleteReleaseAssetRequest) (*v1.DeleteReleaseAssetResponse, error) {
 	repo, actor, rel, err := s.release(ctx, req.Namespace, req.Name, req.Tag, gitrepo.LevelWrite)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.forge.DetachReleaseAsset(ctx, repo, actor, rel, req.ArtifactId); err != nil {
+	a, err := s.forge.ReleaseAsset(ctx, rel, req.AssetId)
+	if err != nil {
 		return nil, mapForgeErr(err)
 	}
-	return &v1.DetachReleaseAssetResponse{}, nil
+	if err := s.forge.DeleteReleaseAsset(ctx, repo, actor, rel, a); err != nil {
+		return nil, mapForgeErr(err)
+	}
+	return &v1.DeleteReleaseAssetResponse{}, nil
 }
 
 func (s *ReleaseService) AttachReleaseImage(ctx context.Context, req *v1.AttachReleaseImageRequest) (*v1.AttachReleaseImageResponse, error) {

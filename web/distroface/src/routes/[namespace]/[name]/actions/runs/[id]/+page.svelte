@@ -62,6 +62,7 @@
 		type Annotation
 	} from '$lib/components/git/actions-state';
 	import { formatBytes, relativeTime } from '$lib/utils';
+	import { primeDownload } from '$lib/releases';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { toast } from 'svelte-sonner';
 
@@ -641,7 +642,13 @@
 										</div>
 									</div>
 									{#if a.downloadUrl}
-										<Button variant="outline" size="sm" href={a.downloadUrl} download>
+										<Button
+											variant="outline"
+											size="sm"
+											href={a.downloadUrl}
+											download
+											onclick={() => primeDownload(namespace, name)}
+										>
 											<Download />Download
 										</Button>
 									{:else}

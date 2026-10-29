@@ -5,23 +5,22 @@ import (
 	"path"
 	"strings"
 
-	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/forge"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/pages"
 )
 
 // Release assets as json rows
-func (q *request) assetList(repo *db.GitRepository, rel *db.GitRelease) ([]obj, []*db.Artifact) {
-	assets, pkg, err := q.h.forge.ReleaseAssets(q.ctx, repo, rel)
-	if err != nil || pkg == nil {
+func (q *request) assetList(repo *db.GitRepository, rel *db.GitRelease) ([]obj, []*db.GitReleaseAsset) {
+	assets, err := q.h.forge.ReleaseAssets(q.ctx, rel)
+	if err != nil {
 		return []obj{}, nil
 	}
 	out := make([]obj, 0, len(assets))
 	for _, a := range assets {
-		out = append(out, q.assetJSON(repo, pkg, a))
+		out = append(out, q.assetJSON(repo, rel, a))
 	}
 	return out, assets
 }
@@ -209,32 +208,27 @@ func (q *request) listAssets() {
 	q.json(http.StatusOK, pageSlice(assets, p))
 }
 
-// Finds an asset by integer or row id across the release package
-func (q *request) assetByPath(repo *db.GitRepository) (*db.ArtifactRepository, *db.Artifact, *db.GitRelease, bool) {
-	pkg, err := q.h.forge.ReleasePackage(q.ctx, repo, false)
-	if err != nil || pkg == nil {
-		q.notFound()
-		return nil, nil, nil, false
-	}
+// Finds an asset by integer or row id across the repository's releases
+func (q *request) assetByPath(repo *db.GitRepository) (*db.GitReleaseAsset, *db.GitRelease, bool) {
 	id := q.param("id")
-	rows, _, err := q.h.store.ListArtifacts(q.ctx, pkg.ID, "", stores.KindRegular, 0, 0)
+	rows, err := q.h.store.ListGitReleaseAssetsByRepo(q.ctx, repo.ID)
 	if err != nil {
 		q.failErr(err)
-		return nil, nil, nil, false
+		return nil, nil, false
 	}
 	canWrite := q.actor(repo, db.GitUnitReleases).CanWrite
 	for _, a := range rows {
-		if a.Properties[forge.ReleaseAssetProperty] != "true" || !idMatches(id, a.ID) {
+		if !idMatches(id, a.ID) {
 			continue
 		}
-		rel, _ := q.h.store.GetGitRelease(q.ctx, repo.ID, a.Version)
-		if rel == nil || (rel.Draft && !canWrite) {
+		rel, _ := q.h.store.GetGitReleaseByID(q.ctx, a.ReleaseID)
+		if rel == nil || rel.RepoID != repo.ID || (rel.Draft && !canWrite) {
 			break
 		}
-		return pkg, a, rel, true
+		return a, rel, true
 	}
 	q.notFound()
-	return nil, nil, nil, false
+	return nil, nil, false
 }
 
 func (q *request) getAsset() {
@@ -242,14 +236,19 @@ func (q *request) getAsset() {
 	if !ok || !q.readable(repo, db.GitUnitReleases) {
 		return
 	}
-	pkg, a, _, ok := q.assetByPath(repo)
+	a, rel, ok := q.assetByPath(repo)
 	if !ok {
 		return
 	}
-	q.json(http.StatusOK, q.assetJSON(repo, pkg, a))
+	// Octet stream callers get the file, the redirect GitHub answers with
+	if strings.Contains(q.r.Header.Get("Accept"), "application/octet-stream") {
+		http.Redirect(q.w, q.r, q.h.forge.AssetDownloadURL(q.ctx, repo, rel, a), http.StatusFound)
+		return
+	}
+	q.json(http.StatusOK, q.assetJSON(repo, rel, a))
 }
 
-// Streams the request body into the release package as a flagged asset
+// Streams the body onto the release the way uploads.github.com does
 func (q *request) uploadAsset() {
 	repo, ok := q.repo()
 	if !ok || !q.writable(repo, db.GitUnitReleases, rbac.ActionPush) {
@@ -264,47 +263,20 @@ func (q *request) uploadAsset() {
 		q.validation("ReleaseAsset", "name", "missing_field", "name is required")
 		return
 	}
-	if err := artifacts.ValidatePath(name); err != nil {
+	if err := gitrepo.ValidateAssetName(name); err != nil {
 		q.validation("ReleaseAsset", "name", "invalid", err.Error())
 		return
 	}
-	_, existing := q.assetList(repo, rel)
-	for _, a := range existing {
-		if a.Path == name {
-			q.validation("ReleaseAsset", "name", "already_exists", "an asset with that name already exists")
-			return
-		}
+	if existing, _ := q.h.store.GetGitReleaseAssetByName(q.ctx, rel.ID, name); existing != nil {
+		q.validation("ReleaseAsset", "name", "already_exists", "an asset with that name already exists")
+		return
 	}
-	pkg, err := q.h.forge.ReleasePackage(q.ctx, repo, true)
+	a, err := q.h.forge.UploadReleaseAsset(q.ctx, repo, q.actor(repo, db.GitUnitReleases), rel, name, strings.TrimSpace(q.query("label")), q.r.Header.Get("Content-Type"), q.r.Body)
 	if err != nil {
 		q.failErr(err)
 		return
 	}
-	blobs := q.h.artifacts.Blobs()
-	uploadID, err := blobs.InitiateUpload()
-	if err != nil {
-		q.failErr(err)
-		return
-	}
-	if _, err := blobs.AppendChunk(uploadID, q.r.Body); err != nil {
-		_ = blobs.CancelUpload(uploadID)
-		q.failErr(err)
-		return
-	}
-	props := map[string]string{forge.ReleaseAssetProperty: "true"}
-	if label := strings.TrimSpace(q.query("label")); label != "" {
-		props["label"] = label
-	}
-	art, err := q.h.artifacts.CompleteUpload(q.ctx, pkg, uploadID, rel.Tag, name, "{}", props)
-	if err != nil {
-		q.failErr(err)
-		return
-	}
-	if ct := strings.TrimSpace(q.r.Header.Get("Content-Type")); ct != "" && ct != "application/octet-stream" && art.MimeType != ct {
-		art.MimeType = ct
-		_ = q.h.store.UpdateArtifact(q.ctx, art)
-	}
-	q.json(http.StatusCreated, q.assetJSON(repo, pkg, art))
+	q.json(http.StatusCreated, q.assetJSON(repo, rel, a))
 }
 
 func (q *request) updateAsset() {
@@ -312,7 +284,7 @@ func (q *request) updateAsset() {
 	if !ok || !q.writable(repo, db.GitUnitReleases, rbac.ActionPush) {
 		return
 	}
-	pkg, a, rel, ok := q.assetByPath(repo)
+	a, rel, ok := q.assetByPath(repo)
 	if !ok {
 		return
 	}
@@ -323,41 +295,15 @@ func (q *request) updateAsset() {
 	if !q.decode(&in) {
 		return
 	}
-	if in.Label != nil {
-		props := map[string]string{}
-		for k, v := range a.Properties {
-			props[k] = v
-		}
-		props["label"] = strings.TrimSpace(*in.Label)
-		if props["label"] == "" {
-			delete(props, "label")
-		}
-		if err := q.h.store.SetArtifactProperties(q.ctx, a.ID, props); err != nil {
-			q.failErr(err)
-			return
-		}
-		a.Properties = props
+	if in.Name != nil {
+		trimmed := path.Base(strings.TrimSpace(*in.Name))
+		in.Name = &trimmed
 	}
-	if in.Name != nil && strings.TrimSpace(*in.Name) != "" && *in.Name != a.Path {
-		newName := path.Base(strings.TrimSpace(*in.Name))
-		if err := artifacts.ValidatePath(newName); err != nil {
-			q.validation("ReleaseAsset", "name", "invalid", err.Error())
-			return
-		}
-		_, existing := q.assetList(repo, rel)
-		for _, other := range existing {
-			if other.Path == newName {
-				q.validation("ReleaseAsset", "name", "already_exists", "an asset with that name already exists")
-				return
-			}
-		}
-		a.Path, a.Name = newName, newName
-		if err := q.h.store.UpdateArtifact(q.ctx, a); err != nil {
-			q.failErr(err)
-			return
-		}
+	if err := q.h.forge.UpdateReleaseAsset(q.ctx, repo, q.actor(repo, db.GitUnitReleases), rel, a, in.Name, in.Label); err != nil {
+		q.failErr(err)
+		return
 	}
-	q.json(http.StatusOK, q.assetJSON(repo, pkg, a))
+	q.json(http.StatusOK, q.assetJSON(repo, rel, a))
 }
 
 func (q *request) deleteAsset() {
@@ -365,11 +311,11 @@ func (q *request) deleteAsset() {
 	if !ok || !q.writable(repo, db.GitUnitReleases, rbac.ActionPush) {
 		return
 	}
-	_, a, _, ok := q.assetByPath(repo)
+	a, rel, ok := q.assetByPath(repo)
 	if !ok {
 		return
 	}
-	if err := q.h.artifacts.DeleteArtifact(q.ctx, a); err != nil {
+	if err := q.h.forge.DeleteReleaseAsset(q.ctx, repo, q.actor(repo, db.GitUnitReleases), rel, a); err != nil {
 		q.failErr(err)
 		return
 	}

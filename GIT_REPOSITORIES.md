@@ -810,7 +810,8 @@ Compact listing of the remaining tables, columns beyond the obvious ids and time
 | `git_watches` | user_id, repo_id, mode | all, participating, ignore |
 | `git_tag_protections` | repo_id, pattern, block_deletion, allowed_pushers json |  |
 | `git_commit_statuses` | repo_id, sha, context, state, target_url, description, creator_id | unique (repo_id, sha, context), latest wins |
-| `git_releases` | repo_id, tag, name, body, draft, prerelease, author_id, target_sha, published_at | assets are artifacts, see 13 |
+| `git_releases` | repo_id, tag, name, body, draft, prerelease, author_id, target_sha, published_at |  |
+| `git_release_assets` | release_id, name, label, size, digest, content_type, uploader_id, download_count | files of a release, unique (release_id, name), blob in the shared store, see 13 |
 | `git_release_images` | release_id, image_repo_id, tag, digest | pinned image references on a release |
 | `gpg_keys` | user_id, key_id, fingerprint, armored, emails, expires_at |  |
 | `api_tokens` | plus scope_type, scope_id, read_only | null scope means today's behavior |
@@ -842,7 +843,7 @@ Compact listing of the remaining tables, columns beyond the obvious ids and time
 | `actions_jobs` | run_id, name, runs_on json, needs json, status, conclusion, runner_id, attempt, started_at, finished_at, steps json, outputs json |  |
 | `actions_job_logs` | job_id, chunk_index, bytes | appended by the runner, compacted on completion |
 | `actions_secrets`, `actions_variables` | owner scope, name, encrypted value or plain value | secrets sealed under the sealing key |
-| `actions_artifacts` | run_id, artifact_id, name, expires_at | rows in the linked artifact package |
+| `actions_artifacts` | run_id, job_id, number, name, digest, size, content_type, status, expires_at | run owned uploads of the results api, blob in the shared store, unique (run_id, name) |
 
 `SettingsRow` gains no columns, the new `SETTINGS_SCOPE_TYPE_REPO = 4` uses the git repo
 id as `scope_id` (22).
@@ -918,10 +919,13 @@ GetTemplates (issue and pull templates, CODEOWNERS presence).
 
 `ReleaseService` (`release.proto`): CreateRelease (tag, target, name, body, draft,
 prerelease), GetRelease (assets, images, source commit), ListReleases, UpdateRelease,
-DeleteRelease, PublishRelease, AttachReleaseAsset (artifact id uploaded through
-ArtifactService into the package), DetachReleaseAsset, AttachReleaseImage (image repo,
-tag, pins the digest), DetachReleaseImage, GetLatestRelease, GenerateReleaseNotes (commits
-since previous tag, merged PR titles).
+DeleteRelease (assets go with it), PublishRelease, UpdateReleaseAsset (name, label),
+DeleteReleaseAsset, AttachReleaseImage (image repo, tag, pins the digest),
+DetachReleaseImage, GetLatestRelease, GenerateReleaseNotes (commits since previous tag,
+merged PR titles). Asset bytes never ride the RPC: a client streams one request to
+`POST /<ns>/<name>/-/releases/<tag>/assets?name=<file>&label=<text>` with the file as the
+body and gets the `ReleaseAsset` json back, the same shape octokit uploads to
+`uploads.github.com`.
 
 `IssueService` (`issue.proto`): CreateIssue, GetIssue, ListIssues (state, labels, milestone,
 assignee, author, mentioned, type issue or pull, sort), SearchIssues (across visible repos),
@@ -983,8 +987,8 @@ DeleteVariable, ListRunners (scope), CreateRunnerToken, DeleteRunner, UpdateRunn
 RegisterRunner, Heartbeat, FetchTask (long poll up to 30 seconds), UpdateTask (step
 states, outputs), AppendTaskLog (chunks of at most 1 MiB, 64 MiB per job, past that the
 server answers resource exhausted and the runner stops streaming while the job runs on),
-CompleteTask, UploadTaskArtifact (initiates the artifact upload and returns the data plane
-url). Finished logs are compacted into one blob a batch of chunks at a time.
+CompleteTask. Artifacts never ride this service, the runner speaks the results api with
+the runtime token. Finished logs are compacted into one blob a batch of chunks at a time.
 
 ## 13. One project: linked packages, releases, and images
 
@@ -1032,14 +1036,19 @@ carries the tag, the target commit, notes, and draft and prerelease flags. A rel
 shows three things, each linking to its home:
 
 - Source. The tag and commit, linking to `/ns/name/commit/<sha>` and the archive downloads.
-- Assets. `Artifact` rows in the artifact package `ns/name`, version equal to the tag, path
-  equal to the asset file name, property `release=true`. The package is created on first
-  asset upload when missing, linked, and given the git repo's visibility. Upload uses the
-  existing `InitiateArtifactUpload`, data plane PATCH, `CompleteArtifactUpload`, then
-  `AttachReleaseAsset`. Each asset row links to `/artifacts/ns/name` at that version, and
-  `-/releases/<tag>/<asset>` on the project route redirects to the artifact download so
-  release links read naturally. `dfcli artifact download ns/name -v v1.2.3` fetches
-  release assets with no new code path.
+- Assets. `git_release_assets` rows that belong to the release and nothing else. A row
+  carries the file name, an optional label, size, sha256 digest, content type, uploader,
+  and a download count, and the bytes live in the shared blob store next to LFS objects and
+  run artifacts, reaped when no table references the digest. Uploads stream in one request
+  to `POST /ns/name/-/releases/<tag>/assets?name=<file>` (session cookie, bearer or basic
+  token, `releases` unit at write), capped by `git.max_release_asset_mb` (2048 by default,
+  org scope may lower it), and a name that already exists is refused unless `replace=1`.
+  Downloads are `GET /ns/name/releases/download/<tag>/<file>`, the GitHub address, served
+  straight from the blob with hardened headers, drafts visible to writers alone. Deleting
+  a release deletes its files, deleting the repository reaps them. `dfcli release upload
+  ns/name v1.2.3 ./dist/*` streams files, `dfcli release download ns/name v1.2.3 --asset
+  '*.tar.gz' -o out` fetches them. The Packages tab lists only real packages, release
+  files never appear there.
 - Images. Every linked image repo that carries a tag equal to the release tag is listed
   automatically with its digest, platforms, and a `docker pull host/ns/name:v1.2.3` line,
   linking to `/images/ns/name`. `AttachReleaseImage` pins an explicit reference (`ns/name/
@@ -1052,14 +1061,17 @@ a release, shows a Release badge linking to `/ns/name/releases/<tag>`. On the ar
 a version equal to a release tag shows the same badge. The project sidebar shows the
 latest release with its asset and image counts.
 
-A mirrored git repo created with "also mirror releases" gets the matching
-`GITHUB_RELEASES`, `GITLAB_RELEASES`, or `GITEA_RELEASES` artifact package with the same
-upstream and token, and the release sync creates or updates `git_releases` rows from the
-upstream release list so notes and flags come along. "Also mirror packages" creates image
+A mirrored git repo created with "also mirror releases" (`mirror_releases` on its
+`MirrorConfig`, editable on the mirror settings page) copies the upstream release list on
+every sync: `git_releases` rows are created or refreshed with notes and flags, every asset
+file is streamed onto its release, files and releases the upstream dropped are removed, and
+the host must be a GitHub, GitLab, Gitea, or Forgejo instance because the listing comes
+from its release api. Release package mirrors that used to hang off git mirrors are folded
+into this on the first sweep after upgrade. "Also mirror packages" creates image
 mirrors for the upstream's container registry under `ns/name` and `ns/name/<child>`.
 
-Workflow artifacts (21) are `Artifact` rows in the same package at version
-`actions/<run_number>` with `actions.run=<id>`, pruned by `git.actions.artifact_retention_days`.
+Workflow run artifacts (21) are `actions_artifacts` rows owned by their run, uploaded and
+downloaded through the GitHub Actions results api, never package contents.
 
 ## 14. Code browsing and web editing (`internal/gitrepo/reads.go`, `diff.go`, `commit.go`)
 
@@ -1469,8 +1481,9 @@ contact (stored in `MirrorState`). The same key serves push mirrors.
 
 Validation probes with `transport` `Handshake` plus `GetRemoteRefs` under a 20 second
 timeout. `ValidateGitMirror` sits beside the other two validators. Creating a git mirror
-offers "also mirror releases" and "also mirror packages" which create the linked artifact
-package and image mirrors described in 13, each an independent row with its own sync.
+offers "also mirror releases", which turns on the release sync described in 13, and "also
+mirror packages", which creates the linked image mirrors described there, each image
+mirror an independent row with its own sync.
 
 ### 20.2 Push mirrors
 
@@ -1513,194 +1526,135 @@ fetched before the issue row is written, so a cut off import resumes without gap
 
 The largest phase and the last one. Workflow files live in `.distroface/workflows/*.yaml`
 with `.gitea/workflows` and `.github/workflows` as fallbacks, written in the GitHub Actions
-syntax that Gitea and Forgejo accept.
+syntax. Nothing about the syntax, the expression language, the action formats, or the job
+execution is homegrown: the server plans with the parser Gitea ships (a copy of its
+`jobparser` and `workflowpattern` packages under `internal/actions/`, built on the act
+model from `gitea.com/gitea/runner`), and the runner executes with act itself, the same
+library behind Gitea's and Forgejo's runners. Every action on github.com runs as is.
 
 Server side:
 
-- Triggers from `PostReceive` (push, tag), the forge (pull_request opened, synchronize,
-  reopened, closed, issues, issue_comment, release), `DispatchWorkflow` (workflow_dispatch
-  with typed inputs), and a scheduler for `schedule` crons. Fork PR runs wait for
-  `ApproveRun` by a user with write on `actions` unless the pull request author already
-  has it, whoever caused the event. `pull_request` runs whose head lives in a fork are
-  marked `from_fork` for life: they receive no secrets and a read only job token, approved
-  or not, like GitHub. `pull_request_target` reads the base workflow and keeps secrets.
-  `[skip ci]` in the head commit message and the `-o skip-ci` push option skip.
-- The parser evaluates `on`, `jobs`, `needs`, `strategy.matrix` with include and exclude
-  (capped at 256 jobs like GitHub, an oversized or invalid matrix becomes one failed job
-  carrying the reason),
-  `runs-on` labels, `if` expressions over the `github`, `env`, `vars`, `secrets`, `needs`,
-  `matrix`, `steps` contexts (the expression grammar is a small recursive descent
-  evaluator with the standard functions `contains`, `startsWith`, `endsWith`, `format`,
-  `join`, `toJSON`, `fromJSON`, `hashFiles` is resolved by the runner), `env` at every level,
-  `timeout-minutes`, `continue-on-error`, `services`, `container` (with `credentials` for
-  private images, used for the pull alone), `outputs`, `concurrency`
-  groups with cancel in progress at the workflow and at the job level, `strategy.fail-fast`
-  (default on, a failed matrix job cancels its queued and running siblings unless it is
-  `continue-on-error`) and `strategy.max-parallel` (enforced in the atomic claim, so no
-  runner race admits one job too many), and workflow and job level `defaults.run`.
-  `continue-on-error`, `timeout-minutes`, `fail-fast` and
-  `max-parallel` accept expressions like on GitHub: job level ones resolve when the job is
-  queued, step level ones on the runner against the full step contexts. A matrix written
-  as `${{ fromJSON(needs.<job>.outputs.<name>) }}` stays one waiting row until the needed
-  jobs finish and then expands into its legs in place, and job names over `needs` outputs
-  resolve at the same moment. The parser also handles
-  `permissions` at both levels: a job whose effective permissions grant neither
-  `contents: write` nor `packages: write` (and no `write-all`) gets a read only job token.
-  Reusable workflows work the GitHub way: a job with `uses:` plus `with:` and `secrets:`
-  (a map or `inherit`) calls a file that declares `on: workflow_call` with typed `inputs`,
-  `secrets`, and `outputs`. References are `./<dir>/<file>` at the caller commit or
-  `owner/repo/<path>@<ref>` for a repository on this instance, nesting is capped at four
-  levels, and github.com references fail the job with a clear reason. Called jobs are
-  inlined as `<caller>/<called>` rows, root called jobs inherit the caller's `needs` and
-  `if`, `inputs` and the mapped secrets are evaluated when the task is built, and
-  `needs.<caller>.outputs.<name>` resolves through the called workflow's `outputs`.
-  Parser notes are stored on the run and shown on its page.
+- Workflow loading (`workflows.go`) reads a file with `model.ReadWorkflow`, decode errors
+  surface as the run's error instead of act's default fatal exit, and `on` is parsed with
+  `jobparser.ParseRawOn`.
+- Triggers (`triggers.go`) from `PostReceive` (push, tag), the forge (pull_request and
+  pull_request_target on opened, synchronize, reopened, closed, issues, issue_comment,
+  release), `DispatchWorkflow` (workflow_dispatch with typed inputs validated against the
+  declaration, the payload keeps strings like GitHub and the `inputs` context is typed),
+  and a scheduler for `schedule` crons. Event matching is the Gitea matcher ported onto
+  `jobparser.Event`: branches, tags, paths and their ignore forms (paths diff the push
+  range, or the merge base against the head for pull requests), types, and dispatch
+  inputs. Fork PR runs wait for `ApproveRun` by a user with write on `actions` unless the
+  pull request author already has it. `pull_request` runs whose head lives in a fork are
+  marked `from_fork` for life: no secrets and a read only job token. `pull_request_target`
+  reads the base workflow, runs on the base sha, and keeps secrets. `[skip ci]` in the head
+  commit message and the `-o skip-ci` push option skip. The `github` context for a pull
+  request points `ref` at `refs/pull/N/head`, the ref the server maintains.
+- Planning (`plan.go`) is `jobparser.Parse` with the git context, variables, and inputs:
+  matrix expansion with include and exclude (capped at 256 jobs, an oversized or invalid
+  matrix becomes one failed job carrying the reason), `runs-on`, `needs`, `strategy`,
+  `concurrency` at both levels, `timeout-minutes`, `continue-on-error`, `permissions`
+  (neither `contents: write` nor `packages: write` nor `write-all` means a read only job
+  token), and `run-name`. Each job row stores its own single job workflow
+  (`WorkflowPayload`) the way Gitea does, so the runner never sees another job. A matrix
+  or a job setting written over `needs` outputs stays one deferred row until its needs
+  finish and expands in place. Reusable workflows expand server side (`expandCaller`):
+  `./path` at the caller's commit or `owner/repo/path@ref` on this instance, and a host
+  reference fetched raw from the default actions url, typed `inputs`, `secrets` as a map or
+  `inherit` narrowed caller by caller, called jobs inlined as `<caller>/<called>` rows
+  under a `ParentJobID`, `needs.<caller>.outputs.<name>` resolved through the called
+  workflow's `outputs`, nesting capped at four levels, cycles and empty called workflows
+  refused with the reason. Where each called workflow came from is kept on the row so a
+  `./` reference inside a called workflow resolves against that workflow's repository.
+- The emitter (`emit.go`) is Gitea's `job_emitter` ported: when a job finishes, the run is
+  advanced under a per run lock, `needs` results and merged outputs are built, `if` is
+  evaluated with `jobparser.EvaluateJobIfExpression` (an empty `if` means every need
+  succeeded, `continue-on-error` jobs count as success downstream), `fail-fast` cancels
+  the queued and running siblings of a failed matrix leg, concurrency groups cancel in
+  progress at the workflow and at the job level, and expansion of callers and deferred
+  rows is a conditional update so two runners finishing needs at once expand once. A job
+  whose `runs-on` labels match no runner registered for the repository, its organization,
+  or the instance fails at queue time with the labels in its annotation, and a queued job
+  no runner took within 24 hours fails the same way.
 - Runs and jobs are rows, jobs become tasks a runner claims through `FetchTask`: the
-  runner's scope is filtered in sql, queued jobs are examined in pages of 100 up to 2000
-  deep with their runs and repositories loaded in bulk, and labels are matched in memory,
-  so jobs no runner can serve never block the queue. A job whose `runs-on` labels match
-  no runner registered for the repository, its organization, or the instance fails at
-  queue time with the labels in its annotation, and a queued job no runner took within
-  24 hours fails the same way, so nothing sits pending forever or blocks a merge. The task
-  carries the job definition, the merged env, secrets for the scope
-  (system, org, repo), a `GITHUB_TOKEN` analog: a short lived `GIT_REPO` scoped API token
-  for the repo that the runner uses for checkout and for publishing images and artifacts
-  to the linked packages, revoked when the job ends. The registry token handler signs
-  registry tokens minted with a job token with the subject `actions-job/<job>/<user>`, so
-  the registry listener attributes every tag pushed with that token to the run
-  (`actions_run_images`), the run page lists them with pull commands, digests, sizes and
-  platforms, and runs on a tag ref pin them on the release of that tag, at push time when
-  the release already exists and from `CreateRelease` otherwise. The task also carries
-  `ACTIONS_CACHE_URL` (`<base>/api/actions/cache/`), `ACTIONS_RUNTIME_URL`, and
-  `ACTIONS_RUNTIME_TOKEN` (the job token) so `actions/cache` and the `setup-*` caches use
-  the instance: the legacy artifactcache protocol (reserve, chunked PATCH, commit, lookup
-  by exact key then prefix preferring the run ref, signed one hour download urls) backed by
-  the artifact blob store (`actions_caches`) with a 10 GiB per repository cap, LRU
-  eviction, and seven day unused expiry. `GITHUB_API_URL` is `<base>/api/v3`, a GitHub REST
-  compatibility layer (`internal/ghapi`) covering the user, repository, releases and
-  assets, issues and comments, labels, pull requests, commit statuses, refs, commits,
-  contents, and run lookups that octokit based actions call with `GITHUB_TOKEN`. The
-  server evaluates job level
-  `env`, `container`, and `services` once and ships step `name`, `uses`, `run`,
-  `working-directory`, `env`, and `with` raw, so every expression is evaluated exactly
-  once and a value such as an issue title holding `${{ toJSON(secrets) }}` stays text.
-  System secrets reach every non fork run on the instance, so they are for material every
-  repository writer may hold.
+  runner's scope is filtered in sql, queued jobs are examined in pages with their runs and
+  repositories loaded in bulk, labels are matched in memory, `max-parallel` is enforced in
+  the atomic claim. The task carries the single job workflow, the `github` context json
+  (`run_id` and `repository_id` are the numeric ids the REST shim accepts, so
+  `parseInt(GITHUB_RUN_ID)` in `@actions/github` works), the event payload, secrets for the
+  scope (system, org, repo), variables, the `needs` results, a `GITHUB_TOKEN` analog (a
+  short lived `GIT_REPO` scoped API token revoked when the job ends), the runtime token (an
+  HS256 JWT with `scp: Actions.Results:<run>:<job>` the artifact and cache apis check), the
+  timeout, and the default actions url. The registry token handler signs registry tokens
+  minted with a job token with the subject `actions-job/<job>/<user>`, so every tag pushed
+  with that token is attributed to the run (`actions_run_images`), listed on the run page,
+  and pinned on the release of a tag ref.
+- Artifacts are the GitHub Actions results api (`artifactsv4.go`): the twirp
+  `ArtifactService` at `/twirp/github.actions.results.api.v1.ArtifactService/` with
+  CreateArtifact, UploadArtifact (block upload with `comp=block`, `appendBlock`,
+  `blocklist`), FinalizeArtifact (size and sha256 verified), ListArtifacts,
+  GetSignedArtifactURL (HMAC signed, one hour), and DeleteArtifact, authenticated by the
+  runtime token and bound to the run in it, so `actions/upload-artifact@v4` and
+  `actions/download-artifact@v4` run unmodified. The legacy pipeline api at
+  `/api/actions_pipeline/` serves v1 to v3 of the same actions and the `setup-*` caches.
+  Rows are `actions_artifacts` owned by the run with the blob in the shared store, listed
+  on the run page and downloadable at `/ns/name/-/actions/artifacts/<id>/<name>.zip` with
+  the session, exposed on the REST shim at `/repos/{o}/{r}/actions/runs/{id}/artifacts`
+  and `/actions/artifacts/{id}/zip` for cross run downloads, expired after
+  `git.actions.artifact_retention_days` (410 once expired), and reaped with the repository.
+  `ACTIONS_CACHE_URL` serves the artifactcache protocol backed by the same blob store with a
+  10 GiB per repository cap. `GITHUB_API_URL` is `<base>/api/v1`, the address act hands
+  every job, where the GitHub REST compatibility layer (`internal/ghapi`) answers the
+  calls octokit based actions make with `GITHUB_TOKEN`.
 - Logs stream from the runner in chunks into `actions_job_logs`, served to the UI by
-  `StreamJobLog`, compacted into one blob in the artifact blob store on completion and
-  pruned after `actions.log_retention_days`.
+  `StreamJobLog` (the stream tracks bytes sent so the tail of a fast job is never lost),
+  compacted into one blob on completion, pruned after `actions.log_retention_days`.
+  Server side failures (no runner, planning errors) write an error line into the transcript
+  so a red job always explains itself.
 - Job conclusions write `git_commit_statuses` with context `<workflow> / <job>` so branch
   protection required checks and the PR checks panel work with no special casing.
-- Secrets are sealed with an AES-GCM key derived from the sealing key (`auth.sealing_key`,
-  or `<data_dir>/sealing.key` generated once), never from the session secret, so rotating
-  `auth.jwt_secret` leaves them readable and a database copy alone cannot open them.
-  Values sealed before the key existed are resealed on the next boot and a secret that
-  cannot be opened fails the job with its name rather than vanishing. Variables are plain,
-  both scoped system, org, or repo, with org and repo overriding.
+- Secrets are sealed with an AES-GCM key derived from the sealing key, never from the
+  session secret. Variables are plain, both scoped system, org, or repo.
 - Runners register with a one time token per scope, carry labels, heartbeat, and show
   online or offline. Admin pages at `/admin/runners`, org settings, and repo settings.
+- Starter workflows come from `github.com/actions/starter-workflows` (or
+  `git.actions.starter_workflows_url`), cloned into `<data_dir>/starter-workflows` and
+  refreshed daily in the background, served by `ListWorkflowTemplates` and
+  `GetWorkflowTemplate` with GitHub's placeholders filled (`$default-branch`,
+  `$protected-branches` from the repository's protection rules, `$cron-*`,
+  `$codeql-languages-matrix` from the detected languages) and grouped the way GitHub's
+  "New workflow" page groups them. No template catalog is maintained in this repository.
 
 Runner (`dfcli runner register --server ... --token ...` and `dfcli runner start`, the scope rides on the token):
 
-- Docker executor through `docker/docker/client`, one container per job from the
-  `runs-on` label to image mapping in the runner config (`ubuntu-latest` maps to
-  `ghcr.io/catthehacker/ubuntu:act-latest`, the image act, Gitea and Forgejo default to,
-  with node, git, docker cli, curl and build tools, edit `images` in `runner.json` for a
-  slim `docker.io/library/ubuntu:24.04`), `services` as sidecar containers
-  on a per job network, the workspace as a per job directory under the runner work dir
-  bound into the job container at one path on both sides, a host executor for `runs-on:
-  [host]` labels when enabled. Images are pulled before every job and a local copy is
-  used only when the pull fails. Every job starts with a `Set up job` step row (image
-  pull, container and service start, action downloads), continues with one `Pre <step>`
-  row per action that declares a pre phase, and ends with the `Post <step>` rows and a
-  `Complete job` row, as on the hosted runner. Service `options` honor `--health-cmd`,
-  `--health-interval`, `--health-timeout`, `--health-retries` and `--health-start-period`,
-  the `job.container` and `job.services.<name>` contexts carry ids, network and
-  ports, and the `strategy` context carries `fail-fast`, `max-parallel`, `job-index` and
-  `job-total` of the matrix leg. `RUNNER_TOOL_CACHE` is `<work dir>/_tool`, bound at `/__t`
-  in every job container and kept across jobs, so `setup-node`, `setup-go` and friends
-  download a version once per runner the way a self hosted GitHub runner does. Steps and
-  actions are started directly by the docker exec api with `PATH` assembled by the runner
-  from the image and `$GITHUB_PATH`, never through a shell, because dash silently drops
-  environment names such as `INPUT_NODE-VERSION` and would starve every action of its
-  hyphenated inputs. Node for JavaScript actions is pinned to the absolute path of the
-  image's node when its major version satisfies `runs.using`, so a later `setup-node`
-  cannot swap the action runtime, and otherwise comes from the runner: it extracts node 20
-  and node 24 (glibc and musl builds) from the official
-  node images into `<work dir>/_externals` once and binds them read only at `/__e` in every
-  job container, probing which build runs in the image. Every
-  job gets `DOCKER_CONFIG` pointing at a config.json pre logged in to the instance registry
-  with the job token and `DISTROFACE_REGISTRY` holding the registry host, so docker, crane,
-  skopeo and BuildKit inside a job authenticate with zero secrets. Jobs never get the
-  docker socket, `--privileged`, or
-  host bind mounts (named volumes and binds inside the job directory pass) unless the
-  runner was registered with `--privileged-jobs`, which is root on that machine for every
-  workflow author. `upload-artifact` and `download-artifact` paths are confined to the job
-  directory on the docker executor, symlinks included. On start the runner removes
-  containers, networks and job directories a crashed run of the same runner name left
-  behind.
-- Steps: `run` with `shell`, `working-directory`, `env`, `with`. `uses` resolves
-  `actions/checkout` natively (clone with the job token over HTTP, plus the `Post` cleanup
-  row that drops the token header from git config), `actions/upload-artifact`
-  and `actions/download-artifact` natively through the artifact package in 13, and the
-  image actions natively: `docker/login-action` stores credentials in the job's docker
-  config (the instance registry needs none) and logs out in its `Post` row unless
-  `logout: false`, `docker/setup-buildx-action` and
-  `docker/setup-qemu-action` are no ops with their outputs, and `docker/build-push-action`
-  (alias `distroface/build-push`) builds with a rootless BuildKit container the runner
-  starts next to the job (`moby/buildkit:rootless`, `buildkit_image` in the runner config,
-  one persistent state volume per concurrency slot for layer cache), honoring context,
-  file, tags, labels, annotations, add-hosts, build-args, target, platforms, push, load,
-  no-cache, pull, secrets, secret-files, build-contexts, outputs, registry cache-from and
-  cache-to, and emitting `digest`, `imageid` and `metadata` outputs. BuildKit drops the
-  embedded docker resolver of the per job network from build sandboxes, so the runner
-  probes the resolvers the daemon hands containers on its default bridge once per process
-  and passes them to buildkitd (`buildkit_dns` in the runner config overrides the probe),
-  which keeps `apk`, `apt` and friends resolving inside `RUN` steps while pushes still
-  reach services on the job network. The job never sees the docker socket and no runner
-  needs `--privileged-jobs` to build or push images, full BuildKit Dockerfile syntax
-  (`--mount`, `# syntax=`) works, and multi platform builds need binfmt on the runner host.
-  Docker actions with `image: Dockerfile` build through the same BuildKit path.
-  Any other action is a git repo cloned at the requested ref: composite actions run their
-  steps, docker actions build or pull and run (`with.args` and `with.entrypoint` for
-  `docker://` references, `pre-entrypoint` and `post-entrypoint` for cleanup), JavaScript
-  actions run under the runner's node (`node20` or `node24` per `runs.using`) with `pre`,
-  `main` and `post` scripts, `pre-if` and `post-if`, and state shared through
-  `$GITHUB_STATE` and `::save-state::`. Phases get rows the way the hosted runner orders
-  them: every `pre` runs as `Pre <step>` right after `Set up job`, and `Post <step>` is
-  queued the moment pre or main starts, so a failed main and a skipped main after a pre
-  both still get their post. Every action of a job is downloaded in `Set up
-  job` before the first step runs. Downloads land in `<work dir>/_externals/actions` keyed
-  by source and ref and are copied into the job, sha refs are kept forever, branch and tag
-  refs are compared against the remote at most every ten minutes and refetched when they
-  moved. Action references resolve against this instance first, then `github.com`,
-  following the Gitea `DEFAULT_ACTIONS_URL` rule. `actions/checkout` fetches by sha first,
-  then the ref as a branch and as a tag, and honors `fetch-depth`, `fetch-tags`, `path`,
-  `clean`, `submodules` (with the job token), `lfs` and `persist-credentials`.
-  `download-artifact` honors `name`, `pattern` and `merge-multiple` with the v4 layout,
-  `upload-artifact` skips dot files unless `include-hidden-files` is set.
-- Step outputs via `$GITHUB_OUTPUT`, env via `$GITHUB_ENV`, path via `$GITHUB_PATH`, step
-  summary via `$GITHUB_STEP_SUMMARY`, log groups `::group::`, masking `::add-mask::`,
-  annotations `::error::` and `::warning::` shown in the UI, `::stop-commands::` and
-  `::echo::on` to print commands verbatim before acting on them. The older `##[name]data`
-  spelling is accepted for every command, as on the hosted runner. `::add-matcher::` and
-  `::remove-matcher::` register problem matchers (the json files `setup-node`, `setup-go`
-  and the like ship), and matched output lines become annotations with file, line and
-  column for the rest of the job. Masked values are also masked in their json escaped,
-  url encoded and base64 forms. `::set-env::` and
-  `::add-path::` are disabled and fail the step, since any logged text could issue them.
-  `::debug::` lines appear only when the `ACTIONS_STEP_DEBUG` secret or variable is
-  `true`, which also sets `runner.debug` and turns command echo on. A `run` step without `shell` uses `bash -e`
-  (`sh -e` without bash), `shell: bash` adds `--noprofile --norc -o pipefail`, and
-  `python`, `pwsh`, `node` and custom `{0}` templates work as on the hosted runner. An
-  expression that fails to evaluate in `run`, `with`, `env` or `working-directory` fails
-  the step instead of reaching the shell as literal text.
-- Concurrency per runner, graceful shutdown finishes running jobs, logs stream in near
-  real time. Cancellation from the UI terminates the running step's process tree inside
-  the container (SIGTERM, then SIGKILL), later steps run only when their `if` names
-  `always()` or `cancelled()`, `post` scripts still run for cleanup (their `post-if`
-  decides), and the step table keeps updating until `Complete job`. A second signal to the
-  runner is the hard stop that skips cleanup. Multi line secrets are masked line by line.
+- Job execution is act (`pkg/runner/job.go` builds an `act/runner.Config` the way
+  act_runner does): `runs-on` labels map to images in the runner config (`ubuntu-latest`
+  is `ghcr.io/catthehacker/ubuntu:act-latest`), `-self-hosted` runs on the host when the
+  runner allows it, `services` and `container` with `credentials`, `pre`, `main`, and
+  `post` phases, composite, docker, and node20 or node24 actions, `$GITHUB_OUTPUT`,
+  `$GITHUB_ENV`, `$GITHUB_PATH`, `$GITHUB_STEP_SUMMARY`, workflow commands, masking, and
+  problem matchers all behave as they do under act_runner because the same code runs
+  them. Images on the instance registry are pulled with the job token before act starts
+  so private `container:` and service images work, and every job gets `DOCKER_CONFIG`
+  logged in to the instance registry with the job token plus `DISTROFACE_REGISTRY`. Jobs
+  never get the docker socket or `--privileged` unless the runner was registered with
+  `--privileged-jobs`. `GITEA_ACTIONS=true` and `DISTROFACE_ACTIONS=true` are set so
+  actions that branch on the host forge pick the Gitea shaped api.
+- The log hook (`report.go`) turns act's entries into step rows and transcript lines the
+  way act_runner's reporter does: one row per step and phase (`Pre` and `Post` rows only
+  for actions that really have the phase), `Run <first line>` for unnamed run steps,
+  `##[group]` markers, annotations from `::error::` and friends with secrets masked in the
+  message, the job conclusion from act's `jobResult`, and a final flush before the task
+  completes.
+- Interactive agent sessions reuse the job container: the injected final step waits for a
+  done file while the runner executes commands through docker exec with the step
+  environment, and the container, volumes, and network are removed at the end, bounded
+  waits on every path.
+- Concurrency per runner, graceful shutdown finishes running jobs, a second signal cancels
+  them as `cancelled`, logs stream in near real time, cancellation from the UI stops the
+  running step and runs the post phases, and on start the runner removes containers,
+  networks, and job directories a crashed run of the same runner name left behind
+  (container names are normalized the way act normalizes them).
 
 ## 22. Settings and config
 
@@ -1722,6 +1676,7 @@ message GitSettings {
   optional bool private_by_default = 8;
   optional string default_branch = 9;
   optional bool release_on_tag = 10;
+  optional int64 max_release_asset_mb = 17; // Per file cap on release assets, zero unlimited
   optional int32 max_concurrent_transfers = 11; // system only
   optional bool allow_forks = 12;
   GitGCSettings gc = 13;                        // enabled, interval_hours, system only
@@ -1735,7 +1690,7 @@ update refuses a looser value and the resolver clamps any stored one back to the
 limit. Members of a scope read its effective settings with the mail subtree reduced to
 `enabled`, the relay host and account are for scope admins.
 `defaults.go` seeds `enabled=true, ssh_enabled=false, ssh_port=22, lfs_enabled=true,
-max_lfs_object_mb=2048, max_repo_size_mb=0, default_branch=main, release_on_tag=false,
+max_lfs_object_mb=2048, max_repo_size_mb=0, max_release_asset_mb=2048, default_branch=main, release_on_tag=false,
 max_concurrent_transfers=32, allow_forks=true, gc.enabled=true, gc.interval_hours=168,
 signing.enabled=false, actions.enabled=false, actions.artifact_retention_days=90,
 actions.log_retention_days=90`, and `mail.enabled=false, smtp_port=587, security=STARTTLS,
@@ -1847,7 +1802,8 @@ Archive. Archived repos are read only for pushes, issues, PRs, wiki, and setting
 unarchive and delete. Listings show the badge.
 
 Deletion. `DeleteGitRepository` removes rows by cascade, the bare and wiki directories,
-LFS links with blob reaping, release assets when `delete_linked`, redirects pointing at it,
+LFS links, release asset files, and run artifacts with blob reaping, linked packages when
+`delete_linked`, redirects pointing at it,
 and audits. Rows no cascade reaches go in the same transaction: tokens scoped to the
 repo, deploy keys, repo scoped actions secrets, variables, runners and runner tokens, and
 the settings row, and the casbin grants on the object are removed after. `DeleteOrganization` gains the git loop beside its image loop and drops the
@@ -1943,8 +1899,8 @@ Git itself is the client for clone, push, and fetch. dfcli adds:
 - `dfcli repo create|list|view|delete|fork|transfer|archive|topics` with `--namespace`,
   `--private`, `--mirror <url>`, `--template`, JSON output through `printProtoJSON`.
 - `dfcli release create|list|view|upload|download|attach-image|delete` where `upload`
-  streams files through the artifact data plane and attaches them, `download` is sugar
-  over `artifact download ns/name -v <tag>`.
+  streams each file to the release asset endpoint (`--label`, `--replace`) and `download`
+  fetches the assets of a release into a directory (`--asset <glob>`, `-o <dir>`).
 - `dfcli issue list|create|view|close|reopen|comment|label|assign` and `dfcli pr
   list|create|view|checkout|merge|review|close` with `--table` and JSON, `checkout` runs
   `git fetch origin pull/<n>/head` and creates the branch.
@@ -1978,8 +1934,9 @@ Git itself is the client for clone, push, and fetch. dfcli adds:
   portal SSH port, SSH clone and push with a generated key, deploy key read only refusal,
   protected branch rejection message shown by the client, LFS push and pull with `git lfs
   install`, wiki clone, web edit then pull, PR create and merge through the RPC then pull
-  shows the merge commit, mirror from a scratch http server, release asset download through
-  the artifact URL and release image listing after a docker push, team permission grid
+  shows the merge commit, mirror from a scratch http server, release asset upload over the
+  streaming endpoint and download through `releases/download/<tag>/<file>`, release image
+  listing after a docker push, team permission grid
   denying a push, password reset mail captured by a local SMTP sink, runner registering
   and executing a workflow with a `run` step.
 - `scripts/seeder`: phases for git repos (pushed through the HTTP transport with go-git
@@ -2087,12 +2044,16 @@ Each phase ships on its own and leaves the app consistent. Nothing below is opti
 - [ ] `MirrorConfigFields kind="git"`, admin mirroring page shows the new kinds
 
 ### Phase 10: actions
-- [ ] `actions.proto`, models, workflow parser and expression evaluator, triggers,
-      scheduler, concurrency groups, run and job state machine, logs, artifacts, secrets,
-      variables, runners and tokens, statuses into protection
-- [ ] `RunnerService`, dfcli `runner` with the docker executor, native checkout and
-      artifact actions, composite, docker, and node actions, annotations and masking
-- [ ] UI actions routes, log streaming, admin and org runner pages, webhook
+- [x] `actions.proto`, models, Gitea's jobparser and workflowpattern for parsing and
+      planning, triggers, scheduler, concurrency groups, run and job state machine with the
+      ported job emitter, reusable workflows, logs, secrets, variables, runners and tokens,
+      statuses into protection
+- [x] GitHub Actions results api (upload-artifact and download-artifact v4), the legacy
+      pipeline artifact api, run owned artifact rows, artifact cache
+- [x] `RunnerService`, dfcli `runner` executing jobs with act the way act_runner does,
+      interactive agent sessions on the job container
+- [x] Starter workflows from `actions/starter-workflows`, no catalog in this repository
+- [x] UI actions routes, log streaming, admin and org runner pages, webhook
       `GIT_WORKFLOW_RUN`
 - [ ] Verify skill scenario with a registered runner and a `run` step workflow
 
@@ -2120,10 +2081,10 @@ flip, otherwise the defaults stand.
 3. Reserved namespaces are enforced for new self service accounts and orgs only. Existing
    accounts and bootstrap names such as `admin` are left alone, no migration renames
    anything.
-4. Release assets and workflow artifacts live in the artifact package `ns/name` as
-   versions. A standalone artifact repo of the same name is adopted as that package at git
-   repo creation. If you would rather keep release assets in a hidden reserved package,
-   the only change is the package name.
+4. Release assets are rows of their release and workflow artifacts are rows of their run,
+   both with bytes in the shared blob store. Neither is a package. A standalone artifact
+   repo named after a git repo is still adopted as a linked package at git repo creation,
+   it just holds package files.
 5. Repository tier settings exist only for `mail.*`. If you want other paths at the repo
    tier, name them and I will add them to `scopeAllowed`.
 6. Artifact repositories and image repositories do not get stars or collaborators in this

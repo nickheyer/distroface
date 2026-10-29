@@ -67,6 +67,8 @@ type Manager struct {
 	access     *Access
 	signing    *Signing
 	packages   PackageManager
+	// Run before a repository's rows go, owners of data no cascade reaches
+	cleaners []RepoCleaner
 
 	subsMu sync.RWMutex
 	subs   []RefSubscriber
@@ -83,6 +85,7 @@ func NewManager(store *stores.Store, engine *Engine, blobs *artifacts.BlobStore,
 	engine.SetTransferLimit(func() int {
 		return int(res.System(context.Background()).GetGit().GetMaxConcurrentTransfers())
 	})
+	m.OnDelete(m.deleteRepoReleaseAssets)
 	return m
 }
 
@@ -97,6 +100,12 @@ func (m *Manager) Recorder() *audit.Recorder    { return m.recorder }
 
 // Installs the package deleter and mover, set once at startup
 func (m *Manager) SetPackageManager(p PackageManager) { m.packages = p }
+
+// RepoCleaner reclaims storage a deleted repository owned outside the database
+type RepoCleaner func(ctx context.Context, repo *db.GitRepository) error
+
+// OnDelete registers a cleaner that runs before the repository rows are deleted
+func (m *Manager) OnDelete(fn RepoCleaner) { m.cleaners = append(m.cleaners, fn) }
 
 // Registers post receive subscribers
 func (m *Manager) Subscribe(fns ...RefSubscriber) {
@@ -513,6 +522,11 @@ func (m *Manager) Delete(ctx context.Context, user *auth.AuthenticatedUser, repo
 			}
 		}
 	}
+	for _, clean := range m.cleaners {
+		if err := clean(ctx, repo); err != nil {
+			return err
+		}
+	}
 	oids, err := m.store.DeleteLFSLinks(ctx, repo.ID)
 	if err != nil {
 		return err
@@ -533,20 +547,9 @@ func (m *Manager) Delete(ctx context.Context, user *auth.AuthenticatedUser, repo
 	return nil
 }
 
-// Removes an lfs blob once no artifact or lfs link references it
+// Removes an lfs blob once no table references it
 func (m *Manager) reapLFSBlob(ctx context.Context, oid string) {
-	links, err := m.store.CountLFSLinksByOID(ctx, oid)
-	if err != nil || links > 0 {
-		return
-	}
-	digest := "sha256:" + oid
-	count, err := m.store.CountArtifactsByDigest(ctx, digest)
-	if err != nil || count > 0 {
-		return
-	}
-	if err := m.blobs.DeleteBlob(digest); err != nil {
-		m.log.Error("lfs blob delete %s: %v", oid, err)
-	}
+	m.ReapBlob(ctx, "sha256:"+oid)
 }
 
 // Renames or transfers a repository and its name linked packages

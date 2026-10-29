@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/actions"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
@@ -43,13 +44,14 @@ type Handler struct {
 	git       *gitrepo.Manager
 	forge     *forge.Manager
 	artifacts *artifacts.Manager
+	actions   *actions.Manager
 	enforcer  *rbac.Enforcer
 	log       *logger.Logger
 	mux       *http.ServeMux
 }
 
-func New(store *stores.Store, authMgr *auth.Manager, git *gitrepo.Manager, fm *forge.Manager, am *artifacts.Manager, enforcer *rbac.Enforcer, log *logger.Logger) *Handler {
-	h := &Handler{store: store, auth: authMgr, git: git, forge: fm, artifacts: am, enforcer: enforcer, log: log, mux: http.NewServeMux()}
+func New(store *stores.Store, authMgr *auth.Manager, git *gitrepo.Manager, fm *forge.Manager, am *artifacts.Manager, actionsMgr *actions.Manager, enforcer *rbac.Enforcer, log *logger.Logger) *Handler {
+	h := &Handler{store: store, auth: authMgr, git: git, forge: fm, artifacts: am, actions: actionsMgr, enforcer: enforcer, log: log, mux: http.NewServeMux()}
 	h.routes()
 	return h
 }
@@ -98,6 +100,10 @@ func (h *Handler) routes() {
 
 	h.handle("GET /repos/{owner}/{repo}/actions/runs/{run_id}", (*request).getRun)
 	h.handle("GET /repos/{owner}/{repo}/actions/runs/{run_id}/jobs", (*request).listRunJobs)
+	h.handle("GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts", (*request).listRunArtifacts)
+	h.handle("GET /repos/{owner}/{repo}/actions/artifacts", (*request).listRepoArtifacts)
+	h.handle("GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}", (*request).getArtifact)
+	h.handle("GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip", (*request).downloadArtifact)
 
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "Not Found")

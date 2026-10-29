@@ -113,18 +113,18 @@ func (q *request) releaseJSON(repo *db.GitRepository, rel *db.GitRelease, assets
 	}
 }
 
-func (q *request) assetJSON(repo *db.GitRepository, pkg *db.ArtifactRepository, a *db.Artifact) obj {
+func (q *request) assetJSON(repo *db.GitRepository, rel *db.GitRelease, a *db.GitReleaseAsset) obj {
 	api := q.repoAPI(repo) + "/releases/assets/" + fmt.Sprint(numID(a.ID))
-	label := ""
-	if a.Properties != nil {
-		label = a.Properties["label"]
+	uploader := q.ghost()
+	if a.UploaderID != "" {
+		uploader = q.userByID(a.UploaderID)
 	}
 	return obj{
-		"id": numID(a.ID), "node_id": "", "name": a.Path, "label": label, "content_type": a.MimeType, "size": a.Size,
-		"state": "uploaded", "download_count": 0, "created_at": ts(a.CreatedAt), "updated_at": ts(a.UpdatedAt),
-		"browser_download_url": q.repoHTML(repo) + "/-/releases/" + a.Version + "/" + a.Path,
-		"url":                  api, "uploader": q.ghost(),
-		"_distroface": obj{"artifact_id": a.ID, "digest": a.Digest, "package": pkg.Namespace + "/" + pkg.Name},
+		"id": numID(a.ID), "node_id": "", "name": a.Name, "label": a.Label, "content_type": a.ContentType, "size": a.Size,
+		"state": "uploaded", "download_count": a.DownloadCount, "created_at": ts(a.CreatedAt), "updated_at": ts(a.UpdatedAt),
+		"browser_download_url": q.h.forge.AssetDownloadURL(q.ctx, repo, rel, a),
+		"url":                  api, "uploader": uploader,
+		"_distroface": obj{"asset_id": a.ID, "digest": a.Digest},
 	}
 }
 

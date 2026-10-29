@@ -75,6 +75,7 @@ var scopeAllowed = map[v1.SettingsScopeType][]string{
 		"git.private_by_default",
 		"git.default_branch",
 		"git.max_repo_size_mb",
+		"git.max_release_asset_mb",
 		"git.actions.enabled",
 	}, scopedMailPaths, scopedActionsPaths, scopedAgentsPaths, orgAgentsPaths),
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: {

@@ -8,7 +8,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"net/http"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -241,6 +240,7 @@ func (m *Monitor) due(ctx context.Context, cfg *v1.MirrorConfig, lastSync *time.
 }
 
 func (m *Monitor) sweep(ctx context.Context) {
+	m.adoptReleasePackages(ctx)
 	lim := m.refreshLimits(ctx)
 	var jobs []func()
 	var wg sync.WaitGroup
@@ -374,7 +374,6 @@ func (m *Monitor) execArtifactSync(ctx context.Context, repo *db.ArtifactReposit
 		OwnerID:   repo.OwnerID,
 	}
 	state := ParseState(repo.MirrorState)
-	prevETag := state.ListETag
 	runCtx, cancel := context.WithTimeout(ctx, currentLimits().SyncTimeout)
 	m.armCancel(key, cancel)
 	m.beginSync(key, ev)
@@ -396,10 +395,6 @@ func (m *Monitor) execArtifactSync(ctx context.Context, repo *db.ArtifactReposit
 	}
 	if err := m.store.SetArtifactRepoMirrorStatus(statusCtx(ctx), repo.ID, time.Now().UTC(), msg, state.Encode()); err != nil {
 		m.log.Error("mirror status update for artifact repo %d: %v", repo.ID, err)
-	}
-	// Linked git repos take release notes whenever the listing changed
-	if m.git != nil && repo.GitRepoID != nil && (syncErr == nil || nothing != nil) && (state.ListETag == "" || state.ListETag != prevETag) {
-		m.syncLinkedReleases(statusCtx(ctx), repo, cfg)
 	}
 	m.endSync(key, ev, syncErr)
 }
@@ -584,16 +579,12 @@ func describeEmptySync(listed, kept, attachments, badTags, badNames, unmatched i
 	}
 }
 
-// Properties stamped on mirrored assets, linked packages flag them as release assets
+// Properties stamped on mirrored package files
 func mirrorAssetProps(repo *db.ArtifactRepository, cfg *v1.MirrorConfig) map[string]string {
-	props := map[string]string{
+	return map[string]string{
 		"mirror.source":   sourceLabel(repo.Type),
 		"mirror.upstream": cfg.GetUpstream(),
 	}
-	if repo.GitRepoID != nil && *repo.GitRepoID != "" {
-		props[artifacts.ReleaseProperty] = "true"
-	}
-	return props
 }
 
 // Streams one upstream asset into the blob store as an artifact
@@ -625,32 +616,18 @@ func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, 
 }
 
 func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository, version string, a asset, src assetSource, props map[string]string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, src.url, nil)
+	body, err := m.openAssetSource(ctx, src)
 	if err != nil {
 		return err
 	}
-	for k, v := range src.headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if err := classifyResponse(resp, src.url); err != nil {
-		return err
-	}
-	// Sign in walls answer anonymous downloads with a 200 html page
-	if p := resp.Request.URL.Path; strings.HasSuffix(p, "/user/login") || strings.HasSuffix(p, "/users/sign_in") {
-		return fmt.Errorf("%s redirected to the sign in page, the upstream did not accept the token for downloads", src.url)
-	}
+	defer body.Close()
 
 	blobs := m.artifacts.Blobs()
 	uploadID, err := blobs.InitiateUpload()
 	if err != nil {
 		return err
 	}
-	if _, err := blobs.AppendChunk(uploadID, resp.Body); err != nil {
+	if _, err := blobs.AppendChunk(uploadID, body); err != nil {
 		_ = blobs.CancelUpload(uploadID)
 		return err
 	}

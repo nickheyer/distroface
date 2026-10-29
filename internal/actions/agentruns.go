@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"path"
 	"slices"
 	"strings"
 	"time"
@@ -65,7 +64,7 @@ func (m *Manager) LoadAgentSetup(ctx context.Context, repo *db.GitRepository, re
 		return nil, err
 	}
 	for _, f := range files {
-		if strings.TrimSuffix(path.Base(f.Path), path.Ext(f.Path)) == AgentSetupJob {
+		if workflowBaseName(f.Path) == AgentSetupJob {
 			return agentSetupFromFile(f)
 		}
 	}
@@ -74,29 +73,66 @@ func (m *Manager) LoadAgentSetup(ctx context.Context, repo *db.GitRepository, re
 
 // Checks the setup file, keeps its job node
 func agentSetupFromFile(f *WorkflowFile) (*AgentSetup, error) {
-	if f.Err != nil {
-		return nil, fmt.Errorf("%s: %w", f.Path, f.Err)
-	}
-	job := f.Workflow.Jobs[AgentSetupJob]
-	if job == nil {
-		return nil, fmt.Errorf("%s: needs a job named %s", f.Path, AgentSetupJob)
-	}
-	if job.Uses != "" {
-		return nil, fmt.Errorf("%s: job %s must list steps, not call a workflow", f.Path, AgentSetupJob)
-	}
 	var root yaml.Node
 	if err := yaml.Unmarshal([]byte(f.Source), &root); err != nil {
+		if f.Err != nil {
+			return nil, fmt.Errorf("%s: %w", f.Path, f.Err)
+		}
 		return nil, fmt.Errorf("%s: %w", f.Path, err)
 	}
 	if len(root.Content) == 0 {
+		if f.Err != nil {
+			return nil, fmt.Errorf("%s: %w", f.Path, f.Err)
+		}
 		return nil, fmt.Errorf("%s: empty workflow", f.Path)
 	}
 	doc := root.Content[0]
-	s := &AgentSetup{Path: f.Path, RunsOn: job.RunsOn, env: mapValue(doc, "env"), job: mapValue(mapValue(doc, "jobs"), AgentSetupJob)}
+	s := &AgentSetup{Path: f.Path, env: mapValue(doc, "env"), job: mapValue(mapValue(doc, "jobs"), AgentSetupJob)}
 	if s.job == nil {
 		return nil, fmt.Errorf("%s: needs a job named %s", f.Path, AgentSetupJob)
 	}
+	if mapValue(s.job, "uses") != nil {
+		return nil, fmt.Errorf("%s: job %s must list steps, not call a workflow", f.Path, AgentSetupJob)
+	}
+	if f.Err != nil {
+		return nil, fmt.Errorf("%s: %w", f.Path, f.Err)
+	}
+	s.RunsOn = labelsOfNode(mapValue(s.job, "runs-on"))
 	return s, nil
+}
+
+// Labels of a runs-on node, a scalar or a sequence
+func labelsOfNode(n *yaml.Node) []string {
+	if n == nil {
+		return nil
+	}
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if v := strings.TrimSpace(n.Value); v != "" {
+			return []string{v}
+		}
+	case yaml.SequenceNode:
+		var out []string
+		for _, c := range n.Content {
+			if v := strings.TrimSpace(c.Value); v != "" {
+				out = append(out, v)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+// Key and value pairs of a mapping node in order
+func mapPairs(n *yaml.Node) map[string]*yaml.Node {
+	out := map[string]*yaml.Node{}
+	if n == nil || n.Kind != yaml.MappingNode {
+		return out
+	}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		out[n.Content[i].Value] = n.Content[i+1]
+	}
+	return out
 }
 
 // Mapping value under one key, nil when absent
@@ -143,12 +179,13 @@ func (m *Manager) StartAgentSessionRun(ctx context.Context, repo *db.GitReposito
 	if err != nil {
 		return nil, nil, err
 	}
-	wf, err := ParseWorkflow([]byte(source))
-	if err != nil {
+	path := fmt.Sprintf("agent-session-%d.yml", opts.Session.SessionNumber)
+	file := ParseWorkflowFile(path, []byte(source))
+	if file.Err != nil {
 		if opts.Setup != nil {
-			return nil, nil, fmt.Errorf("%w: %s: %w", ErrInvalid, opts.Setup.Path, err)
+			return nil, nil, fmt.Errorf("%w: %s: %w", ErrInvalid, opts.Setup.Path, file.Err)
 		}
-		return nil, nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		return nil, nil, fmt.Errorf("%w: %w", ErrInvalid, file.Err)
 	}
 	payload := map[string]any{
 		"ref":        fullRef,
@@ -160,7 +197,6 @@ func (m *Manager) StartAgentSessionRun(ctx context.Context, repo *db.GitReposito
 	if actor != nil {
 		payload["sender"] = map[string]any{"login": actor.Username}
 	}
-	path := fmt.Sprintf("agent-session-%d.yml", opts.Session.SessionNumber)
 	in := &triggerInput{
 		Event: "workflow_dispatch", Ref: fullRef, SHA: commit.String(), FileCommit: commit, Actor: actor,
 		Payload: payload, Inputs: map[string]any{}, OnlyPath: path,
@@ -168,7 +204,7 @@ func (m *Manager) StartAgentSessionRun(ctx context.Context, repo *db.GitReposito
 		FromFork:     true,
 		AgentSession: &opts.Session,
 	}
-	run, err := m.createRun(ctx, repo, &WorkflowFile{Path: path, Source: source, Workflow: wf}, in)
+	run, err := m.createRun(ctx, repo, file, in)
 	if err != nil {
 		return nil, nil, err
 	}

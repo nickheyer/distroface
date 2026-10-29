@@ -1,9 +1,8 @@
+// Package runner executes Actions jobs for dfcli through act
 package runner
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -15,10 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/client"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
@@ -26,14 +21,10 @@ const (
 	heartbeatEvery = 30 * time.Second
 	pollWait       = 20 * time.Second
 	pollBackoff    = 5 * time.Second
+	// Step table push cadence, each push also polls cancel
+	stateReportEvery = 3 * time.Second
 	// Slack past the long poll before a fetch is abandoned
 	pollGrace = 15 * time.Second
-)
-
-// Labels naming the runner and job on docker objects
-const (
-	labelJob    = "dfcli.runner.job"
-	labelRunner = "dfcli.runner.name"
 )
 
 // Polls for tasks and runs them up to concurrency
@@ -46,15 +37,6 @@ type Runner struct {
 
 	mu      sync.Mutex
 	running map[string]*job
-
-	ext *externals
-	// Buildkit state volumes, one per concurrency slot
-	bkSlots chan string
-	pullMu  sync.Mutex
-	pulled  map[string]bool
-
-	dnsMu sync.Mutex
-	dns   *dnsConfig
 
 	// Embedded runners leave process signals to their host
 	noSignals bool
@@ -89,69 +71,14 @@ func New(cfg *Config, version string, httpClient *http.Client) (*Runner, error) 
 	if cfg.Concurrency <= 0 {
 		cfg.Concurrency = 1
 	}
-	r := &Runner{
+	installDecodeHook()
+	return &Runner{
 		cfg: cfg, version: version, http: httpClient,
 		client:  NewClient(cfg.Server, cfg.Token, httpClient),
 		out:     log.New(os.Stderr, "", log.LstdFlags),
 		running: map[string]*job{},
-		ext:     newExternals(filepath.Join(cfg.JobRoot(), "_externals"), httpClient),
-		bkSlots: make(chan string, cfg.Concurrency),
-		pulled:  map[string]bool{},
 		drain:   make(chan struct{}),
-	}
-	for i := range cfg.Concurrency {
-		r.bkSlots <- buildKitVolumeName(cfg.Name, i)
-	}
-	return r, nil
-}
-
-// Blocks until a buildkit state volume is free
-func (r *Runner) acquireBuildKitVolume(ctx context.Context) (string, func(), error) {
-	select {
-	case name := <-r.bkSlots:
-		return name, func() { r.bkSlots <- name }, nil
-	case <-ctx.Done():
-		return "", nil, ctx.Err()
-	}
-}
-
-// Pulls an image once per runner process
-func (r *Runner) pullOnce(ctx context.Context, cli *client.Client, ref string, out io.Writer) error {
-	r.pullMu.Lock()
-	defer r.pullMu.Unlock()
-	if r.pulled[ref] {
-		return nil
-	}
-	if err := pullImage(ctx, cli, ref, "", out); err != nil {
-		return err
-	}
-	r.pulled[ref] = true
-	return nil
-}
-
-// Nameservers builds resolve with, probed from the daemon once
-func (r *Runner) buildDNS(ctx context.Context, cli *client.Client, image string, out io.Writer) *dnsConfig {
-	r.dnsMu.Lock()
-	defer r.dnsMu.Unlock()
-	if r.dns != nil {
-		return r.dns
-	}
-	if len(r.cfg.BuildKitDNS) > 0 {
-		r.dns = &dnsConfig{nameservers: append([]string(nil), r.cfg.BuildKitDNS...)}
-		return r.dns
-	}
-	cfg, err := probeDaemonDNS(ctx, cli, image)
-	if err != nil {
-		fmt.Fprintf(out, "##[warning]Resolver probe on the daemon's default network failed: %v\n", err)
-		return nil
-	}
-	r.dns = cfg
-	return cfg
-}
-
-// Labels shared by every container and network of a job
-func (r *Runner) labels(jobID string) map[string]string {
-	return map[string]string{labelJob: jobID, labelRunner: r.cfg.Name}
+	}, nil
 }
 
 // Polls until the context ends or a signal drains
@@ -285,13 +212,17 @@ func (r *Runner) Heartbeat(ctx context.Context) error {
 
 // Whether the configured daemon answers
 func (r *Runner) DockerAvailable(ctx context.Context) error {
-	cli, err := newDockerClient(r.cfg.DockerHost)
+	cli, err := dockerClient(ctx, r.cfg.DockerHost)
 	if err != nil {
 		return err
 	}
 	defer cli.Close()
-	_, err = cli.Ping(ctx)
-	return err
+	return pingDocker(ctx, cli)
+}
+
+// Act spelled prefix on every container, volume, and network
+func (r *Runner) containerPrefix() string {
+	return containerNamePrefix("DF-" + safeName(r.cfg.Name))
 }
 
 // Job directory prefix of this runner inside the job root
@@ -299,7 +230,7 @@ func (r *Runner) jobDirPrefix() string {
 	return "job-" + safeName(r.cfg.Name) + "-"
 }
 
-// Removes containers, networks, and directories a crashed run left behind
+// Removes containers, networks, volumes, and directories a crashed run left behind
 func (r *Runner) cleanupLeftovers(ctx context.Context) {
 	root := r.cfg.JobRoot()
 	if entries, err := os.ReadDir(root); err == nil {
@@ -310,28 +241,18 @@ func (r *Runner) cleanupLeftovers(ctx context.Context) {
 			}
 		}
 	}
-	cli, err := newDockerClient(r.cfg.DockerHost)
+	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	cli, err := dockerClient(cctx, r.cfg.DockerHost)
 	if err != nil {
 		return
 	}
 	defer cli.Close()
-	cctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
-	defer cancel()
-	if _, err := cli.Ping(cctx); err != nil {
+	if err := pingDocker(cctx, cli); err != nil {
 		return
 	}
-	args := filters.NewArgs(filters.Arg("label", labelRunner+"="+r.cfg.Name))
-	if list, err := cli.ContainerList(cctx, container.ListOptions{All: true, Filters: args}); err == nil {
-		for _, c := range list {
-			r.out.Printf("removing leftover container %s", shortID(c.ID))
-			_ = cli.ContainerRemove(cctx, c.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
-		}
-	}
-	if list, err := cli.NetworkList(cctx, network.ListOptions{Filters: args}); err == nil {
-		for _, n := range list {
-			r.out.Printf("removing leftover network %s", n.Name)
-			_ = cli.NetworkRemove(cctx, n.ID)
-		}
+	for _, name := range removeDockerLeftovers(cctx, cli, r.containerPrefix()) {
+		r.out.Printf("removed leftover %s", name)
 	}
 }
 
@@ -370,4 +291,11 @@ func safeName(s string) string {
 		clean = clean[:32]
 	}
 	return clean
+}
+
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }

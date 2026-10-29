@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"strings"
 	"time"
 
@@ -260,37 +259,18 @@ func groupBusy(live []stores.LiveGroup, repoID, group, selfID string) bool {
 
 // Everything the runner needs to execute one job
 func (m *Manager) buildTask(ctx context.Context, repo *db.GitRepository, run *db.ActionsRun, job *db.ActionsJob) (*v1.Task, error) {
-	def, err := decodeDefinition(job)
-	if err != nil {
-		return nil, err
+	if strings.TrimSpace(job.WorkflowPayload) == "" {
+		return nil, errors.New("job has no workflow payload")
 	}
 	jobs, err := m.store.ListActionsJobs(ctx, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	_, status, needs := needsState(def.Job.Needs, jobs, nil)
-	var wf *Workflow
-	if run.Workflow != "" {
-		wf, _ = ParseWorkflow([]byte(run.Workflow))
+	secrets, err := m.jobSecrets(ctx, repo, run, job)
+	if err != nil {
+		return nil, err
 	}
-	ectx := m.jobContext(ctx, repo, run, wf, def, job, jobs, needs, status)
-	orgID := m.repoOrgID(ctx, repo)
-	secrets := map[string]string{}
-	if !run.FromFork {
-		if secrets, err = m.repoSecrets(ctx, repo, orgID); err != nil {
-			return nil, err
-		}
-	}
-	if len(def.Job.Calls) > 0 {
-		// Called workflows see typed inputs and only the secrets passed down
-		inputs, exposed, err := resolveCalls(def.Job.Calls, ectx, jobs, secrets)
-		if err != nil {
-			return nil, err
-		}
-		ectx.Inputs = inputs
-		secrets = exposed
-	}
-	token, err := m.issueJobToken(ctx, repo, run, job, run.FromFork || def.ReadOnly)
+	token, err := m.issueJobToken(ctx, repo, run, job, run.FromFork || job.ReadOnly)
 	if err != nil {
 		return nil, err
 	}
@@ -298,152 +278,43 @@ func (m *Manager) buildTask(ctx context.Context, repo *db.GitRepository, run *db
 		secrets["GITHUB_TOKEN"] = token
 		secrets["DISTROFACE_TOKEN"] = token
 	}
-	ectx.Secrets = secrets
-
-	interp := func(s string) string {
-		out, err := Interpolate(s, ectx)
-		if err != nil {
-			return s
-		}
-		return out
+	vars, err := m.repoVariables(ctx, repo, m.repoOrgID(ctx, repo))
+	if err != nil {
+		return nil, err
 	}
-	interpMap := func(in map[string]string) map[string]string {
-		out := make(map[string]string, len(in))
-		for k, v := range in {
-			out[k] = interp(v)
-		}
-		return out
+	timeout := job.TimeoutMinutes
+	if timeout <= 0 {
+		timeout = defaultJobTimeout
 	}
-
-	task := &v1.Task{
+	runtime, err := m.runtimeToken(job.ID, run.ID, timeout)
+	if err != nil {
+		return nil, err
+	}
+	gitCtx := m.githubContext(ctx, repo, run, job)
+	gitCtx["token"] = token
+	needs := map[string]*v1.TaskNeed{}
+	for id, r := range needResults(job, jobs) {
+		if id == job.WorkflowJobID {
+			continue
+		}
+		needs[id] = &v1.TaskNeed{Outputs: r.Outputs, Result: ProtoConclusion(r.Result)}
+	}
+	return &v1.Task{
 		JobId: job.ID, RunId: run.ID, RepoFullName: repo.Namespace + "/" + repo.Name, JobName: job.Name,
-		Env:            interpMap(mergeEnv(def.WorkflowEnv, def.Job.Env)),
-		Secrets:        secrets,
-		Variables:      ectx.Vars,
-		Token:          token,
-		Needs:          mustJSON(needs),
-		Matrix:         job.Matrix,
-		TimeoutMinutes: int32(def.Job.TimeoutMinutes),
-		CloneUrl:       m.git.HTTPCloneURL(ctx, repo, false),
-		ServerUrl:      m.git.BaseURL(ctx),
-		RunsOn:         decodeStrings(job.RunsOn),
-		Interactive:    job.Interactive,
-	}
-	if task.TimeoutMinutes <= 0 {
-		task.TimeoutMinutes = defaultJobTimeout
-	}
-	if token != "" {
-		cacheURL := strings.TrimRight(task.ServerUrl, "/") + "/api/actions/cache/"
-		task.Env["ACTIONS_CACHE_URL"] = cacheURL
-		task.Env["ACTIONS_RUNTIME_URL"] = cacheURL
-		task.Env["ACTIONS_RUNTIME_TOKEN"] = token
-	}
-	if def.Job.Defaults != nil {
-		task.DefaultShell = def.Job.Defaults.Shell
-	}
-	credentials := func(c *Credentials) *v1.TaskCredentials {
-		if c == nil {
-			return nil
-		}
-		return &v1.TaskCredentials{Username: interp(c.Username), Password: interp(c.Password)}
-	}
-	if c := def.Job.Container; c != nil {
-		task.ContainerImage = interp(c.Image)
-		task.ContainerOptions = interp(c.Options)
-		task.ContainerCredentials = credentials(c.Credentials)
-		for k, v := range interpMap(c.Env) {
-			task.Env[k] = v
-		}
-	}
-	for _, name := range def.Job.ServiceOrder {
-		svc := def.Job.Services[name]
-		if svc == nil {
-			continue
-		}
-		task.Services = append(task.Services, &v1.TaskService{
-			Name: name, Image: interp(svc.Image), Env: interpMap(svc.Env),
-			Ports: svc.Ports, Volumes: svc.Volumes, Options: interp(svc.Options),
-			Credentials: credentials(svc.Credentials),
-		})
-	}
-	// Step fields stay raw, the runner evaluates them exactly once
-	for i, st := range def.Job.Steps {
-		ts := &v1.TaskStep{
-			Number: int32(i + 1), Name: st.Name, Id: st.ID,
-			Uses: st.Uses, Run: st.Run, Shell: st.Shell,
-			WorkingDirectory: st.WorkingDirectory,
-			Env:              map[string]string{}, With: map[string]string{},
-			Condition: st.If, ContinueOnError: st.ContinueOnError, TimeoutMinutes: int32(st.TimeoutMinutes),
-			ContinueOnErrorExpr: st.ContinueOnErrorExpr, TimeoutMinutesExpr: st.TimeoutMinutesExpr,
-		}
-		if ts.Name == "" {
-			if st.Uses != "" {
-				ts.Name = "Run " + st.Uses
-			} else {
-				ts.Name = firstLine(ts.Run)
-			}
-		}
-		if ts.WorkingDirectory == "" && def.Job.Defaults != nil {
-			ts.WorkingDirectory = def.Job.Defaults.WorkingDirectory
-		}
-		maps.Copy(ts.Env, st.Env)
-		maps.Copy(ts.With, st.With)
-		task.Steps = append(task.Steps, ts)
-	}
-
-	// Context carries github, inputs, job output expressions, and the workflow source
-	outputs := def.Job.Outputs
-	if outputs == nil {
-		outputs = map[string]string{}
-	}
-	task.Context = mustJSON(map[string]any{
-		"github":          ectx.GitHub,
-		"inputs":          ectx.Inputs,
-		"outputs":         outputs,
-		"job":             map[string]any{"key": baseKey(job), "continue_on_error": def.Job.ContinueOnError, "attempt": job.Attempt},
-		"strategy":        strategyContext(def.Job.Strategy, job, jobs),
-		"workflow_path":   run.WorkflowPath,
-		"workflow_source": run.Workflow,
-	})
-	return task, nil
-}
-
-// Strategy context as the hosted runner fills it for one matrix leg
-func strategyContext(st *Strategy, job *db.ActionsJob, jobs []*db.ActionsJob) map[string]any {
-	index, total := 0, 0
-	for _, sibling := range jobs {
-		if sibling.MatrixGroup != job.MatrixGroup {
-			continue
-		}
-		if sibling.ID == job.ID {
-			index = total
-		}
-		total++
-	}
-	if total == 0 {
-		total = 1
-	}
-	out := map[string]any{"fail-fast": true, "job-index": index, "job-total": total, "max-parallel": total}
-	if st != nil {
-		if st.FailFast != nil {
-			out["fail-fast"] = *st.FailFast
-		}
-		if st.MaxParallel > 0 {
-			out["max-parallel"] = st.MaxParallel
-		}
-	}
-	return out
-}
-
-func firstLine(s string) string {
-	s = strings.TrimSpace(s)
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		s = s[:i]
-	}
-	if len(s) > 80 {
-		s = s[:80]
-	}
-	return "Run " + s
+		WorkflowPayload:   []byte(job.WorkflowPayload),
+		Context:           mustJSON(gitCtx),
+		Secrets:           secrets,
+		Variables:         vars,
+		Needs:             needs,
+		Token:             token,
+		RuntimeToken:      runtime,
+		TimeoutMinutes:    int32(timeout),
+		CloneUrl:          m.git.HTTPCloneURL(ctx, repo, false),
+		ServerUrl:         strings.TrimRight(m.git.BaseURL(ctx), "/"),
+		RunsOn:            decodeStrings(job.RunsOn),
+		Interactive:       job.Interactive,
+		DefaultActionsUrl: m.defaultActionsURL(ctx),
+	}, nil
 }
 
 // Scoped api token the runner uses for checkout and publishing

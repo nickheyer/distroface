@@ -14,7 +14,7 @@ const (
 	HostExecutor = "host"
 	// Label every fresh runner serves
 	DefaultLabel = "ubuntu-latest"
-	// Image behind the default label, node, git, docker cli and build tools included
+	// Image behind the default label, full tool set
 	DefaultImage = "ghcr.io/catthehacker/ubuntu:act-latest"
 	// Slim alternative for the images map
 	SlimImage = "docker.io/library/ubuntu:24.04"
@@ -31,16 +31,19 @@ type Config struct {
 	Images      map[string]string `json:"images"`
 	Concurrency int               `json:"concurrency"`
 	HostEnabled bool              `json:"host_enabled"`
-	// Jobs may mount the docker socket, run privileged, and bind host paths
+	// Jobs get the docker socket and may run privileged
 	PrivilegedJobs bool   `json:"privileged_jobs,omitempty"`
 	WorkDir        string `json:"work_dir,omitempty"`
-	DockerHost     string `json:"docker_host,omitempty"`
-	// Rootless buildkit image behind native image builds
-	BuildKitImage string `json:"buildkit_image,omitempty"`
-	// Build sandbox nameservers, probed from the daemon when empty
-	BuildKitDNS []string `json:"buildkit_dns,omitempty"`
-	// PEM bundle buildkit trusts for the instance registry
-	RegistryCA string `json:"registry_ca,omitempty"`
+	// Daemon address, the cli exports it as DOCKER_HOST
+	DockerHost string `json:"docker_host,omitempty"`
+	// Network job containers join, empty makes one per job
+	ContainerNetwork string `json:"container_network,omitempty"`
+	// Extra docker run options every job container gets
+	ContainerOptions string `json:"container_options,omitempty"`
+	// Host paths and named volumes jobs may mount, glob syntax
+	ValidVolumes []string `json:"valid_volumes,omitempty"`
+	// Skip certificate checks when cloning actions and workflows
+	InsecureSkipTLS bool `json:"insecure_skip_tls,omitempty"`
 }
 
 // Lives at ~/.dfcli/runner.json unless DFCLI_RUNNER_CONFIG names another file

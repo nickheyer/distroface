@@ -2,275 +2,331 @@ package actions
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
+	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/nickheyer/distroface/internal/artifacts"
-	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
-	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"github.com/nickheyer/distroface/internal/db/stores"
 )
 
-// Expired rows deleted per sweep pass
-const expireBatch = 500
+// Artifact row states
+const (
+	ArtifactPending   = "pending"
+	ArtifactConfirmed = "confirmed"
+)
 
-// ArtifactVersion names the package version holding a run's uploads
-func ArtifactVersion(run *db.ActionsRun) string {
-	return fmt.Sprintf("actions-%d", run.Number)
+const (
+	// Where signed download links live
+	ArtifactDownloadPrefix = "/api/actions/artifacts"
+	artifactURLPurpose     = "actions-artifact-url"
+	artifactURLTTL         = time.Hour
+	// Uploads that never finalized are dropped after this
+	pendingArtifactGrace = 24 * time.Hour
+	// Expired rows deleted per sweep pass
+	expireBatch = 500
+	// The toolkit's rules for artifact names
+	invalidArtifactNameChars = "\\/\":<>|*?\r\n"
+	artifactZipType          = "application/zip"
+)
+
+// ValidateArtifactName applies the rules the upload action checks locally
+func ValidateArtifactName(name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("%w: artifact name is required", ErrInvalid)
+	}
+	if strings.ContainsAny(name, invalidArtifactNameChars) {
+		return fmt.Errorf("%w: artifact name %q contains an invalid character", ErrInvalid, name)
+	}
+	return nil
 }
 
-// Zip holding every file of one named artifact
-func artifactZipPath(name string) string {
-	return artifacts.SanitizePath(name) + ".zip"
+// ArtifactExpired reports whether retention already ran out
+func ArtifactExpired(a *db.ActionsArtifact) bool {
+	return a.ExpiresAt != nil && a.ExpiresAt.Before(time.Now())
 }
 
-// Package linked to the repository, created on first use
-func (m *Manager) ensurePackage(ctx context.Context, repo *db.GitRepository) (*db.ArtifactRepository, error) {
-	pkg, err := m.store.GetArtifactRepository(ctx, repo.Namespace, repo.Name)
-	if err != nil {
-		return nil, err
-	}
-	if pkg != nil {
-		if pkg.GitRepoID == nil || *pkg.GitRepoID != repo.ID {
-			id := repo.ID
-			if err := m.store.SetArtifactRepositoryGitRepo(ctx, pkg.ID, &id); err == nil {
-				pkg.GitRepoID = &id
-			}
-		}
-		return pkg, nil
-	}
-	id := repo.ID
-	pkg = &db.ArtifactRepository{
-		Namespace: repo.Namespace, Name: repo.Name, Description: "Packages of " + repo.Namespace + "/" + repo.Name,
-		OwnerID: repo.OwnerID, IsPrivate: repo.IsPrivate, Type: v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE, GitRepoID: &id,
-	}
-	if err := m.store.CreateArtifactRepository(ctx, pkg); err != nil {
-		return nil, err
-	}
-	return pkg, nil
+// Confirmed and still inside retention
+func artifactLive(a *db.ActionsArtifact) bool {
+	return a != nil && a.Status == ArtifactConfirmed && !ArtifactExpired(a)
 }
 
-// Existing rows of the name, a conflict unless the caller overwrites
-func (m *Manager) existingArtifact(ctx context.Context, run *db.ActionsRun, name string, overwrite bool) ([]*db.ActionsArtifact, error) {
-	rows, err := m.store.ListActionsArtifactsByName(ctx, run.ID, name)
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) > 0 && !overwrite {
-		return nil, fmt.Errorf("%w: artifact %q already exists in this run, set overwrite to replace it", ErrConflict, name)
-	}
-	return rows, nil
+// Blocks of an upload wait here until finalize merges them
+func (m *Manager) artifactBlockDir(id string) string {
+	return filepath.Join(m.artifacts.Blobs().Root(), "actions-blocks", id)
 }
 
-// BeginArtifactUpload opens an upload session in the linked package
-func (m *Manager) BeginArtifactUpload(ctx context.Context, runner *db.ActionsRunner, jobID, name string, overwrite bool) (string, *db.ArtifactRepository, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "", nil, fmt.Errorf("%w: artifact name is required", ErrInvalid)
-	}
-	job, run, repo, err := m.runnerJob(ctx, runner, jobID)
-	if err != nil {
-		return "", nil, err
-	}
-	if job.Status != StatusRunning {
-		return "", nil, fmt.Errorf("%w: job is not running", ErrConflict)
-	}
-	if _, err := m.existingArtifact(ctx, run, name, overwrite); err != nil {
-		return "", nil, err
-	}
-	if job.TokenID == "" {
-		return "", nil, fmt.Errorf("%w: job has no token to upload with", ErrDenied)
-	}
-	pkg, err := m.ensurePackage(ctx, repo)
-	if err != nil {
-		return "", nil, err
-	}
-	// Chunks arrive on the data plane under the job token, bind the session to it
-	uploadID, err := m.artifacts.Blobs().InitiateOwnedUpload(auth.TokenUploadOwner(job.TokenID))
-	if err != nil {
-		return "", nil, err
-	}
-	return uploadID, pkg, nil
-}
-
-// FinishArtifactUpload stores the zip and records it on the run
-func (m *Manager) FinishArtifactUpload(ctx context.Context, runner *db.ActionsRunner, jobID, name, uploadID string, fileCount, retentionDays int32, overwrite bool) (*RunArtifact, error) {
-	job, run, repo, err := m.runnerJob(ctx, runner, jobID)
-	if err != nil {
-		return nil, err
-	}
-	if job.Status != StatusRunning {
-		return nil, fmt.Errorf("%w: job is not running", ErrConflict)
-	}
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, fmt.Errorf("%w: artifact name is required", ErrInvalid)
-	}
-	if uploadID == "" {
-		return nil, fmt.Errorf("%w: upload id is required", ErrInvalid)
-	}
-	if err := m.artifacts.Blobs().VerifyUploadOwner(uploadID, auth.TokenUploadOwner(job.TokenID)); err != nil {
-		return nil, err
-	}
-	previous, err := m.existingArtifact(ctx, run, name, overwrite)
-	if err != nil {
-		return nil, err
-	}
-	pkg, err := m.ensurePackage(ctx, repo)
-	if err != nil {
-		return nil, err
-	}
-	props := map[string]string{"actions.run": run.ID, "actions.artifact": name, "actions.job": job.ID}
-	art, err := m.artifacts.CompleteWorkflowUpload(ctx, pkg, uploadID, ArtifactVersion(run), artifactZipPath(name), props)
-	if err != nil {
-		return nil, err
-	}
-	for _, old := range previous {
-		m.dropRunArtifact(ctx, old, art.ID)
-	}
-	row := &db.ActionsArtifact{RunID: run.ID, JobID: job.ID, ArtifactID: art.ID, Name: name, FileCount: fileCount}
-	days := m.Settings(ctx, repo).GetArtifactRetentionDays()
-	if retentionDays > 0 && (days <= 0 || retentionDays < days) {
-		days = retentionDays
-	}
-	if days > 0 {
+// Expiry the caller asks for, capped by the repository setting
+func (m *Manager) artifactExpiry(ctx context.Context, repo *db.GitRepository, requested *time.Time) *time.Time {
+	var expires *time.Time
+	if days := m.Settings(ctx, repo).GetArtifactRetentionDays(); days > 0 {
 		t := time.Now().UTC().Add(time.Duration(days) * 24 * time.Hour)
-		row.ExpiresAt = &t
+		expires = &t
 	}
-	if err := m.store.CreateActionsArtifact(ctx, row); err != nil {
+	if requested != nil {
+		t := requested.UTC()
+		if expires == nil || t.Before(*expires) {
+			expires = &t
+		}
+	}
+	return expires
+}
+
+// Pending row for an upload, reused across retries
+func (m *Manager) claimArtifact(ctx context.Context, scope *resultsScope, name, contentType string, expires *time.Time, restart bool) (*db.ActionsArtifact, error) {
+	a := &db.ActionsArtifact{
+		RunID: scope.run.ID, JobID: scope.job.ID, Name: name, ContentType: contentType,
+		Status: ArtifactPending, ExpiresAt: expires,
+	}
+	row, created, err := m.store.CreateActionsArtifactOrReuse(ctx, scope.repo.ID, a)
+	if err != nil {
 		return nil, err
 	}
-	return &RunArtifact{Row: row, Files: []*db.Artifact{art}, Size: art.Size, FileCount: fileCount, Pkg: pkg}, nil
-}
-
-// Removes a run row and its stored file unless the file was reused
-func (m *Manager) dropRunArtifact(ctx context.Context, row *db.ActionsArtifact, keep string) {
-	if row.ArtifactID != keep {
-		if art, _ := m.store.GetArtifact(ctx, row.ArtifactID); art != nil {
-			if err := m.artifacts.DeleteArtifact(ctx, art); err != nil {
-				m.log.Warn("actions: drop artifact %s: %v", row.ArtifactID, err)
-				return
-			}
-		}
+	if created || row.Status == ArtifactConfirmed {
+		return row, nil
 	}
-	_ = m.store.DeleteActionsArtifact(ctx, row.ID)
-}
-
-// Deletes every expired upload, draining in batches
-func (m *Manager) expireArtifacts(ctx context.Context) {
-	for ctx.Err() == nil {
-		expired, err := m.store.ListExpiredActionsArtifacts(ctx, expireBatch)
-		if err != nil || len(expired) == 0 {
-			return
-		}
-		for _, a := range expired {
-			if art, _ := m.store.GetArtifact(ctx, a.ArtifactID); art != nil {
-				if err := m.artifacts.DeleteArtifact(ctx, art); err != nil {
-					m.log.Warn("actions: expire artifact %s: %v", a.ArtifactID, err)
-					continue
-				}
-			}
-			_ = m.store.DeleteActionsArtifact(ctx, a.ID)
-		}
-		if len(expired) < expireBatch {
-			return
-		}
+	// Retries restart the blocks and the abandon clock
+	if restart {
+		_ = os.RemoveAll(m.artifactBlockDir(row.ID))
 	}
-}
-
-// RunArtifact is one named upload of a run, legacy uploads span many files
-type RunArtifact struct {
-	Row       *db.ActionsArtifact // Newest row of the name
-	Files     []*db.Artifact      // Stored rows still present, one zip for current uploads
-	Size      int64
-	FileCount int32
-	Pkg       *db.ArtifactRepository
-}
-
-// DownloadPath streams the zip, legacy file sets are archived on the fly
-func (a *RunArtifact) DownloadPath() string {
-	if a.Pkg == nil || len(a.Files) == 0 {
-		return ""
+	now := time.Now().UTC()
+	cols := map[string]any{"job_id": scope.job.ID, "content_type": contentType, "expires_at": expires, "created_at": now}
+	if err := m.store.UpdateActionsArtifactColumns(ctx, row.ID, cols); err != nil {
+		return nil, err
 	}
-	if len(a.Files) == 1 && a.Files[0].Path == artifactZipPath(a.Row.Name) {
-		return ArtifactDownloadPath(a.Pkg, a.Files[0])
-	}
-	q := url.Values{"kind": {"workflow"}, "actions.run": {a.Row.RunID}, "actions.artifact": {a.Row.Name}, "format": {"zip"}, "num": {"100000"}}
-	return fmt.Sprintf("/api/v1/artifacts/_ns/%s/%s/query?%s", a.Pkg.Namespace, a.Pkg.Name, q.Encode())
+	row.JobID, row.ContentType, row.ExpiresAt, row.CreatedAt = scope.job.ID, contentType, expires, now
+	return row, nil
 }
 
-// RunArtifacts groups a run's uploads by name in upload order
-func (m *Manager) RunArtifacts(ctx context.Context, run *db.ActionsRun) ([]*RunArtifact, error) {
+// RunArtifacts lists confirmed, unexpired uploads of a run, oldest first
+func (m *Manager) RunArtifacts(ctx context.Context, run *db.ActionsRun) ([]*db.ActionsArtifact, error) {
 	rows, err := m.store.ListActionsArtifacts(ctx, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(rows))
-	for _, r := range rows {
-		ids = append(ids, r.ArtifactID)
+	out := rows[:0]
+	for _, a := range rows {
+		if artifactLive(a) {
+			out = append(out, a)
+		}
 	}
-	arts, err := m.store.GetArtifactsByIDs(ctx, ids)
+	return out, nil
+}
+
+func (m *Manager) signArtifactURL(id string, exp int64) string {
+	h := hmac.New(sha256.New, m.auth.DerivedKey(artifactURLPurpose))
+	h.Write([]byte("artifact:" + id + ":" + strconv.FormatInt(exp, 10)))
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+}
+
+// ArtifactDownloadURL is a signed link valid for an hour
+func (m *Manager) ArtifactDownloadURL(ctx context.Context, a *db.ActionsArtifact) string {
+	exp := time.Now().Add(artifactURLTTL).Unix()
+	base := strings.TrimRight(m.git.BaseURL(ctx), "/")
+	return fmt.Sprintf("%s%s/%s/%s?exp=%d&sig=%s", base, ArtifactDownloadPrefix, a.ID, url.PathEscape(artifactFileName(a)), exp, m.signArtifactURL(a.ID, exp))
+}
+
+// ArtifactPageURL is the session authenticated link the run page uses
+func (m *Manager) ArtifactPageURL(ctx context.Context, repo *db.GitRepository, a *db.ActionsArtifact) string {
+	return m.git.HTMLURL(ctx, repo) + "/-/actions/artifacts/" + a.ID + "/" + url.PathEscape(artifactFileName(a))
+}
+
+// ArtifactDownloadHandler serves signed links to confirmed artifacts
+func (m *Manager) ArtifactDownloadHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		rest := strings.TrimPrefix(r.URL.Path, ArtifactDownloadPrefix+"/")
+		id, _, _ := strings.Cut(rest, "/")
+		exp, err := strconv.ParseInt(r.URL.Query().Get("exp"), 10, 64)
+		if err != nil || id == "" {
+			http.Error(w, "bad link", http.StatusBadRequest)
+			return
+		}
+		if time.Now().Unix() > exp {
+			http.Error(w, "link expired", http.StatusUnauthorized)
+			return
+		}
+		if !hmac.Equal([]byte(r.URL.Query().Get("sig")), []byte(m.signArtifactURL(id, exp))) {
+			http.Error(w, "bad signature", http.StatusUnauthorized)
+			return
+		}
+		a, err := m.store.GetActionsArtifact(r.Context(), id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		m.serveConfirmedArtifact(w, r, a)
+	})
+}
+
+// ServeRepoArtifact streams an artifact of the repository to a session authenticated caller
+func (m *Manager) ServeRepoArtifact(w http.ResponseWriter, r *http.Request, repo *db.GitRepository, id string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ctx := r.Context()
+	a, err := m.store.GetActionsArtifact(ctx, id)
 	if err != nil {
-		return nil, err
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
-	byID := make(map[string]*db.Artifact, len(arts))
-	for _, a := range arts {
-		byID[a.ID] = a
-	}
-	groups := groupRunArtifacts(rows, byID)
-	pkgs := map[int64]*db.ArtifactRepository{}
-	for _, g := range groups {
-		if len(g.Files) == 0 {
-			continue
+	if a != nil {
+		run, err := m.store.GetActionsRunByID(ctx, a.RunID)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		id := g.Files[0].RepoID
-		if _, ok := pkgs[id]; !ok {
-			pkgs[id], _ = m.store.GetArtifactRepositoryByID(ctx, id)
+		if run == nil || repo == nil || run.RepoID != repo.ID {
+			a = nil
 		}
-		g.Pkg = pkgs[id]
 	}
-	return groups, nil
+	m.serveConfirmedArtifact(w, r, a)
 }
 
-// TaskArtifacts lists the run of a job the runner holds
-func (m *Manager) TaskArtifacts(ctx context.Context, runner *db.ActionsRunner, jobID string) ([]*RunArtifact, error) {
-	_, run, _, err := m.runnerJob(ctx, runner, jobID)
+// Streams a confirmed artifact, 404 when missing, 410 once retention ran out
+func (m *Manager) serveConfirmedArtifact(w http.ResponseWriter, r *http.Request, a *db.ActionsArtifact) {
+	if a == nil || a.Status != ArtifactConfirmed {
+		http.Error(w, "artifact not found", http.StatusNotFound)
+		return
+	}
+	if ArtifactExpired(a) {
+		http.Error(w, "artifact expired", http.StatusGone)
+		return
+	}
+	m.streamArtifact(w, r, a)
+}
+
+// Zips carry the suffix, legacy single file rows keep their name
+func artifactFileName(a *db.ActionsArtifact) string {
+	if a.ContentType == "" || a.ContentType == artifactZipType {
+		return a.Name + ".zip"
+	}
+	return a.Name
+}
+
+// Writes the blob with the headers browsers and the toolkit expect
+func (m *Manager) streamArtifact(w http.ResponseWriter, r *http.Request, a *db.ActionsArtifact) {
+	f, info, err := m.artifacts.Blobs().OpenBlob(a.Digest)
 	if err != nil {
-		return nil, err
+		http.Error(w, "artifact data is missing", http.StatusNotFound)
+		return
 	}
-	return m.RunArtifacts(ctx, run)
+	defer f.Close()
+	ct := a.ContentType
+	if ct == "" {
+		ct = artifactZipType
+	}
+	name := artifactFileName(a)
+	w.Header().Set("Content-Type", ct)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name))
+	w.Header().Set("Cache-Control", "private, no-store")
+	http.ServeContent(w, r, name, info.ModTime(), f)
 }
 
-// Rows arrive oldest first, the newest row of a name speaks for the group
-func groupRunArtifacts(rows []*db.ActionsArtifact, arts map[string]*db.Artifact) []*RunArtifact {
-	var order []*RunArtifact
-	groups := map[string]*RunArtifact{}
-	for _, row := range rows {
-		g := groups[row.Name]
-		if g == nil {
-			g = &RunArtifact{}
-			groups[row.Name] = g
-			order = append(order, g)
-		}
-		g.Row = row
-		art := arts[row.ArtifactID]
-		if art == nil {
-			continue
-		}
-		g.Files = append(g.Files, art)
-		g.Size += art.Size
-		if row.FileCount > 0 {
-			g.FileCount += row.FileCount
-		} else {
-			g.FileCount++
-		}
+// Deletes a row, staged blocks, and unshared blob
+func (m *Manager) deleteArtifact(ctx context.Context, a *db.ActionsArtifact) error {
+	if err := m.store.DeleteActionsArtifact(ctx, a.ID); err != nil {
+		return err
 	}
-	return order
+	_ = os.RemoveAll(m.artifactBlockDir(a.ID))
+	if a.Digest != "" {
+		m.gcArtifactBlob(ctx, a.Digest)
+	}
+	return nil
 }
 
-// ArtifactDownloadPath is the data plane url of one artifact file
-func ArtifactDownloadPath(pkg *db.ArtifactRepository, art *db.Artifact) string {
-	return fmt.Sprintf("/api/v1/artifacts/_ns/%s/%s/%s/%s", pkg.Namespace, pkg.Name, art.Version, art.Path)
+// Removes a blob once no table references it
+func (m *Manager) gcArtifactBlob(ctx context.Context, digest string) {
+	referenced, err := m.store.BlobReferenced(ctx, digest)
+	if err != nil {
+		m.log.Warn("actions: count references of blob %s: %v", digest, err)
+		return
+	}
+	if referenced {
+		return
+	}
+	if err := m.artifacts.Blobs().DeleteBlob(digest); err != nil {
+		m.log.Warn("actions: delete artifact blob %s: %v", digest, err)
+	}
+}
+
+// DeleteRunArtifacts removes every upload of a run with its blocks and blobs
+func (m *Manager) DeleteRunArtifacts(ctx context.Context, run *db.ActionsRun) error {
+	rows, err := m.store.ListActionsArtifacts(ctx, run.ID)
+	if err != nil {
+		return err
+	}
+	for _, a := range rows {
+		if err := m.deleteArtifact(ctx, a); err != nil {
+			return fmt.Errorf("delete artifact %s of run %s: %w", a.Name, run.ID, err)
+		}
+	}
+	return nil
+}
+
+// DeleteRepoArtifacts reclaims artifacts, logs, and caches before a repository's rows go
+func (m *Manager) DeleteRepoArtifacts(ctx context.Context, repo *db.GitRepository) error {
+	runs, _, err := m.store.ListActionsRuns(ctx, stores.ActionsRunListOptions{RepoID: repo.ID})
+	if err != nil {
+		return err
+	}
+	for _, run := range runs {
+		if err := m.DeleteRunArtifacts(ctx, run); err != nil {
+			return err
+		}
+		jobs, err := m.store.ListActionsJobs(ctx, run.ID)
+		if err != nil {
+			return err
+		}
+		for _, j := range jobs {
+			m.dropJobLogs(ctx, j)
+		}
+	}
+	caches, err := m.store.ListActionsCachesForRepo(ctx, repo.ID)
+	if err != nil {
+		return err
+	}
+	for _, c := range caches {
+		m.dropCache(ctx, c)
+	}
+	return nil
+}
+
+// Deletes expired uploads and abandoned ones, draining in batches
+func (m *Manager) expireArtifacts(ctx context.Context) {
+	for ctx.Err() == nil {
+		expired, err := m.store.ListExpiredActionsArtifacts(ctx, expireBatch)
+		if err != nil || len(expired) == 0 {
+			break
+		}
+		for _, a := range expired {
+			if err := m.deleteArtifact(ctx, a); err != nil {
+				m.log.Warn("actions: expire artifact %s: %v", a.ID, err)
+			}
+		}
+		if len(expired) < expireBatch {
+			break
+		}
+	}
+	stale, err := m.store.ListStalePendingActionsArtifacts(ctx, time.Now().UTC().Add(-pendingArtifactGrace), expireBatch)
+	if err != nil {
+		return
+	}
+	for _, a := range stale {
+		if err := m.deleteArtifact(ctx, a); err != nil {
+			m.log.Warn("actions: drop abandoned artifact %s: %v", a.ID, err)
+		}
+	}
 }

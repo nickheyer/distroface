@@ -476,7 +476,7 @@
 				<FormField
 					label="Also mirror releases"
 					layout="toggle"
-					help="Creates a linked artifact package that mirrors upstream release assets"
+					help="Copies upstream releases and their asset files onto this repository on every sync"
 				>
 					<Switch bind:checked={newMirrorReleases} />
 				</FormField>

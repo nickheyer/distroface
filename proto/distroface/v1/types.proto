@@ -177,6 +177,8 @@ message MirrorConfig {
   int32 sync_interval_minutes = 8;
   // Suspends scheduled syncs, config kept
   bool paused = 9;
+  // Git mirrors also copy upstream releases and their asset files
+  bool mirror_releases = 10;
 }
 
 // Repository represents a container image repository.
@@ -403,9 +405,7 @@ message ArtifactRepository {
   bool mirror_syncing = 17;
   // Full name of the linked git repository, empty when standalone
   string source_repository = 18;
-  // Workflow run uploads, counted apart from the package contents
-  int64 workflow_artifact_count = 19;
-  int64 workflow_total_size = 20;
+  reserved 19, 20;
   int64 star_count = 21;
   bool is_starred = 22;
 }
@@ -430,8 +430,7 @@ message Artifact {
   string digest = 11;
   google.protobuf.Timestamp created_at = 12;
   google.protobuf.Timestamp updated_at = 13;
-  // Empty for package contents, "workflow" for files a run uploaded
-  string kind = 14;
+  reserved 14;
 }
 
 // ImageConfig contains parsed metadata from an OCI/Docker image config blob.

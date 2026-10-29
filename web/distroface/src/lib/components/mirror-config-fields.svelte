@@ -14,6 +14,8 @@
 		syncDepth: number | undefined;
 		syncIntervalMinutes: number;
 		paused: boolean;
+		// Git mirrors copy upstream releases and their files
+		mirrorReleases: boolean;
 	};
 
 	export function emptyMirrorForm(): MirrorForm {
@@ -26,7 +28,8 @@
 			includePrereleases: false,
 			syncDepth: undefined,
 			syncIntervalMinutes: 0,
-			paused: false
+			paused: false,
+			mirrorReleases: false
 		};
 	}
 
@@ -40,6 +43,7 @@
 		form.syncDepth = cfg.syncDepth > 0 ? cfg.syncDepth : undefined;
 		form.syncIntervalMinutes = cfg.syncIntervalMinutes;
 		form.paused = cfg.paused;
+		form.mirrorReleases = cfg.mirrorReleases;
 		return form;
 	}
 
@@ -57,7 +61,8 @@
 			includePrereleases: form.includePrereleases,
 			syncDepth: Math.max(0, Math.trunc(Number(form.syncDepth) || 0)),
 			syncIntervalMinutes: Math.max(0, Math.trunc(Number(form.syncIntervalMinutes) || 0)),
-			paused: form.paused
+			paused: form.paused,
+			mirrorReleases: form.mirrorReleases
 		};
 	}
 </script>
@@ -206,7 +211,7 @@
 				{#if lastError || (cooldownActive && nextAttempt)}
 					<AlertDescription>
 						{#if lastError}
-							<p class="break-words">{lastError}</p>
+							<p class="wrap-break-word">{lastError}</p>
 						{/if}
 						{#if cooldownActive && nextAttempt}
 							<p class="flex items-center gap-1.5">
@@ -346,6 +351,16 @@
 				class="w-full"
 			/>
 		</FormField>
+
+		{#if kind === 'git'}
+			<FormField
+				label="Mirror releases"
+				layout="toggle"
+				help="Copies upstream releases and their asset files on every sync"
+			>
+				<Switch bind:checked={form.mirrorReleases} />
+			</FormField>
+		{/if}
 
 		<FormField label="Paused" layout="toggle" help="Skips scheduled syncs">
 			<Switch bind:checked={form.paused} />

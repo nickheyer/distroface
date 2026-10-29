@@ -163,6 +163,17 @@
 			get: (s) => Number(git(s)?.maxLfsObjectMb ?? 0n),
 			patch: (v) => ({ git: { maxLfsObjectMb: BigInt(v) } })
 		},
+		maxReleaseAssetMb: {
+			key: 'maxReleaseAssetMb',
+			path: 'git.max_release_asset_mb',
+			label: 'Max release asset',
+			help: 'Largest single release file accepted, 0 for no limit',
+			unit: 'MB',
+			min: 0,
+			max: 1_000_000,
+			get: (s) => Number(git(s)?.maxReleaseAssetMb ?? 0n),
+			patch: (v) => ({ git: { maxReleaseAssetMb: BigInt(v) } })
+		},
 		maxConcurrentTransfers: {
 			key: 'maxConcurrentTransfers',
 			path: 'git.max_concurrent_transfers',
@@ -545,6 +556,7 @@
 		>
 			{@render boolRow(bools.lfsEnabled)}
 			{@render numRow(nums.maxLfsObjectMb)}
+			{@render numRow(nums.maxReleaseAssetMb)}
 			{@render numRow(nums.maxConcurrentTransfers)}
 		</FormSection>
 

@@ -87,7 +87,7 @@
 					: 'Pick an existing tag or type a new one'
 	);
 	const assetsHelp = $derived(
-		`Files stored in the ${namespace}/${name} artifact package at version ${tag.trim() || 'the tag'}`
+		`Files attached to the release are served at ${namespace}/${name}/releases/download/${tag.trim() || '<tag>'}/<file>`
 	);
 	const imagesHelp = $derived(
 		`Linked images tagged ${tag.trim() || 'the tag'} appear automatically, pin others here`
@@ -238,15 +238,15 @@
 
 	async function detachAsset(a: ReleaseAsset) {
 		if (!current) return;
-		detaching = a.artifactId;
+		detaching = a.id;
 		try {
-			await rpcClient.release.detachReleaseAsset({
+			await rpcClient.release.deleteReleaseAsset({
 				namespace,
 				name,
 				tag: current.tag,
-				artifactId: a.artifactId
+				assetId: a.id
 			});
-			assets = assets.filter((x) => x.artifactId !== a.artifactId);
+			assets = assets.filter((x) => x.id !== a.id);
 			toast.success('Asset removed');
 		} catch {
 			// Error interceptor already toasted
@@ -412,7 +412,7 @@
 			<div class="space-y-4">
 				{#if assets.length > 0}
 					<ul class="box divide-y">
-						{#each assets as a (a.artifactId)}
+						{#each assets as a (a.id)}
 							<li class="flex min-w-0 items-center gap-3 px-4 py-2.5 text-sm">
 								<Download class="size-3.5 shrink-0 text-muted-foreground" />
 								<!-- eslint-disable svelte/no-navigation-without-resolve -->
@@ -428,13 +428,12 @@
 									variant="ghost-muted"
 									size="icon-sm"
 									class="hover:text-destructive"
-									disabled={detaching === a.artifactId}
+									disabled={detaching === a.id}
 									onclick={() => detachAsset(a)}
 									title="Remove asset"
 									aria-label="Remove asset"
 								>
-									{#if detaching === a.artifactId}<Loader class="animate-spin" />{:else}<Trash
-										/>{/if}
+									{#if detaching === a.id}<Loader class="animate-spin" />{:else}<Trash />{/if}
 								</Button>
 							</li>
 						{/each}
@@ -444,7 +443,7 @@
 					{namespace}
 					{name}
 					tag={current.tag}
-					onUploaded={(a) => (assets = [...assets.filter((x) => x.artifactId !== a.artifactId), a])}
+					onUploaded={(a) => (assets = [...assets.filter((x) => x.id !== a.id), a])}
 				/>
 			</div>
 		{:else}

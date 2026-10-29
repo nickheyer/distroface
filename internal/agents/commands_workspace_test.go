@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-git/go-git/v6/plumbing/filemode"
 	"github.com/nickheyer/distroface/internal/actions"
+	"github.com/nickheyer/distroface/internal/actions/jobparser"
 	"github.com/nickheyer/distroface/internal/agents/llm"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
@@ -117,6 +118,7 @@ func TestCommandWorkspacePersistsAcrossCommands(t *testing.T) {
 	select {
 	case <-rl.finished:
 	case <-time.After(15 * time.Second):
+		h.dumpJobs(t)
 		t.Fatal("the fake runner never finished the session job")
 	}
 	if len(rl.jobs) != 1 {
@@ -265,6 +267,7 @@ func TestCommandWorkspaceRunsAgentSetupSteps(t *testing.T) {
 	select {
 	case <-rl.finished:
 	case <-time.After(15 * time.Second):
+		h.dumpJobs(t)
 		t.Fatal("the fake runner never finished the session job")
 	}
 	if len(rl.tasks) != 1 || len(rl.execs) != 1 {
@@ -272,11 +275,20 @@ func TestCommandWorkspaceRunsAgentSetupSteps(t *testing.T) {
 	}
 	// The setup job shapes the session job, checkout stays first
 	task := rl.tasks[0]
-	if len(task.RunsOn) != 1 || task.RunsOn[0] != "go-runner" || task.ContainerImage != "golang:1.25" || !task.Interactive {
-		t.Fatalf("task = runs_on %v container %q interactive %v", task.RunsOn, task.ContainerImage, task.Interactive)
+	if len(task.RunsOn) != 1 || task.RunsOn[0] != "go-runner" || !task.Interactive {
+		t.Fatalf("task = runs_on %v interactive %v", task.RunsOn, task.Interactive)
 	}
-	if len(task.Steps) != 3 || task.Steps[0].Uses != "actions/checkout@v4" || task.Steps[1].Uses != "actions/setup-go@v5" || task.Steps[1].With["go-version-file"] != "go.mod" || task.Steps[2].Run != "go mod download" {
-		t.Fatalf("steps = %+v", task.Steps)
+	swfs, err := jobparser.Parse(task.WorkflowPayload)
+	if err != nil || len(swfs) != 1 {
+		t.Fatalf("payload: %v\n%s", err, task.WorkflowPayload)
+	}
+	_, job := swfs[0].Job()
+	var image string
+	if job == nil || job.RawContainer.Decode(&image) != nil || image != "golang:1.25" {
+		t.Fatalf("job container = %+v", job)
+	}
+	if len(job.Steps) != 3 || job.Steps[0].Uses != "actions/checkout@v4" || job.Steps[1].Uses != "actions/setup-go@v5" || job.Steps[1].With["go-version-file"] != "go.mod" || strings.TrimSpace(job.Steps[2].Run) != "go mod download" {
+		t.Fatalf("steps = %+v", job.Steps)
 	}
 	runs, _, _ := h.store.ListActionsRuns(h.ctx, stores.ActionsRunListOptions{RepoID: h.repo.ID})
 	if len(runs) != 1 || !strings.Contains(runs[0].Workflow, "actions/setup-go@v5") {
@@ -326,5 +338,25 @@ func TestCommandWorkspaceRefusesBrokenSetupWorkflow(t *testing.T) {
 	}
 	if runs, _, _ := h.store.ListActionsRuns(h.ctx, stores.ActionsRunListOptions{RepoID: h.repo.ID}); len(runs) != 0 {
 		t.Fatal("no run may be created from a broken setup workflow")
+	}
+}
+
+// Job rows of every run, for failures that stall before the runner
+func (h *harness) dumpJobs(t *testing.T) {
+	t.Helper()
+	runs, _, _ := h.store.ListActionsRuns(h.ctx, stores.ActionsRunListOptions{RepoID: h.repo.ID})
+	t.Logf("runs = %d", len(runs))
+	sessions, _, _ := h.store.ListAgentSessions(h.ctx, stores.AgentSessionListOptions{RepoID: h.repo.ID})
+	for _, sess := range sessions {
+		events, _ := h.store.ListAgentSessionEvents(h.ctx, sess.ID, 0, 0)
+		for _, ev := range events {
+			t.Logf("event %s %s: %s", ev.Kind, ev.Tool, ev.Text)
+		}
+	}
+	for _, run := range runs {
+		jobs, _ := h.store.ListActionsJobs(h.ctx, run.ID)
+		for _, j := range jobs {
+			t.Logf("run %s %s/%s job %s status=%s conclusion=%s error=%q runs_on=%s annotations=%s", run.ID, run.Status, run.Conclusion, j.Name, j.Status, j.Conclusion, j.Error, j.RunsOn, j.Annotations)
+		}
 	}
 }

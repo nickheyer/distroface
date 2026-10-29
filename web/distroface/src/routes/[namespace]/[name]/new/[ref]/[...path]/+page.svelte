@@ -5,6 +5,7 @@
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { toast } from 'svelte-sonner';
+	import { errText } from '$lib/act.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Alert, AlertDescription } from '$lib/components/ui/alert';
@@ -12,9 +13,8 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import CodeEditor from '$lib/components/git/code-editor.svelte';
 	import CommitForm from '$lib/components/git/commit-form.svelte';
-	import { FilePlus, Lock, ChevronLeft } from '$lib/icons';
+	import { FilePlus, Lock, ChevronLeft, AlertCircle, RotateCcw, Loader } from '$lib/icons';
 	import { GitUnit, FileOperationKind } from '$lib/proto/distroface/v1/git_pb';
-	import { findTemplate, renderTemplate } from '$lib/components/git/workflow-templates';
 
 	const namespace = $derived(page.params.namespace ?? '');
 	const name = $derived(page.params.name ?? '');
@@ -38,6 +38,9 @@
 	let refError = $state('');
 
 	let prefilledFor = $state('');
+	let templateId = $state('');
+	let templateLoading = $state(false);
+	let templateError = $state('');
 
 	let summary = $state('');
 	let description = $state('');
@@ -95,9 +98,32 @@
 		const params = page.url.searchParams;
 		const preset = params.get('filename');
 		if (preset) fileName = preset;
-		const template = findTemplate(params.get('workflow_template') ?? '');
-		if (template) content = renderTemplate(template, ref);
+		const id = params.get('workflow_template') ?? '';
+		templateId = id;
+		if (id) void loadTemplate();
 	});
+
+	// The server renders the starter for this repository, the editor waits on it
+	async function loadTemplate() {
+		const id = templateId;
+		if (!id) return;
+		templateLoading = true;
+		templateError = '';
+		try {
+			const resp = await rpcClient.actions.getWorkflowTemplate(
+				{ namespace, name, id },
+				silentCallOptions
+			);
+			if (id !== templateId) return;
+			if (!resp.template) throw new Error('the server answered without a template');
+			content = resp.template.content;
+			if (!fileName) fileName = resp.template.fileName;
+		} catch (err) {
+			if (id === templateId) templateError = errText(err);
+		} finally {
+			if (id === templateId) templateLoading = false;
+		}
+	}
 
 	async function loadTree() {
 		refError = '';
@@ -247,11 +273,30 @@
 				</div>
 			</FormField>
 			<FormField label="Contents" id="new-file-content">
+				{#if templateLoading}
+					<p class="mb-2 inline-flex items-center gap-2 text-sm text-muted-foreground">
+						<Loader class="size-3.5 animate-spin" />Loading starter workflow {templateId}
+					</p>
+				{:else if templateError}
+					<div class="mb-2">
+						<Alert variant="destructive">
+							<AlertCircle />
+							<AlertDescription class="flex flex-wrap items-center gap-3">
+								<span class="min-w-0 flex-1">
+									Starter workflow {templateId} could not be loaded: {templateError}
+								</span>
+								<Button size="sm" variant="outline" onclick={loadTemplate}>
+									<RotateCcw />Retry
+								</Button>
+							</AlertDescription>
+						</Alert>
+					</div>
+				{/if}
 				<CodeEditor
 					bind:value={content}
 					filename={cleanName}
-					readonly={!canWrite}
-					placeholder="Start typing"
+					readonly={!canWrite || templateLoading}
+					placeholder={templateLoading ? 'Loading starter workflow' : 'Start typing'}
 				/>
 			</FormField>
 		</div>
@@ -266,7 +311,7 @@
 		placeholder={baseName ? `Create ${baseName}` : 'Create new file'}
 		submitLabel="Commit new file"
 		{submitting}
-		disabled={!canWrite || !nameValid || collides || !!refError}
+		disabled={!canWrite || !nameValid || collides || !!refError || templateLoading}
 		onSubmit={commit}
 		onCancel={cancel}
 	/>

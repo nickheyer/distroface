@@ -18,9 +18,6 @@ import (
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
-// Property flagging an artifact as a release asset of the linked git repository
-const ReleaseProperty = "release"
-
 // Resolved retention rules for a single repo
 type RetentionPolicy struct {
 	Enabled       bool
@@ -112,15 +109,6 @@ func SanitizePath(name string) string {
 
 // Finalizes upload, replaces existing same version path properties
 func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata string, properties map[string]string) (*storage.Artifact, error) {
-	return m.complete(ctx, repo, uploadID, version, artifactPath, metadata, properties, "", true)
-}
-
-// Workflow uploads expire on their own schedule, package retention skips them
-func (m *Manager) CompleteWorkflowUpload(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath string, properties map[string]string) (*storage.Artifact, error) {
-	return m.complete(ctx, repo, uploadID, version, artifactPath, "{}", properties, storage.ArtifactKindWorkflow, false)
-}
-
-func (m *Manager) complete(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata string, properties map[string]string, kind string, retain bool) (*storage.Artifact, error) {
 	if err := ValidateVersion(version); err != nil {
 		return nil, err
 	}
@@ -161,7 +149,6 @@ func (m *Manager) complete(ctx context.Context, repo *storage.ArtifactRepository
 		Path:     artifactPath,
 		UploadID: uploadID,
 		Version:  version,
-		Kind:     kind,
 		Digest:   digest,
 		Size:     size,
 		MimeType: mimeType,
@@ -177,10 +164,8 @@ func (m *Manager) complete(ctx context.Context, repo *storage.ArtifactRepository
 		m.gcBlob(ctx, replacedDigest)
 	}
 
-	if retain {
-		if err := m.ApplyRetention(ctx, repo); err != nil {
-			m.log.Error("artifact retention for repo %d: %v", repo.ID, err)
-		}
+	if err := m.ApplyRetention(ctx, repo); err != nil {
+		m.log.Error("artifact retention for repo %d: %v", repo.ID, err)
 	}
 
 	return artifact, nil
@@ -250,7 +235,7 @@ func (m *Manager) ApplyRetentionPolicy(ctx context.Context, repoID int64, p Rete
 		return nil
 	}
 
-	all, _, err := m.store.ListArtifacts(ctx, repoID, "", stores.KindRegular, 0, 0)
+	all, _, err := m.store.ListArtifacts(ctx, repoID, "", 0, 0)
 	if err != nil {
 		return err
 	}
@@ -328,12 +313,12 @@ func (m *Manager) gcBlob(ctx context.Context, digest string) {
 	if digest == "" {
 		return
 	}
-	count, err := m.store.CountArtifactsByDigest(ctx, digest)
+	referenced, err := m.store.BlobReferenced(ctx, digest)
 	if err != nil {
 		m.log.Error("blob refcount for %s: %v", digest, err)
 		return
 	}
-	if count > 0 {
+	if referenced {
 		return
 	}
 	if err := m.blobs.DeleteBlob(digest); err != nil {

@@ -426,6 +426,11 @@ func (m *Monitor) execGitSync(ctx context.Context, repo *db.GitRepository, cfg *
 	m.beginSync(key, ev)
 
 	syncErr := m.syncGitRepo(runCtx, repo, cfg, &state)
+	if syncErr == nil && cfg.GetMirrorReleases() {
+		if up, err := parseGitUpstream(cfg.GetUpstream()); err == nil {
+			syncErr = m.syncGitReleases(runCtx, repo, cfg, up)
+		}
+	}
 	cancel()
 	if m.disarmCancel(key) && syncErr != nil {
 		syncErr = ErrSyncStopped

@@ -494,13 +494,12 @@ func (m *Manager) dropCache(ctx context.Context, c *db.ActionsCache) {
 	if c.Digest == "" {
 		return
 	}
-	if n, _ := m.store.CountActionsCachesByDigest(ctx, c.Digest); n > 0 {
+	referenced, err := m.store.BlobReferenced(ctx, c.Digest)
+	if err != nil {
+		m.log.Warn("actions: count references of cache blob %s: %v", c.Digest, err)
 		return
 	}
-	if n, _ := m.store.CountArtifactsByDigest(ctx, c.Digest); n > 0 {
-		return
-	}
-	if n, _ := m.store.CountActionsJobsByLogDigest(ctx, c.Digest); n > 0 {
+	if referenced {
 		return
 	}
 	if err := m.artifacts.Blobs().DeleteBlob(c.Digest); err != nil {

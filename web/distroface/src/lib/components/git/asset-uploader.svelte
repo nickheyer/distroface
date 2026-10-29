@@ -2,9 +2,9 @@
 	import { Upload, Check, X, Loader, AlertTriangle } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Progress } from '$lib/components/ui/progress';
-	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
-	import { ConnectError } from '@connectrpc/connect';
-	import type { ReleaseAsset } from '$lib/proto/distroface/v1/release_pb';
+	import { fromJson } from '@bufbuild/protobuf';
+	import { ReleaseAssetSchema, type ReleaseAsset } from '$lib/proto/distroface/v1/release_pb';
+	import { assetUploadUrl } from '$lib/releases';
 	import { formatBytes } from '$lib/utils';
 
 	let {
@@ -23,7 +23,7 @@
 
 	const SESSION_KEY = 'distroface_session';
 
-	type Stage = 'queued' | 'uploading' | 'finalizing' | 'done' | 'error';
+	type Stage = 'queued' | 'uploading' | 'done' | 'error';
 	interface Item {
 		id: number;
 		file: File;
@@ -67,62 +67,43 @@
 		if (!disabled) input?.click();
 	}
 
-	function patch(url: string, file: File, onProgress: (pct: number) => void): Promise<void> {
+	// One streamed POST per file, the response is the asset
+	function post(file: File, onProgress: (pct: number) => void): Promise<ReleaseAsset> {
 		return new Promise((resolve, reject) => {
 			const xhr = new XMLHttpRequest();
-			xhr.open('PATCH', url);
+			xhr.open('POST', assetUploadUrl(namespace, name, tag, file.name));
 			const token = localStorage.getItem(SESSION_KEY);
 			if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+			xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
 			xhr.upload.onprogress = (ev) => {
 				if (ev.lengthComputable) onProgress(Math.round((ev.loaded / ev.total) * 100));
 			};
 			xhr.onload = () => {
-				if (xhr.status >= 200 && xhr.status < 300) resolve();
-				else reject(new Error(`Upload failed (${xhr.status})`));
+				if (xhr.status >= 200 && xhr.status < 300) {
+					try {
+						resolve(fromJson(ReleaseAssetSchema, JSON.parse(xhr.responseText)));
+					} catch (err) {
+						reject(err instanceof Error ? err : new Error('Unreadable server response'));
+					}
+				} else {
+					reject(new Error(xhr.responseText.trim() || `Upload failed (${xhr.status})`));
+				}
 			};
 			xhr.onerror = () => reject(new Error('Upload failed'));
 			xhr.send(file);
 		});
 	}
 
-	// Initiate, PATCH the bytes, complete, then attach
 	async function upload(item: Item) {
 		item.stage = 'uploading';
 		try {
-			const init = await rpcClient.artifact.initiateArtifactUpload(
-				{ repoName: name, namespace },
-				silentCallOptions
-			);
-			if (!init.uploadUrl) throw new Error('Server did not return an upload location');
-			await patch(init.uploadUrl, item.file, (pct) => (item.progress = pct));
-			item.stage = 'finalizing';
-			const done = await rpcClient.artifact.completeArtifactUpload(
-				{
-					repoName: name,
-					namespace,
-					uploadId: init.uploadId,
-					version: tag,
-					path: item.file.name,
-					properties: { release: 'true' }
-				},
-				silentCallOptions
-			);
-			const artifactId = done.artifact?.id ?? '';
-			const attached = await rpcClient.release.attachReleaseAsset(
-				{ namespace, name, tag, artifactId },
-				silentCallOptions
-			);
+			const asset = await post(item.file, (pct) => (item.progress = pct));
 			item.stage = 'done';
 			item.progress = 100;
-			if (attached.asset) onUploaded?.(attached.asset);
+			onUploaded?.(asset);
 		} catch (err) {
 			item.stage = 'error';
-			item.error =
-				err instanceof ConnectError
-					? err.rawMessage || err.message
-					: err instanceof Error
-						? err.message
-						: 'Upload failed';
+			item.error = err instanceof Error ? err.message : 'Upload failed';
 		}
 	}
 
@@ -174,8 +155,8 @@
 		<Upload class="mx-auto size-6 text-muted-foreground/70" />
 		<p class="mt-2 text-sm font-medium">Drop files here or click to choose</p>
 		<p class="mt-0.5 text-xs text-muted-foreground">
-			Stored in the <span class="font-mono">{namespace}/{name}</span> package at version
-			<span class="font-mono">{tag}</span>
+			Attached to release <span class="font-mono">{tag}</span> of
+			<span class="font-mono">{namespace}/{name}</span>
 		</p>
 		<input bind:this={input} type="file" multiple class="hidden" onchange={onPick} {disabled} />
 	</div>
@@ -199,8 +180,6 @@
 						<span class="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
 							{#if item.stage === 'uploading'}
 								{item.progress}%
-							{:else if item.stage === 'finalizing'}
-								Finalizing
 							{:else if item.stage === 'queued'}
 								Queued
 							{:else if item.stage === 'done'}
@@ -221,7 +200,7 @@
 							</Button>
 						{/if}
 					</div>
-					{#if item.stage === 'uploading' || item.stage === 'finalizing'}
+					{#if item.stage === 'uploading'}
 						<Progress value={item.progress} />
 					{/if}
 					{#if item.error}

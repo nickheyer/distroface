@@ -285,6 +285,9 @@ func New() (*App, error) {
 	forgeManager := forge.NewManager(store, gitManager, mailService, resolver, log)
 	forgeManager.SetTokenKey(authManager.DerivedKey("notifications"))
 	actionsManager := actions.NewManager(store, gitManager, forgeManager, artifactManager, authManager, resolver, log)
+	actionsManager.SetDataDir(cfg.Storage.DataDir)
+	// Run artifacts, logs, and caches leave with their repository
+	gitManager.OnDelete(actionsManager.DeleteRepoArtifacts)
 	agentsManager := agents.NewManager(store, gitManager, forgeManager, actionsManager, authManager, resolver, log)
 	// Forge events reach workflows first, then agents
 	forgeManager.SetTrigger(func(ctx context.Context, repo *db.GitRepository, event, action, ref, sha string, actor *auth.AuthenticatedUser, payload map[string]any) {
@@ -309,6 +312,7 @@ func New() (*App, error) {
 		log.Error("resealing mirror credentials: %v", err)
 	}
 	gitHTTP := gitrepo.NewHTTP(gitManager, authManager, tokenService, authLimiter, pullLimiter, anonPullLimiter, log)
+	gitHTTP.SetArtifactServer(actionsManager)
 	gitSSH, err := gitrepo.NewSSHManager(gitManager, tokenService, portalResolver, cfg.Server.Host, log)
 	if err != nil {
 		return fail("initializing git ssh", err)

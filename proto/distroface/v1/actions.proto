@@ -20,6 +20,10 @@ service ActionsService {
   rpc DisableWorkflow(DisableWorkflowRequest) returns (DisableWorkflowResponse) {}
   // DispatchWorkflow triggers a workflow_dispatch run.
   rpc DispatchWorkflow(DispatchWorkflowRequest) returns (DispatchWorkflowResponse) {}
+  // ListWorkflowTemplates lists the starter workflows the instance offers.
+  rpc ListWorkflowTemplates(ListWorkflowTemplatesRequest) returns (ListWorkflowTemplatesResponse) {}
+  // GetWorkflowTemplate renders one starter workflow for a repository.
+  rpc GetWorkflowTemplate(GetWorkflowTemplateRequest) returns (GetWorkflowTemplateResponse) {}
   // ListWorkflowRuns pages runs.
   rpc ListWorkflowRuns(ListWorkflowRunsRequest) returns (ListWorkflowRunsResponse) {}
   // GetWorkflowRun returns one run with its jobs.
@@ -75,12 +79,6 @@ service RunnerService {
   rpc AppendTaskLog(AppendTaskLogRequest) returns (AppendTaskLogResponse) {}
   // CompleteTask reports the final conclusion.
   rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse) {}
-  // UploadTaskArtifact starts an artifact upload for the run.
-  rpc UploadTaskArtifact(UploadTaskArtifactRequest) returns (UploadTaskArtifactResponse) {}
-  // FinishTaskArtifact completes an artifact upload.
-  rpc FinishTaskArtifact(FinishTaskArtifactRequest) returns (FinishTaskArtifactResponse) {}
-  // ListTaskArtifacts lists what the job's run has uploaded so far.
-  rpc ListTaskArtifacts(ListTaskArtifactsRequest) returns (ListTaskArtifactsResponse) {}
   // FetchExec long polls for the next command of an interactive job.
   rpc FetchExec(FetchExecRequest) returns (FetchExecResponse) {}
   // CompleteExec reports the outcome of one command of an interactive job.
@@ -201,16 +199,18 @@ message JobLogChunk {
 
 // RunArtifact is a named upload of a run, stored as one zip.
 message RunArtifact {
+  reserved 7;
   string id = 1;
   string name = 2;
   int64 size = 3;
+  // Signed link valid for an hour
   string download_url = 4;
   google.protobuf.Timestamp expires_at = 5;
   google.protobuf.Timestamp created_at = 6;
-  // Files inside the zip, zero when unknown
-  int32 file_count = 7;
   string job_id = 8;
   string job_name = 9;
+  // Number GitHub style clients address the artifact by
+  int64 number = 10;
 }
 
 // RunImage is a container image tag a run pushed with its job token.
@@ -274,6 +274,58 @@ message ListWorkflowsRequest {
 // ListWorkflowsResponse contains workflows.
 message ListWorkflowsResponse {
   repeated Workflow workflows = 1;
+}
+
+// WorkflowTemplate is one starter workflow of the configured starter repository.
+message WorkflowTemplate {
+  // Directory and file name inside the starter repository, such as ci/go
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  // Section the starter repository files it under
+  string category = 4;
+  // Every category, languages included, for suggestions
+  repeated string categories = 5;
+  // Root file patterns that suggest the template
+  repeated string file_patterns = 6;
+  // Icon the source ships, as a data url the browser treats as an image
+  string icon_data_url = 7;
+  string file_name = 8;
+  // Rendered for the repository, only GetWorkflowTemplate fills it
+  string content = 9;
+  // Octicon name when the source names one instead of shipping a file
+  string icon_name = 10;
+  // Who the source credits for the template
+  string creator = 11;
+}
+
+// ListWorkflowTemplatesRequest identifies the repository the starters are for.
+message ListWorkflowTemplatesRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// ListWorkflowTemplatesResponse contains starters grouped as their source groups them.
+message ListWorkflowTemplatesResponse {
+  repeated WorkflowTemplate templates = 1;
+  // Repository url the starters were read from
+  string source = 2;
+  // When the served catalog was fetched
+  google.protobuf.Timestamp fetched_at = 3;
+  // Last failed refresh, the catalog served predates it
+  string refresh_error = 4;
+}
+
+// GetWorkflowTemplateRequest names one starter.
+message GetWorkflowTemplateRequest {
+  string namespace = 1;
+  string name = 2;
+  string id = 3;
+}
+
+// GetWorkflowTemplateResponse contains the rendered starter.
+message GetWorkflowTemplateResponse {
+  WorkflowTemplate template = 1;
 }
 
 // GetWorkflowRequest identifies a workflow by path.
@@ -590,43 +642,10 @@ message FetchTaskRequest {
   int32 wait_seconds = 1;
 }
 
-// One service container of a job
-// TaskCredentials is a registry login for image pulls
-message TaskCredentials {
-  string username = 1;
-  string password = 2;
-}
-
-// TaskService is one service container of a job
-message TaskService {
-  string name = 1;
-  string image = 2;
-  map<string, string> env = 3;
-  repeated string ports = 4;
-  repeated string volumes = 5;
-  string options = 6;
-  TaskCredentials credentials = 7;
-}
-
-// One step to execute
-message TaskStep {
-  int32 number = 1;
-  string name = 2;
-  string id = 3;
-  // Action reference such as actions/checkout@v4, empty for run steps
-  string uses = 4;
-  string run = 5;
-  string shell = 6;
-  string working_directory = 7;
-  map<string, string> env = 8;
-  map<string, string> with = 9;
-  // Expression evaluated by the runner against step results
-  string condition = 10;
-  bool continue_on_error = 11;
-  int32 timeout_minutes = 12;
-  // Expression forms the runner evaluates per step, empty when literal
-  string continue_on_error_expr = 13;
-  string timeout_minutes_expr = 14;
+// TaskNeed is the outcome of a job this job needs.
+message TaskNeed {
+  map<string, string> outputs = 1;
+  ActionsConclusion result = 2;
 }
 
 // Task is a job handed to a runner.
@@ -635,32 +654,26 @@ message Task {
   string run_id = 2;
   string repo_full_name = 3;
   string job_name = 4;
-  // Image for the job container, empty for the host executor
-  string container_image = 5;
-  string container_options = 6;
-  repeated TaskService services = 7;
-  repeated TaskStep steps = 8;
-  map<string, string> env = 9;
-  map<string, string> secrets = 10;
-  map<string, string> variables = 11;
-  // Scoped api token for checkout and publishing
-  string token = 12;
+  // Single job workflow in the GitHub Actions syntax
+  bytes workflow_payload = 5;
   // github context as json
-  string context = 13;
-  // Outputs of needed jobs as json
-  string needs = 14;
-  // Matrix values as json
-  string matrix = 15;
-  int32 timeout_minutes = 16;
-  string clone_url = 17;
-  string server_url = 18;
-  // Shell for run steps without an explicit shell
-  string default_shell = 19;
+  string context = 6;
+  map<string, string> secrets = 7;
+  map<string, string> variables = 8;
+  map<string, TaskNeed> needs = 9;
+  // Scoped api token for checkout and publishing
+  string token = 10;
+  // Bearer the artifact and cache apis accept
+  string runtime_token = 11;
+  int32 timeout_minutes = 12;
+  string clone_url = 13;
+  string server_url = 14;
   // Resolved runs-on labels of the job
-  repeated string runs_on = 20;
-  TaskCredentials container_credentials = 21;
+  repeated string runs_on = 15;
   // Job stays open after its steps and serves commands via FetchExec
-  bool interactive = 22;
+  bool interactive = 16;
+  // Where uses references without a host resolve
+  string default_actions_url = 17;
 }
 
 // FetchTaskResponse contains a task or nothing.
@@ -706,49 +719,6 @@ message CompleteTaskRequest {
 
 // CompleteTaskResponse is empty on success.
 message CompleteTaskResponse {}
-
-// UploadTaskArtifactRequest starts an upload of one zipped artifact.
-message UploadTaskArtifactRequest {
-  reserved 3;
-  string job_id = 1;
-  string artifact_name = 2;
-  // Replace an artifact of the same name in this run
-  bool overwrite = 4;
-}
-
-// UploadTaskArtifactResponse contains the upload session and data plane url.
-message UploadTaskArtifactResponse {
-  string upload_id = 1;
-  string upload_url = 2;
-}
-
-// FinishTaskArtifactRequest completes an upload.
-message FinishTaskArtifactRequest {
-  reserved 3;
-  string job_id = 1;
-  string artifact_name = 2;
-  string upload_id = 4;
-  // Files packed into the zip
-  int32 file_count = 5;
-  // Requested expiry, capped by the repository setting
-  int32 retention_days = 6;
-  bool overwrite = 7;
-}
-
-// FinishTaskArtifactResponse contains the stored artifact.
-message FinishTaskArtifactResponse {
-  RunArtifact artifact = 1;
-}
-
-// ListTaskArtifactsRequest names the job whose run to list.
-message ListTaskArtifactsRequest {
-  string job_id = 1;
-}
-
-// ListTaskArtifactsResponse contains the run's artifacts.
-message ListTaskArtifactsResponse {
-  repeated RunArtifact artifacts = 1;
-}
 
 // One command queued on an interactive job, run with bash
 message ExecRequest {

@@ -130,15 +130,15 @@ func (m *Manager) refreshSchedules(ctx context.Context, repo *db.GitRepository, 
 	if entry == nil || entry.sha != head || entry.branch != repo.DefaultBranch {
 		entry = &scheduleEntry{sha: head, branch: repo.DefaultBranch}
 		for _, f := range loadWorkflowFiles(ctx, r, head) {
-			if f.Err != nil || f.Workflow == nil {
+			if f.Err != nil {
 				continue
 			}
-			spec, ok := f.Workflow.On["schedule"]
-			if !ok || len(spec.Crons) == 0 {
+			crons := f.Schedules()
+			if len(crons) == 0 {
 				continue
 			}
 			sw := scheduledWorkflow{file: f}
-			for _, c := range spec.Crons {
+			for _, c := range crons {
 				if parsed, err := ParseCron(c); err == nil {
 					sw.crons = append(sw.crons, parsed)
 					sw.specs = append(sw.specs, c)
@@ -201,8 +201,8 @@ func (m *Manager) reapJobs(ctx context.Context) {
 			targets = append(targets, reapTarget{j, ConclusionFailure, "runner stopped reporting"})
 		case j.StartedAt != nil:
 			timeout := defaultJobTimeout
-			if def, err := decodeDefinition(j); err == nil && def.Job.TimeoutMinutes > 0 {
-				timeout = def.Job.TimeoutMinutes
+			if j.TimeoutMinutes > 0 {
+				timeout = j.TimeoutMinutes
 			}
 			if now.Sub(*j.StartedAt) > time.Duration(timeout)*time.Minute {
 				targets = append(targets, reapTarget{j, ConclusionTimedOut, "job exceeded its timeout"})

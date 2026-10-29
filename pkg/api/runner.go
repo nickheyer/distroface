@@ -26,12 +26,30 @@ carry their scope. Jobs run in docker containers chosen by the runs-on label
 mapping in the runner config, or directly on this host for labels mapped to
 "host" when the host executor is enabled.
 
-ubuntu-latest maps to ` + runner.DefaultImage + `, the image act, Gitea and
-Forgejo default to, with node, git, the docker cli, curl and build tools.
-Point a label at ` + runner.SlimImage + ` in the images map of runner.json for
-a slim image. Javascript actions run on the runner's own node in any image,
-and docker/build-push-action builds with rootless BuildKit through the
-runner, so image builds and pushes need no privileged jobs and no secrets.`,
+Jobs execute through act, the engine behind the Gitea and Forgejo runners,
+so every action from the GitHub ecosystem runs as published. ubuntu-latest
+maps to ` + runner.DefaultImage + `, the image act, Gitea and Forgejo default
+to, with node, git, the docker cli, curl and build tools. Point a label at
+` + runner.SlimImage + ` in the images map of runner.json for a slim image.
+Jobs that build images need docker, register with --privileged-jobs to hand
+them the runner's docker socket.
+
+Every option lives in runner.json and can be set at registration:
+
+  container_options   extra docker run flags for every job container, shell
+                      quoted, for example --add-host host.docker.internal:host-gateway
+  valid_volumes       host paths and named volumes workflows may mount through
+                      container options, glob syntax, everything else is refused
+  container_network   docker network job and service containers join, empty
+                      creates a private network per job
+  docker_host         daemon address such as unix:///run/docker.sock or
+                      ssh://user@host, exported as DOCKER_HOST so act uses it too
+  insecure_skip_tls   skip certificate checks when cloning actions and workflows
+                      from the instance
+
+The runner pulls the job image and every service image before a job starts,
+using the job token for images on this instance's registry and the docker
+login of the runner process for everything else.`,
 	}
 	cmd.AddCommand(newRunnerRegisterCmd(), newRunnerStartCmd(), newRunnerStatusCmd())
 	return cmd
@@ -67,9 +85,9 @@ func addRunnerConfigFlag(cmd *cobra.Command, dest *string) {
 }
 
 func newRunnerRegisterCmd() *cobra.Command {
-	var scope, token, name, labels, config, workDir string
+	var scope, token, name, labels, config, workDir, containerOptions, validVolumes, dockerHost, containerNetwork string
 	var concurrency int
-	var host, privileged bool
+	var host, privileged, insecureSkipTLS bool
 
 	cmd := &cobra.Command{
 		Use:   "register",
@@ -109,10 +127,8 @@ func newRunnerRegisterCmd() *cobra.Command {
 			cfg := &runner.Config{
 				Server: client.BaseURL, Token: runnerToken, RunnerID: info.GetId(), Name: info.GetName(), Scope: runnerScopeString(info.GetScope()),
 				Labels: info.GetLabels(), Images: images, Concurrency: concurrency, HostEnabled: host, PrivilegedJobs: privileged, WorkDir: workDir,
-			}
-			// BuildKit trusts the same instance ca dfcli installed
-			if _, err := os.Stat(caPath()); err == nil {
-				cfg.RegistryCA = caPath()
+				DockerHost: strings.TrimSpace(dockerHost), ContainerOptions: strings.TrimSpace(containerOptions), ValidVolumes: splitList(validVolumes),
+				ContainerNetwork: strings.TrimSpace(containerNetwork), InsecureSkipTLS: insecureSkipTLS,
 			}
 			if err := cfg.Save(config); err != nil {
 				return fmt.Errorf("save runner config: %w", err)
@@ -138,9 +154,33 @@ func newRunnerRegisterCmd() *cobra.Command {
 	cmd.Flags().IntVar(&concurrency, "concurrency", 1, "Jobs to run at once")
 	cmd.Flags().BoolVar(&host, "host", false, "Enable the host executor for labels mapped to host")
 	cmd.Flags().StringVar(&workDir, "work-dir", "", "Parent of job work trees")
-	cmd.Flags().BoolVar(&privileged, "privileged-jobs", false, "Let jobs mount the docker socket, run --privileged, and bind host paths")
+	cmd.Flags().BoolVar(&privileged, "privileged-jobs", false, "Hand jobs the docker socket and let them run --privileged")
+	cmd.Flags().StringVar(&dockerHost, "docker-host", "", "Docker daemon address, unix://, tcp:// or ssh:// (default the environment)")
+	cmd.Flags().StringVar(&containerOptions, "container-options", "", "Extra docker run flags for every job container, shell quoted")
+	cmd.Flags().StringVar(&validVolumes, "valid-volumes", "", "Comma separated host paths and named volumes jobs may mount, glob syntax")
+	cmd.Flags().StringVar(&containerNetwork, "container-network", "", "Docker network job containers join (default a private network per job)")
+	cmd.Flags().BoolVar(&insecureSkipTLS, "insecure-skip-tls", false, "Skip certificate checks when cloning actions and workflows")
 	_ = cmd.MarkFlagRequired("token")
 	return cmd
+}
+
+// Comma separated flag values, blanks dropped
+func splitList(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// Act reads the environment, the standalone runner owns it
+func exportDockerHost(cfg *runner.Config) error {
+	if cfg.DockerHost == "" {
+		return nil
+	}
+	return os.Setenv("DOCKER_HOST", cfg.DockerHost)
 }
 
 func newRunnerStartCmd() *cobra.Command {
@@ -152,6 +192,9 @@ func newRunnerStartCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := runner.Load(config)
 			if err != nil {
+				return err
+			}
+			if err := exportDockerHost(cfg); err != nil {
 				return err
 			}
 			r, err := runner.New(cfg, runnerVersion(), runnerHTTPClient())
@@ -187,14 +230,20 @@ func newRunnerStatusCmd() *cobra.Command {
 			fmt.Printf("Concurrency: %d\n", cfg.Concurrency)
 			fmt.Printf("Host runs:   %v\n", cfg.HostEnabled)
 			fmt.Printf("Privileged:  %v\n", cfg.PrivilegedJobs)
-			if cfg.BuildKitImage != "" {
-				fmt.Printf("BuildKit:    %s\n", cfg.BuildKitImage)
+			if cfg.ContainerOptions != "" {
+				fmt.Printf("Options:     %s\n", cfg.ContainerOptions)
 			}
-			if len(cfg.BuildKitDNS) > 0 {
-				fmt.Printf("BuildKit DNS: %s\n", strings.Join(cfg.BuildKitDNS, ","))
+			if len(cfg.ValidVolumes) > 0 {
+				fmt.Printf("Volumes:     %s\n", strings.Join(cfg.ValidVolumes, ","))
 			}
-			if cfg.RegistryCA != "" {
-				fmt.Printf("Registry CA: %s\n", cfg.RegistryCA)
+			if cfg.ContainerNetwork != "" {
+				fmt.Printf("Network:     %s\n", cfg.ContainerNetwork)
+			}
+			if cfg.DockerHost != "" {
+				fmt.Printf("Docker host: %s\n", cfg.DockerHost)
+			}
+			if cfg.InsecureSkipTLS {
+				fmt.Printf("TLS checks:  skipped for clones\n")
 			}
 			fmt.Printf("Images:\n")
 			keys := make([]string, 0, len(cfg.Images))

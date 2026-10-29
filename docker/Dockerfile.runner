@@ -11,9 +11,13 @@
 #     -v dfcli-runner-home:/home/runner \
 #     distroface-runner
 #
-# The work dir also holds _externals, the node builds lent to job images, and
-# image builds run in rootless BuildKit containers whose layer cache lives in
-# named docker volumes called dfcli-buildkit-<runner>-<slot>.
+# Jobs run through act. Each job gets its own directory under the work dir
+# holding the checkout act copies into the job container, a docker config that
+# carries the job token for the instance registry, and the files an agent
+# session exchanges with its command step. Remote actions are cloned once into
+# _actions under the work dir and shared by every job. The runner pulls the job
+# and service images through the host daemon before act starts, and act keeps
+# the tool cache in the act-toolcache volume mounted at /opt/hostedtoolcache.
 ARG APP_VERSION=dev
 
 FROM --platform=$BUILDPLATFORM bufbuild/buf:latest AS proto-builder

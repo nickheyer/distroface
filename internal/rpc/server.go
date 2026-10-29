@@ -126,25 +126,36 @@ func (s *Server) setupHandler() {
 		mux.HandleFunc("/api/v1/auth/oidc/callback", s.OIDCHandler.HandleCallback)
 	}
 
+	var gh http.Handler
+	if s.GitManager != nil && s.ForgeManager != nil && s.ArtifactManager != nil {
+		// gh flavored octokit tooling api
+		gh = ghapi.New(s.Store, s.AuthManager, s.GitManager, s.ForgeManager, s.ArtifactManager, s.ActionsManager, s.Enforcer, s.Log)
+		mux.Handle(ghapi.Prefix+"/", http.StripPrefix(ghapi.Prefix, gh))
+	}
+
 	// V1 artifact facade for old dfcli and ci, gated per request
+	// Everything else under /api/v1 is the GitHub api act points jobs at
+	var v1mux *http.ServeMux
 	if s.ArtifactV1Facade != nil {
-		v1mux := http.NewServeMux()
+		v1mux = http.NewServeMux()
 		s.ArtifactV1Facade.RegisterAuth(v1mux)
 		s.ArtifactV1Facade.RegisterArtifacts(v1mux)
-		mux.Handle("/api/v1/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !s.Resolver.System(r.Context()).GetArtifacts().GetV1Compat() {
+	}
+	mux.Handle("/api/v1/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/artifacts") || strings.HasPrefix(r.URL.Path, "/api/v1/auth/") {
+			if v1mux == nil || !s.Resolver.System(r.Context()).GetArtifacts().GetV1Compat() {
 				http.NotFound(w, r)
 				return
 			}
 			v1mux.ServeHTTP(w, r)
-		}))
-	}
-
-	if s.GitManager != nil && s.ForgeManager != nil && s.ArtifactManager != nil {
-
-		// gh flavored octokit tooling api
-		mux.Handle(ghapi.Prefix+"/", http.StripPrefix(ghapi.Prefix, ghapi.New(s.Store, s.AuthManager, s.GitManager, s.ForgeManager, s.ArtifactManager, s.Enforcer, s.Log)))
-	}
+			return
+		}
+		if gh == nil {
+			http.NotFound(w, r)
+			return
+		}
+		http.StripPrefix("/api/v1", gh).ServeHTTP(w, r)
+	}))
 
 	// Uploaded profile images, cached and public
 	mux.Handle("GET /api/avatars/{id}", s.avatarHandler())
@@ -210,6 +221,11 @@ func (s *Server) setupHandler() {
 
 			// Legacy artifactcache protocol for actions/cache and setup-* actions
 			mux.Handle("/api/actions/cache/", http.StripPrefix("/api/actions/cache", s.ActionsManager.CacheHandler()))
+			// Results api behind upload-artifact and download-artifact, plus signed links for everyone else
+			mux.Handle(actions.ResultsAPIPrefix+"/", s.ActionsManager.ResultsHandler())
+			mux.Handle(actions.ArtifactDownloadPrefix+"/", s.ActionsManager.ArtifactDownloadHandler())
+			// Pipeline protocol behind upload-artifact v1 to v3 and the setup actions' tool caches
+			mux.Handle(actions.PipelineAPIPrefix+"/", http.StripPrefix(actions.PipelineAPIPrefix, s.ActionsManager.PipelineHandler()))
 		}
 		if s.AgentsManager != nil {
 			distrofacev1connect.RegisterAgentsServiceHandler(rpcServer, services.NewAgentsService(s.Store, s.AgentsManager, s.GitManager, s.Log))

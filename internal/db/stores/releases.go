@@ -155,3 +155,81 @@ func (s *Store) GitReleaseImageTags(ctx context.Context, imageRepoID string) (ma
 	}
 	return out, nil
 }
+
+func (s *Store) CreateGitReleaseAsset(ctx context.Context, a *db.GitReleaseAsset) error {
+	if a.ID == "" {
+		a.ID = uuid.New().String()
+	}
+	return s.db.WithContext(ctx).Create(a).Error
+}
+
+func (s *Store) GetGitReleaseAsset(ctx context.Context, id string) (*db.GitReleaseAsset, error) {
+	var a db.GitReleaseAsset
+	err := s.db.WithContext(ctx).First(&a, "id = ?", id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &a, err
+}
+
+func (s *Store) GetGitReleaseAssetByName(ctx context.Context, releaseID, name string) (*db.GitReleaseAsset, error) {
+	var a db.GitReleaseAsset
+	err := s.db.WithContext(ctx).First(&a, "release_id = ? AND name = ?", releaseID, name).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &a, err
+}
+
+// Assets of one release, by name
+func (s *Store) ListGitReleaseAssets(ctx context.Context, releaseID string) ([]*db.GitReleaseAsset, error) {
+	var out []*db.GitReleaseAsset
+	err := s.db.WithContext(ctx).Where("release_id = ?", releaseID).Order("name ASC").Find(&out).Error
+	return out, err
+}
+
+// Assets of every release of a repository, for cleanup
+func (s *Store) ListGitReleaseAssetsByRepo(ctx context.Context, repoID string) ([]*db.GitReleaseAsset, error) {
+	var out []*db.GitReleaseAsset
+	err := s.db.WithContext(ctx).Table("git_release_assets").
+		Joins("JOIN git_releases ON git_releases.id = git_release_assets.release_id").
+		Where("git_releases.repo_id = ?", repoID).Find(&out).Error
+	return out, err
+}
+
+// Asset counts per release, for listings
+func (s *Store) CountGitReleaseAssets(ctx context.Context, releaseIDs []string) (map[string]int64, error) {
+	out := map[string]int64{}
+	if len(releaseIDs) == 0 {
+		return out, nil
+	}
+	var rows []struct {
+		ReleaseID string
+		Count     int64
+	}
+	err := s.db.WithContext(ctx).Model(&db.GitReleaseAsset{}).Select("release_id, COUNT(*) as count").
+		Where("release_id IN ?", releaseIDs).Group("release_id").Scan(&rows).Error
+	for _, r := range rows {
+		out[r.ReleaseID] = r.Count
+	}
+	return out, err
+}
+
+func (s *Store) UpdateGitReleaseAsset(ctx context.Context, a *db.GitReleaseAsset) error {
+	return s.db.WithContext(ctx).Save(a).Error
+}
+
+func (s *Store) IncrementGitReleaseAssetDownloads(ctx context.Context, id string) error {
+	return s.db.WithContext(ctx).Model(&db.GitReleaseAsset{}).Where("id = ?", id).
+		UpdateColumn("download_count", gorm.Expr("download_count + 1")).Error
+}
+
+func (s *Store) DeleteGitReleaseAsset(ctx context.Context, id string) error {
+	return s.db.WithContext(ctx).Delete(&db.GitReleaseAsset{}, "id = ?", id).Error
+}
+
+func (s *Store) CountGitReleaseAssetsByDigest(ctx context.Context, digest string) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&db.GitReleaseAsset{}).Where("digest = ?", digest).Count(&n).Error
+	return n, err
+}

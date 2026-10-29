@@ -3,14 +3,17 @@ package api
 import (
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"connectrpc.com/connect/v2"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 )
 
 func newReleaseCmd() *cobra.Command {
@@ -137,31 +140,12 @@ func newReleaseViewCmd() *cobra.Command {
 	}
 }
 
-// Assets live in the artifact package named after the repo
-func ensureReleasePackage(ctx context.Context, ref RepoRef) error {
-	_, err := client.Artifacts().GetArtifactRepository(ctx, &v1.GetArtifactRepositoryRequest{
-		Namespace: ref.Namespace,
-		Name:      ref.Name,
-	})
-	if err == nil {
-		return nil
-	}
-	if connect.CodeOf(err) != connect.CodeNotFound {
-		return rpcErr(err)
-	}
-	repo, err := getGitRepo(ctx, ref)
-	if err != nil {
-		return err
-	}
-	private := repo.GetVisibility() == v1.Visibility_VISIBILITY_PRIVATE
-	_, err = client.createArtifactRepo(ctx, ref, "Release assets of "+ref.String(), private)
-	return err
-}
-
 func newReleaseUploadCmd() *cobra.Command {
-	return &cobra.Command{
+	var label string
+	var replace bool
+	cmd := &cobra.Command{
 		Use:   "upload namespace/name tag file...",
-		Short: "Upload files through the artifact data plane as release assets",
+		Short: "Stream files onto a release as assets",
 		Args:  cobra.MinimumNArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := gitRepoArg(args[0], "")
@@ -169,68 +153,139 @@ func newReleaseUploadCmd() *cobra.Command {
 				return err
 			}
 			tag := args[1]
-			if err := ensureReleasePackage(cmd.Context(), ref); err != nil {
-				return err
-			}
 			for _, file := range args[2:] {
-				path := sanitizeFilePath(filepath.Base(file))
+				name := filepath.Base(file)
 				fmt.Printf("Uploading %s to %s@%s\n", file, ref, tag)
-				artifact, err := client.uploadArtifact(cmd.Context(), ref, file, tag, path, nil)
+				asset, err := client.uploadReleaseAsset(cmd.Context(), ref, tag, file, name, label, replace)
 				if err != nil {
 					return fmt.Errorf("upload %s failed: %w", file, err)
 				}
-				resp, err := client.Releases().AttachReleaseAsset(cmd.Context(), &v1.AttachReleaseAssetRequest{
-					Namespace:  ref.Namespace,
-					Name:       ref.Name,
-					Tag:        tag,
-					ArtifactId: artifact.GetId(),
-				})
-				if err != nil {
-					return rpcErr(err)
-				}
-				fmt.Printf("Attached %s (%s)\n", resp.GetAsset().GetName(), formatSize(resp.GetAsset().GetSize()))
+				fmt.Printf("Attached %s (%s)\n", asset.GetName(), formatSize(asset.GetSize()))
 			}
 			return nil
 		},
 	}
+	cmd.Flags().StringVar(&label, "label", "", "Display label for the uploaded assets")
+	cmd.Flags().BoolVar(&replace, "replace", false, "Replace an asset that already carries the file name")
+	return cmd
 }
 
 func newReleaseDownloadCmd() *cobra.Command {
-	var output, format string
-	var unpack, flat bool
+	var output, pattern string
 
 	cmd := &cobra.Command{
 		Use:   "download namespace/name tag",
-		Short: "Download the assets of a release as one archive",
+		Short: "Download the assets of a release",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ref, err := gitRepoArg(args[0], "")
 			if err != nil {
 				return err
 			}
-			q := make(url.Values)
-			q.Set("version", args[1])
-			q.Set("release", "true")
-			q.Set("num", strconv.Itoa(maxPageSize))
-			q.Set("format", format)
-			if flat {
-				q.Set("flat", "1")
+			resp, err := client.Releases().GetRelease(cmd.Context(), &v1.GetReleaseRequest{Namespace: ref.Namespace, Name: ref.Name, Tag: args[1]})
+			if err != nil {
+				return rpcErr(err)
 			}
 			if output == "" {
 				output = "."
 			}
-			return client.downloadArtifacts(cmd.Context(), ref, q, output, unpack, flat, format)
+			if err := os.MkdirAll(output, 0o755); err != nil {
+				return err
+			}
+			n := 0
+			for _, a := range resp.GetRelease().GetAssets() {
+				if pattern != "" {
+					if ok, _ := filepath.Match(pattern, a.GetName()); !ok {
+						continue
+					}
+				}
+				dest := filepath.Join(output, filepath.Base(a.GetName()))
+				fmt.Printf("Downloading %s (%s)\n", a.GetName(), formatSize(a.GetSize()))
+				if err := client.downloadReleaseAsset(cmd.Context(), a.GetDownloadUrl(), dest); err != nil {
+					return fmt.Errorf("download %s failed: %w", a.GetName(), err)
+				}
+				n++
+			}
+			if n == 0 {
+				return fmt.Errorf("release %s has no assets%s", args[1], patternNote(pattern))
+			}
+			fmt.Printf("Downloaded %d asset(s) to %s\n", n, output)
+			return nil
 		},
 	}
 
-	cmd.Flags().StringVarP(&output, "output", "o", "", "Output path (file or directory)")
-	cmd.Flags().StringVar(&format, "format", "zip", "Archive format (zip/tar.gz)")
-	cmd.Flags().BoolVar(&unpack, "unpack", false, "Unpack the downloaded archive")
-	cmd.Flags().BoolVar(&flat, "flat", false, "Flatten directory structure")
+	cmd.Flags().StringVarP(&output, "output", "o", "", "Directory to write the assets into (default current)")
+	cmd.Flags().StringVar(&pattern, "asset", "", "Only assets whose name matches this glob")
 	return cmd
 }
 
-// Strips a matching namespace prefix, splits off the tag
+func patternNote(pattern string) string {
+	if pattern == "" {
+		return ""
+	}
+	return " matching " + pattern
+}
+
+// Streams one file to the release asset endpoint
+func (c *Client) uploadReleaseAsset(ctx context.Context, ref RepoRef, tag, file, name, label string, replace bool) (*v1.ReleaseAsset, error) {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	q := url.Values{"name": {name}}
+	if label != "" {
+		q.Set("label", label)
+	}
+	if replace {
+		q.Set("replace", "1")
+	}
+	endpoint := "/" + url.PathEscape(ref.Namespace) + "/" + url.PathEscape(ref.Name) + "/-/releases/" + url.PathEscape(tag) + "/assets?" + q.Encode()
+	resp, err := c.doData(ctx, http.MethodPost, endpoint, f)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	asset := &v1.ReleaseAsset{}
+	if err := protojson.Unmarshal(body, asset); err != nil {
+		return nil, fmt.Errorf("decode asset: %w", err)
+	}
+	return asset, nil
+}
+
+// Fetches one asset by its download url into a file
+func (c *Client) downloadReleaseAsset(ctx context.Context, downloadURL, dest string) error {
+	path := strings.TrimPrefix(downloadURL, strings.TrimRight(c.BaseURL, "/"))
+	if path == downloadURL {
+		if u, err := url.Parse(downloadURL); err == nil {
+			path = u.RequestURI()
+		}
+	}
+	resp, err := c.doData(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(dest), ".dfcli-asset-*")
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(tmp, resp.Body); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), dest)
+}
+
 func parseImageRef(s, namespace string) (name, tag string, err error) {
 	name, tag, ok := strings.Cut(s, ":")
 	if !ok || tag == "" {

@@ -230,11 +230,22 @@ func (l *logStream) flush(ctx context.Context, force bool) {
 			l.mu.Lock()
 			l.failed = err
 			l.dead = permanent(err)
+			if !l.dead {
+				l.requeue(chunk)
+			}
 			l.mu.Unlock()
 			return
 		}
 		force = false
 	}
+}
+
+// Puts an unsent chunk back ahead of everything buffered since
+func (l *logStream) requeue(chunk []byte) {
+	rest := append([]byte(nil), l.buf.Bytes()...)
+	l.buf.Reset()
+	l.buf.Write(chunk)
+	l.buf.Write(rest)
 }
 
 // Explicit indexes dedupe retries, conflicts defer to the server

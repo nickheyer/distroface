@@ -379,7 +379,7 @@ message GitImportSource {
   bool metadata = 4;
   bool wiki = 5;
   bool lfs = 6;
-  // Release entries and their assets, copied into a linked artifact package
+  // Release entries and their asset files, copied onto the releases
   bool releases = 7;
   // Upstream container images copied once into linked image repositories
   repeated string images = 8;
@@ -717,7 +717,7 @@ message CreateGitRepositoryRequest {
   string gitignore_template = 10;
   // License identifier such as MIT, requires auto_init
   string license = 11;
-  // Also create a linked release mirror package for mirror type
+  // Keep upstream releases and their asset files in sync for mirror type
   bool mirror_releases = 12;
   // Also create linked image mirrors for mirror type
   repeated string mirror_images = 13;

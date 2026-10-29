@@ -3,8 +3,33 @@ package rbac
 import (
 	"testing"
 
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 )
+
+func TestEveryActionsProcedureHasPolicy(t *testing.T) {
+	svc := v1.File_distroface_v1_actions_proto.Services().ByName("ActionsService")
+	if svc == nil {
+		t.Fatal("ActionsService missing from the actions descriptor")
+	}
+	methods := svc.Methods()
+	for i := 0; i < methods.Len(); i++ {
+		proc := "/" + string(svc.FullName()) + "/" + string(methods.Get(i).Name())
+		_, mapped := ProcedurePermissions[proc]
+		if !mapped && !PublicProcedures[proc] && !IdentityProcedures[proc] && !AuthenticatedOnlyProcedures[proc] {
+			t.Errorf("%s has no access policy, authorize denies it", proc)
+		}
+	}
+	for _, proc := range []string{
+		distrofacev1connect.ActionsServiceListWorkflowTemplatesProcedure,
+		distrofacev1connect.ActionsServiceGetWorkflowTemplateProcedure,
+	} {
+		perm, ok := ProcedurePermissions[proc]
+		if !ok || perm.Resource != ResourceGit || perm.Action != ActionRead || !perm.AnyGrant {
+			t.Errorf("%s = %+v, want git/read with AnyGrant", proc, perm)
+		}
+	}
+}
 
 func TestProcedureTiersDisjoint(t *testing.T) {
 	tiers := map[string]map[string]bool{

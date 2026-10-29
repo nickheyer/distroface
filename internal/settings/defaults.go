@@ -101,6 +101,7 @@ func Defaults() *v1.Settings {
 			PrivateByDefault:       proto.Bool(false),
 			DefaultBranch:          proto.String("main"),
 			ReleaseOnTag:           proto.Bool(false),
+			MaxReleaseAssetMb:      proto.Int64(2048),
 			MaxConcurrentTransfers: proto.Int32(32),
 			AllowForks:             proto.Bool(true),
 			Gc: &v1.GitGCSettings{
@@ -116,6 +117,8 @@ func Defaults() *v1.Settings {
 				LogRetentionDays:      proto.Int32(90),
 				RunOnMirror:           proto.Bool(false),
 				DefaultRunsOn:         proto.String("ubuntu-latest"),
+				DefaultActionsUrl:     proto.String("https://github.com"),
+				StarterWorkflowsUrl:   proto.String("https://github.com/actions/starter-workflows"),
 				BuiltinRunner: &v1.BuiltinRunnerSettings{
 					Enabled:     proto.Bool(false),
 					Labels:      proto.String("ubuntu-latest"),

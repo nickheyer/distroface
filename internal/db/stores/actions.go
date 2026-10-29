@@ -224,6 +224,23 @@ func (s *Store) CreateActionsJobs(ctx context.Context, jobs []*db.ActionsJob) er
 	})
 }
 
+// Removes every job row of a run, logs and tokens go separately
+func (s *Store) DeleteActionsJobs(ctx context.Context, runID string) error {
+	return s.db.WithContext(ctx).Where("run_id = ?", runID).Delete(&db.ActionsJob{}).Error
+}
+
+// Removes the jobs a reusable workflow caller expanded into
+func (s *Store) DeleteActionsJobsByParent(ctx context.Context, parentID string) error {
+	return s.db.WithContext(ctx).Where("parent_job_id = ?", parentID).Delete(&db.ActionsJob{}).Error
+}
+
+// Jobs a reusable workflow caller expanded into, oldest first
+func (s *Store) ListActionsJobsByParent(ctx context.Context, parentID string) ([]*db.ActionsJob, error) {
+	var out []*db.ActionsJob
+	err := s.db.WithContext(ctx).Where("parent_job_id = ?", parentID).Order("created_at ASC").Find(&out).Error
+	return out, err
+}
+
 func (s *Store) GetActionsRun(ctx context.Context, repoID, id string) (*db.ActionsRun, error) {
 	var run db.ActionsRun
 	err := s.db.WithContext(ctx).First(&run, "repo_id = ? AND id = ?", repoID, id).Error
@@ -372,6 +389,35 @@ func (s *Store) UpdateActionsJobColumns(ctx context.Context, id string, cols map
 func (s *Store) UpdateActionsJobOwned(ctx context.Context, id, runnerID string, cols map[string]any) (bool, error) {
 	res := s.db.WithContext(ctx).Model(&db.ActionsJob{}).Where("id = ? AND runner_id = ? AND status = ?", id, runnerID, "running").Updates(cols)
 	return res.RowsAffected > 0, res.Error
+}
+
+// Claims a row by guard columns and inserts children atomically
+func (s *Store) ExpandActionsJob(ctx context.Context, id string, guard, cols map[string]any, children []*db.ActionsJob) (bool, error) {
+	claimed := false
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		q := tx.Model(&db.ActionsJob{}).Where("id = ?", id)
+		for col, want := range guard {
+			q = q.Where(col+" = ?", want)
+		}
+		res := q.Updates(cols)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return nil
+		}
+		claimed = true
+		for _, j := range children {
+			if j.ID == "" {
+				j.ID = uuid.New().String()
+			}
+			if err := tx.Create(j).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return claimed, err
 }
 
 // One queued job a runner may take and the groups it must respect
@@ -712,23 +758,71 @@ func (s *Store) CreateActionsArtifact(ctx context.Context, a *db.ActionsArtifact
 	return s.db.WithContext(ctx).Create(a).Error
 }
 
+func (s *Store) UpdateActionsArtifactColumns(ctx context.Context, id string, cols map[string]any) error {
+	return s.db.WithContext(ctx).Model(&db.ActionsArtifact{}).Where("id = ?", id).Updates(cols).Error
+}
+
 func (s *Store) ListActionsArtifacts(ctx context.Context, runID string) ([]*db.ActionsArtifact, error) {
 	var out []*db.ActionsArtifact
 	err := s.db.WithContext(ctx).Where("run_id = ?", runID).Order("created_at ASC").Find(&out).Error
 	return out, err
 }
 
-// Rows sharing one artifact name in a run, oldest first
-func (s *Store) ListActionsArtifactsByName(ctx context.Context, runID, name string) ([]*db.ActionsArtifact, error) {
+// Newest row of a name in a run, any status
+func (s *Store) GetActionsArtifactByName(ctx context.Context, runID, name string) (*db.ActionsArtifact, error) {
+	var a db.ActionsArtifact
+	err := s.db.WithContext(ctx).Where("run_id = ? AND name = ?", runID, name).Order("created_at DESC").First(&a).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &a, err
+}
+
+// Artifact by the number GitHub style clients address it with
+func (s *Store) GetActionsArtifactByNumber(ctx context.Context, repoID string, number int64) (*db.ActionsArtifact, error) {
+	var a db.ActionsArtifact
+	err := s.db.WithContext(ctx).
+		Where("number = ? AND run_id IN (SELECT id FROM actions_runs WHERE repo_id = ?)", number, repoID).
+		First(&a).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	return &a, err
+}
+
+// Confirmed artifacts of a repository, newest first, optionally one name
+func (s *Store) ListActionsArtifactsForRepo(ctx context.Context, repoID, name string, limit, offset int) ([]*db.ActionsArtifact, int64, error) {
+	q := s.db.WithContext(ctx).Model(&db.ActionsArtifact{}).
+		Where("status = ? AND run_id IN (SELECT id FROM actions_runs WHERE repo_id = ?)", "confirmed", repoID)
+	if name != "" {
+		q = q.Where("name = ?", name)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	var out []*db.ActionsArtifact
-	err := s.db.WithContext(ctx).Where("run_id = ? AND name = ?", runID, name).Order("created_at ASC").Find(&out).Error
-	return out, err
+	err := q.Order("created_at DESC").Limit(limit).Offset(offset).Find(&out).Error
+	return out, total, err
 }
 
 func (s *Store) ListExpiredActionsArtifacts(ctx context.Context, limit int) ([]*db.ActionsArtifact, error) {
 	var out []*db.ActionsArtifact
 	err := s.db.WithContext(ctx).Where("expires_at IS NOT NULL AND expires_at < ?", time.Now().UTC()).Limit(limit).Find(&out).Error
 	return out, err
+}
+
+// Uploads that never finalized within the grace period
+func (s *Store) ListStalePendingActionsArtifacts(ctx context.Context, cutoff time.Time, limit int) ([]*db.ActionsArtifact, error) {
+	var out []*db.ActionsArtifact
+	err := s.db.WithContext(ctx).Where("status = ? AND created_at < ?", "pending", cutoff).Limit(limit).Find(&out).Error
+	return out, err
+}
+
+func (s *Store) CountActionsArtifactsByDigest(ctx context.Context, digest string) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&db.ActionsArtifact{}).Where("digest = ?", digest).Count(&n).Error
+	return n, err
 }
 
 func (s *Store) DeleteActionsArtifact(ctx context.Context, id string) error {

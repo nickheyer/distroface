@@ -41,9 +41,7 @@
 		Lock,
 		Globe,
 		Loader,
-		Package,
 		Pencil,
-		Play,
 		Plus,
 		RefreshCw,
 		Search,
@@ -56,12 +54,9 @@
 		Upload,
 		User,
 		X,
-		GitBranch,
-		Rocket,
-		Workflow
+		GitBranch
 	} from '$lib/icons';
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
-	import * as Tabs from '$lib/components/ui/tabs';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
@@ -85,22 +80,11 @@
 	);
 
 	let repo = $state<ArtifactRepository | null>(null);
-	// Namespace and name of the git repository this package belongs to
-	const sourceRepo = $derived.by(() => {
-		const [namespace = '', name = ''] = (repo?.sourceRepository ?? '').split('/');
-		return { namespace, name };
-	});
 	let versions = $state<ArtifactVersionGroup[]>([]);
 	let loading = $state(true);
 	let notFound = $state(false);
 	let expandedVersions = $state<Record<string, boolean>>({});
 	const versionPager = new Pager(10);
-
-	// Run uploads list apart from package files
-	let workflow = $state(false);
-	const showWorkflowTab = $derived(
-		!!repo && (!!repo.sourceRepository || Number(repo.workflowArtifactCount) > 0)
-	);
 
 	const versionSortOptions = [
 		{ value: 'version desc', label: 'Newest version' },
@@ -166,8 +150,7 @@
 		const resp = await rpcClient.artifact.listArtifactVersions({
 			page: versionPager.request(undefined, versionSort),
 			repoName,
-			namespace,
-			workflow
+			namespace
 		});
 		versions = resp.versions;
 		versionPager.apply(resp.page);
@@ -181,16 +164,6 @@
 		versionSort = v;
 		versionPager.reset();
 		loadVersions();
-	}
-
-	function setView(v: string) {
-		const next = v === 'workflow';
-		if (next === workflow) return;
-		workflow = next;
-		expandedVersions = {};
-		versionPager.reset();
-		loadVersions();
-		if (searchResults !== null) runSearch();
 	}
 
 	let fileSort = $state('path asc');
@@ -239,8 +212,7 @@
 			const resp = await rpcClient.artifact.searchArtifacts({
 				page: searchPager.request(filter.request(), searchSort),
 				repoName,
-				namespace,
-				workflow
+				namespace
 			});
 			searchResults = resp.artifacts;
 			searchPager.apply(resp.page);
@@ -748,15 +720,6 @@
 					<span class="flex items-center gap-1"
 						><HardDrive class="size-3.5" />{formatBytes(Number(repo.totalSize))}</span
 					>
-					{#if Number(repo.workflowArtifactCount) > 0}
-						<span class="flex items-center gap-1 tabular-nums">
-							<Workflow class="size-3.5" />{repo.workflowArtifactCount} workflow file{Number(
-								repo.workflowArtifactCount
-							) === 1
-								? ''
-								: 's'}, {formatBytes(Number(repo.workflowTotalSize))}
-						</span>
-					{/if}
 					{#if repo.owner}
 						<span class="flex items-center gap-1"><User class="size-3.5" />{repo.owner}</span>
 					{/if}
@@ -812,20 +775,8 @@
 		</div>
 
 		<div class="flex flex-wrap items-center gap-2">
-			{#if showWorkflowTab}
-				<Tabs.Root value={workflow ? 'workflow' : 'artifacts'} onValueChange={setView}>
-					<Tabs.List>
-						<Tabs.Trigger value="artifacts"><Package />Artifacts</Tabs.Trigger>
-						<Tabs.Trigger value="workflow"><Workflow />Workflow runs</Tabs.Trigger>
-					</Tabs.List>
-				</Tabs.Root>
-			{/if}
 			<div class="w-full sm:max-w-md sm:flex-1">
-				<QueryFilterBar
-					{filter}
-					placeholder={workflow ? 'Filter workflow files' : 'Filter artifacts'}
-					onchange={runSearch}
-				/>
+				<QueryFilterBar {filter} placeholder="Filter artifacts" onchange={runSearch} />
 			</div>
 			{#if searchResults === null}
 				<Select
@@ -862,12 +813,6 @@
 					<DataPagination attached pager={searchPager} onChange={fetchSearch} />
 				</div>
 			{/if}
-		{:else if versions.length === 0 && workflow}
-			<EmptyState
-				icon={Workflow}
-				message="No workflow uploads yet"
-				description="Files that workflow runs upload land here, apart from the package contents."
-			/>
 		{:else if versions.length === 0}
 			<EmptyState
 				icon={Archive}
@@ -907,29 +852,6 @@
 										{group.artifacts.length} file{group.artifacts.length === 1 ? '' : 's'}
 									</span>
 								</CollapsibleTrigger>
-								{#if group.runId && repo.sourceRepository}
-									<Badge
-										variant="outline"
-										href={resolve('/[namespace]/[name]/actions/runs/[id]', {
-											...sourceRepo,
-											id: group.runId
-										})}
-										class="mr-4 shrink-0"
-									>
-										<Play />Run
-									</Badge>
-								{/if}
-								{#if group.hasRelease && repo.sourceRepository}
-									<Badge
-										href={resolve('/[namespace]/[name]/releases/[tag]', {
-											...sourceRepo,
-											tag: group.version
-										})}
-										class="mr-4 shrink-0"
-									>
-										<Rocket />Release
-									</Badge>
-								{/if}
 							</div>
 							<CollapsibleContent>
 								{@render artifactTable(sortedFiles(group.artifacts))}

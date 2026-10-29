@@ -307,11 +307,7 @@ func (l *LFS) upload(w http.ResponseWriter, r *http.Request, repo *db.GitReposit
 	}
 	if digest != "sha256:"+oid {
 		// Content did not match, drop the blob unless something else owns it
-		if count, _ := l.manager.Store().CountArtifactsByDigest(ctx, digest); count == 0 {
-			if links, _ := l.manager.Store().CountLFSLinksByOID(ctx, strings.TrimPrefix(digest, "sha256:")); links == 0 {
-				_ = blobs.DeleteBlob(digest)
-			}
-		}
+		l.manager.ReapBlob(ctx, digest)
 		lfsFail(w, http.StatusBadRequest, "object content does not match its oid")
 		return
 	}
