@@ -1112,13 +1112,12 @@ type ActionsVariable struct {
 	UpdatedAt time.Time `gorm:"autoUpdateTime"`
 }
 
-// Unique run and name index comes from migration 202610280002
 type ActionsArtifact struct {
 	ID          string      `gorm:"primaryKey"`
-	RunID       string      `gorm:"not null;index"`
+	RunID       string      `gorm:"not null;index;uniqueIndex:idx_actions_artifact_run_name"`
 	JobID       string      `gorm:"not null;default:''"`
 	Number      int64       `gorm:"not null;default:0;index"` // Per repository id GitHub style clients use
-	Name        string      `gorm:"not null"`
+	Name        string      `gorm:"not null;uniqueIndex:idx_actions_artifact_run_name"`
 	Digest      string      `gorm:"not null;default:'';index"`
 	Size        int64       `gorm:"not null;default:0"`
 	ContentType string      `gorm:"not null;default:'application/zip'"`

@@ -224,7 +224,7 @@ func envKeyLine(line string) bool {
 func (s *session) findContainer(ctx context.Context) (string, error) {
 	prefix := s.j.containerPrefix()
 	var last error
-	for attempt := 0; attempt < 20; attempt++ {
+	for range 20 {
 		id, err := findJobContainer(ctx, s.cli, prefix)
 		if err == nil {
 			return id, nil

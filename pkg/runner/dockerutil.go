@@ -17,7 +17,7 @@ func dockerClient(ctx context.Context, host string) (client.APIClient, error) {
 	if host == "" {
 		return actcontainer.GetDockerClient(ctx)
 	}
-	opts := []client.Opt{client.WithAPIVersionNegotiation()}
+	var opts []client.Opt
 	if strings.HasPrefix(host, "ssh://") {
 		helper, err := connhelper.GetConnectionHelper(host)
 		if err != nil {

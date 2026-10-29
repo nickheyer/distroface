@@ -2,6 +2,7 @@ package gitrepo
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -178,7 +179,7 @@ func (zeroReader) Read(p []byte) (int, error) {
 }
 
 func unwrapPathErr(err error) error {
-	if pe, ok := err.(*os.PathError); ok {
+	if pe, ok := errors.AsType[*os.PathError](err); ok {
 		return pe.Err
 	}
 	return err

@@ -274,7 +274,7 @@ func TestParseEnvDump(t *testing.T) {
 
 func TestHeadTailKeepsBothEnds(t *testing.T) {
 	b := &headTail{keep: 16}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		_, _ = b.Write([]byte("line-" + strings.Repeat("x", 5) + "\n"))
 	}
 	out := b.String()

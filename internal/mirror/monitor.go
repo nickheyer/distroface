@@ -5,11 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/go-git/go-git/v6/plumbing/transport"
 	"net/http"
 	"slices"
 	"sync"
 	"time"
+
+	"github.com/go-git/go-git/v6/plumbing/transport"
 
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
@@ -535,7 +536,7 @@ func (m *Monitor) syncArtifactRepo(ctx context.Context, repo *db.ArtifactReposit
 				errs = append(errs, fmt.Errorf("%s@%s exceeds the size limit", a.name, rel.version))
 				continue
 			}
-			if err := m.ingestAsset(ctx, repo, cfg, rel.version, a, mirrorAssetProps(repo, cfg)); err != nil {
+			if err := m.ingestAsset(ctx, repo, cfg, rel.version, a); err != nil {
 				errs = append(errs, fmt.Errorf("%s@%s: %w", a.name, rel.version, err))
 				// A rate limit taints every further request, stop now
 				if _, limited := RetryAfter(err); limited {
@@ -588,35 +589,8 @@ func mirrorAssetProps(repo *db.ArtifactRepository, cfg *v1.MirrorConfig) map[str
 }
 
 // Streams one upstream asset into the blob store as an artifact
-func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, cfg *v1.MirrorConfig, version string, a asset, props map[string]string) error {
-	var lastErr error
-	for _, src := range a.sources {
-		err := m.downloadAsset(ctx, repo, version, a, src, props)
-		if err == nil {
-			return nil
-		}
-		if _, limited := RetryAfter(err); limited {
-			return err
-		}
-		lastErr = err
-		// Auth shaped failures fall through to the next source
-		var ue *upstreamError
-		if errors.As(err, &ue) {
-			switch ue.status {
-			case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-				continue
-			}
-		}
-		return err
-	}
-	if lastErr == nil {
-		return fmt.Errorf("no download source for %s", a.name)
-	}
-	return lastErr
-}
-
-func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository, version string, a asset, src assetSource, props map[string]string) error {
-	body, err := m.openAssetSource(ctx, src)
+func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, cfg *v1.MirrorConfig, version string, a asset) error {
+	body, src, err := m.openAsset(ctx, a)
 	if err != nil {
 		return err
 	}
@@ -632,8 +606,8 @@ func (m *Monitor) downloadAsset(ctx context.Context, repo *db.ArtifactRepository
 		return err
 	}
 
-	meta, _ := json.Marshal(map[string]string{"mirror_url": src.url})
-	_, err = m.artifacts.CompleteUpload(ctx, repo, uploadID, version, a.name, string(meta), props)
+	meta, _ := json.Marshal(map[string]string{"mirror_url": src})
+	_, err = m.artifacts.CompleteUpload(ctx, repo, uploadID, version, a.name, string(meta), mirrorAssetProps(repo, cfg))
 	return err
 }
 

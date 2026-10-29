@@ -113,7 +113,7 @@ func (c *sizeCache) measure(dir string, full bool) (int64, error) {
 }
 
 func isHexDir(name string) bool {
-	for i := 0; i < len(name); i++ {
+	for i := range len(name) {
 		c := name[i]
 		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false

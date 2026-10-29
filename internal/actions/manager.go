@@ -206,7 +206,8 @@ func (m *Manager) jobURL(ctx context.Context, repo *db.GitRepository, runID, job
 	return m.runURL(ctx, repo, runID) + "/jobs/" + jobID
 }
 
-func nowPtr() *time.Time {
+// Current utc instant for nullable timestamp columns
+func NowPtr() *time.Time {
 	t := time.Now().UTC()
 	return &t
 }

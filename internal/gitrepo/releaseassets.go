@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/db"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/utils"
@@ -227,7 +226,7 @@ func (m *Manager) ReleaseAssetProto(ctx context.Context, repo *db.GitRepository,
 	return out
 }
 
-// Audits an asset upload that came in over http
-func (m *Manager) recordAssetUpload(ctx context.Context, req *gitRequest, rel *db.GitRelease, a *db.GitReleaseAsset) {
-	m.audit(ctx, req.user, "Git/release_asset", req.repo.Namespace+"/"+req.repo.Name+"@"+rel.Tag+"/"+a.Name, audit.OutcomeSuccess)
+// Audits an asset upload that came in over http, failures included
+func (m *Manager) recordAssetUpload(ctx context.Context, req *gitRequest, rel *db.GitRelease, name string, err error) {
+	m.audit(ctx, req.user, "Git/release_asset", req.repo.Namespace+"/"+req.repo.Name+"@"+rel.Tag+"/"+name, outcomeFor(err))
 }

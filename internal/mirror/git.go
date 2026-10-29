@@ -319,7 +319,7 @@ func (m *Monitor) SetupCompositeMirror(ctx context.Context, repo *db.GitReposito
 		}
 		if forgeDriverFor(up.Forge) == nil {
 			errs = append(errs, fmt.Errorf("releases: %w: cannot tell which forge hosts %s", ErrInvalid, up.Host))
-		} else if err := m.EnableReleaseMirroring(ctx, repo); err != nil {
+		} else if err := m.EnableReleaseMirroring(ctx, repo, up.Forge); err != nil {
 			errs = append(errs, fmt.Errorf("releases: %w", err))
 		}
 	}

@@ -359,7 +359,7 @@ func (f pipelineFile) open() (io.ReadCloser, error) {
 		readers = append(readers, fh)
 		closers = append(closers, fh)
 	}
-	var r io.Reader = io.MultiReader(readers...)
+	r := io.MultiReader(readers...)
 	if f.meta.Gzip {
 		gz, err := gzip.NewReader(r)
 		if err != nil {

@@ -180,34 +180,34 @@ func (m *Manager) resultsURL(r *http.Request, endpoint, name, jobID, artifactID 
 	return strings.TrimRight(m.git.BaseURL(r.Context()), "/") + ResultsAPIPrefix + "/" + endpoint + "?" + q.Encode()
 }
 
-// Verifies a signed link, answers its job and artifact
-func (m *Manager) resultsVerify(w http.ResponseWriter, r *http.Request, endpoint string) (*resultsScope, *db.ActionsArtifact, bool) {
+// Verifies a signed link, answers the artifact it names
+func (m *Manager) resultsVerify(w http.ResponseWriter, r *http.Request, endpoint string) (*db.ActionsArtifact, bool) {
 	q := r.URL.Query()
 	expires, name, jobID, artifactID := q.Get("expires"), q.Get("artifactName"), q.Get("taskID"), q.Get("artifactID")
 	if !hmac.Equal([]byte(q.Get("sig")), []byte(m.resultsSignature(endpoint, expires, name, jobID, artifactID))) {
 		twirpError(w, "unauthenticated", "bad signature")
-		return nil, nil, false
+		return nil, false
 	}
 	t, err := time.Parse(time.RFC3339, expires)
 	if err != nil || t.Before(time.Now()) {
 		twirpError(w, "unauthenticated", "link expired")
-		return nil, nil, false
+		return nil, false
 	}
 	scope, err := m.resultsScopeOf(r, jobID)
 	if err != nil {
 		twirpError(w, "unauthenticated", err.Error())
-		return nil, nil, false
+		return nil, false
 	}
 	a, err := m.store.GetActionsArtifact(r.Context(), artifactID)
 	if err != nil {
 		twirpError(w, "internal", err.Error())
-		return nil, nil, false
+		return nil, false
 	}
 	if a == nil || a.RunID != scope.run.ID || a.Name != name {
 		twirpError(w, "not_found", "artifact not found")
-		return nil, nil, false
+		return nil, false
 	}
-	return scope, a, true
+	return a, true
 }
 
 // Expiry a results request asks for, unset when the timestamp is missing
@@ -261,7 +261,7 @@ func blockFileName(blockID string) string {
 }
 
 func (m *Manager) resultsUpload(w http.ResponseWriter, r *http.Request) {
-	_, a, ok := m.resultsVerify(w, r, "UploadArtifact")
+	a, ok := m.resultsVerify(w, r, "UploadArtifact")
 	if !ok {
 		return
 	}
@@ -481,7 +481,7 @@ func (m *Manager) resultsSignedURL(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *Manager) resultsDownload(w http.ResponseWriter, r *http.Request) {
-	_, a, ok := m.resultsVerify(w, r, "DownloadArtifact")
+	a, ok := m.resultsVerify(w, r, "DownloadArtifact")
 	if !ok {
 		return
 	}

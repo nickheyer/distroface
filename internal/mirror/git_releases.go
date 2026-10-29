@@ -29,8 +29,7 @@ func (m *Monitor) openAsset(ctx context.Context, a asset) (io.ReadCloser, string
 		}
 		lastErr = err
 		// Auth shaped failures fall through to the next source
-		var ue *upstreamError
-		if errors.As(err, &ue) {
+		if ue, ok := errors.AsType[*upstreamError](err); ok {
 			switch ue.status {
 			case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
 				continue
@@ -145,7 +144,11 @@ func (m *Monitor) syncReleaseAssets(ctx context.Context, repo *db.GitRepository,
 }
 
 // Mirrors upstream releases and their files onto a git mirror repository
-func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream) error {
+func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, state *GitMirrorState) error {
+	// A remembered forge beats host name guessing
+	if state.Forge != "" {
+		up.Forge = state.Forge
+	}
 	if up.Forge == "" {
 		forge, err := m.detectForge(ctx, up)
 		if err != nil {
@@ -157,6 +160,7 @@ func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, c
 	if drv == nil {
 		return fmt.Errorf("releases: %s has no release api", up.Host)
 	}
+	state.Forge = up.Forge
 	assets, err := m.upstreamReleaseAssets(ctx, up, cfg.GetAuthToken())
 	if err != nil {
 		return fmt.Errorf("releases: %w", err)
@@ -252,24 +256,38 @@ func (m *Monitor) upsertMirroredRelease(ctx context.Context, repo *db.GitReposit
 	return existing, nil
 }
 
-// Turns on release mirroring for a git mirror repository
-func (m *Monitor) EnableReleaseMirroring(ctx context.Context, repo *db.GitRepository) error {
+// Turns on release mirroring and pins the forge
+func (m *Monitor) EnableReleaseMirroring(ctx context.Context, repo *db.GitRepository, forge string) error {
 	cfg, err := m.Config(repo.MirrorConfig)
 	if err != nil {
 		return err
 	}
-	if cfg.GetMirrorReleases() {
+	state := parseGitMirrorState(repo.MirrorState)
+	cols := map[string]any{}
+	if !cfg.GetMirrorReleases() {
+		cfg.MirrorReleases = true
+		raw, err := EncodeConfig(cfg)
+		if err != nil {
+			return err
+		}
+		cols["mirror_config"] = raw
+	}
+	if forge != "" && state.Forge != forge {
+		state.Forge = forge
+		cols["mirror_state"] = state.Encode()
+	}
+	if len(cols) == 0 {
 		return nil
 	}
-	cfg.MirrorReleases = true
-	raw, err := EncodeConfig(cfg)
-	if err != nil {
+	if err := m.store.UpdateGitRepositoryColumns(ctx, repo.ID, cols); err != nil {
 		return err
 	}
-	if err := m.store.UpdateGitRepositoryColumns(ctx, repo.ID, map[string]any{"mirror_config": raw}); err != nil {
-		return err
+	if raw, ok := cols["mirror_config"].(string); ok {
+		repo.MirrorConfig = raw
 	}
-	repo.MirrorConfig = raw
+	if encoded, ok := cols["mirror_state"].(string); ok {
+		repo.MirrorState = encoded
+	}
 	return nil
 }
 
@@ -294,7 +312,7 @@ func (m *Monitor) adoptReleasePackages(ctx context.Context) {
 			if err != nil || repo == nil || repo.Type != v1.GitRepoType_GIT_REPO_TYPE_MIRROR {
 				continue
 			}
-			if err := m.EnableReleaseMirroring(ctx, repo); err != nil {
+			if err := m.EnableReleaseMirroring(ctx, repo, forgeForType(pkg.Type)); err != nil {
 				m.log.Error("release package adoption for %s/%s: %v", repo.Namespace, repo.Name, err)
 				continue
 			}

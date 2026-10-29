@@ -261,7 +261,8 @@ type CreateParams struct {
 }
 
 // Creates the row and the bare directory, adopting same named packages
-func (m *Manager) Create(ctx context.Context, user *auth.AuthenticatedUser, p CreateParams) (*db.GitRepository, error) {
+func (m *Manager) Create(ctx context.Context, user *auth.AuthenticatedUser, p CreateParams) (_ *db.GitRepository, err error) {
+	defer func() { m.audit(ctx, user, "Git/create", p.Namespace+"/"+p.Name, outcomeFor(err)) }()
 	if !ValidName(p.Name) {
 		return nil, fmt.Errorf("%w: repository name must match %s and not end in .git or .wiki", ErrInvalid, NamePattern.String())
 	}
@@ -340,7 +341,6 @@ func (m *Manager) Create(ctx context.Context, user *auth.AuthenticatedUser, p Cr
 			m.log.Error("git auto init %s/%s: %v", repo.Namespace, repo.Name, err)
 		}
 	}
-	m.audit(ctx, user, "Git/create", repo.Namespace+"/"+repo.Name, audit.OutcomeSuccess)
 	m.dispatchRepoEvent(ctx, repo, user, "created")
 	return repo, nil
 }
@@ -502,7 +502,8 @@ func (m *Manager) autoInit(ctx context.Context, user *auth.AuthenticatedUser, re
 }
 
 // Deletes rows, directories, lfs links, and optionally linked packages
-func (m *Manager) Delete(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository, deleteLinked bool) error {
+func (m *Manager) Delete(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository, deleteLinked bool) (err error) {
+	defer func() { m.audit(ctx, user, "Git/delete", repo.Namespace+"/"+repo.Name, outcomeFor(err)) }()
 	images, _ := m.store.ListRepositoriesByGitRepo(ctx, repo.ID)
 	arts, _ := m.store.ListArtifactRepositoriesByGitRepo(ctx, repo.ID)
 	if !deleteLinked && (len(images) > 0 || len(arts) > 0) {
@@ -542,7 +543,6 @@ func (m *Manager) Delete(ctx context.Context, user *auth.AuthenticatedUser, repo
 	if err := m.engine.Delete(repo.Namespace, repo.Name); err != nil {
 		return err
 	}
-	m.audit(ctx, user, "Git/delete", repo.Namespace+"/"+repo.Name, audit.OutcomeSuccess)
 	m.dispatchRepoEvent(ctx, repo, user, "deleted")
 	return nil
 }
@@ -553,13 +553,15 @@ func (m *Manager) reapLFSBlob(ctx context.Context, oid string) {
 }
 
 // Renames or transfers a repository and its name linked packages
-func (m *Manager) Move(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository, newNamespace, newName string) (*db.GitRepository, error) {
+func (m *Manager) Move(ctx context.Context, user *auth.AuthenticatedUser, repo *db.GitRepository, newNamespace, newName string) (_ *db.GitRepository, err error) {
 	if !ValidName(newName) {
 		return nil, fmt.Errorf("%w: invalid repository name", ErrInvalid)
 	}
 	if newNamespace == repo.Namespace && newName == repo.Name {
 		return repo, nil
 	}
+	oldFull, newFull := repo.Namespace+"/"+repo.Name, newNamespace+"/"+newName
+	defer func() { m.audit(ctx, user, "Git/move", oldFull+" -> "+newFull, outcomeFor(err)) }()
 	if existing, _ := m.store.GetGitRepository(ctx, newNamespace, newName); existing != nil {
 		return nil, fmt.Errorf("%w: %s/%s already exists", ErrInvalid, newNamespace, newName)
 	}
@@ -575,7 +577,6 @@ func (m *Manager) Move(ctx context.Context, user *auth.AuthenticatedUser, repo *
 	lock := m.engine.LockRepo(repo.ID)
 	defer lock.Unlock()
 	defer m.engine.MarkRenaming(repo.ID)()
-	oldFull := repo.Namespace + "/" + repo.Name
 	undo, err := m.movePackages(ctx, repo, newNamespace, newName, ownerID, isOrg)
 	if err != nil {
 		return nil, err
@@ -590,14 +591,12 @@ func (m *Manager) Move(ctx context.Context, user *auth.AuthenticatedUser, repo *
 		return nil, err
 	}
 	m.res.ForgetRepo(repo.ID)
-	newFull := newNamespace + "/" + newName
 	_ = m.access.enforcer.RenameObject("git", oldFull, newFull)
 	_ = m.store.RenameAPITokenScope(ctx, int32(v1.CredentialScopeType_CREDENTIAL_SCOPE_TYPE_GIT_REPO), oldFull, newFull)
 	moved, err := m.store.GetGitRepositoryByID(ctx, repo.ID)
 	if err != nil {
 		return nil, err
 	}
-	m.audit(ctx, user, "Git/move", oldFull+" -> "+newFull, audit.OutcomeSuccess)
 	m.dispatchRepoEvent(ctx, moved, user, "renamed")
 	return moved, nil
 }
@@ -1084,6 +1083,14 @@ func (m *Manager) audit(ctx context.Context, user *auth.AuthenticatedUser, actio
 		ev.Actor, ev.ActorID = user.Username, user.ID
 	}
 	m.recorder.Record(ctx, ev)
+}
+
+// Audit outcome an operation's final error maps onto
+func outcomeFor(err error) string {
+	if err == nil {
+		return audit.OutcomeSuccess
+	}
+	return audit.OutcomeError
 }
 
 // Records an audit event with the caller's source ip for transports

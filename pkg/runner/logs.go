@@ -107,13 +107,13 @@ func maskVariants(v string) []string {
 // Percent encodes everything but unreserved characters
 func uriEscape(s string) string {
 	var sb strings.Builder
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.', c == '~':
 			sb.WriteByte(c)
 		default:
-			sb.WriteString(fmt.Sprintf("%%%02X", c))
+			fmt.Fprintf(&sb, "%%%02X", c)
 		}
 	}
 	return sb.String()

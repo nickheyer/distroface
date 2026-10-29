@@ -13,7 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/gitrepo"
-	"github.com/nickheyer/distroface/internal/rbac"
+	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"github.com/nickheyer/distroface/pkg/utils"
 )
 
@@ -250,7 +250,7 @@ func (q *request) createStatus() {
 	if !ok {
 		return
 	}
-	if !q.writable(repo, db.GitUnitCode, rbac.ActionPush) {
+	if !q.writable(repo, db.GitUnitCode, rpcAction(distrofacev1connect.GitFileServiceCreateCommitStatusProcedure)) {
 		return
 	}
 	var in struct {

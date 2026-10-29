@@ -91,10 +91,9 @@ func (g *Registry) Register(ctx context.Context, registration, name string, labe
 	if err != nil {
 		return nil, "", err
 	}
-	now := time.Now().UTC()
 	row := &db.ActionsRunner{
 		ScopeKind: tok.ScopeKind, ScopeID: tok.ScopeID, Name: name,
-		Labels: encodeList(normalizeLabels(labels)), TokenHash: hashToken(plain), Version: version, LastSeen: &now,
+		Labels: encodeList(normalizeLabels(labels)), TokenHash: hashToken(plain), Version: version, LastSeen: actions.NowPtr(),
 		Capabilities: encodeList(normalizeLabels(capabilities)),
 	}
 	if err := g.store.RegisterActionsRunner(ctx, tok.ID, row); err != nil {
@@ -112,11 +111,10 @@ func (g *Registry) RegisterBuiltin(ctx context.Context, labels []string, version
 	if err != nil {
 		return nil, "", err
 	}
-	now := time.Now().UTC()
 	row := &db.ActionsRunner{
 		ScopeKind: db.ActionsScopeSystem, ScopeID: "", Name: BuiltinName, Builtin: true,
 		Labels: encodeList(normalizeLabels(labels)), TokenHash: hashToken(plain), Version: version,
-		Capabilities: encodeList([]string{actions.CapabilityExec}), LastSeen: &now,
+		Capabilities: encodeList([]string{actions.CapabilityExec}), LastSeen: actions.NowPtr(),
 	}
 	if err := g.store.UpsertBuiltinActionsRunner(ctx, row); err != nil {
 		return nil, "", fmt.Errorf("register built in runner: %w", err)

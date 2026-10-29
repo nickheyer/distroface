@@ -415,6 +415,11 @@ func (q *request) capability(action, objectID string, anyGrant bool) bool {
 	return err == nil && ok
 }
 
+// Action the rpc policy table demands, empty denies when unlisted
+func rpcAction(procedure string) string {
+	return rbac.ProcedurePermissions[procedure].Action
+}
+
 func (q *request) actor(repo *db.GitRepository, unit string) forge.Actor {
 	lv := q.levels(repo)
 	return forge.Actor{User: q.user, CanWrite: lv.Unit(unit) >= gitrepo.LevelWrite, CanAdmin: lv.CanAdmin || lv.IsOwner}

@@ -277,7 +277,7 @@ func (m *Manager) RerunRun(ctx context.Context, repo *db.GitRepository, run *db.
 		if err := m.replanRun(ctx, repo, run, jobs, attempt); err != nil {
 			return err
 		}
-	} else if err := m.resetFailedJobs(ctx, run, jobs, attempt); err != nil {
+	} else if err := m.resetFailedJobs(ctx, jobs, attempt); err != nil {
 		return err
 	}
 	run.Status, run.Conclusion, run.StartedAt, run.FinishedAt = StatusQueued, "", nil, nil
@@ -307,7 +307,7 @@ func (m *Manager) replanRun(ctx context.Context, repo *db.GitRepository, run *db
 }
 
 // Returns failed jobs and whatever depends on them to the queue
-func (m *Manager) resetFailedJobs(ctx context.Context, run *db.ActionsRun, jobs []*db.ActionsJob, attempt int) error {
+func (m *Manager) resetFailedJobs(ctx context.Context, jobs []*db.ActionsJob, attempt int) error {
 	byID := make(map[string]*db.ActionsJob, len(jobs))
 	reset := map[string]bool{}
 	// Skipped by condition stays skipped unless a need resets

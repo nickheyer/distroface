@@ -71,7 +71,7 @@ jobs:
 
 func TestEvaluateCallerWith(t *testing.T) {
 	t.Run("empty with: returns empty map", func(t *testing.T) {
-		out, err := EvaluateCallerWith("caller", &Job{}, nil, callerResults("caller", nil, nil), nil, nil)
+		out, err := EvaluateCallerWith(callerJobID, &Job{}, nil, callerResults(nil, nil), nil, nil)
 		require.NoError(t, err)
 		assert.Empty(t, out)
 	})
@@ -82,7 +82,7 @@ func TestEvaluateCallerWith(t *testing.T) {
 			"already_int":   42,
 			"already_slice": []any{"a", "b"},
 		}}
-		out, err := EvaluateCallerWith("caller", job, nil, callerResults("caller", nil, nil), nil, nil)
+		out, err := EvaluateCallerWith(callerJobID, job, nil, callerResults(nil, nil), nil, nil)
 		require.NoError(t, err)
 		assert.Equal(t, true, out["already_bool"])
 		assert.Equal(t, 42, out["already_int"])
@@ -96,12 +96,12 @@ func TestEvaluateCallerWith(t *testing.T) {
 			"from_needs":  "${{ needs.upstream.outputs.commit }}",
 		}}
 		gitCtx := map[string]any{"event": map[string]any{}}
-		results := callerResults("caller", []string{"upstream"}, map[string]*JobResult{
+		results := callerResults([]string{"upstream"}, map[string]*JobResult{
 			"upstream": {Result: "success", Outputs: map[string]string{"commit": "abc123"}},
 		})
 		vars := map[string]string{"ENV": "staging"}
 		inputs := map[string]any{"PARENT_VAR": "from-parent"}
-		out, err := EvaluateCallerWith("caller", job, gitCtx, results, vars, inputs)
+		out, err := EvaluateCallerWith(callerJobID, job, gitCtx, results, vars, inputs)
 		require.NoError(t, err)
 		assert.Equal(t, "staging", out["env_name"])
 		assert.Equal(t, "from-parent", out["from_inputs"])
@@ -115,7 +115,7 @@ func TestEvaluateCallerWith(t *testing.T) {
 			With:     map[string]any{"env": "${{ matrix.target }}"},
 			Strategy: Strategy{RawMatrix: rawMatrix},
 		}
-		out, err := EvaluateCallerWith("caller", job, nil, callerResults("caller", nil, nil), nil, nil)
+		out, err := EvaluateCallerWith(callerJobID, job, nil, callerResults(nil, nil), nil, nil)
 		require.NoError(t, err)
 		assert.Equal(t, "staging", out["env"])
 	})
@@ -462,8 +462,11 @@ jobs:
 `)
 }
 
-// callerResults returns the minimum results map shape that NewInterpeter expects
-func callerResults(callerJobID string, callerNeeds []string, deps map[string]*JobResult) map[string]*JobResult {
+// Job id every caller evaluation in this file runs under
+const callerJobID = "caller"
+
+// Minimum results map shape the interpreter expects
+func callerResults(callerNeeds []string, deps map[string]*JobResult) map[string]*JobResult {
 	out := make(map[string]*JobResult, len(deps)+1)
 	maps.Copy(out, deps)
 	out[callerJobID] = &JobResult{Needs: callerNeeds}

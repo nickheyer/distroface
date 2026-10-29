@@ -739,6 +739,7 @@ func (h *HTTP) uploadReleaseAsset(w http.ResponseWriter, r *http.Request, req *g
 		Name: name, Label: q.Get("label"), ContentType: r.Header.Get("Content-Type"), UploaderID: uploader, Body: r.Body,
 		Replace: q.Get("replace") == "1" || q.Get("replace") == "true",
 	})
+	h.manager.recordAssetUpload(r.Context(), req, rel, name, err)
 	if err != nil {
 		status := http.StatusInternalServerError
 		switch {
@@ -750,7 +751,6 @@ func (h *HTTP) uploadReleaseAsset(w http.ResponseWriter, r *http.Request, req *g
 		http.Error(w, err.Error(), status)
 		return
 	}
-	h.manager.recordAssetUpload(r.Context(), req, rel, a)
 	body, err := protojson.Marshal(h.manager.ReleaseAssetProto(r.Context(), req.repo, rel, a))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

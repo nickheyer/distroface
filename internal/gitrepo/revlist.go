@@ -28,17 +28,18 @@ type revNode struct {
 // Newest commit first, insertion order breaks ties
 type revHeap []*revNode
 
-func (h revHeap) Len() int { return len(h) }
-func (h revHeap) Less(i, j int) bool {
-	if h[i].when != h[j].when {
-		return h[i].when > h[j].when
+func (h *revHeap) Len() int { return len(*h) }
+func (h *revHeap) Less(i, j int) bool {
+	a, b := (*h)[i], (*h)[j]
+	if a.when != b.when {
+		return a.when > b.when
 	}
-	return h[i].seq < h[j].seq
+	return a.seq < b.seq
 }
-func (h revHeap) Swap(i, j int)   { h[i], h[j] = h[j], h[i] }
-func (h *revHeap) Push(x any)     { *h = append(*h, x.(*revNode)) }
-func (h *revHeap) Pop() any       { old := *h; n := old[len(old)-1]; *h = old[:len(old)-1]; return n }
-func (h revHeap) peekWhen() int64 { return h[0].when }
+func (h *revHeap) Swap(i, j int)   { (*h)[i], (*h)[j] = (*h)[j], (*h)[i] }
+func (h *revHeap) Push(x any)      { *h = append(*h, x.(*revNode)) }
+func (h *revHeap) Pop() any        { old := *h; n := old[len(old)-1]; *h = old[:len(old)-1]; return n }
+func (h *revHeap) peekWhen() int64 { return (*h)[0].when }
 
 // Commit behind a hash, annotated tags peeled
 func peelCommit(st storer.EncodedObjectStorer, h plumbing.Hash) (*object.Commit, error) {

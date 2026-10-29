@@ -10,24 +10,24 @@ import (
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/pages"
+	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 )
 
 // Release assets as json rows
-func (q *request) assetList(repo *db.GitRepository, rel *db.GitRelease) ([]obj, []*db.GitReleaseAsset) {
+func (q *request) assetList(repo *db.GitRepository, rel *db.GitRelease) []obj {
 	assets, err := q.h.forge.ReleaseAssets(q.ctx, rel)
 	if err != nil {
-		return []obj{}, nil
+		return []obj{}
 	}
 	out := make([]obj, 0, len(assets))
 	for _, a := range assets {
 		out = append(out, q.assetJSON(repo, rel, a))
 	}
-	return out, assets
+	return out
 }
 
 func (q *request) releaseWithAssets(repo *db.GitRepository, rel *db.GitRelease) obj {
-	assets, _ := q.assetList(repo, rel)
-	return q.releaseJSON(repo, rel, assets)
+	return q.releaseJSON(repo, rel, q.assetList(repo, rel))
 }
 
 // Release named by an integer id, a row id, or a tag in the path
@@ -134,7 +134,7 @@ type releaseBody struct {
 
 func (q *request) createRelease() {
 	repo, ok := q.repo()
-	if !ok || !q.writable(repo, db.GitUnitReleases, rbac.ActionPush) {
+	if !ok || !q.writable(repo, db.GitUnitReleases, rpcAction(distrofacev1connect.ReleaseServiceCreateReleaseProcedure)) {
 		return
 	}
 	var in releaseBody
@@ -157,7 +157,7 @@ func (q *request) createRelease() {
 
 func (q *request) updateRelease() {
 	repo, ok := q.repo()
-	if !ok || !q.writable(repo, db.GitUnitReleases, rbac.ActionPush) {
+	if !ok || !q.writable(repo, db.GitUnitReleases, rpcAction(distrofacev1connect.ReleaseServiceUpdateReleaseProcedure)) {
 		return
 	}
 	rel, ok := q.releaseByPath(repo, true)
@@ -177,7 +177,7 @@ func (q *request) updateRelease() {
 
 func (q *request) deleteRelease() {
 	repo, ok := q.repo()
-	if !ok || !q.writable(repo, db.GitUnitReleases, rbac.ActionPush) {
+	if !ok || !q.writable(repo, db.GitUnitReleases, rpcAction(distrofacev1connect.ReleaseServiceDeleteReleaseProcedure)) {
 		return
 	}
 	rel, ok := q.releaseByPath(repo, true)
@@ -202,7 +202,7 @@ func (q *request) listAssets() {
 	if !ok {
 		return
 	}
-	assets, _ := q.assetList(repo, rel)
+	assets := q.assetList(repo, rel)
 	p := parsePage(q.r)
 	q.paginate(p, int64(len(assets)))
 	q.json(http.StatusOK, pageSlice(assets, p))
@@ -251,6 +251,7 @@ func (q *request) getAsset() {
 // Streams the body onto the release the way uploads.github.com does
 func (q *request) uploadAsset() {
 	repo, ok := q.repo()
+	// Asset upload has no rpc twin, it is a push
 	if !ok || !q.writable(repo, db.GitUnitReleases, rbac.ActionPush) {
 		return
 	}
@@ -281,7 +282,7 @@ func (q *request) uploadAsset() {
 
 func (q *request) updateAsset() {
 	repo, ok := q.repo()
-	if !ok || !q.writable(repo, db.GitUnitReleases, rbac.ActionPush) {
+	if !ok || !q.writable(repo, db.GitUnitReleases, rpcAction(distrofacev1connect.ReleaseServiceUpdateReleaseAssetProcedure)) {
 		return
 	}
 	a, rel, ok := q.assetByPath(repo)
@@ -308,7 +309,7 @@ func (q *request) updateAsset() {
 
 func (q *request) deleteAsset() {
 	repo, ok := q.repo()
-	if !ok || !q.writable(repo, db.GitUnitReleases, rbac.ActionPush) {
+	if !ok || !q.writable(repo, db.GitUnitReleases, rpcAction(distrofacev1connect.ReleaseServiceDeleteReleaseAssetProcedure)) {
 		return
 	}
 	a, rel, ok := q.assetByPath(repo)

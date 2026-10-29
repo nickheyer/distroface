@@ -11,20 +11,20 @@ import (
 
 func init() {
 	register(migration{
-		id:      "202610140002",
+		id:      "202610290001",
 		name:    "default_teams",
 		migrate: createDefaultTeams,
 	})
 }
 
-// Every existing org gets the implicit Members team with write everywhere
+// Existing orgs get the implicit Members team, write everywhere
 func createDefaultTeams(tx *gorm.DB, log *logger.Logger) error {
 	var orgs []db.Organization
 	if err := tx.Find(&orgs).Error; err != nil {
 		return err
 	}
 	units := map[string]string{}
-	for _, u := range []string{db.GitUnitCode, db.GitUnitIssues, db.GitUnitPulls, db.GitUnitReleases, db.GitUnitWiki, db.GitUnitProjects, db.GitUnitPackages, db.GitUnitActions} {
+	for _, u := range []string{db.GitUnitCode, db.GitUnitIssues, db.GitUnitPulls, db.GitUnitReleases, db.GitUnitWiki, db.GitUnitProjects, db.GitUnitPackages, db.GitUnitActions, db.GitUnitAgents} {
 		units[u] = db.GitLevelWrite
 	}
 	raw, _ := json.Marshal(units)

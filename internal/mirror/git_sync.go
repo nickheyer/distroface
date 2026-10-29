@@ -192,6 +192,8 @@ type GitMirrorState struct {
 	SSHPrivateKey string `json:"ssh_private_key,omitempty"`
 	SSHPublicKey  string `json:"ssh_public_key,omitempty"`
 	HostKey       string `json:"host_key,omitempty"`
+	// Vendor api serving releases, kept once known
+	Forge string `json:"forge,omitempty"`
 }
 
 func parseGitMirrorState(raw string) GitMirrorState {
@@ -428,7 +430,7 @@ func (m *Monitor) execGitSync(ctx context.Context, repo *db.GitRepository, cfg *
 	syncErr := m.syncGitRepo(runCtx, repo, cfg, &state)
 	if syncErr == nil && cfg.GetMirrorReleases() {
 		if up, err := parseGitUpstream(cfg.GetUpstream()); err == nil {
-			syncErr = m.syncGitReleases(runCtx, repo, cfg, up)
+			syncErr = m.syncGitReleases(runCtx, repo, cfg, up, &state)
 		}
 	}
 	cancel()
@@ -456,6 +458,9 @@ func (m *Monitor) writeGitMirrorStatus(ctx context.Context, repo *db.GitReposito
 		fs := parseGitMirrorState(fresh.MirrorState)
 		if fs.SSHPrivateKey != "" && fs.SSHPrivateKey != state.SSHPrivateKey {
 			state.SSHPrivateKey, state.SSHPublicKey, state.HostKey = fs.SSHPrivateKey, fs.SSHPublicKey, fs.HostKey
+		}
+		if state.Forge == "" {
+			state.Forge = fs.Forge
 		}
 	}
 	encoded := state.Encode()

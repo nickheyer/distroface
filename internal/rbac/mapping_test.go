@@ -13,7 +13,7 @@ func TestEveryActionsProcedureHasPolicy(t *testing.T) {
 		t.Fatal("ActionsService missing from the actions descriptor")
 	}
 	methods := svc.Methods()
-	for i := 0; i < methods.Len(); i++ {
+	for i := range methods.Len() {
 		proc := "/" + string(svc.FullName()) + "/" + string(methods.Get(i).Name())
 		_, mapped := ProcedurePermissions[proc]
 		if !mapped && !PublicProcedures[proc] && !IdentityProcedures[proc] && !AuthenticatedOnlyProcedures[proc] {
