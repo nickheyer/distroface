@@ -32,7 +32,8 @@
 		Ellipsis,
 		Mail,
 		Ban,
-		History
+		History,
+		Bot
 	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -46,6 +47,7 @@
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import Markdown from '$lib/components/git/markdown.svelte';
 	import LabelChip from '$lib/components/git/label-chip.svelte';
+	import BotBadge from '$lib/components/bot-badge.svelte';
 	import CommentBox from '$lib/components/git/comment-box.svelte';
 	import ReactionBar from '$lib/components/git/reaction-bar.svelte';
 	import { rpcClient } from '$lib/api/rpc-client';
@@ -59,6 +61,7 @@
 		namespace,
 		name,
 		number,
+		isPull = false,
 		items,
 		canComment,
 		canModerate,
@@ -69,6 +72,7 @@
 		namespace: string;
 		name: string;
 		number: number;
+		isPull?: boolean;
 		items: Comment[];
 		canComment: boolean;
 		canModerate: boolean;
@@ -199,6 +203,8 @@
 				return { icon: GitBranch, tone: '' };
 			case CommentType.PROJECT_CHANGED:
 				return { icon: Kanban, tone: '' };
+			case CommentType.AGENT_SESSION:
+				return { icon: Bot, tone: 'bg-primary/10 text-primary' };
 			default:
 				return { icon: History, tone: '' };
 		}
@@ -254,7 +260,10 @@
 	}
 
 	function copyLink(c: Comment) {
-		const url = `${location.origin}${resolve('/[namespace]/[name]/issues/[number]', { namespace, name, number: String(number) })}#comment-${c.id}`;
+		const path = isPull
+			? resolve('/[namespace]/[name]/pulls/[number]', { namespace, name, number: String(number) })
+			: resolve('/[namespace]/[name]/issues/[number]', { namespace, name, number: String(number) });
+		const url = `${location.origin}${path}#comment-${c.id}`;
 		navigator.clipboard?.writeText(url).then(() => toast.success('Link copied'));
 	}
 </script>
@@ -273,7 +282,7 @@
 			class="font-medium text-foreground hover:text-primary"
 			data-hover="user"
 			data-user={u}>{u}</a
-		>
+		>{#if c.author?.isAgent}<BotBadge class="ml-1 align-middle" />{/if}
 	{/if}
 {/snippet}
 
@@ -293,18 +302,35 @@
 		<a
 			href={resolve('/[namespace]/[name]/pulls/[number]', params)}
 			class="font-medium text-foreground hover:text-primary"
+			data-hover="issue"
+			data-repo={repo || `${namespace}/${name}`}
+			data-number={n}
+			data-pull="1"
 		>
-			{#if repo && repo !== `${namespace}/${name}`}{repo}{/if}#{n}
+			{#if repo && repo !== `${namespace}/${name}`}{repo}{/if}!{n}
 		</a>
 	{:else}
 		<a
 			href={resolve('/[namespace]/[name]/issues/[number]', params)}
 			class="font-medium text-foreground hover:text-primary"
+			data-hover="issue"
+			data-repo={repo || `${namespace}/${name}`}
+			data-number={n}
 		>
 			{#if repo && repo !== `${namespace}/${name}`}{repo}{/if}#{n}
 		</a>
 	{/if}
 	{#if title}<span class="text-foreground">{title}</span>{/if}
+{/snippet}
+
+{#snippet sessionLink(id: string, n: number)}
+	<a
+		href={resolve('/[namespace]/[name]/agents/sessions/[id]', { namespace, name, id })}
+		class="font-medium text-foreground hover:text-primary"
+		data-hover="session"
+		data-repo="{namespace}/{name}"
+		data-session={id}>session #{n}</a
+	>
 {/snippet}
 
 {#snippet shaLink(repo: string, sha: string)}
@@ -371,6 +397,16 @@
 					>
 				{:else}
 					referenced this
+				{/if}
+			{:else if c.type === CommentType.AGENT_SESSION}
+				opened this from {@render sessionLink(str(p, 'session_id'), num(p, 'session_number'))}
+				{#if p.from_number !== undefined}
+					while working on {@render issueLink(
+						'',
+						str(p, 'from_number'),
+						p.from_is_pull === true,
+						''
+					)}
 				{/if}
 			{:else if c.type === CommentType.RENAMED}
 				changed the title <span class="line-through">{str(p, 'from')}</span>
@@ -524,6 +560,7 @@
 						href={resolve('/[namespace]', { namespace: u })}
 						class="font-medium text-foreground hover:text-primary">{u}</a
 					>
+					{#if c.author?.isAgent}<BotBadge />{/if}
 				{/if}
 				<span>commented</span>
 				{#if t.rel}<span title={t.abs}>{t.rel}</span>{/if}
@@ -581,6 +618,7 @@
 					{namespace}
 					{name}
 					{number}
+					{isPull}
 					commentId={c.id}
 					reactions={c.reactions}
 					canReact={canComment}

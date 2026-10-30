@@ -33,6 +33,7 @@
 	} from '$lib/proto/distroface/v1/settings_pb';
 	import {
 		CertSource,
+		CertState,
 		TLSScope,
 		type GetCertStatusResponse,
 		type GetTLSMaterialResponse
@@ -45,6 +46,7 @@
 	let loading = $state(true);
 	let loadError = $state('');
 
+	let publicHostname = $state('');
 	let tlsMode = $state<TLSMode>(TLSMode.TLS_MODE_DUAL);
 	let mtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_OFF);
 	let primarySource = $state<CertSource>(CertSource.CONFIG);
@@ -53,6 +55,7 @@
 	let acmeDirectory = $state('');
 	let challengePort = $state('');
 
+	const hostAct = new Act();
 	const modeAct = new Act();
 	const mtlsAct = new Act();
 	const primaryAct = new Act();
@@ -102,8 +105,16 @@
 
 	const acmeSwitchHelp = $derived(
 		challengePort
-			? `Challenges answer on http port ${challengePort}`
-			: 'Challenges use tls-alpn-01 on port 443'
+			? `http-01 answers on port ${challengePort}, the CA connects to port 80`
+			: 'tls-alpn-01 only, port 443 must reach the main listener'
+	);
+	// First line carries the state, the rest next steps
+	const problemClass = $derived(
+		certStatus?.state === CertState.ERROR
+			? 'text-destructive'
+			: certStatus?.state === CertState.PENDING
+				? 'text-warning'
+				: 'text-muted-foreground'
 	);
 
 	// Pinned fields render disabled with a lock hint
@@ -112,6 +123,7 @@
 		locked(path) ? 'Pinned by the config file' : help;
 
 	function seedForms(s: Settings) {
+		publicHostname = s.server?.publicHostname ?? '';
 		tlsMode = s.tls?.mode ?? TLSMode.TLS_MODE_DUAL;
 		mtlsMode = s.tls?.mtlsMode ?? MTLSMode.MTLS_MODE_OFF;
 		primarySource = s.tls?.primarySource || CertSource.CONFIG;
@@ -161,6 +173,13 @@
 			await loadStatus();
 		});
 		if (!ok && eff) seedForms(eff);
+	}
+
+	function commitPublicHostname() {
+		if (publicHostname.trim() === (eff?.server?.publicHostname ?? '')) return;
+		apply(hostAct, { server: { publicHostname: publicHostname.trim() } }, [
+			'server.public_hostname'
+		]);
 	}
 
 	function setTlsMode(v: TLSMode) {
@@ -250,12 +269,35 @@
 		description="TLS for the primary hostname and the client certificate policy. Changes apply immediately."
 	>
 		<FormSection title="Server certificate" description="What the primary hostname serves.">
-			<div class="flex items-center justify-between gap-4 rounded-lg border px-4 py-3">
-				<div class="flex min-w-0 flex-wrap items-center gap-2">
+			<FormField
+				label="Public hostname"
+				id="public-hostname"
+				help={lockHint(
+					'server.public_hostname',
+					'Host or host:port as clients reach this instance, a DNS name for ACME'
+				)}
+				tag={hostAct.tag}
+				error={hostAct.error}
+			>
+				<Input
+					id="public-hostname"
+					bind:value={publicHostname}
+					class="font-mono"
+					placeholder="registry.example.com"
+					disabled={hostAct.busy || locked('server.public_hostname')}
+					onblur={commitPublicHostname}
+					onkeydown={(e) => {
+						if (e.key === 'Enter') commitPublicHostname();
+					}}
+				/>
+			</FormField>
+
+			<div class="flex items-start justify-between gap-4 rounded-lg border px-4 py-3">
+				<div class="min-w-0 space-y-1">
 					<code class="code-inline">{primaryHostname || '-'}</code>
-					{#if certStatus?.problems?.length}
-						<span class="text-xs text-destructive">{certStatus.problems[0]}</span>
-					{/if}
+					{#each certStatus?.problems ?? [] as line, i (i)}
+						<p class="text-xs {i === 0 ? problemClass : 'text-muted-foreground'}">{line}</p>
+					{/each}
 				</div>
 				{#if primaryHealth.issued}
 					<Badge
@@ -342,7 +384,7 @@
 										{/if}
 									{:else if option === CertSource.ACME}
 										{#if !acmeEnabled}
-											<div class="flex items-center gap-3">
+											<div class="flex flex-wrap items-center gap-3">
 												<p class="text-sm text-warning">ACME is off</p>
 												<Button
 													variant="outline"
@@ -356,6 +398,9 @@
 														Turn on ACME
 													{/if}
 												</Button>
+												{#if acmeSwitchAct.error}
+													<p class="text-sm text-destructive">{acmeSwitchAct.error}</p>
+												{/if}
 											</div>
 										{:else}
 											<div class="flex items-center gap-3">
@@ -391,7 +436,10 @@
 			</FormField>
 		</FormSection>
 
-		<FormSection title="ACME client" description="Automatic certificates from an external CA.">
+		<FormSection
+			title="ACME client"
+			description="Automatic certificates from an external CA. The CA reaches the public hostname on port 80 or 443 only."
+		>
 			<FormField
 				label="Automatic issuance"
 				layout="toggle"
@@ -405,69 +453,67 @@
 					onCheckedChange={setAcmeEnabled}
 				/>
 			</FormField>
-			{#if acmeEnabled}
-				<div class="form-subfields">
-					<FormField
-						label="Account email"
+			<div class="form-subfields">
+				<FormField
+					label="Account email"
+					id="acme-email"
+					span="half"
+					help={lockHint('acme.email', 'Receives expiry notices from the CA')}
+					tag={acmeEmailAct.tag}
+					error={acmeEmailAct.error}
+				>
+					<Input
 						id="acme-email"
-						span="half"
-						help={lockHint('acme.email', 'Receives expiry notices from the CA')}
-						tag={acmeEmailAct.tag}
-						error={acmeEmailAct.error}
-					>
-						<Input
-							id="acme-email"
-							bind:value={acmeEmail}
-							placeholder="admin@example.com"
-							disabled={acmeEmailAct.busy || locked('acme.email')}
-							onblur={commitAcmeEmail}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') commitAcmeEmail();
-							}}
-						/>
-					</FormField>
-					<FormField
-						label="Directory URL"
+						bind:value={acmeEmail}
+						placeholder="admin@example.com"
+						disabled={acmeEmailAct.busy || locked('acme.email')}
+						onblur={commitAcmeEmail}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') commitAcmeEmail();
+						}}
+					/>
+				</FormField>
+				<FormField
+					label="Directory URL"
+					id="acme-dir"
+					span="half"
+					help={lockHint('acme.directory_url', 'Empty uses Lets Encrypt production')}
+					tag={acmeDirAct.tag}
+					error={acmeDirAct.error}
+				>
+					<Input
 						id="acme-dir"
-						span="half"
-						help={lockHint('acme.directory_url', 'Empty uses Lets Encrypt production')}
-						tag={acmeDirAct.tag}
-						error={acmeDirAct.error}
-					>
-						<Input
-							id="acme-dir"
-							bind:value={acmeDirectory}
-							class="font-mono"
-							placeholder="https://acme-v02.api.letsencrypt.org/directory"
-							disabled={acmeDirAct.busy || locked('acme.directory_url')}
-							onblur={commitAcmeDirectory}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') commitAcmeDirectory();
-							}}
-						/>
-					</FormField>
-					<FormField
-						label="Challenge port"
+						bind:value={acmeDirectory}
+						class="font-mono"
+						placeholder="https://acme-v02.api.letsencrypt.org/directory"
+						disabled={acmeDirAct.busy || locked('acme.directory_url')}
+						onblur={commitAcmeDirectory}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') commitAcmeDirectory();
+						}}
+					/>
+				</FormField>
+				<FormField
+					label="Challenge port"
+					id="acme-port"
+					layout="inline"
+					help={lockHint('acme.challenge_port', 'Cleartext http-01 listener, empty disables')}
+					tag={acmePortAct.tag}
+					error={acmePortAct.error}
+				>
+					<Input
 						id="acme-port"
-						layout="inline"
-						help={lockHint('acme.challenge_port', 'Cleartext http-01 listener, empty disables')}
-						tag={acmePortAct.tag}
-						error={acmePortAct.error}
-					>
-						<Input
-							id="acme-port"
-							bind:value={challengePort}
-							class="w-28 font-mono"
-							placeholder="80"
-							disabled={acmePortAct.busy || locked('acme.challenge_port')}
-							onblur={commitChallengePort}
-							onkeydown={(e) => {
-								if (e.key === 'Enter') commitChallengePort();
-							}}
-						/>
-					</FormField>
-				</div>
-			{/if}
+						bind:value={challengePort}
+						class="w-28 font-mono"
+						placeholder="80"
+						disabled={acmePortAct.busy || locked('acme.challenge_port')}
+						onblur={commitChallengePort}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') commitChallengePort();
+						}}
+					/>
+				</FormField>
+			</div>
 		</FormSection>
 
 		<FormSection

@@ -31,7 +31,7 @@
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { IssueState, type Issue } from '$lib/proto/distroface/v1/issue_pb';
 	import type { WikiPage } from '$lib/proto/distroface/v1/wiki_pb';
-	import { cn } from '$lib/utils';
+	import { cn, issueRef } from '$lib/utils';
 
 	let {
 		value = $bindable(''),
@@ -417,15 +417,13 @@
 							<Search class="size-3.5 shrink-0 text-muted-foreground" />
 							<input
 								class="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-								placeholder="Search open issues or type #12"
+								placeholder="Search open issues, or type #12 or !12"
 								bind:value={issueQuery}
 								oninput={onIssueQuery}
 								onkeydown={(e) => {
-									if (e.key === 'Enter' && /^(\S+#)?\d+$/.test(issueQuery.trim()))
+									if (e.key === 'Enter' && /^(\S+[#!])?\d+$/.test(issueQuery.trim()))
 										pickIssue(
-											issueQuery.trim().startsWith('#') || issueQuery.includes('#')
-												? issueQuery.trim()
-												: `#${issueQuery.trim()}`
+											/[#!]/.test(issueQuery.trim()) ? issueQuery.trim() : `#${issueQuery.trim()}`
 										);
 								}}
 							/>
@@ -434,16 +432,16 @@
 						<div class="max-h-64 overflow-y-auto py-1">
 							{#if !issuesLoading && issues.length === 0}
 								<p class="px-3 py-4 text-center text-sm text-muted-foreground">
-									No open issues match, type #12 or ns/name#12 and press Enter
+									No open issues match, type #12, !12, or ns/name#12 and press Enter
 								</p>
 							{/if}
 							{#each issues as i (i.id)}
 								<button
 									type="button"
 									class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted"
-									onclick={() => pickIssue(`#${i.number}`)}
+									onclick={() => pickIssue(issueRef(i.isPull, i.number))}
 								>
-									<span class="shrink-0 text-muted-foreground">#{i.number}</span>
+									<span class="shrink-0 text-muted-foreground">{issueRef(i.isPull, i.number)}</span>
 									<span class="truncate">{i.title}</span>
 								</button>
 							{/each}

@@ -523,9 +523,15 @@ func publicUserToProto(u *storage.User) *v1.User {
 		Username:    u.Username,
 		DisplayName: u.DisplayName,
 		AvatarUrl:   u.AvatarURL,
+		IsAgent:     isAgentUser(u),
 		CreatedAt:   timestamppb.New(u.CreatedAt),
 		UpdatedAt:   timestamppb.New(u.UpdatedAt),
 	}
+}
+
+// Bot accounts act for agents and render with a badge
+func isAgentUser(u *storage.User) bool {
+	return u != nil && u.AuthProvider == storage.AuthProviderAgent
 }
 
 // Wire refs for role rows
@@ -557,6 +563,7 @@ func userToProto(u *storage.User, roles []*storage.Role) *v1.User {
 		MustChangePassword: u.MustChangePassword,
 		OidcLinked:         u.OIDCSubject != "",
 		AvatarUrl:          u.AvatarURL,
+		IsAgent:            isAgentUser(u),
 		CreatedAt:          timestamppb.New(u.CreatedAt),
 		UpdatedAt:          timestamppb.New(u.UpdatedAt),
 	}

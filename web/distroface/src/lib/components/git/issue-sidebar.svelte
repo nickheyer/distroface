@@ -45,7 +45,7 @@
 		type TrackedTime
 	} from '$lib/proto/distroface/v1/issue_pb';
 	import type { Project } from '$lib/proto/distroface/v1/project_pb';
-	import { relativeTime } from '$lib/utils';
+	import { relativeTime, issueRef } from '$lib/utils';
 	import { timestampDate, timestampFromDate } from '@bufbuild/protobuf/wkt';
 	import { toast } from 'svelte-sonner';
 
@@ -67,7 +67,7 @@
 
 	const signedIn = $derived(authStore.isAuthenticated);
 	const repoArchived = $derived(gitRepoStore.repo?.isArchived === true);
-	const req = $derived({ namespace, name, number: issue.number });
+	const req = $derived({ namespace, name, number: issue.number, isPull: issue.isPull });
 	const num = $derived(Number(issue.number));
 	const isPull = $derived(issue.isPull);
 	const kind = $derived(issue.isPull ? 'pull request' : 'issue');
@@ -241,8 +241,8 @@
 	async function removeDependency(ref: IssueRef) {
 		const target =
 			ref.repoFullName && ref.repoFullName !== `${namespace}/${name}`
-				? `${ref.repoFullName}#${ref.number}`
-				: String(ref.number);
+				? `${ref.repoFullName}${issueRef(ref.isPull, ref.number)}`
+				: issueRef(ref.isPull, ref.number);
 		try {
 			const resp = await rpcClient.issue.removeDependency({ ...req, dependsOn: target });
 			blockedBy = resp.blockedBy;
@@ -472,7 +472,7 @@
 				class="truncate hover:text-primary {resolved ? 'line-through' : ''}"
 				title={ref.title}
 			>
-				<span class="text-muted-foreground">#{ref.number}</span>
+				<span class="text-muted-foreground">!{ref.number}</span>
 				{ref.title}
 			</a>
 		{:else}
@@ -663,9 +663,9 @@
 								<button
 									type="button"
 									class="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm transition-colors hover:bg-muted"
-									onclick={() => addDependency(String(r.number))}
+									onclick={() => addDependency(issueRef(r.isPull, r.number))}
 								>
-									<span class="shrink-0 text-muted-foreground">#{r.number}</span>
+									<span class="shrink-0 text-muted-foreground">{issueRef(r.isPull, r.number)}</span>
 									<span class="truncate">{r.title}</span>
 								</button>
 							{/each}
@@ -682,7 +682,7 @@
 					<Blocks class="size-3" />Blocked by
 				</p>
 				<div class="space-y-1">
-					{#each openBlockers as ref (`${ref.repoFullName}#${ref.number}`)}
+					{#each openBlockers as ref (`${ref.repoFullName}${issueRef(ref.isPull, ref.number)}`)}
 						{@render refRow(ref, canWrite)}
 					{/each}
 				</div>
@@ -701,7 +701,7 @@
 					>
 				</p>
 				<div class="space-y-1">
-					{#each resolvedBlockers as ref (`${ref.repoFullName}#${ref.number}`)}
+					{#each resolvedBlockers as ref (`${ref.repoFullName}${issueRef(ref.isPull, ref.number)}`)}
 						{@render refRow(ref, canWrite, true)}
 					{/each}
 				</div>
@@ -711,7 +711,7 @@
 					<Blocks class="size-3" />Blocking
 				</p>
 				<div class="space-y-1">
-					{#each blocking as ref (`${ref.repoFullName}#${ref.number}`)}
+					{#each blocking as ref (`${ref.repoFullName}${issueRef(ref.isPull, ref.number)}`)}
 						{@render refRow(ref, false)}
 					{/each}
 				</div>
@@ -913,7 +913,7 @@
 	icon={Trash}
 >
 	{#snippet description()}
-		This permanently deletes {kind} <strong>#{num}</strong> with every comment{isPull
+		This permanently deletes {kind} <strong>{issueRef(isPull, num)}</strong> with every comment{isPull
 			? ', review,'
 			: ''} and reaction.
 	{/snippet}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -16,12 +17,7 @@ import (
 var Reactions = []string{"+1", "-1", "laugh", "hooray", "confused", "heart", "rocket", "eyes"}
 
 func validReaction(e string) bool {
-	for _, r := range Reactions {
-		if r == e {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(Reactions, e)
 }
 
 // Reports whether the actor may comment on an issue
@@ -66,8 +62,8 @@ func (m *Manager) CreateComment(ctx context.Context, repo *db.GitRepository, act
 	m.recordReferences(ctx, repo, issue, actor, body)
 	m.Notify(ctx, Notification{
 		Repo: repo, Issue: issue, Kind: m.notifyKind(issue), Actor: actor.User, Reason: "commented",
-		Subject:   fmt.Sprintf("[%s/%s] %s (#%d)", repo.Namespace, repo.Name, issue.Title, issue.Number),
-		Text:      fmt.Sprintf("%s commented on #%d:\n\n%s", actor.username(), issue.Number, body),
+		Subject:   fmt.Sprintf("[%s/%s] %s (%s)", repo.Namespace, repo.Name, issue.Title, issue.Ref()),
+		Text:      fmt.Sprintf("%s commented on %s:\n\n%s", actor.username(), issue.Ref(), body),
 		URL:       m.IssueURL(ctx, repo, issue) + "#comment-" + c.ID,
 		Mentioned: m.resolveMentions(ctx, repo, mentions(body)),
 		CommentID: c.ID,

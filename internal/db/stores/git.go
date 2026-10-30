@@ -290,7 +290,7 @@ func (s *Store) RecordGitPush(ctx context.Context, id string, size int64, branch
 	}).Error
 }
 
-// Claims the next issue or run number inside one transaction
+// Claims the next issue, pull, run, or session number atomically
 func (s *Store) NextGitCounter(ctx context.Context, repoID, column string) (int64, error) {
 	var next int64
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

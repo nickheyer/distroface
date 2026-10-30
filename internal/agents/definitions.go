@@ -47,6 +47,7 @@ type Definition struct {
 	Enabled          bool              `json:"enabled"`
 	Concurrency      int               `json:"concurrency,omitempty"`
 	AllowedCallerIDs []string          `json:"allowed_caller_ids,omitempty"`
+	AvatarURL        string            `json:"avatar_url,omitempty"`
 	Source           string            `json:"source"`
 	FilePath         string            `json:"file_path,omitempty"`
 	Error            string            `json:"error,omitempty"`
@@ -73,6 +74,7 @@ type AgentSpec struct {
 	Enabled          bool
 	Concurrency      int
 	AllowedCallerIDs []string
+	AvatarURL        string
 }
 
 // Tools the agent may call, the kind default when none are listed
@@ -117,7 +119,7 @@ func DefinitionFromRow(a *db.Agent) *Definition {
 		ID: a.ID, ScopeKind: a.ScopeKind, ScopeID: a.ScopeID, Slug: a.Slug, Name: a.Name, Description: a.Description, Kind: a.Kind,
 		ProviderID: a.ProviderID, Model: a.Model, Instructions: a.Instructions, Tools: decodeList(a.Tools), Triggers: decodeTriggers(a.Triggers),
 		MaxTurns: a.MaxTurns, MaxTokens: a.MaxTokens, Approval: a.Approval, Enabled: a.Enabled, Concurrency: a.Concurrency,
-		AllowedCallerIDs: decodeList(a.AllowedCallerIDs), Source: SourceDatabase, CreatedBy: a.CreatedBy, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
+		AllowedCallerIDs: decodeList(a.AllowedCallerIDs), AvatarURL: a.AvatarURL, Source: SourceDatabase, CreatedBy: a.CreatedBy, CreatedAt: a.CreatedAt, UpdatedAt: a.UpdatedAt,
 	}
 	if a.Temperature >= 0 {
 		t := a.Temperature
@@ -163,6 +165,17 @@ func validApproval(a string) bool {
 	return false
 }
 
+// Absolute http(s) or site relative, blank clears
+func validAvatarURL(u string) bool {
+	if u == "" {
+		return true
+	}
+	if len(u) > 2048 || strings.ContainsAny(u, " \t\r\n\"'<>") {
+		return false
+	}
+	return strings.HasPrefix(u, "https://") || strings.HasPrefix(u, "http://") || (strings.HasPrefix(u, "/") && !strings.HasPrefix(u, "//"))
+}
+
 // Validates a spec against the scope and applies it onto a row
 func (m *Manager) applyAgentSpec(ctx context.Context, a *db.Agent, spec AgentSpec) error {
 	slug := strings.ToLower(strings.TrimSpace(spec.Slug))
@@ -191,6 +204,10 @@ func (m *Manager) applyAgentSpec(ctx context.Context, a *db.Agent, spec AgentSpe
 	}
 	if len(spec.Instructions) > 64<<10 {
 		return fmt.Errorf("%w: instructions are too long", ErrInvalid)
+	}
+	avatar := strings.TrimSpace(spec.AvatarURL)
+	if !validAvatarURL(avatar) {
+		return fmt.Errorf("%w: picture url must be an http(s) or site relative link", ErrInvalid)
 	}
 	tools := []string{}
 	for _, t := range spec.Tools {
@@ -238,6 +255,7 @@ func (m *Manager) applyAgentSpec(ctx context.Context, a *db.Agent, spec AgentSpe
 		a.Temperature = *spec.Temperature
 	}
 	a.Approval, a.Enabled, a.Concurrency, a.AllowedCallerIDs = approval, spec.Enabled, spec.Concurrency, encodeList(spec.AllowedCallerIDs)
+	a.AvatarURL = avatar
 	return nil
 }
 
@@ -443,6 +461,7 @@ type agentFile struct {
 	Temperature *float64          `yaml:"temperature"`
 	Enabled     *bool             `yaml:"enabled"`
 	Concurrency int               `yaml:"concurrency"`
+	Avatar      string            `yaml:"avatar"`
 	Triggers    agentFileTriggers `yaml:"triggers"`
 }
 
@@ -512,6 +531,12 @@ func ParseAgentFile(path, source string) (*Definition, error) {
 	d.MaxTurns, d.MaxTokens, d.Temperature, d.Concurrency = meta.MaxTurns, meta.MaxTokens, meta.Temperature, meta.Concurrency
 	if meta.Enabled != nil {
 		d.Enabled = *meta.Enabled
+	}
+	if avatar := strings.TrimSpace(meta.Avatar); avatar != "" {
+		if !validAvatarURL(avatar) {
+			return d, fmt.Errorf("avatar %q must be an http(s) or site relative link", avatar)
+		}
+		d.AvatarURL = avatar
 	}
 	t := meta.Triggers
 	for _, action := range t.PullRequest {

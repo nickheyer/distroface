@@ -103,8 +103,8 @@ func (m *Manager) RequestReviewers(ctx context.Context, repo *db.GitRepository, 
 	requested := append([]string{}, users...)
 	m.Notify(ctx, Notification{
 		Repo: repo, Issue: issue, Kind: NotifyReview, Actor: actor.User, Reason: "review_requested",
-		Subject: fmt.Sprintf("[%s/%s] %s (#%d)", repo.Namespace, repo.Name, issue.Title, issue.Number),
-		Text:    fmt.Sprintf("%s requested your review on #%d %s.", actor.username(), issue.Number, issue.Title),
+		Subject: fmt.Sprintf("[%s/%s] %s (%s)", repo.Namespace, repo.Name, issue.Title, issue.Ref()),
+		Text:    fmt.Sprintf("%s requested your review on %s %s.", actor.username(), issue.Ref(), issue.Title),
 		URL:     m.IssueURL(ctx, repo, issue), Reviewers: notify, ExplicitOnly: true,
 	})
 	m.dispatchIssue(ctx, repo, issue, actor, "review_requested", nil)
@@ -269,8 +269,8 @@ func (m *Manager) SubmitReview(ctx context.Context, repo *db.GitRepository, acto
 	verb := map[string]string{ReviewApproved: "approved", ReviewChangesRequested: "requested changes on", ReviewCommented: "reviewed"}[state]
 	m.Notify(ctx, Notification{
 		Repo: repo, Issue: issue, Kind: NotifyReview, Actor: actor.User, Reason: "reviewed",
-		Subject: fmt.Sprintf("[%s/%s] %s (#%d)", repo.Namespace, repo.Name, issue.Title, issue.Number),
-		Text:    fmt.Sprintf("%s %s #%d %s.\n\n%s", actor.username(), verb, issue.Number, issue.Title, rv.Body),
+		Subject: fmt.Sprintf("[%s/%s] %s (%s)", repo.Namespace, repo.Name, issue.Title, issue.Ref()),
+		Text:    fmt.Sprintf("%s %s %s %s.\n\n%s", actor.username(), verb, issue.Ref(), issue.Title, rv.Body),
 		URL:     m.IssueURL(ctx, repo, issue), Mentioned: m.resolveMentions(ctx, repo, mentions(rv.Body)),
 	})
 	m.dispatchReview(ctx, repo, issue, pr, actor, "submitted", rv)
@@ -416,8 +416,8 @@ func (m *Manager) CreateReviewComment(ctx context.Context, repo *db.GitRepositor
 	_ = m.store.SetGitIssueSubscription(ctx, issue.ID, actor.User.ID, true)
 	m.Notify(ctx, Notification{
 		Repo: repo, Issue: issue, Kind: NotifyPull, Actor: actor.User, Reason: "commented",
-		Subject: fmt.Sprintf("[%s/%s] %s (#%d)", repo.Namespace, repo.Name, issue.Title, issue.Number),
-		Text:    fmt.Sprintf("%s commented on %s in #%d:\n\n%s", actor.username(), c.Path, issue.Number, c.Body),
+		Subject: fmt.Sprintf("[%s/%s] %s (%s)", repo.Namespace, repo.Name, issue.Title, issue.Ref()),
+		Text:    fmt.Sprintf("%s commented on %s in %s:\n\n%s", actor.username(), c.Path, issue.Ref(), c.Body),
 		URL:     m.IssueURL(ctx, repo, issue) + "/files#comment-" + c.ID, Mentioned: m.resolveMentions(ctx, repo, mentions(c.Body)), CommentID: c.ID,
 	})
 	m.dispatchIssue(ctx, repo, issue, actor, "created", &db.GitComment{ID: c.ID, Body: c.Body, AuthorID: c.AuthorID})

@@ -355,42 +355,42 @@
 
 	<!-- Center: the feed -->
 	<main class="min-w-0 space-y-4">
-		<div class="flex flex-wrap items-end justify-between gap-3 border-b pb-3">
-			<div class="min-w-0">
+		<div class="border-b pb-3">
+			<div class="flex items-center justify-between gap-3">
 				<h1 class="flex items-center gap-2 text-xl leading-7 font-semibold tracking-tight">
 					<Activity class="size-5 text-muted-foreground" />
 					Home
 				</h1>
-				<p class="mt-0.5 text-sm text-muted-foreground">{tab.hint}</p>
+				<div class="flex shrink-0 items-center gap-1">
+					<nav
+						class="flex items-center gap-0.5 rounded-md border bg-muted/40 p-0.5"
+						aria-label="Feed"
+					>
+						{#each tabs as t (t.key)}
+							<button
+								type="button"
+								onclick={() => (tabKey = t.key)}
+								aria-pressed={tab.key === t.key}
+								class={cn(
+									'rounded px-2.5 py-1 text-xs font-medium transition-colors',
+									tab.key === t.key
+										? 'bg-background text-foreground shadow-xs'
+										: 'text-muted-foreground hover:text-foreground'
+								)}>{t.label}</button
+							>
+						{/each}
+					</nav>
+					<Button
+						variant="ghost-muted"
+						size="icon-sm"
+						aria-label="Refresh"
+						onclick={() => feedView?.refresh()}
+					>
+						<RefreshCw />
+					</Button>
+				</div>
 			</div>
-			<div class="flex items-center gap-1">
-				<nav
-					class="flex items-center gap-0.5 rounded-md border bg-muted/40 p-0.5"
-					aria-label="Feed"
-				>
-					{#each tabs as t (t.key)}
-						<button
-							type="button"
-							onclick={() => (tabKey = t.key)}
-							aria-pressed={tab.key === t.key}
-							class={cn(
-								'rounded px-2.5 py-1 text-xs font-medium transition-colors',
-								tab.key === t.key
-									? 'bg-background text-foreground shadow-xs'
-									: 'text-muted-foreground hover:text-foreground'
-							)}>{t.label}</button
-						>
-					{/each}
-				</nav>
-				<Button
-					variant="ghost-muted"
-					size="icon-sm"
-					aria-label="Refresh"
-					onclick={() => feedView?.refresh()}
-				>
-					<RefreshCw />
-				</Button>
-			</div>
+			<p class="mt-1 text-sm text-muted-foreground">{tab.hint}</p>
 		</div>
 
 		<div class="scrollbar-none flex items-center gap-1.5 overflow-x-auto">

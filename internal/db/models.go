@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"time"
 
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -391,6 +392,7 @@ type GitRepository struct {
 	LFSEnabled      bool           `json:"lfs_enabled" gorm:"not null;default:true;column:lfs_enabled"`
 	MergeSettings   string         `json:"merge_settings" gorm:"type:text;not null;default:'{}'"` // Protojson GitMergeSettings
 	IssueCounter    int64          `json:"issue_counter" gorm:"not null;default:0"`
+	PullCounter     int64          `json:"pull_counter" gorm:"not null;default:0"`
 	RunCounter      int64          `json:"run_counter" gorm:"not null;default:0"`
 	ArtifactCounter int64          `json:"artifact_counter" gorm:"not null;default:0"` // Numbers run artifacts per repository
 	AgentCounter    int64          `json:"agent_counter" gorm:"not null;default:0;column:agent_counter"`
@@ -666,11 +668,12 @@ const (
 	IssueStateClosed = "closed"
 )
 
+// Issues and pull requests number independently inside a repository
 type GitIssue struct {
 	ID           string  `gorm:"primaryKey"`
-	RepoID       string  `gorm:"not null;uniqueIndex:idx_issue_repo_number;index:idx_issue_repo_state"`
-	Number       int64   `gorm:"not null;uniqueIndex:idx_issue_repo_number"`
-	IsPull       bool    `gorm:"not null;index"`
+	RepoID       string  `gorm:"not null;uniqueIndex:idx_issue_repo_kind_number;index:idx_issue_repo_state"`
+	IsPull       bool    `gorm:"not null;uniqueIndex:idx_issue_repo_kind_number"`
+	Number       int64   `gorm:"not null;uniqueIndex:idx_issue_repo_kind_number"`
 	Title        string  `gorm:"not null"`
 	Body         string  `gorm:"type:text"`
 	State        string  `gorm:"not null;default:'open';index:idx_issue_repo_state"`
@@ -686,6 +689,18 @@ type GitIssue struct {
 	CreatedAt    time.Time      `gorm:"autoCreateTime;index"`
 	UpdatedAt    time.Time      `gorm:"autoUpdateTime;index"`
 	Repo         *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+}
+
+// Display form, issues as #n and pull requests as !n
+func IssueRef(isPull bool, number int64) string {
+	if isPull {
+		return fmt.Sprintf("!%d", number)
+	}
+	return fmt.Sprintf("#%d", number)
+}
+
+func (i *GitIssue) Ref() string {
+	return IssueRef(i.IsPull, i.Number)
 }
 
 type GitPullRequest struct {
@@ -1206,6 +1221,7 @@ type Agent struct {
 	Enabled          bool      `gorm:"not null;default:true"`
 	Concurrency      int       `gorm:"not null;default:0"`
 	AllowedCallerIDs string    `gorm:"type:text;not null;default:'[]'"`
+	AvatarURL        string    `gorm:"not null;default:'';column:avatar_url"`
 	CreatedBy        string    `gorm:"not null;default:''"`
 	CreatedAt        time.Time `gorm:"autoCreateTime"`
 	UpdatedAt        time.Time `gorm:"autoUpdateTime"`

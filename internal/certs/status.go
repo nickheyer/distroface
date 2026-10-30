@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
+	"net"
+	"strings"
 	"time"
 
 	storage "github.com/nickheyer/distroface/internal/db"
@@ -13,6 +15,11 @@ import (
 
 func problem(st *v1.GetCertStatusResponse, state v1.CertState, format string, args ...any) {
 	st.State = state
+	st.Problems = append(st.Problems, fmt.Sprintf(format, args...))
+}
+
+// Adds a next step without changing the resolved state
+func hint(st *v1.GetCertStatusResponse, format string, args ...any) {
 	st.Problems = append(st.Problems, fmt.Sprintf(format, args...))
 }
 
@@ -87,16 +94,18 @@ func (e *Engine) checkCA(ctx context.Context, st *v1.GetCertStatusResponse, scop
 
 func (e *Engine) checkACME(ctx context.Context, st *v1.GetCertStatusResponse, host, orgID string) {
 	if !e.ACMEEnabled(ctx) {
-		problem(st, v1.CertState_CERT_STATE_ERROR, "acme is disabled at the app tier")
+		problem(st, v1.CertState_CERT_STATE_ERROR,
+			"automatic issuance is off, a system admin turns it on under Admin, Network security, ACME client")
 		return
 	}
 	if !issuableHost(host) {
-		problem(st, v1.CertState_CERT_STATE_ERROR, "hostname %q is not publicly issuable", host)
+		problem(st, v1.CertState_CERT_STATE_ERROR,
+			"hostname %q cannot receive a public certificate, use a dns name that is not localhost or an ip", host)
 		return
 	}
 	if e.managerForHost(ctx, host) == nil {
 		problem(st, v1.CertState_CERT_STATE_ERROR,
-			"acme directory url points at this instance, use the org ca source instead")
+			"the acme directory url points at this instance, which cannot enroll with its own ca, use the instance ca or org ca source instead")
 		return
 	}
 	if err := e.policy.Allowed(ctx, host, orgID); err != nil {
@@ -108,6 +117,9 @@ func (e *Engine) checkACME(ctx context.Context, st *v1.GetCertStatusResponse, ho
 			}
 		}
 		problem(st, state, "%s", err.Error())
+		if state == v1.CertState_CERT_STATE_PENDING {
+			hint(st, "a system admin approves it under Admin, Portals")
+		}
 		return
 	}
 	info, err := e.CertificateInfo(ctx, host)
@@ -115,14 +127,48 @@ func (e *Engine) checkACME(ctx context.Context, st *v1.GetCertStatusResponse, ho
 		st.AcmeCert = info
 	}
 	if !info.GetIssued() {
-		problem(st, v1.CertState_CERT_STATE_PENDING, "certificate not yet issued")
+		if f, ok := e.lastIssueFailure(host); ok {
+			problem(st, v1.CertState_CERT_STATE_ERROR, "issuance failed %s ago: %s",
+				time.Since(f.at).Round(time.Second), f.err)
+		} else {
+			problem(st, v1.CertState_CERT_STATE_PENDING,
+				"not issued yet, use Issue certificate or open https://%s once dns points here", host)
+		}
+		e.reachabilityHints(ctx, st, host)
 		return
 	}
 	if time.Now().After(info.NotAfter.AsTime()) {
+		if f, ok := e.lastIssueFailure(host); ok {
+			problem(st, v1.CertState_CERT_STATE_ERROR, "certificate expired and renewal failed %s ago: %s",
+				time.Since(f.at).Round(time.Second), f.err)
+			e.reachabilityHints(ctx, st, host)
+			return
+		}
 		problem(st, v1.CertState_CERT_STATE_PENDING, "certificate expired, renewal happens on the next handshake")
 		return
 	}
 	st.State = v1.CertState_CERT_STATE_READY
+}
+
+// Ports are the usual reason a ca cannot validate
+func (e *Engine) reachabilityHints(ctx context.Context, st *v1.GetCertStatusResponse, host string) {
+	if listenErr := e.ChallengeListenerError(); listenErr != "" {
+		hint(st, "%s, pick another challenge port or leave it empty", listenErr)
+	}
+	sys := e.res.System(ctx)
+	port := strings.TrimSpace(sys.GetAcme().GetChallengePort())
+	switch {
+	case port == "":
+		if e.listenPort != "" && e.listenPort != "443" {
+			hint(st, "validation uses tls-alpn-01 only, port 443 of %s must reach the main listener on port %s", host, e.listenPort)
+		}
+	case port != "80":
+		hint(st, "the ca fetches http-01 tokens on port 80, publish it to the challenge listener on port %s", port)
+	}
+	public := sys.GetServer().GetPublicHostname()
+	if _, p, err := net.SplitHostPort(public); err == nil && p != "443" && bareHost(public) == host {
+		hint(st, "clients use port %s but the ca validates only on ports 80 and 443, both must reach this instance too", p)
+	}
 }
 
 // What the engine would serve for this portal right now
@@ -168,15 +214,17 @@ func (e *Engine) AppStatus(ctx context.Context) *v1.GetCertStatusResponse {
 	default:
 		st.Source = v1.CertSource_CERT_SOURCE_CONFIG
 		if e.configCert == nil {
-			problem(st, v1.CertState_CERT_STATE_NONE, "no cert_file/key_file pair in the config")
-			return st
-		}
-		leaf, err := x509.ParseCertificate(e.configCert.Certificate[0])
-		if err == nil && time.Now().After(leaf.NotAfter) {
+			problem(st, v1.CertState_CERT_STATE_NONE,
+				"no certificate configured, the primary hostname serves cleartext only, pick a certificate source or set tls.cert_file and tls.key_file")
+		} else if leaf, err := x509.ParseCertificate(e.configCert.Certificate[0]); err == nil && time.Now().After(leaf.NotAfter) {
 			problem(st, v1.CertState_CERT_STATE_ERROR, "config certificate expired %s", leaf.NotAfter.Format("2006-01-02"))
-			return st
+		} else {
+			st.State = v1.CertState_CERT_STATE_READY
 		}
-		st.State = v1.CertState_CERT_STATE_READY
+	}
+	if st.State != v1.CertState_CERT_STATE_READY &&
+		e.res.System(ctx).GetTls().GetMode() == v1.TLSMode_TLS_MODE_HTTPS_ONLY {
+		hint(st, "https only redirects start once this certificate is ready, cleartext keeps working until then")
 	}
 	return st
 }

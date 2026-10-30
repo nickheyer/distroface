@@ -13,7 +13,8 @@
 	import FormActions from '$lib/components/form-actions.svelte';
 	import LimitInput from '$lib/components/limit-input.svelte';
 	import PrincipalPicker from '$lib/components/git/principal-picker.svelte';
-	import { Loader, Undo } from '$lib/icons';
+	import UserAvatar from '$lib/components/user-avatar.svelte';
+	import { Loader, Undo, Upload, Trash } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import {
 		AgentApprovalPolicy,
@@ -62,6 +63,9 @@
 	const initial = untrack(() => agent);
 	const editing = !!initial;
 
+	// Matches the server cap
+	const AVATAR_MAX_BYTES = 1024 * 1024;
+
 	const positive = (v: number | bigint | undefined) => (v && Number(v) > 0 ? Number(v) : undefined);
 	const whole = (v: number | null | undefined) => Math.max(0, Math.round(Number(v) || 0));
 
@@ -90,6 +94,13 @@
 	let temperature = $state<number | undefined>(initial?.temperature);
 	let enabled = $state(initial?.enabled ?? true);
 	let allowedCallers = $state<string[]>([...(initial?.allowedCallerIds ?? [])]);
+	let botAvatarUrl = $state(initial?.botAvatarUrl ?? '');
+	let avatarUploaded = $state(initial?.avatarUploaded ?? false);
+	let avatarBusy = $state(false);
+	let fileInput = $state<HTMLInputElement | null>(null);
+	// Picture chosen before the agent exists, sent with create
+	let pendingAvatar = $state<File | null>(null);
+	let pendingAvatarUrl = $state('');
 
 	const t = initial?.triggers;
 	let flags = $state<Record<TriggerFlag, boolean>>(
@@ -111,6 +122,8 @@
 	const slugValid = $derived(slugPattern.test(slug));
 	const nameValid = $derived(name.trim().length > 0);
 	const handle = $derived(slug || 'handle');
+	const avatarPreview = $derived(editing ? botAvatarUrl : pendingAvatarUrl);
+	const hasAvatar = $derived(editing ? avatarUploaded : !!pendingAvatar);
 	const kindLabel = $derived(kindLabels[kind] ?? 'Agent');
 	const kindTools = $derived(defaultTools[kind] ?? []);
 	const effectiveTools = $derived(customTools ? tools : kindTools);
@@ -158,12 +171,75 @@
 			: 'Gated tools wait for approval before they run.'
 	);
 
+	function applyAvatar(a: Agent) {
+		botAvatarUrl = a.botAvatarUrl;
+		avatarUploaded = a.avatarUploaded;
+	}
+
+	$effect(() => {
+		const url = pendingAvatarUrl;
+		return () => {
+			if (url) URL.revokeObjectURL(url);
+		};
+	});
+
+	async function pickAvatar(ev: Event) {
+		const input = ev.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (!file) return;
+		if (file.size > AVATAR_MAX_BYTES) {
+			toast.error('Pick an image under 1 MB');
+			return;
+		}
+		if (!initial) {
+			pendingAvatar = file;
+			pendingAvatarUrl = URL.createObjectURL(file);
+			return;
+		}
+		avatarBusy = true;
+		try {
+			const data = new Uint8Array(await file.arrayBuffer());
+			const resp = await rpcClient.agents.setAgentAvatar({
+				scope,
+				id: initial.id,
+				data,
+				contentType: file.type
+			});
+			if (resp.agent) applyAvatar(resp.agent);
+			toast.success('Picture updated');
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			avatarBusy = false;
+		}
+	}
+
+	async function removeAvatar() {
+		if (!initial) {
+			pendingAvatar = null;
+			pendingAvatarUrl = '';
+			return;
+		}
+		avatarBusy = true;
+		try {
+			const resp = await rpcClient.agents.removeAgentAvatar({ scope, id: initial.id });
+			if (resp.agent) applyAvatar(resp.agent);
+			toast.success('Picture removed');
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			avatarBusy = false;
+		}
+	}
+
 	function spec(): AgentSpec {
 		return {
 			$typeName: 'distroface.v1.AgentSpec',
 			slug: slug.trim(),
 			name: name.trim(),
 			description: description.trim(),
+			avatarUrl: initial?.avatarUrl ?? '',
 			kind,
 			providerId,
 			model: model.trim(),
@@ -193,7 +269,11 @@
 		try {
 			const resp = editing
 				? await rpcClient.agents.updateAgent({ scope, id: initial!.id, spec: spec() })
-				: await rpcClient.agents.createAgent({ scope, spec: spec() });
+				: await rpcClient.agents.createAgent({
+						scope,
+						spec: spec(),
+						avatar: pendingAvatar ? new Uint8Array(await pendingAvatar.arrayBuffer()) : undefined
+					});
 			toast.success(editing ? 'Agent updated' : 'Agent created');
 			if (resp.agent) onSaved(resp.agent);
 		} catch {
@@ -210,6 +290,50 @@
 {/snippet}
 
 <FormSection title="Identity" description="The handle is the bot username and the mention.">
+	<FormField label="Picture">
+		<div class="flex flex-wrap items-center gap-5 rounded-lg border bg-card p-4">
+			<UserAvatar
+				username={handle}
+				displayName={name}
+				avatarUrl={avatarPreview}
+				class="size-20 ring-1 ring-border"
+				fallbackClass="text-2xl"
+			/>
+			<div class="min-w-0 flex-1 space-y-2">
+				<p class="text-sm text-muted-foreground">
+					PNG, JPEG, GIF, or WebP, up to 1 MB. Square images look best.
+				</p>
+				<div class="flex flex-wrap gap-2">
+					<input
+						bind:this={fileInput}
+						type="file"
+						accept="image/png,image/jpeg,image/gif,image/webp"
+						class="hidden"
+						onchange={pickAvatar}
+					/>
+					<Button
+						variant="outline"
+						size="sm"
+						onclick={() => fileInput?.click()}
+						disabled={avatarBusy}
+					>
+						{#if avatarBusy}
+							<Loader class="animate-spin" />
+						{:else}
+							<Upload />
+						{/if}
+						{hasAvatar ? 'Replace' : 'Upload'}
+					</Button>
+					{#if hasAvatar}
+						<Button variant="ghost-muted" size="sm" onclick={removeAvatar} disabled={avatarBusy}>
+							<Trash />
+							Remove
+						</Button>
+					{/if}
+				</div>
+			</div>
+		</div>
+	</FormField>
 	<FormField label="Name" id="agent-name" required span="half">
 		<Input id="agent-name" bind:value={name} placeholder="Code reviewer" autocomplete="off" />
 	</FormField>

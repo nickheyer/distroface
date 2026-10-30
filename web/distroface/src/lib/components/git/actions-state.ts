@@ -180,7 +180,7 @@ export function runTitle(run: WorkflowRun): string {
 		case 'push':
 			return r.kind === 'tag' ? `Tag ${r.name} pushed` : `Push to ${r.name}`;
 		case 'pull_request':
-			return run.pullRequestNumber ? `Pull request #${run.pullRequestNumber}` : 'Pull request';
+			return run.pullRequestNumber ? `Pull request !${run.pullRequestNumber}` : 'Pull request';
 		case 'workflow_dispatch':
 			return r.name ? `Manual run on ${r.name}` : 'Manual run';
 		case 'schedule':

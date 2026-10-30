@@ -268,7 +268,7 @@ func TestCodeSessionCommitsAndOpensPullRequest(t *testing.T) {
 	if err != nil || string(blob.Content) != "hello world\n" {
 		t.Fatalf("hello.txt %v %v", err, blob)
 	}
-	issue, err := h.store.GetGitIssue(h.ctx, h.repo.ID, done.ResultPullNumber)
+	issue, err := h.store.GetGitIssue(h.ctx, h.repo.ID, done.ResultPullNumber, true)
 	if err != nil || issue == nil || !issue.IsPull {
 		t.Fatalf("pull request row %v %v", issue, err)
 	}
@@ -313,7 +313,7 @@ func TestReviewSessionPausesForApproval(t *testing.T) {
 		t.Fatalf("pull: %v", err)
 	}
 	def := h.defineAgent(AgentSpec{Slug: "reviewer", Name: "Reviewer", Kind: KindReview, Approval: ApprovalAllWrites, Enabled: true})
-	sess, err := h.agents.StartSession(h.ctx, StartParams{Repo: h.repo, Def: def, IssueNumber: issue.Number, Trigger: TriggerManual, Actor: h.actor})
+	sess, err := h.agents.StartSession(h.ctx, StartParams{Repo: h.repo, Def: def, IssueNumber: issue.Number, IsPull: issue.IsPull, Trigger: TriggerManual, Actor: h.actor})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -501,7 +501,7 @@ func TestSessionOpensIssueAndAdoptsIt(t *testing.T) {
 		}
 	}
 	// The new issue is the bot's, carries the label, and became the session target
-	issue, err := h.store.GetGitIssue(h.ctx, h.repo.ID, 2)
+	issue, err := h.store.GetGitIssue(h.ctx, h.repo.ID, 2, false)
 	if err != nil || issue == nil || issue.IsPull || issue.Title != "Close session keybind is unset" {
 		t.Fatalf("issue %v %v", issue, err)
 	}
@@ -524,11 +524,11 @@ func TestSessionOpensIssueAndAdoptsIt(t *testing.T) {
 	if len(olderComments) != 1 || olderComments[0].Body != "Related to the new issue." {
 		t.Fatalf("older issue comments %+v", olderComments)
 	}
-	// The pull request closes the adopted issue
-	if done.ResultPullNumber != 3 {
+	// The pull request closes the adopted issue and numbers on its own sequence
+	if done.ResultPullNumber != 1 {
 		t.Fatalf("pull request number %d", done.ResultPullNumber)
 	}
-	pull, err := h.store.GetGitIssue(h.ctx, h.repo.ID, 3)
+	pull, err := h.store.GetGitIssue(h.ctx, h.repo.ID, 1, true)
 	if err != nil || pull == nil || !pull.IsPull || !strings.Contains(pull.Body, "Closes #2") {
 		t.Fatalf("pull request %v %v", pull, err)
 	}
@@ -613,7 +613,7 @@ func TestResumedSessionReplaysTheSameFirstMessage(t *testing.T) {
 		t.Fatalf("pull: %v", err)
 	}
 	def := h.defineAgent(AgentSpec{Slug: "reviewer", Name: "Reviewer", Kind: KindReview, Approval: ApprovalAllWrites, Enabled: true})
-	sess, err := h.agents.StartSession(h.ctx, StartParams{Repo: h.repo, Def: def, IssueNumber: issue.Number, Trigger: TriggerManual, Actor: h.actor})
+	sess, err := h.agents.StartSession(h.ctx, StartParams{Repo: h.repo, Def: def, IssueNumber: issue.Number, IsPull: issue.IsPull, Trigger: TriggerManual, Actor: h.actor})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

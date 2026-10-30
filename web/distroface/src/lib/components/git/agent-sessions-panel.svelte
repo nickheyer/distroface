@@ -69,7 +69,13 @@
 					? Promise.resolve(undefined)
 					: rpcClient.agents.getRepoAgents({ namespace, name }, backgroundCallOptions),
 				rpcClient.agents.listAgentSessions(
-					{ namespace, name, issueNumber, page: { pageSize: 10, pageToken: '', orderBy: '' } },
+					{
+						namespace,
+						name,
+						issueNumber,
+						isPull,
+						page: { pageSize: 10, pageToken: '', orderBy: '' }
+					},
 					silent ? backgroundCallOptions : silentCallOptions
 				)
 			]);
@@ -119,7 +125,8 @@
 				name,
 				agent: selected.id.startsWith('file:') ? selected.slug : selected.id,
 				prompt: prompt.trim(),
-				issueNumber
+				issueNumber,
+				isPull
 			});
 			toast.success(`Session #${resp.session?.number} queued`);
 			prompt = '';
@@ -210,14 +217,14 @@
 									{relativeTime(timestampDate(s.createdAt))}
 								{/if}
 							</span>
-							{#if s.resultPullNumber > 0n && s.resultPullNumber !== issueNumber}
+							{#if s.resultPullNumber > 0n && !(isPull && s.resultPullNumber === issueNumber)}
 								<a
 									href={resolve('/[namespace]/[name]/pulls/[number]', {
 										namespace,
 										name,
 										number: String(s.resultPullNumber)
 									})}
-									class="link">PR #{s.resultPullNumber}</a
+									class="link">PR !{s.resultPullNumber}</a
 								>
 							{/if}
 						</div>

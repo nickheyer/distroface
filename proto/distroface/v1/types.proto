@@ -53,6 +53,8 @@ message User {
   bool oidc_linked = 12;
   // Uploaded image route or the identity provider picture, empty shows initials
   string avatar_url = 13;
+  // Bot account behind an agent
+  bool is_agent = 14;
 }
 
 // Reports a per-item failure in a bulk operation.

@@ -80,6 +80,7 @@
 					namespace,
 					name,
 					number,
+					isPull: true,
 					commentsOnly: false,
 					page: { pageSize: 50, pageToken: token, orderBy: '' }
 				},
@@ -156,7 +157,7 @@
 		if (!comment.trim() || posting) return;
 		posting = true;
 		try {
-			await rpcClient.issue.createComment({ namespace, name, number, body: comment });
+			await rpcClient.issue.createComment({ namespace, name, number, isPull: true, body: comment });
 			comment = '';
 			await loadTimeline();
 			onChanged();
@@ -283,6 +284,7 @@
 					{namespace}
 					{name}
 					number={Number(number)}
+					isPull
 					reactions={issue.reactions}
 					canReact={canComment}
 					{onChanged}
@@ -305,6 +307,7 @@
 					{namespace}
 					{name}
 					number={Number(number)}
+					isPull
 					items={seg.items}
 					{canComment}
 					canModerate={canWrite}
@@ -318,6 +321,7 @@
 				{namespace}
 				{name}
 				number={Number(number)}
+				isPull
 				items={[]}
 				canComment={false}
 				canModerate={false}

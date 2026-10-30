@@ -4,6 +4,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import EmptyState from '$lib/components/empty-state.svelte';
+	import BotBadge from '$lib/components/bot-badge.svelte';
 	import CommitBadge from './commit-badge.svelte';
 	import VerificationBadge from './verification-badge.svelte';
 	import { CommitStatusState } from '$lib/proto/distroface/v1/git_pb';
@@ -192,6 +193,7 @@
 											href={resolve('/[namespace]', { namespace: c.author.username })}
 											class="font-medium text-foreground hover:text-primary">{c.author.username}</a
 										>
+										{#if c.author.isAgent}<BotBadge />{/if}
 									{:else}
 										<span class="font-medium text-foreground">{c.author?.name ?? 'Unknown'}</span>
 									{/if}

@@ -316,7 +316,7 @@
 								<p
 									class="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted-foreground"
 								>
-									<span>#{n}</span>
+									<span>!{n}</span>
 									<span>opened {opened(p)} by</span>
 									<a
 										href={resolve('/[namespace]', { namespace: p.issue?.author?.username ?? '' })}

@@ -21,31 +21,45 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// Per request cache of usernames by email for commit signatures
+// Per request cache of accounts by email for commit signatures
 type gitUserCache struct {
 	store   *stores.Store
-	byEmail map[string]string
+	byEmail map[string]*storage.User
 	byID    map[string]*storage.User
 }
 
 func newGitUserCache(store *stores.Store) *gitUserCache {
-	return &gitUserCache{store: store, byEmail: map[string]string{}, byID: map[string]*storage.User{}}
+	return &gitUserCache{store: store, byEmail: map[string]*storage.User{}, byID: map[string]*storage.User{}}
 }
 
-func (c *gitUserCache) usernameByEmail(ctx context.Context, email string) string {
+func (c *gitUserCache) userByEmail(ctx context.Context, email string) *storage.User {
 	if email == "" {
-		return ""
+		return nil
 	}
 	key := strings.ToLower(email)
 	if u, ok := c.byEmail[key]; ok {
 		return u
 	}
-	name := ""
-	if u, err := c.store.GetUserByEmail(ctx, email); err == nil && u != nil {
-		name = u.Username
+	u, _ := c.store.GetUserByEmail(ctx, email)
+	c.byEmail[key] = u
+	return u
+}
+
+func (c *gitUserCache) usernameByEmail(ctx context.Context, email string) string {
+	if u := c.userByEmail(ctx, email); u != nil {
+		return u.Username
 	}
-	c.byEmail[key] = name
-	return name
+	return ""
+}
+
+// Fills the local account fields of a signature
+func (c *gitUserCache) resolveSignature(ctx context.Context, sig *v1.GitSignature) {
+	if sig == nil {
+		return
+	}
+	if u := c.userByEmail(ctx, sig.Email); u != nil {
+		sig.Username, sig.IsAgent = u.Username, isAgentUser(u)
+	}
 }
 
 // Loads many users in one query ahead of lookups
@@ -311,8 +325,8 @@ func (e *gitCommitEnricher) commit(c *object.Commit, withStats, withVerification
 	if out == nil {
 		return nil
 	}
-	out.Author.Username = e.users.usernameByEmail(e.ctx, c.Author.Email)
-	out.Committer.Username = e.users.usernameByEmail(e.ctx, c.Committer.Email)
+	e.users.resolveSignature(e.ctx, out.Author)
+	e.users.resolveSignature(e.ctx, out.Committer)
 	if withStats {
 		out.Additions, out.Deletions, out.ChangedFiles = e.r.CommitStats(e.ctx, c)
 	}

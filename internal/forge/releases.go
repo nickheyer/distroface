@@ -427,7 +427,7 @@ func (m *Manager) GenerateReleaseNotes(ctx context.Context, repo *db.GitReposito
 				name = m.usernameOf(ctx, p.AuthorID)
 				users[p.AuthorID] = name
 			}
-			fmt.Fprintf(&b, "* %s by @%s in #%d\n", p.Title, name, p.Number)
+			fmt.Fprintf(&b, "* %s by @%s in !%d\n", p.Title, name, p.Number)
 		}
 		if len(pulls) > 0 {
 			b.WriteString("\n## Commits\n\n")

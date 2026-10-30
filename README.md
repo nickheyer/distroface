@@ -81,6 +81,55 @@ Repos are addressed as `[namespace/]name`, bare names resolve to your own namesp
 
 One `config.yaml`, every default is in [`config.example.yaml`](config.example.yaml). Any key works as a `DISTROFACE_*` env var. Seed users and orgs on first boot with the `bootstrap:` block.
 
+## TLS and ACME
+
+The main listener (`server.port`, default 8080) answers TLS and cleartext on the same port and picks the certificate by SNI. Nothing is served over TLS until a certificate source resolves, so a fresh install is reached over plain `http://` and stays reachable that way until a certificate is ready, even in HTTPS only mode. Everything below lives under Admin, Network security and Admin, Certificate authority, and can be seeded on first boot through the `settings:` block or `DISTROFACE_SETTINGS_JSON`. The status line under the hostname on Network security reports why a certificate is not issued yet and what to do next.
+
+### Public certificate from Let's Encrypt
+
+The CA validates on port 80 (http-01) and port 443 (tls-alpn-01), nothing else. Publish the main port as 443 and the challenge port as 80, keep 8080 for the cleartext setup session:
+
+```bash
+docker run -p 80:80 -p 443:8080 -p 8080:8080 -v distroface:/app/data nickheyer/distroface:latest
+```
+
+1. Point DNS at the host, open `http://registry.example.com:8080` and sign in as the admin.
+2. Admin, Network security: set the public hostname to `registry.example.com` (no port when clients use 443).
+3. ACME client: set the account email, leave the directory empty for Let's Encrypt, keep the challenge port at 80, then turn on automatic issuance. Use `https://acme-staging-v02.api.letsencrypt.org/directory` while wiring ports, failed validations count against the production limits.
+4. Certificate source: pick ACME and press Issue certificate. The first https handshake also issues.
+5. Listener mode: HTTPS only once the status reads https, redirects start when the certificate is ready.
+
+Saves that cannot work are refused with the fix in the message: ACME without an email, ACME as the source while issuance is off or the hostname is `localhost` or an ip, a challenge port equal to the main or ssh port, a directory url pointing at this instance. A public hostname with a port such as `registry.example.com:8443` is fine for clients, the CA still needs 80 or 443 to reach the instance.
+
+The same deployment as config:
+
+```yaml
+settings:
+  server: { public_hostname: "registry.example.com" }
+  tls: { mode: "TLS_MODE_HTTPS_ONLY", primary_source: "CERT_SOURCE_ACME" }
+  acme: { enabled: true, email: "ops@example.com", challenge_port: "80" }
+```
+
+### Org portal hostname with an ACME certificate
+
+Needs automatic issuance on at the instance (step 3 above) and DNS for the portal hostname pointing at the host. The org admin creates the portal under the org's Portals page with the hostname and picks ACME as the certificate source. The hostname registers itself as a certificate domain, with Require approval on under Admin, Portals it waits there for a system admin. Issue from the org's Certificates page or let the first https handshake do it. Validation hits the portal hostname on 80 or 443, a portal on another port therefore relies on the http-01 listener on port 80.
+
+### Internal CA with the built in ACME server
+
+For runners and other internal machines that should trust one root.
+
+1. Admin, Certificate authority: generate the instance root. Clients fetch it from `https://registry.example.com/.well-known/distroface/ca.pem` or run `dfcli trust install --server https://registry.example.com`.
+2. Turn on the built in ACME server, it refuses to start without the root.
+3. Add every hostname that may enroll under Allowed hostnames. The primary hostname and ACME portal hostnames are allowed implicitly, anything else is rejected with `host not allowed`.
+4. Point the client at `https://registry.example.com/acme/directory` with the root as its CA bundle. Until the primary hostname serves TLS the directory also answers at `http://registry.example.com:8080/acme/directory`. The instance validates http-01 on port 80 or tls-alpn-01 on port 443 of the client, so the client must be reachable from the instance on one of those.
+
+```bash
+LEGO_CA_CERTIFICATES=distroface-ca.pem lego --server https://registry.example.com/acme/directory \
+  --email ops@example.com --domains runner1.internal --http run
+```
+
+To serve the primary hostname or a portal from the same root pick the Instance CA or Org CA certificate source instead, an instance cannot enroll with its own directory.
+
 ## Hack
 
 ```bash

@@ -105,9 +105,9 @@
 
 	function defaultTitle(m: GitMergeMethod): string {
 		const n = Number(number);
-		if (m === GitMergeMethod.SQUASH) return `${pull.issue?.title ?? ''} (#${n})`;
+		if (m === GitMergeMethod.SQUASH) return `${pull.issue?.title ?? ''} (!${n})`;
 		const ns = pull.headRepoFullName.split('/')[0] || namespace;
-		return `Merge pull request #${n} from ${ns}/${pull.headBranch}`;
+		return `Merge pull request !${n} from ${ns}/${pull.headBranch}`;
 	}
 
 	function defaultMessage(m: GitMergeMethod): string {

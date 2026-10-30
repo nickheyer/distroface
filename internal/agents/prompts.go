@@ -3,6 +3,8 @@ package agents
 import (
 	"fmt"
 	"strings"
+
+	"github.com/nickheyer/distroface/internal/db"
 )
 
 // System prompt of a session, kind guidance plus repository and agent instructions
@@ -20,6 +22,7 @@ func (m *Manager) systemPrompt(rc *runContext) string {
 - Never reveal secrets, tokens, or credentials, and never ask for them.
 - Some actions may pause for human approval. When a tool result says an action was rejected, respect the decision and adapt.
 - When you are done, reply with a concise plain text summary and no tool call. That final message is shown to people as the session summary.
+- Issues and pull requests number separately. Write #12 for issue 12 and !12 for pull request 12, they are different things. Closes #12 in a pull request body closes the issue when the pull request merges.
 `)
 	tools := map[string]bool{}
 	for _, name := range rc.def.ToolNames() {
@@ -118,29 +121,29 @@ func initialMessage(context, prompt string) string {
 func defaultPrompt(kind, trigger string, issueNumber int64, isPull bool) string {
 	switch {
 	case trigger == TriggerPullRequest && kind == KindReview:
-		return fmt.Sprintf("Review pull request #%d.", issueNumber)
+		return fmt.Sprintf("Review pull request !%d.", issueNumber)
 	case trigger == TriggerPullRequest:
-		return fmt.Sprintf("Look at pull request #%d and act according to your instructions.", issueNumber)
+		return fmt.Sprintf("Look at pull request !%d and act according to your instructions.", issueNumber)
 	case trigger == TriggerIssue && isPull:
-		return fmt.Sprintf("You were assigned pull request #%d. Act according to your instructions.", issueNumber)
+		return fmt.Sprintf("You were assigned pull request !%d. Act according to your instructions.", issueNumber)
 	case trigger == TriggerIssue && kind == KindTriage:
 		return fmt.Sprintf("Triage issue #%d.", issueNumber)
 	case trigger == TriggerIssue:
 		return fmt.Sprintf("Implement issue #%d.", issueNumber)
 	case trigger == TriggerLabel && kind == KindTriage:
-		return fmt.Sprintf("Triage #%d, it was just labeled for you.", issueNumber)
+		return fmt.Sprintf("Triage %s, it was just labeled for you.", db.IssueRef(isPull, issueNumber))
 	case trigger == TriggerLabel && isPull:
-		return fmt.Sprintf("Pull request #%d was labeled for you. Act according to your instructions.", issueNumber)
+		return fmt.Sprintf("Pull request !%d was labeled for you. Act according to your instructions.", issueNumber)
 	case trigger == TriggerLabel:
 		return fmt.Sprintf("Issue #%d was labeled for you. Act according to your instructions.", issueNumber)
 	case trigger == TriggerReview:
-		return fmt.Sprintf("Address the review feedback on pull request #%d.", issueNumber)
+		return fmt.Sprintf("Address the review feedback on pull request !%d.", issueNumber)
 	case trigger == TriggerWorkflowRun:
-		return fmt.Sprintf("A workflow run failed on pull request #%d. Find the failing job with get_checks and get_workflow_run_log, then fix the cause.", issueNumber)
+		return fmt.Sprintf("A workflow run failed on pull request !%d. Find the failing job with get_checks and get_workflow_run_log, then fix the cause.", issueNumber)
 	}
 	if issueNumber > 0 {
 		if isPull {
-			return fmt.Sprintf("Look at pull request #%d and act according to your instructions.", issueNumber)
+			return fmt.Sprintf("Look at pull request !%d and act according to your instructions.", issueNumber)
 		}
 		return fmt.Sprintf("Look at issue #%d and act according to your instructions.", issueNumber)
 	}

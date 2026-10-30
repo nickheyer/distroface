@@ -44,12 +44,13 @@ type PortalLookup interface {
 // Terminates tls for primary server + portal listeners, every serving
 // identity has one explicit certificate source, nothing falls back
 type Engine struct {
-	store    *stores.Store
-	res      *settings.Resolver
-	portals  PortalLookup
-	log      *logger.Logger
-	policy   *HostnamePolicy
-	bindHost string
+	store      *stores.Store
+	res        *settings.Resolver
+	portals    PortalLookup
+	log        *logger.Logger
+	policy     *HostnamePolicy
+	bindHost   string
+	listenPort string // Main listener port, only used for status hints
 
 	configCert *tls.Certificate // From cert_file/key_file at startup
 
@@ -57,7 +58,9 @@ type Engine struct {
 	managers     map[string]*autocert.Manager // Keyed directory plus email
 	certCache    map[string]*cachedKeyPair    // Parsed uploads keyed by scope target
 	leaves       map[string]*tls.Certificate  // Org ca minted leaves keyed org plus host
+	issueErrs    map[string]issueFailure      // Last failed acme order per configured host
 	challenge    *http.Server
+	challengeErr string // Why the http-01 listener is not running
 	ready        readyCache
 	acmeIssuerMu sync.Mutex // Serializes lazy acme ca minting
 }
@@ -66,6 +69,14 @@ type cachedKeyPair struct {
 	cert      *tls.Certificate
 	updatedAt time.Time
 }
+
+type issueFailure struct {
+	err string
+	at  time.Time
+}
+
+// Bounds failure memory, policy already limits hosts
+const maxIssueFailures = 128
 
 func NewEngine(store *stores.Store, res *settings.Resolver, portals PortalLookup, certFile, keyFile, bindHost string, log *logger.Logger) (*Engine, error) {
 	e := &Engine{
@@ -78,6 +89,7 @@ func NewEngine(store *stores.Store, res *settings.Resolver, portals PortalLookup
 		managers:  map[string]*autocert.Manager{},
 		certCache: map[string]*cachedKeyPair{},
 		leaves:    map[string]*tls.Certificate{},
+		issueErrs: map[string]issueFailure{},
 	}
 	if certFile != "" || keyFile != "" {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
@@ -91,6 +103,11 @@ func NewEngine(store *stores.Store, res *settings.Resolver, portals PortalLookup
 
 func (e *Engine) Policy() *HostnamePolicy {
 	return e.policy
+}
+
+// Records the main listener port for status hints
+func (e *Engine) SetListenPort(port string) {
+	e.listenPort = strings.TrimSpace(port)
 }
 
 // Bare primary hostname from live settings
@@ -123,19 +140,12 @@ func (e *Engine) ManualCertLoaded() bool {
 
 // Bare lowercase host from a host or host port string
 func bareHost(host string) string {
-	host = strings.ToLower(strings.TrimSpace(host))
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		return h
-	}
-	return host
+	return settings.BareHost(host)
 }
 
 // Dotted dns name, not an ip, not localhost
 func issuableHost(host string) bool {
-	if host == "" || host == "localhost" || !strings.Contains(host, ".") {
-		return false
-	}
-	return net.ParseIP(host) == nil
+	return settings.IssuableHost(host)
 }
 
 // Issuance is limited to hostnames explicitly configured somewhere,
@@ -183,8 +193,73 @@ func (e *Engine) managerFor(directory, email string) *autocert.Manager {
 	if directory != "" {
 		m.Client = &acme.Client{DirectoryURL: directory}
 	}
+	// Without this autocert never offers http-01
+	if e.challengeConfigured() {
+		m.HTTPHandler(nil)
+	}
 	e.managers[key] = m
 	return m
+}
+
+// Whether settings ask for the cleartext http-01 listener
+func (e *Engine) challengeConfigured() bool {
+	acmeEff := e.res.System(context.Background()).GetAcme()
+	return acmeEff.GetEnabled() && strings.TrimSpace(acmeEff.GetChallengePort()) != ""
+}
+
+// Autocert issuance with the outcome remembered per host
+func (e *Engine) acmeCertificate(ctx context.Context, m *autocert.Manager, hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	cert, err := m.GetCertificate(hello)
+	// Challenge hellos are not an order outcome
+	if len(hello.SupportedProtos) == 1 && hello.SupportedProtos[0] == acme.ALPNProto {
+		return cert, err
+	}
+	host := bareHost(hello.ServerName)
+	if err == nil {
+		e.clearIssueFailure(host)
+		return cert, nil
+	}
+	// Only policy approved hosts are remembered
+	if host != "" && e.hostPolicy(ctx, host) == nil {
+		e.recordIssueFailure(host, err)
+	}
+	return nil, err
+}
+
+func (e *Engine) recordIssueFailure(host string, err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if _, ok := e.issueErrs[host]; !ok && len(e.issueErrs) >= maxIssueFailures {
+		oldest, oldestAt := "", time.Time{}
+		for h, f := range e.issueErrs {
+			if oldest == "" || f.at.Before(oldestAt) {
+				oldest, oldestAt = h, f.at
+			}
+		}
+		delete(e.issueErrs, oldest)
+	}
+	e.issueErrs[host] = issueFailure{err: err.Error(), at: time.Now()}
+}
+
+func (e *Engine) clearIssueFailure(host string) {
+	e.mu.Lock()
+	delete(e.issueErrs, host)
+	e.mu.Unlock()
+}
+
+// Last failed order, false since the last success
+func (e *Engine) lastIssueFailure(host string) (issueFailure, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	f, ok := e.issueErrs[host]
+	return f, ok
+}
+
+// Why the http-01 listener is stopped, empty when fine
+func (e *Engine) ChallengeListenerError() string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.challengeErr
 }
 
 // A stored directory pointing back at this instance would dial itself
@@ -291,7 +366,7 @@ func (e *Engine) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, e
 	switch portal.Source {
 	case v1.CertSource_CERT_SOURCE_ACME:
 		if m := e.portalManager(ctx, portal.ID); m != nil {
-			return m.GetCertificate(hello)
+			return e.acmeCertificate(ctx, m, hello)
 		}
 		return nil, fmt.Errorf("acme is disabled, no certificate for portal host %q", host)
 	case v1.CertSource_CERT_SOURCE_ORG_CA:
@@ -332,7 +407,7 @@ func (e *Engine) appCertificate(ctx context.Context, hello *tls.ClientHelloInfo,
 		return cert, nil
 	case v1.CertSource_CERT_SOURCE_ACME:
 		if m := e.defaultManager(ctx); m != nil {
-			return m.GetCertificate(hello)
+			return e.acmeCertificate(ctx, m, hello)
 		}
 		return nil, fmt.Errorf("acme is disabled, no app certificate for %q", host)
 	case v1.CertSource_CERT_SOURCE_APP_CA:
@@ -541,7 +616,7 @@ func IssueICA(rootCertPEM, rootKeyPEM, commonName string) (certPEM, keyPEM strin
 // Handler for the cleartext port, answers http-01 then redirects
 func (e *Engine) HTTPChallengeHandler() http.Handler {
 	forbid := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "https required", http.StatusForbidden)
+		http.Error(w, "https required, this port only answers acme challenges, use https://"+bareHost(r.Host), http.StatusForbidden)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -570,15 +645,16 @@ func (e *Engine) HTTPChallengeHandler() http.Handler {
 // Starts or stops the cleartext challenge listener to match settings
 func (e *Engine) ReconcileChallengeServer() {
 	acmeEff := e.res.System(context.Background()).GetAcme()
-	port := acmeEff.GetChallengePort()
+	port := strings.TrimSpace(acmeEff.GetChallengePort())
 	want := acmeEff.GetEnabled() && port != ""
+	addr := net.JoinHostPort(e.bindHost, port)
 
 	e.mu.Lock()
 	running := e.challenge
 	e.mu.Unlock()
 
 	// A port change needs a stop then start
-	if running != nil && want && running.Addr != net.JoinHostPort(e.bindHost, port) {
+	if running != nil && want && running.Addr != addr {
 		_ = running.Close()
 		e.mu.Lock()
 		e.challenge = nil
@@ -586,28 +662,51 @@ func (e *Engine) ReconcileChallengeServer() {
 		running = nil
 	}
 
-	if want && running == nil {
+	switch {
+	case want && running == nil:
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			e.mu.Lock()
+			e.challengeErr = fmt.Sprintf("http-01 listener on %s failed: %v", addr, err)
+			e.mu.Unlock()
+			e.log.Error("ACME challenge listener on %s failed: %v", addr, err)
+			return
+		}
 		srv := &http.Server{
-			Addr:              net.JoinHostPort(e.bindHost, port),
+			Addr:              addr,
 			Handler:           e.HTTPChallengeHandler(),
 			ReadHeaderTimeout: 10 * time.Second,
 			IdleTimeout:       60 * time.Second,
 		}
 		e.mu.Lock()
 		e.challenge = srv
+		e.challengeErr = ""
+		managers := make([]*autocert.Manager, 0, len(e.managers))
+		for _, m := range e.managers {
+			managers = append(managers, m)
+		}
 		e.mu.Unlock()
+		// Managers built before the listener existed may now offer http-01
+		for _, m := range managers {
+			m.HTTPHandler(nil)
+		}
 		go func() {
 			e.log.Info("ACME challenge listener on %s", srv.Addr)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				e.log.Error("ACME challenge listener stopped: %v", err)
 			}
 		}()
-	} else if !want && running != nil {
+	case !want && running != nil:
 		_ = running.Close()
 		e.mu.Lock()
 		e.challenge = nil
+		e.challengeErr = ""
 		e.mu.Unlock()
 		e.log.Info("ACME challenge listener stopped")
+	case !want:
+		e.mu.Lock()
+		e.challengeErr = ""
+		e.mu.Unlock()
 	}
 }
 
@@ -644,7 +743,7 @@ func (e *Engine) EnsureCertificate(ctx context.Context, domain string) (*v1.Cert
 	if manager == nil {
 		return nil, fmt.Errorf("acme is disabled or the directory url points back at this instance")
 	}
-	if _, err := manager.GetCertificate(syntheticHello(domain)); err != nil {
+	if _, err := e.acmeCertificate(ctx, manager, syntheticHello(domain)); err != nil {
 		return nil, err
 	}
 	return e.CertificateInfo(ctx, domain)

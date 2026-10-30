@@ -3,6 +3,7 @@
 	import { CircleDot, CheckCircle, GitPullRequest, GitMerge, Users, Loader } from '$lib/icons';
 	import { Avatar, AvatarFallback } from '$lib/components/ui/avatar';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { issueRef } from '$lib/utils';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { IssueState, type Issue } from '$lib/proto/distroface/v1/issue_pb';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -38,7 +39,7 @@
 	const nm = $derived(name ?? gitRepoStore.repo?.name ?? '');
 	const orgId = $derived(gitRepoStore.repo?.isOrgNamespace ? gitRepoStore.repo.ownerId : '');
 
-	let trigger = $state<'@' | '#' | null>(null);
+	let trigger = $state<'@' | '#' | '!' | null>(null);
 	let query = $state('');
 	let start = 0;
 	let items = $state<Item[]>([]);
@@ -79,7 +80,7 @@
 		const tokenStart = i + 1;
 		const token = text.slice(tokenStart, end);
 		const ch = token[0];
-		if (ch !== '@' && ch !== '#') return close();
+		if (ch !== '@' && ch !== '#' && ch !== '!') return close();
 		if (tokenStart > 0 && !/[\s(]/.test(text[tokenStart - 1])) return close();
 		const q = token.slice(1);
 		if (!/^[\w./-]*$/.test(q)) return close();
@@ -104,7 +105,7 @@
 		if (!kind) return;
 		loading = true;
 		try {
-			const found = kind === '@' ? await searchPeople(q) : await searchIssues(q);
+			const found = kind === '@' ? await searchPeople(q) : await searchIssues(q, kind === '!');
 			if (mine !== seq) return;
 			items = found.slice(0, LIMIT);
 			if (active >= items.length) active = 0;
@@ -165,7 +166,8 @@
 			: { icon: CircleDot, tone: 'text-success' };
 	}
 
-	async function searchIssues(q: string): Promise<Item[]> {
+	// Hash completes issues, bang completes pull requests
+	async function searchIssues(q: string, pulls: boolean): Promise<Item[]> {
 		const out: Item[] = [];
 		const seen = new SvelteSet<string>();
 		const add = (i: Issue) => {
@@ -173,9 +175,9 @@
 			seen.add(i.id);
 			out.push({
 				key: `issue:${i.id}`,
-				insert: `#${i.number}`,
+				insert: issueRef(i.isPull, i.number),
 				title: i.title,
-				detail: `#${i.number}`,
+				detail: issueRef(i.isPull, i.number),
 				...issueIcon(i)
 			});
 		};
@@ -183,7 +185,7 @@
 		if (numeric) {
 			try {
 				const exact = await rpcClient.issue.getIssue(
-					{ namespace: ns, name: nm, number: BigInt(q) },
+					{ namespace: ns, name: nm, number: BigInt(q), isPull: pulls },
 					silentCallOptions
 				);
 				if (exact.issue) add(exact.issue);
@@ -196,6 +198,7 @@
 				namespace: ns,
 				name: nm,
 				state: IssueState.OPEN,
+				isPull: pulls,
 				page: { pageSize: numeric ? 40 : LIMIT, query: { text: numeric ? '' : q, filters: [] } }
 			},
 			silentCallOptions

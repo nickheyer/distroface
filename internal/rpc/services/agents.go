@@ -357,12 +357,29 @@ func (s *AgentsService) CreateAgent(ctx context.Context, req *v1.CreateAgentRequ
 	if err != nil {
 		return nil, err
 	}
+	// Reject a bad picture before the row exists
+	var avatarType string
+	if len(req.Avatar) > 0 {
+		if avatarType, err = avatarContentType(req.Avatar); err != nil {
+			return nil, err
+		}
+	}
 	user := auth.UserFromContext(ctx)
 	a, err := s.agents.CreateAgent(ctx, sc.kind, sc.id, agentSpecFromProto(req.Spec), user.ID)
 	if err != nil {
 		return nil, mapAgentsErr(err)
 	}
-	return &v1.CreateAgentResponse{Agent: s.agentProto(ctx, agents.DefinitionFromRow(a), sc.proto(), false)}, nil
+	d := agents.DefinitionFromRow(a)
+	if avatarType != "" {
+		bot, err := s.agents.Identity(ctx, d)
+		if err != nil {
+			return nil, mapAgentsErr(err)
+		}
+		if err := storeAvatar(ctx, s.store, bot, req.Avatar, avatarType); err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		}
+	}
+	return &v1.CreateAgentResponse{Agent: s.agentProto(ctx, d, sc.proto(), false)}, nil
 }
 
 func (s *AgentsService) UpdateAgent(ctx context.Context, req *v1.UpdateAgentRequest) (*v1.UpdateAgentResponse, error) {
@@ -387,6 +404,44 @@ func (s *AgentsService) DeleteAgent(ctx context.Context, req *v1.DeleteAgentRequ
 	return &v1.DeleteAgentResponse{}, nil
 }
 
+func (s *AgentsService) SetAgentAvatar(ctx context.Context, req *v1.SetAgentAvatarRequest) (*v1.SetAgentAvatarResponse, error) {
+	sc, a, err := s.scopedAgent(ctx, req.Scope, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	ct, err := avatarContentType(req.Data)
+	if err != nil {
+		return nil, err
+	}
+	bot, err := s.agents.Identity(ctx, agents.DefinitionFromRow(a))
+	if err != nil {
+		return nil, mapAgentsErr(err)
+	}
+	if err := storeAvatar(ctx, s.store, bot, req.Data, ct); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	return &v1.SetAgentAvatarResponse{Agent: s.agentProto(ctx, agents.DefinitionFromRow(a), sc.proto(), false)}, nil
+}
+
+func (s *AgentsService) RemoveAgentAvatar(ctx context.Context, req *v1.RemoveAgentAvatarRequest) (*v1.RemoveAgentAvatarResponse, error) {
+	sc, a, err := s.scopedAgent(ctx, req.Scope, req.Id)
+	if err != nil {
+		return nil, err
+	}
+	bot, err := s.agents.Identity(ctx, agents.DefinitionFromRow(a))
+	if err != nil {
+		return nil, mapAgentsErr(err)
+	}
+	if err := s.store.DeleteUserAvatar(ctx, bot.ID); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	bot.AvatarURL = a.AvatarURL
+	if err := s.store.UpdateUser(ctx, bot); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	return &v1.RemoveAgentAvatarResponse{Agent: s.agentProto(ctx, agents.DefinitionFromRow(a), sc.proto(), false)}, nil
+}
+
 func agentSpecFromProto(in *v1.AgentSpec) agents.AgentSpec {
 	if in == nil {
 		return agents.AgentSpec{}
@@ -395,6 +450,7 @@ func agentSpecFromProto(in *v1.AgentSpec) agents.AgentSpec {
 		Slug: in.Slug, Name: in.Name, Description: in.Description, Kind: agents.KindFromProto(in.Kind), ProviderID: in.ProviderId, Model: in.Model,
 		Instructions: in.Instructions, Tools: in.Tools, Triggers: in.Triggers, MaxTurns: int(in.MaxTurns), MaxTokens: in.MaxTokens, Temperature: in.Temperature,
 		Approval: agents.ApprovalFromProto(in.Approval), Enabled: in.Enabled, Concurrency: int(in.Concurrency), AllowedCallerIDs: in.AllowedCallerIds,
+		AvatarURL: in.AvatarUrl,
 	}
 }
 
@@ -404,6 +460,7 @@ func (s *AgentsService) agentProto(ctx context.Context, d *agents.Definition, sc
 		Instructions: d.Instructions, Tools: d.Tools, Triggers: d.Triggers, MaxTurns: int32(d.MaxTurns), MaxTokens: d.MaxTokens, Temperature: d.Temperature,
 		Approval: agents.ProtoApproval(d.Approval), Enabled: d.Enabled, Concurrency: int32(d.Concurrency), AllowedCallerIds: d.AllowedCallerIDs,
 		Source: agents.ProtoSource(d.Source), FilePath: d.FilePath, Inherited: inherited, Error: d.Error, CreatedBy: d.CreatedBy,
+		AvatarUrl: d.AvatarURL, BotAvatarUrl: d.AvatarURL,
 		CreatedAt: timestamppb.New(d.CreatedAt), UpdatedAt: timestamppb.New(d.UpdatedAt),
 	}
 	if out.Tools == nil {
@@ -424,6 +481,10 @@ func (s *AgentsService) agentProto(ctx context.Context, d *agents.Definition, sc
 		out.BotUserId = ident.UserID
 		if u, _ := s.store.GetUserByID(ctx, ident.UserID); u != nil {
 			out.BotUsername = u.Username
+			if u.AvatarURL != "" {
+				out.BotAvatarUrl = u.AvatarURL
+				out.AvatarUploaded, _ = s.store.HasUserAvatar(ctx, u.ID)
+			}
 		}
 	}
 	if out.BotUsername == "" {
@@ -498,7 +559,7 @@ func (s *AgentsService) StartAgentSession(ctx context.Context, req *v1.StartAgen
 	if err != nil {
 		return nil, mapAgentsErr(err)
 	}
-	sess, err := s.agents.StartSession(ctx, agents.StartParams{Repo: repo, Def: def, Prompt: req.Prompt, Ref: req.Ref, IssueNumber: req.IssueNumber, Model: req.Model, Trigger: agents.TriggerManual, Actor: user})
+	sess, err := s.agents.StartSession(ctx, agents.StartParams{Repo: repo, Def: def, Prompt: req.Prompt, Ref: req.Ref, IssueNumber: req.IssueNumber, IsPull: req.IsPull, Model: req.Model, Trigger: agents.TriggerManual, Actor: user})
 	if err != nil {
 		return nil, mapAgentsErr(err)
 	}
@@ -513,7 +574,7 @@ func (s *AgentsService) ListAgentSessions(ctx context.Context, req *v1.ListAgent
 	limit, offset := pages.Parse(req.Page)
 	opts := stores.AgentSessionListOptions{
 		RepoID: repo.ID, Status: agents.StatusFromProto(req.Status), Conclusion: agents.ConclusionFromProto(req.Conclusion),
-		IssueNumber: req.IssueNumber, Actor: strings.TrimSpace(req.Actor), Trigger: strings.TrimSpace(req.Trigger), Limit: limit, Offset: offset,
+		IssueNumber: req.IssueNumber, IsPull: req.IsPull, Actor: strings.TrimSpace(req.Actor), Trigger: strings.TrimSpace(req.Trigger), Limit: limit, Offset: offset,
 	}
 	if a := strings.TrimSpace(strings.TrimPrefix(req.Agent, "@")); a != "" {
 		if def, err := s.agents.FindAgentForRepo(ctx, repo, a); err == nil {

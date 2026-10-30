@@ -97,13 +97,13 @@ func (s *IssueService) trackerReadable(ctx context.Context, user *auth.Authentic
 }
 
 // Loads a repository, an issue, and the caller's actor
-func (s *IssueService) issue(ctx context.Context, namespace, name string, number int64) (*auth.AuthenticatedUser, *storage.GitRepository, *storage.GitIssue, forge.Actor, error) {
+func (s *IssueService) issue(ctx context.Context, namespace, name string, number int64, isPull bool) (*auth.AuthenticatedUser, *storage.GitRepository, *storage.GitIssue, forge.Actor, error) {
 	user := auth.UserFromContext(ctx)
 	repo, levels, err := s.repoLevels(ctx, user, namespace, name)
 	if err != nil {
 		return nil, nil, nil, forge.Actor{}, err
 	}
-	issue, err := s.forge.Issue(ctx, repo, number)
+	issue, err := s.forge.Issue(ctx, repo, number, isPull)
 	if err != nil {
 		return nil, nil, nil, forge.Actor{}, mapForgeErr(err)
 	}
@@ -178,7 +178,7 @@ func (s *IssueService) CreateIssue(ctx context.Context, req *v1.CreateIssueReque
 }
 
 func (s *IssueService) GetIssue(ctx context.Context, req *v1.GetIssueRequest) (*v1.GetIssueResponse, error) {
-	user, repo, issue, _, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, _, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +274,7 @@ func (s *IssueService) SearchIssues(ctx context.Context, req *v1.SearchIssuesReq
 }
 
 func (s *IssueService) UpdateIssue(ctx context.Context, req *v1.UpdateIssueRequest) (*v1.UpdateIssueResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -329,7 +329,7 @@ func (s *IssueService) BulkUpdateIssues(ctx context.Context, req *v1.BulkUpdateI
 }
 
 func (s *IssueService) LockIssue(ctx context.Context, req *v1.LockIssueRequest) (*v1.LockIssueResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -347,7 +347,7 @@ func (s *IssueService) LockIssue(ctx context.Context, req *v1.LockIssueRequest) 
 }
 
 func (s *IssueService) UnlockIssue(ctx context.Context, req *v1.UnlockIssueRequest) (*v1.UnlockIssueResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -365,7 +365,7 @@ func (s *IssueService) UnlockIssue(ctx context.Context, req *v1.UnlockIssueReque
 }
 
 func (s *IssueService) PinIssue(ctx context.Context, req *v1.PinIssueRequest) (*v1.PinIssueResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -383,7 +383,7 @@ func (s *IssueService) PinIssue(ctx context.Context, req *v1.PinIssueRequest) (*
 }
 
 func (s *IssueService) UnpinIssue(ctx context.Context, req *v1.UnpinIssueRequest) (*v1.UnpinIssueResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -401,7 +401,7 @@ func (s *IssueService) UnpinIssue(ctx context.Context, req *v1.UnpinIssueRequest
 }
 
 func (s *IssueService) DeleteIssue(ctx context.Context, req *v1.DeleteIssueRequest) (*v1.DeleteIssueResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -417,7 +417,7 @@ func (s *IssueService) DeleteIssue(ctx context.Context, req *v1.DeleteIssueReque
 // ── Comments and reactions ───────────────────────────────────────────────
 
 func (s *IssueService) CreateComment(ctx context.Context, req *v1.CreateCommentRequest) (*v1.CreateCommentResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +479,7 @@ func (s *IssueService) DeleteComment(ctx context.Context, req *v1.DeleteCommentR
 }
 
 func (s *IssueService) ListComments(ctx context.Context, req *v1.ListCommentsRequest) (*v1.ListCommentsResponse, error) {
-	user, repo, issue, _, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, _, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -555,8 +555,8 @@ func payloadString(raw, key string) string {
 	return v
 }
 
-func (s *IssueService) react(ctx context.Context, namespace, name string, number int64, commentID, emoji string, add bool) ([]*v1.ReactionGroup, error) {
-	user, repo, issue, actor, err := s.issue(ctx, namespace, name, number)
+func (s *IssueService) react(ctx context.Context, namespace, name string, number int64, isPull bool, commentID, emoji string, add bool) ([]*v1.ReactionGroup, error) {
+	user, repo, issue, actor, err := s.issue(ctx, namespace, name, number, isPull)
 	if err != nil {
 		return nil, err
 	}
@@ -571,7 +571,7 @@ func (s *IssueService) react(ctx context.Context, namespace, name string, number
 }
 
 func (s *IssueService) AddReaction(ctx context.Context, req *v1.AddReactionRequest) (*v1.AddReactionResponse, error) {
-	groups, err := s.react(ctx, req.Namespace, req.Name, req.Number, req.CommentId, req.Emoji, true)
+	groups, err := s.react(ctx, req.Namespace, req.Name, req.Number, req.IsPull, req.CommentId, req.Emoji, true)
 	if err != nil {
 		return nil, err
 	}
@@ -579,7 +579,7 @@ func (s *IssueService) AddReaction(ctx context.Context, req *v1.AddReactionReque
 }
 
 func (s *IssueService) RemoveReaction(ctx context.Context, req *v1.RemoveReactionRequest) (*v1.RemoveReactionResponse, error) {
-	groups, err := s.react(ctx, req.Namespace, req.Name, req.Number, req.CommentId, req.Emoji, false)
+	groups, err := s.react(ctx, req.Namespace, req.Name, req.Number, req.IsPull, req.CommentId, req.Emoji, false)
 	if err != nil {
 		return nil, err
 	}
@@ -820,7 +820,7 @@ func (s *IssueService) dependencyRefs(ctx context.Context, user *auth.Authentica
 }
 
 func (s *IssueService) AddDependency(ctx context.Context, req *v1.AddDependencyRequest) (*v1.AddDependencyResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -838,7 +838,7 @@ func (s *IssueService) AddDependency(ctx context.Context, req *v1.AddDependencyR
 }
 
 func (s *IssueService) RemoveDependency(ctx context.Context, req *v1.RemoveDependencyRequest) (*v1.RemoveDependencyResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -856,7 +856,7 @@ func (s *IssueService) RemoveDependency(ctx context.Context, req *v1.RemoveDepen
 }
 
 func (s *IssueService) ListDependencies(ctx context.Context, req *v1.ListDependenciesRequest) (*v1.ListDependenciesResponse, error) {
-	user, _, issue, _, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, _, issue, _, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -870,7 +870,7 @@ func (s *IssueService) ListDependencies(ctx context.Context, req *v1.ListDepende
 // ── Time tracking ────────────────────────────────────────────────────────
 
 func (s *IssueService) AddTrackedTime(ctx context.Context, req *v1.AddTrackedTimeRequest) (*v1.AddTrackedTimeResponse, error) {
-	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, repo, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -885,7 +885,7 @@ func (s *IssueService) AddTrackedTime(ctx context.Context, req *v1.AddTrackedTim
 }
 
 func (s *IssueService) DeleteTrackedTime(ctx context.Context, req *v1.DeleteTrackedTimeRequest) (*v1.DeleteTrackedTimeResponse, error) {
-	user, _, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	user, _, issue, actor, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -899,7 +899,7 @@ func (s *IssueService) DeleteTrackedTime(ctx context.Context, req *v1.DeleteTrac
 }
 
 func (s *IssueService) ListTrackedTime(ctx context.Context, req *v1.ListTrackedTimeRequest) (*v1.ListTrackedTimeResponse, error) {
-	_, repo, issue, _, err := s.issue(ctx, req.Namespace, req.Name, req.Number)
+	_, repo, issue, _, err := s.issue(ctx, req.Namespace, req.Name, req.Number, req.IsPull)
 	if err != nil {
 		return nil, err
 	}
@@ -922,8 +922,8 @@ func (s *IssueService) ListTrackedTime(ctx context.Context, req *v1.ListTrackedT
 
 // ── Subscriptions ────────────────────────────────────────────────────────
 
-func (s *IssueService) subscribe(ctx context.Context, namespace, name string, number int64, on bool) error {
-	user, _, issue, _, err := s.issue(ctx, namespace, name, number)
+func (s *IssueService) subscribe(ctx context.Context, namespace, name string, number int64, isPull bool, on bool) error {
+	user, _, issue, _, err := s.issue(ctx, namespace, name, number, isPull)
 	if err != nil {
 		return err
 	}
@@ -937,14 +937,14 @@ func (s *IssueService) subscribe(ctx context.Context, namespace, name string, nu
 }
 
 func (s *IssueService) SubscribeIssue(ctx context.Context, req *v1.SubscribeIssueRequest) (*v1.SubscribeIssueResponse, error) {
-	if err := s.subscribe(ctx, req.Namespace, req.Name, req.Number, true); err != nil {
+	if err := s.subscribe(ctx, req.Namespace, req.Name, req.Number, req.IsPull, true); err != nil {
 		return nil, err
 	}
 	return &v1.SubscribeIssueResponse{}, nil
 }
 
 func (s *IssueService) UnsubscribeIssue(ctx context.Context, req *v1.UnsubscribeIssueRequest) (*v1.UnsubscribeIssueResponse, error) {
-	if err := s.subscribe(ctx, req.Namespace, req.Name, req.Number, false); err != nil {
+	if err := s.subscribe(ctx, req.Namespace, req.Name, req.Number, req.IsPull, false); err != nil {
 		return nil, err
 	}
 	return &v1.UnsubscribeIssueResponse{}, nil

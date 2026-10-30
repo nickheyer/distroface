@@ -61,7 +61,7 @@ func issueUserProto(u *storage.User) *v1.IssueUser {
 	if u == nil {
 		return nil
 	}
-	return &v1.IssueUser{Id: u.ID, Username: u.Username, DisplayName: u.DisplayName}
+	return &v1.IssueUser{Id: u.ID, Username: u.Username, DisplayName: u.DisplayName, IsAgent: isAgentUser(u)}
 }
 
 func issueLabelProto(l *storage.GitLabel, counts map[string][2]int64) *v1.Label {

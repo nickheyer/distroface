@@ -76,14 +76,14 @@ type IssueView struct {
 	Project *db.GitProjectIssue
 }
 
-// Loads an issue by number in a repository
-func (m *Manager) Issue(ctx context.Context, repo *db.GitRepository, number int64) (*db.GitIssue, error) {
-	issue, err := m.store.GetGitIssue(ctx, repo.ID, number)
+// Loads an issue or pull request by number, each kind numbers on its own
+func (m *Manager) Issue(ctx context.Context, repo *db.GitRepository, number int64, isPull bool) (*db.GitIssue, error) {
+	issue, err := m.store.GetGitIssue(ctx, repo.ID, number, isPull)
 	if err != nil {
 		return nil, err
 	}
 	if issue == nil {
-		return nil, fmt.Errorf("%w: issue #%d", ErrNotFound, number)
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, db.IssueRef(isPull, number))
 	}
 	return issue, nil
 }
@@ -701,8 +701,8 @@ func (m *Manager) SetAssignees(ctx context.Context, repo *db.GitRepository, acto
 	if len(added) > 0 {
 		m.Notify(ctx, Notification{
 			Repo: repo, Issue: issue, Kind: m.notifyKind(issue), Actor: actor.User,
-			Subject: fmt.Sprintf("[%s/%s] %s (#%d)", repo.Namespace, repo.Name, issue.Title, issue.Number),
-			Text:    fmt.Sprintf("%s assigned you to #%d %s.", actor.username(), issue.Number, issue.Title),
+			Subject: fmt.Sprintf("[%s/%s] %s (%s)", repo.Namespace, repo.Name, issue.Title, issue.Ref()),
+			Text:    fmt.Sprintf("%s assigned you to %s %s.", actor.username(), issue.Ref(), issue.Title),
 			URL:     m.IssueURL(ctx, repo, issue), Recipients: added, Assigned: added, Reason: "assigned",
 		})
 		m.dispatchIssue(ctx, repo, issue, actor, "assigned", nil)
@@ -824,8 +824,8 @@ func (m *Manager) BulkUpdate(ctx context.Context, repo *db.GitRepository, actor 
 	}
 	changed := 0
 	for _, n := range numbers {
-		issue, err := m.Issue(ctx, repo, n)
-		if err != nil || issue.IsPull {
+		issue, err := m.Issue(ctx, repo, n, false)
+		if err != nil {
 			continue
 		}
 		touched := false
@@ -996,8 +996,8 @@ func (m *Manager) notifyIssue(ctx context.Context, repo *db.GitRepository, issue
 	ids := m.resolveMentions(ctx, repo, mentioned)
 	m.Notify(ctx, Notification{
 		Repo: repo, Issue: issue, Kind: m.notifyKind(issue), Actor: actor.User, Reason: action,
-		Subject:   fmt.Sprintf("[%s/%s] %s (#%d)", repo.Namespace, repo.Name, title, issue.Number),
-		Text:      fmt.Sprintf("%s %s #%d %s.", actor.username(), action, issue.Number, issue.Title),
+		Subject:   fmt.Sprintf("[%s/%s] %s (%s)", repo.Namespace, repo.Name, title, issue.Ref()),
+		Text:      fmt.Sprintf("%s %s %s %s.", actor.username(), action, issue.Ref(), issue.Title),
 		URL:       m.IssueURL(ctx, repo, issue),
 		Mentioned: ids,
 	})

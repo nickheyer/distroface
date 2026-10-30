@@ -339,7 +339,7 @@ func (s *GitRefService) tagProto(ctx context.Context, r *gitrepo.Repo, enrich *g
 		out.TagSha = h.String()
 		out.Message = tag.Message
 		out.Tagger = gitrepo.SignatureToProto(tag.Tagger)
-		out.Tagger.Username = enrich.users.usernameByEmail(ctx, tag.Tagger.Email)
+		enrich.users.resolveSignature(ctx, out.Tagger)
 		out.Verification = s.manager.Signing().VerifyTag(ctx, tag).Proto()
 		if c, err := tag.Commit(); err == nil {
 			commitHash = c.Hash

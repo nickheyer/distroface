@@ -19,7 +19,7 @@
 		triggerLabel
 	} from './agents-state';
 	import { durationOf, formatDuration } from './actions-state';
-	import { relativeTime } from '$lib/utils';
+	import { relativeTime, issueRef } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { toast } from 'svelte-sonner';
 
@@ -168,7 +168,9 @@
 								{:else}
 									<CircleDot class="size-3" />
 								{/if}
-								#{s.resultPullNumber > 0n ? s.resultPullNumber : s.issueNumber}
+								{s.resultPullNumber > 0n
+									? `!${s.resultPullNumber}`
+									: issueRef(s.isPull, s.issueNumber)}
 							</a>
 							<!-- eslint-enable svelte/no-navigation-without-resolve -->
 						{/if}

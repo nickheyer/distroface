@@ -45,7 +45,11 @@
 	let agentKey = $state(page.url.searchParams.get('agent') ?? '');
 	let prompt = $state(page.url.searchParams.get('prompt') ?? '');
 	let ref = $state(page.url.searchParams.get('ref') ?? '');
-	let issueNumber = $state(page.url.searchParams.get('issue') ?? '');
+	let issueNumber = $state(
+		page.url.searchParams.get('pull')
+			? `!${page.url.searchParams.get('pull')}`
+			: (page.url.searchParams.get('issue') ?? '')
+	);
 	let model = $state('');
 	let submitting = $state(false);
 
@@ -54,7 +58,10 @@
 		agents.find((a) => a.slug === agentKey || a.id === agentKey) ?? agents[0]
 	);
 	const refOptions = $derived(ref && !branches.includes(ref) ? [ref, ...branches] : branches);
-	const issueValid = $derived(issueNumber.trim() === '' || /^\d+$/.test(issueNumber.trim()));
+	const issueValid = $derived(issueNumber.trim() === '' || /^[#!]?\d+$/.test(issueNumber.trim()));
+	// Bang means pull request, otherwise issue
+	const targetIsPull = $derived(issueNumber.trim().startsWith('!'));
+	const targetNumber = $derived(issueNumber.trim().replace(/^[#!]/, ''));
 	const needsPrompt = $derived(
 		!issueNumber.trim() &&
 			(selected?.kind === AgentKind.CODE ||
@@ -99,7 +106,8 @@
 				agent: selected.source === AgentSource.FILE ? selected.slug : selected.id,
 				prompt: prompt.trim(),
 				ref: ref.trim(),
-				issueNumber: issueNumber.trim() ? BigInt(issueNumber.trim()) : 0n,
+				issueNumber: targetNumber ? BigInt(targetNumber) : 0n,
+				isPull: targetIsPull,
 				model: model.trim()
 			});
 			toast.success(`Session #${resp.session?.number} queued`);
@@ -236,15 +244,14 @@
 			<FormField
 				label="Issue or pull request"
 				id="task-issue"
-				help="Number of the issue or pull request to work on, blank for a free standing task"
-				error={!issueValid ? 'Enter a number' : undefined}
+				help="#12 for an issue or !12 for a pull request, blank for a free standing task"
+				error={!issueValid ? 'Enter #12 for an issue or !12 for a pull request' : undefined}
 				span="half"
 			>
 				<Input
 					id="task-issue"
 					bind:value={issueNumber}
-					placeholder="42"
-					inputmode="numeric"
+					placeholder="#42 or !7"
 					class="font-mono"
 					aria-invalid={!issueValid}
 				/>

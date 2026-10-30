@@ -196,6 +196,7 @@ func newIssueStateCmd(verb string, state v1.IssueState) *cobra.Command {
 
 func newIssueCommentCmd() *cobra.Command {
 	var body string
+	var pull bool
 
 	cmd := &cobra.Command{
 		Use:   "comment namespace/name number [body]",
@@ -216,6 +217,7 @@ func newIssueCommentCmd() *cobra.Command {
 				Namespace: ref.Namespace,
 				Name:      ref.Name,
 				Number:    number,
+				IsPull:    pull,
 				Body:      body,
 			})
 			if err != nil {
@@ -226,6 +228,7 @@ func newIssueCommentCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&body, "body", "", "Comment body")
+	cmd.Flags().BoolVar(&pull, "pull", false, "The number names a pull request")
 	return cmd
 }
 

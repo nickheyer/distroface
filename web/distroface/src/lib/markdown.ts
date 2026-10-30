@@ -7,7 +7,7 @@ export interface MarkdownOptions {
 	baseHref?: string;
 	// Raw file directory for images
 	rawBase?: string;
-	// ns/name that #12, ns/name#12, and @user resolve against
+	// ns/name that #12, !12, ns/name#12, and @user resolve against
 	repo?: string;
 	// Wiki page directory that [[Page]] links resolve against
 	wikiBase?: string;
@@ -56,11 +56,11 @@ function wikiLinks(wikiBase: string): TokenizerAndRendererExtension {
 }
 
 const REF_START =
-	/(?:^|[\s(])(?:#\d|[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*[#@]|@[A-Za-z0-9]|[0-9a-f]{40}\b)/;
+	/(?:^|[\s(])(?:[#!]\d|[A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*[#!@]|@[A-Za-z0-9]|[0-9a-f]{40}\b)/;
 const REF_TOKEN =
-	/^(?:([A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*)?#(\d+)|@([A-Za-z0-9][A-Za-z0-9_.-]*[A-Za-z0-9]|[A-Za-z0-9])|(?:([A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*)@)?([0-9a-f]{40}))(?![\w#@/-])/;
+	/^(?:([A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*)?([#!])(\d+)|@([A-Za-z0-9][A-Za-z0-9_.-]*[A-Za-z0-9]|[A-Za-z0-9])|(?:([A-Za-z0-9][\w.-]*\/[A-Za-z0-9][\w.-]*)@)?([0-9a-f]{40}))(?![\w#!@/-])/;
 
-// #12, ns/name#12, @user, and full shas autolink the way issue bodies do
+// Issue, pull, user, and commit references autolink
 function refLinks(repo: string): TokenizerAndRendererExtension {
 	return {
 		name: 'refLink',
@@ -73,36 +73,39 @@ function refLinks(repo: string): TokenizerAndRendererExtension {
 		tokenizer(src) {
 			const m = REF_TOKEN.exec(src);
 			if (!m) return undefined;
-			if (m[3]) {
+			if (m[4]) {
 				const token: RefLinkToken = {
 					type: 'refLink',
 					raw: m[0],
-					href: `/${encodeURIComponent(m[3])}`,
+					href: `/${encodeURIComponent(m[4])}`,
 					text: m[0],
-					hover: { hover: 'user', user: m[3] }
+					hover: { hover: 'user', user: m[4] }
 				};
 				return token;
 			}
-			if (m[5]) {
-				const target = m[4] || repo;
+			if (m[6]) {
+				const target = m[5] || repo;
 				if (!target) return undefined;
 				const token: RefLinkToken = {
 					type: 'refLink',
 					raw: m[0],
-					href: `/${target}/commit/${m[5]}`,
-					text: `${m[4] ? `${m[4]}@` : ''}${m[5].slice(0, 7)}`,
-					hover: { hover: 'commit', repo: target, sha: m[5] }
+					href: `/${target}/commit/${m[6]}`,
+					text: `${m[5] ? `${m[5]}@` : ''}${m[6].slice(0, 7)}`,
+					hover: { hover: 'commit', repo: target, sha: m[6] }
 				};
 				return token;
 			}
 			const target = m[1] || repo;
 			if (!target) return undefined;
+			const pull = m[2] === '!';
 			const token: RefLinkToken = {
 				type: 'refLink',
 				raw: m[0],
-				href: `/${target}/issues/${m[2]}`,
+				href: `/${target}/${pull ? 'pulls' : 'issues'}/${m[3]}`,
 				text: m[0],
-				hover: { hover: 'issue', repo: target, number: m[2] }
+				hover: pull
+					? { hover: 'issue', repo: target, number: m[3], pull: '1' }
+					: { hover: 'issue', repo: target, number: m[3] }
 			};
 			return token;
 		},

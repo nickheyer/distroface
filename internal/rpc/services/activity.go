@@ -190,6 +190,7 @@ func (s *ActivityService) toProto(ctx context.Context, rows []*storage.ActivityE
 			ev.Actor = u.Username
 			ev.ActorDisplayName = u.DisplayName
 			ev.ActorAvatarUrl = u.AvatarURL
+			ev.ActorIsAgent = isAgentUser(u)
 		}
 		out[i] = ev
 	}

@@ -56,6 +56,7 @@ message ActivityEvent {
   string detail = 11;
   bool is_public = 12;
   google.protobuf.Timestamp created_at = 13;
+  bool actor_is_agent = 14;
 }
 
 // ListActivityRequest selects a feed and pages it.

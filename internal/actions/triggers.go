@@ -337,7 +337,7 @@ func (m *Manager) actorCanWrite(ctx context.Context, repo *db.GitRepository, act
 
 // Write access of the pull request author, who controls the head code
 func (m *Manager) pullAuthorCanWrite(ctx context.Context, repo *db.GitRepository, number int64) bool {
-	issue, err := m.store.GetGitIssue(ctx, repo.ID, number)
+	issue, err := m.store.GetGitIssue(ctx, repo.ID, number, true)
 	if err != nil || issue == nil {
 		return false
 	}

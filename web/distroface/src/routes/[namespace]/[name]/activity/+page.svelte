@@ -15,6 +15,7 @@
 		TableRow
 	} from '$lib/components/ui/table';
 	import EmptyState from '$lib/components/empty-state.svelte';
+	import BotBadge from '$lib/components/bot-badge.svelte';
 	import { Activity, Users, Code, GitCommit } from '$lib/icons';
 	import type {
 		GitActivityWeek,
@@ -254,6 +255,7 @@
 												class="text-sm font-medium transition-colors hover:text-primary"
 												>{c.username}</a
 											>
+											{#if c.isAgent}<BotBadge class="ml-1.5 align-middle" />{/if}
 										{:else}
 											<span class="text-sm font-medium">{c.displayName || c.email}</span>
 										{/if}

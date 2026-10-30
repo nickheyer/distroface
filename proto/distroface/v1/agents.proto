@@ -35,6 +35,10 @@ service AgentsService {
   rpc UpdateAgent(UpdateAgentRequest) returns (UpdateAgentResponse) {}
   // DeleteAgent removes an agent definition, its sessions stay readable.
   rpc DeleteAgent(DeleteAgentRequest) returns (DeleteAgentResponse) {}
+  // SetAgentAvatar stores an uploaded picture for the agent bot account
+  rpc SetAgentAvatar(SetAgentAvatarRequest) returns (SetAgentAvatarResponse) {}
+  // RemoveAgentAvatar drops the uploaded picture, the definition url applies again
+  rpc RemoveAgentAvatar(RemoveAgentAvatarRequest) returns (RemoveAgentAvatarResponse) {}
   // GetRepoAgents returns what the agents tab of a repository needs, usable agents and limits.
   rpc GetRepoAgents(GetRepoAgentsRequest) returns (GetRepoAgentsResponse) {}
   // StartAgentSession queues a session for an agent against a repository target.
@@ -289,6 +293,11 @@ message Agent {
   // Parse error of a file defined agent
   string error = 29;
   string created_by = 30;
+  // Picture url from the definition
+  string avatar_url = 31;
+  // Picture the bot account shows, an upload wins over the url
+  string bot_avatar_url = 32;
+  bool avatar_uploaded = 33;
 }
 
 // Fields of a new or changed agent
@@ -309,6 +318,7 @@ message AgentSpec {
   bool enabled = 14;
   int32 concurrency = 15;
   repeated string allowed_caller_ids = 16;
+  string avatar_url = 17;
 }
 
 // One gated tool call waiting for a decision
@@ -529,6 +539,7 @@ message GetAgentResponse {
 message CreateAgentRequest {
   ActionsScope scope = 1;
   AgentSpec spec = 2;
+  bytes avatar = 3; // max 1mb
 }
 
 // CreateAgentResponse contains the agent.
@@ -556,6 +567,30 @@ message DeleteAgentRequest {
 
 // DeleteAgentResponse is empty on success.
 message DeleteAgentResponse {}
+
+// SetAgentAvatarRequest carries one png, jpeg, gif, or webp image under one megabyte
+message SetAgentAvatarRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+  bytes data = 3;
+  string content_type = 4;
+}
+
+// SetAgentAvatarResponse contains the agent
+message SetAgentAvatarResponse {
+  Agent agent = 1;
+}
+
+// RemoveAgentAvatarRequest identifies an agent
+message RemoveAgentAvatarRequest {
+  ActionsScope scope = 1;
+  string id = 2;
+}
+
+// RemoveAgentAvatarResponse contains the agent
+message RemoveAgentAvatarResponse {
+  Agent agent = 1;
+}
 
 // GetRepoAgentsRequest identifies a repository.
 message GetRepoAgentsRequest {
@@ -603,6 +638,8 @@ message StartAgentSessionRequest {
   int64 issue_number = 6;
   // Model override within the connector allowlist
   string model = 7;
+  // Pull requests number separately from issues, set when issue_number names one
+  bool is_pull = 8;
 }
 
 // StartAgentSessionResponse contains the session.
@@ -622,6 +659,8 @@ message ListAgentSessionsRequest {
   int64 issue_number = 7;
   string actor = 8;
   string trigger = 9;
+  // Kind of issue_number, pull requests also match sessions that opened them
+  bool is_pull = 10;
 }
 
 // ListAgentSessionsResponse contains sessions newest first.

@@ -65,6 +65,7 @@ type importState struct {
 	Milestones map[string]string `json:"milestones,omitempty"`
 	Pulls      map[string]int64  `json:"pulls,omitempty"`
 	MaxNumber  int64             `json:"max_number,omitempty"`
+	MaxPull    int64             `json:"max_pull,omitempty"`
 	Counts     map[string]int    `json:"counts,omitempty"`
 	Notes      []string          `json:"notes,omitempty"`
 }
@@ -987,7 +988,7 @@ func (m *Monitor) importIssues(ctx context.Context, repo *db.GitRepository, drv 
 				return ctx.Err()
 			}
 			st.MaxNumber = max(st.MaxNumber, is.Number)
-			existing, err := m.store.GetGitIssue(ctx, repo.ID, is.Number)
+			existing, err := m.store.GetGitIssue(ctx, repo.ID, is.Number, false)
 			if err != nil {
 				return err
 			}
@@ -1026,36 +1027,31 @@ func (m *Monitor) importIssues(ctx context.Context, repo *db.GitRepository, drv 
 	return nil
 }
 
-// Raises the issue counter past imported numbers
-func (m *Monitor) ensureIssueCounter(ctx context.Context, repo *db.GitRepository, n int64) error {
-	if n <= 0 {
-		return nil
-	}
+// Raises the issue and pull counters past imported numbers
+func (m *Monitor) ensureCounters(ctx context.Context, repo *db.GitRepository, st *importState) error {
 	fresh, err := m.store.GetGitRepositoryByID(ctx, repo.ID)
 	if err != nil || fresh == nil {
 		return err
 	}
-	if fresh.IssueCounter >= n {
+	cols := map[string]any{}
+	if st.MaxNumber > fresh.IssueCounter {
+		cols["issue_counter"] = st.MaxNumber
+	}
+	if st.MaxPull > fresh.PullCounter {
+		cols["pull_counter"] = st.MaxPull
+	}
+	if len(cols) == 0 {
 		return nil
 	}
-	return m.store.UpdateGitRepositoryColumns(ctx, repo.ID, map[string]any{"issue_counter": n})
+	return m.store.UpdateGitRepositoryColumns(ctx, repo.ID, cols)
 }
 
-// Local pull number, gitlab merge requests get fresh ones
-func (m *Monitor) pullNumber(ctx context.Context, repo *db.GitRepository, st *importState, upstream int64) (int64, error) {
-	if st.Forge != forgeGitLab {
-		return upstream, nil
+// Resumed imports keep their pre split mapping
+func (m *Monitor) pullNumber(st *importState, upstream int64) int64 {
+	if n, ok := st.Pulls[strconv.FormatInt(upstream, 10)]; ok {
+		return n
 	}
-	key := strconv.FormatInt(upstream, 10)
-	if n, ok := st.Pulls[key]; ok {
-		return n, nil
-	}
-	n, err := m.store.NextGitCounter(ctx, repo.ID, "issue_counter")
-	if err != nil {
-		return 0, err
-	}
-	st.Pulls[key] = n
-	return n, nil
+	return upstream
 }
 
 func (m *Monitor) localRefHash(repo *db.GitRepository, ref string) string {
@@ -1089,11 +1085,6 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 	if err != nil {
 		return err
 	}
-	if st.Forge == forgeGitLab {
-		if err := m.ensureIssueCounter(ctx, repo, st.MaxNumber); err != nil {
-			return err
-		}
-	}
 	for page := max(st.Cursor["pulls"], 1); page <= importMaxPages; page++ {
 		items, more, err := drv.pulls(ctx, f, page)
 		if err != nil {
@@ -1103,12 +1094,9 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			number, err := m.pullNumber(ctx, repo, st, pr.Number)
-			if err != nil {
-				return err
-			}
-			st.MaxNumber = max(st.MaxNumber, number)
-			existing, err := m.store.GetGitIssue(ctx, repo.ID, number)
+			number := m.pullNumber(st, pr.Number)
+			st.MaxPull = max(st.MaxPull, number)
+			existing, err := m.store.GetGitIssue(ctx, repo.ID, number, true)
 			if err != nil {
 				return err
 			}
@@ -1305,7 +1293,7 @@ func (m *Monitor) importReleases(ctx context.Context, repo *db.GitRepository, dr
 
 // Settles counters and drops the upstream, a plain repository remains
 func (m *Monitor) finishImport(ctx context.Context, repo *db.GitRepository, st *importState) error {
-	if err := m.ensureIssueCounter(ctx, repo, st.MaxNumber); err != nil {
+	if err := m.ensureCounters(ctx, repo, st); err != nil {
 		return err
 	}
 	return m.clearImportSource(ctx, repo)

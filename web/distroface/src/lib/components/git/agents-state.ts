@@ -381,7 +381,7 @@ export const defaultTools: Record<number, string[]> = {
 
 export function sessionTitle(s: AgentSession): string {
 	if (s.title) return s.title;
-	if (s.issueNumber) return `#${s.issueNumber}`;
+	if (s.issueNumber) return `${s.isPull ? '!' : '#'}${s.issueNumber}`;
 	return s.prompt.split('\n')[0]?.slice(0, 80) || 'Session';
 }
 

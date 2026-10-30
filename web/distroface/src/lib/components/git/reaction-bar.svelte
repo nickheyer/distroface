@@ -21,6 +21,7 @@
 		namespace,
 		name,
 		number,
+		isPull = false,
 		commentId = '',
 		reactions,
 		canReact,
@@ -29,6 +30,7 @@
 		namespace: string;
 		name: string;
 		number: number;
+		isPull?: boolean;
 		commentId?: string;
 		reactions: ReactionGroup[];
 		canReact: boolean;
@@ -68,7 +70,7 @@
 		pending = emoji;
 		open = false;
 		const current = groups.find((g) => g.emoji === emoji);
-		const req = { namespace, name, number: BigInt(number), commentId, emoji };
+		const req = { namespace, name, number: BigInt(number), isPull, commentId, emoji };
 		try {
 			const resp = current?.reacted
 				? await rpcClient.issue.removeReaction(req)

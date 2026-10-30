@@ -201,7 +201,7 @@
 									name,
 									number: String(run.pullRequestNumber)
 								})}
-								class="hover:text-primary">PR #{run.pullRequestNumber}</a
+								class="hover:text-primary">PR !{run.pullRequestNumber}</a
 							>
 						{/if}
 					</div>

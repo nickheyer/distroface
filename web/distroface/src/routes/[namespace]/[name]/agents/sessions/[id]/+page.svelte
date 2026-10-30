@@ -50,7 +50,7 @@
 		triggerLabel
 	} from '$lib/components/git/agents-state';
 	import { durationOf, formatDuration } from '$lib/components/git/actions-state';
-	import { relativeTime } from '$lib/utils';
+	import { relativeTime, issueRef } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { toast } from 'svelte-sonner';
 
@@ -351,7 +351,8 @@
 								{#if session.isPull}<GitPullRequest class="size-3.5" />{:else}<CircleDot
 										class="size-3.5"
 									/>{/if}
-								{session.isPull ? 'Pull request' : 'Issue'} #{session.issueNumber}
+								{session.isPull ? 'Pull request' : 'Issue'}
+								{issueRef(session.isPull, session.issueNumber)}
 							</a>
 						{/if}
 						{#if session.resultPullNumber > 0n}
@@ -363,7 +364,7 @@
 								})}
 								class="inline-flex items-center gap-1 font-medium hover:text-primary"
 							>
-								<GitPullRequest class="size-3.5" />Opened PR #{session.resultPullNumber}
+								<GitPullRequest class="size-3.5" />Opened PR !{session.resultPullNumber}
 							</a>
 						{/if}
 						{#if session.branch && session.resultCommits.length > 0}

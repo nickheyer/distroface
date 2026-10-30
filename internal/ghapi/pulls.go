@@ -79,13 +79,9 @@ func (q *request) getPull() {
 	if !ok {
 		return
 	}
-	issue, err := q.h.forge.Issue(q.ctx, repo, number)
+	issue, err := q.h.forge.Issue(q.ctx, repo, number, true)
 	if err != nil {
 		q.failErr(err)
-		return
-	}
-	if !issue.IsPull {
-		q.notFound()
 		return
 	}
 	out, ok := q.pullView(repo, issue, true)

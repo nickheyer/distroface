@@ -37,6 +37,7 @@
 	import Markdown from '$lib/components/git/markdown.svelte';
 	import LatestCommitBar from '$lib/components/git/latest-commit-bar.svelte';
 	import ForkContributeBar from '$lib/components/git/fork-contribute-bar.svelte';
+	import BotBadge from '$lib/components/bot-badge.svelte';
 	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { GitUnit, LinkedRepositoryKind } from '$lib/proto/distroface/v1/git_pb';
@@ -504,12 +505,13 @@ git push -u origin {ref || 'main'}</pre>
 							{#if c.username}
 								<a
 									href={resolve('/[namespace]', { namespace: c.username })}
-									class="rounded-full transition-opacity hover:opacity-80"
+									class="inline-flex items-center gap-1 rounded-full transition-opacity hover:opacity-80"
 									title="{c.username}, {c.commits} commit{c.commits !== 1 ? 's' : ''}"
 								>
 									<Avatar class="size-7">
 										<AvatarFallback>{contributorInitials(c)}</AvatarFallback>
 									</Avatar>
+									{#if c.isAgent}<BotBadge />{/if}
 								</a>
 							{:else}
 								<Avatar

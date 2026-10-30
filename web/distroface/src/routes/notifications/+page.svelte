@@ -200,7 +200,7 @@
 
 	function subject(n: Notification): string {
 		const num = Number(n.number);
-		if (num > 0) return `#${num}`;
+		if (num > 0) return `${n.kind === 'pull' ? '!' : '#'}${num}`;
 		if (n.sha) return n.sha.slice(0, 7);
 		return '';
 	}

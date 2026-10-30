@@ -37,6 +37,7 @@ type Resolver struct {
 	portalOrg map[string]string
 	repoOrg   map[string]string
 	subs      []func()
+	checks    []Validator
 }
 
 // Merged result of one scope, handed out as clones
@@ -70,6 +71,13 @@ func (r *Resolver) Subscribe(fn func()) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.subs = append(r.subs, fn)
+}
+
+// Registers a check run before every update is saved
+func (r *Resolver) AddValidator(fn Validator) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.checks = append(r.checks, fn)
 }
 
 // Invalidate drops all cached rows
@@ -226,9 +234,20 @@ func (e effectiveEntry) clone() (*v1.Settings, []*v1.FieldProvenance, error) {
 
 // Merges stored tiers over defaults under file pins
 func (r *Resolver) merge(ctx context.Context, scope v1.SettingsScopeType, scopeID string) (*v1.Settings, []*v1.FieldProvenance, error) {
+	return r.mergeWith(ctx, scope, scopeID, nil)
+}
+
+// Merge with unsaved rows standing in for stored tiers
+func (r *Resolver) mergeWith(ctx context.Context, scope v1.SettingsScopeType, scopeID string, pending map[scopeKey]*v1.Settings) (*v1.Settings, []*v1.FieldProvenance, error) {
+	stored := func(sc v1.SettingsScopeType, id string) (*v1.Settings, error) {
+		if row, ok := pending[scopeKey{sc, id}]; ok {
+			return row, nil
+		}
+		return r.Stored(ctx, sc, id)
+	}
 	chain := []tierRow{}
 
-	system, err := r.Stored(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
+	system, err := stored(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -236,7 +255,7 @@ func (r *Resolver) merge(ctx context.Context, scope v1.SettingsScopeType, scopeI
 
 	switch scope {
 	case v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG:
-		org, err := r.Stored(ctx, scope, scopeID)
+		org, err := stored(scope, scopeID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -246,11 +265,11 @@ func (r *Resolver) merge(ctx context.Context, scope v1.SettingsScopeType, scopeI
 		if err != nil {
 			return nil, nil, err
 		}
-		org, err := r.Stored(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, orgID)
+		org, err := stored(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, orgID)
 		if err != nil {
 			return nil, nil, err
 		}
-		portal, err := r.Stored(ctx, scope, scopeID)
+		portal, err := stored(scope, scopeID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -263,13 +282,13 @@ func (r *Resolver) merge(ctx context.Context, scope v1.SettingsScopeType, scopeI
 			return nil, nil, err
 		}
 		if orgID != "" {
-			org, err := r.Stored(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, orgID)
+			org, err := stored(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, orgID)
 			if err != nil {
 				return nil, nil, err
 			}
 			chain = append(chain, tierRow{org, v1.SettingsTier_SETTINGS_TIER_ORG})
 		}
-		repo, err := r.Stored(ctx, scope, scopeID)
+		repo, err := stored(scope, scopeID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -414,11 +433,34 @@ func (r *Resolver) Update(ctx context.Context, scope v1.SettingsScopeType, scope
 	if err := applyMask(stored, patch, paths); err != nil {
 		return nil, err
 	}
+	if err := r.validate(ctx, scope, scopeID, paths, stored); err != nil {
+		return nil, err
+	}
 	if err := r.save(ctx, scope, scopeID, stored); err != nil {
 		return nil, err
 	}
 	r.notify()
 	return stored, nil
+}
+
+// Runs the checks against the merge the row would produce
+func (r *Resolver) validate(ctx context.Context, scope v1.SettingsScopeType, scopeID string, paths []string, pending *v1.Settings) error {
+	r.mu.RLock()
+	checks := append([]Validator{}, r.checks...)
+	r.mu.RUnlock()
+	if len(checks) == 0 {
+		return nil
+	}
+	eff, _, err := r.mergeWith(ctx, scope, scopeID, map[scopeKey]*v1.Settings{{scope, scopeID}: pending})
+	if err != nil {
+		return err
+	}
+	for _, check := range checks {
+		if err := check(ctx, scope, scopeID, paths, eff); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteScope removes a scope's row on org or portal deletion

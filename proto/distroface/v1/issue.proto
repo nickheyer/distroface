@@ -122,6 +122,7 @@ enum CommentType {
   COMMENT_TYPE_REVIEW_DISMISSED = 32;
   COMMENT_TYPE_BLOCKER_CLOSED = 33;
   COMMENT_TYPE_BLOCKER_REOPENED = 34;
+  COMMENT_TYPE_AGENT_SESSION = 35;
 }
 
 // Public identity of a user on issues and comments
@@ -129,6 +130,8 @@ message IssueUser {
   string id = 1;
   string username = 2;
   string display_name = 3;
+  // Bot account behind an agent
+  bool is_agent = 4;
 }
 
 // Label is a colored tag.
@@ -276,6 +279,8 @@ message GetIssueRequest {
   string namespace = 1;
   string name = 2;
   int64 number = 3;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 4;
 }
 
 // GetIssueResponse contains the issue.
@@ -342,6 +347,8 @@ message UpdateIssueRequest {
   repeated string label_ids = 10;
   bool set_assignees = 11;
   repeated string assignee_ids = 12;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 13;
 }
 
 // UpdateIssueResponse contains the issue.
@@ -373,6 +380,8 @@ message LockIssueRequest {
   string name = 2;
   int64 number = 3;
   string reason = 4;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 5;
 }
 
 // LockIssueResponse contains the issue.
@@ -385,6 +394,8 @@ message UnlockIssueRequest {
   string namespace = 1;
   string name = 2;
   int64 number = 3;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 4;
 }
 
 // UnlockIssueResponse contains the issue.
@@ -397,6 +408,8 @@ message PinIssueRequest {
   string namespace = 1;
   string name = 2;
   int64 number = 3;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 4;
 }
 
 // PinIssueResponse contains the issue.
@@ -409,6 +422,8 @@ message UnpinIssueRequest {
   string namespace = 1;
   string name = 2;
   int64 number = 3;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 4;
 }
 
 // UnpinIssueResponse contains the issue.
@@ -421,6 +436,8 @@ message DeleteIssueRequest {
   string namespace = 1;
   string name = 2;
   int64 number = 3;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 4;
 }
 
 // DeleteIssueResponse is empty on success.
@@ -432,6 +449,8 @@ message CreateCommentRequest {
   string name = 2;
   int64 number = 3;
   string body = 4;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 5;
 }
 
 // CreateCommentResponse contains the comment.
@@ -470,6 +489,8 @@ message ListCommentsRequest {
   int64 number = 4;
   // Only plain comments, no events
   bool comments_only = 5;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 6;
 }
 
 // ListCommentsResponse contains timeline entries oldest first.
@@ -486,6 +507,8 @@ message AddReactionRequest {
   // Empty reacts to the issue body
   string comment_id = 4;
   string emoji = 5;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 6;
 }
 
 // AddReactionResponse contains the updated groups.
@@ -500,6 +523,8 @@ message RemoveReactionRequest {
   int64 number = 3;
   string comment_id = 4;
   string emoji = 5;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 6;
 }
 
 // RemoveReactionResponse contains the updated groups.
@@ -625,8 +650,10 @@ message AddDependencyRequest {
   string namespace = 1;
   string name = 2;
   int64 number = 3;
-  // Blocker as number or ns/name#number
+  // Blocker as number, #number, !number, or ns/name#number
   string depends_on = 4;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 5;
 }
 
 // AddDependencyResponse contains the blockers.
@@ -640,6 +667,8 @@ message RemoveDependencyRequest {
   string name = 2;
   int64 number = 3;
   string depends_on = 4;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 5;
 }
 
 // RemoveDependencyResponse contains the blockers.
@@ -652,6 +681,8 @@ message ListDependenciesRequest {
   string namespace = 1;
   string name = 2;
   int64 number = 3;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 4;
 }
 
 // ListDependenciesResponse contains both directions.
@@ -667,6 +698,8 @@ message AddTrackedTimeRequest {
   int64 number = 3;
   int64 seconds = 4;
   string note = 5;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 6;
 }
 
 // AddTrackedTimeResponse contains the entry.
@@ -680,6 +713,8 @@ message DeleteTrackedTimeRequest {
   string name = 2;
   int64 number = 3;
   string id = 4;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 5;
 }
 
 // DeleteTrackedTimeResponse is empty on success.
@@ -691,6 +726,8 @@ message ListTrackedTimeRequest {
   string namespace = 2;
   string name = 3;
   int64 number = 4;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 5;
 }
 
 // ListTrackedTimeResponse contains manual time entries and their sum.
@@ -706,6 +743,8 @@ message SubscribeIssueRequest {
   string namespace = 1;
   string name = 2;
   int64 number = 3;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 4;
 }
 
 // SubscribeIssueResponse is empty on success.
@@ -716,6 +755,8 @@ message UnsubscribeIssueRequest {
   string namespace = 1;
   string name = 2;
   int64 number = 3;
+  // Pull requests number separately from issues, set to address one
+  bool is_pull = 4;
 }
 
 // UnsubscribeIssueResponse is empty on success.

@@ -216,7 +216,7 @@ var toolRegistry = map[string]*toolSpec{
 	"get_issue": {
 		Name:        "get_issue",
 		Description: "Returns an issue or pull request with its labels, assignees, and comments.",
-		Schema:      `{"type":"object","properties":{"number":{"type":"integer","description":"Defaults to the target of this session"}}}`,
+		Schema:      `{"type":"object","properties":{"number":{"type":"integer","description":"Issue number, defaults to the target of this session"}}}`,
 		Read:        true,
 		Run:         toolGetIssue,
 	},
@@ -258,7 +258,7 @@ var toolRegistry = map[string]*toolSpec{
 	"post_comment": {
 		Name:        "post_comment",
 		Description: "Posts a markdown comment on an issue or pull request, the session target unless number is given.",
-		Schema:      `{"type":"object","properties":{"body":{"type":"string"},"number":{"type":"integer","description":"Another issue or pull request of this repository, defaults to the target"}},"required":["body"]}`,
+		Schema:      `{"type":"object","properties":{"body":{"type":"string"},"number":{"type":"integer","description":"Another issue or pull request of this repository, defaults to the target"},"pull":{"type":"boolean","description":"True when number names a pull request, issues and pull requests number separately"}},"required":["body"]}`,
 		Write:       true,
 		Run:         toolPostComment,
 	},
@@ -272,7 +272,7 @@ var toolRegistry = map[string]*toolSpec{
 	"update_issue": {
 		Name:        "update_issue",
 		Description: "Changes labels, assignees, title, or state of an issue or pull request, the session target unless number is given. Labels are matched by name and created when missing only if create_labels is true.",
-		Schema:      `{"type":"object","properties":{"number":{"type":"integer","description":"Another issue or pull request of this repository, defaults to the target"},"add_labels":{"type":"array","items":{"type":"string"}},"remove_labels":{"type":"array","items":{"type":"string"}},"create_labels":{"type":"boolean"},"assignees":{"type":"array","items":{"type":"string"},"description":"Usernames, replaces the current assignees"},"title":{"type":"string"},"state":{"type":"string","enum":["open","closed"]}}}`,
+		Schema:      `{"type":"object","properties":{"number":{"type":"integer","description":"Another issue or pull request of this repository, defaults to the target"},"pull":{"type":"boolean","description":"True when number names a pull request, issues and pull requests number separately"},"add_labels":{"type":"array","items":{"type":"string"}},"remove_labels":{"type":"array","items":{"type":"string"}},"create_labels":{"type":"boolean"},"assignees":{"type":"array","items":{"type":"string"},"description":"Usernames, replaces the current assignees"},"title":{"type":"string"},"state":{"type":"string","enum":["open","closed"]}}}`,
 		Write:       true,
 		Run:         toolUpdateIssue,
 	},
@@ -606,7 +606,7 @@ func pullDiff(rc *runContext, r *gitrepo.Repo, path string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fmt.Fprintf(&b, "Pull request #%d: %d files, +%d -%d\n", rc.issue.Number, diff.TotalFiles, diff.Additions, diff.Deletions)
+		fmt.Fprintf(&b, "Pull request !%d: %d files, +%d -%d\n", rc.issue.Number, diff.TotalFiles, diff.Additions, diff.Deletions)
 		writeDiffSummary(&b, diff)
 		b.WriteString("Pass a path for the hunks of one file.\n")
 		return b.String(), nil
@@ -713,13 +713,10 @@ func renderUnified(before, after string) string {
 
 func toolGetPull(rc *runContext, args map[string]any) (string, error) {
 	issue, pr := rc.issue, rc.pr
-	if n := argInt(args, "number"); n > 0 && (issue == nil || int64(n) != issue.Number) {
-		other, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n))
+	if n := argInt(args, "number"); n > 0 && (issue == nil || !issue.IsPull || int64(n) != issue.Number) {
+		other, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n), true)
 		if err != nil {
-			return "", fmt.Errorf("pull request #%d not found", n)
-		}
-		if !other.IsPull {
-			return "", fmt.Errorf("#%d is an issue, use get_issue", n)
+			return "", fmt.Errorf("pull request !%d not found", n)
 		}
 		otherPR, err := rc.m.forge.Pull(rc.ctx, other)
 		if err != nil {
@@ -735,10 +732,10 @@ func toolGetPull(rc *runContext, args map[string]any) (string, error) {
 
 func toolGetIssue(rc *runContext, args map[string]any) (string, error) {
 	issue := rc.issue
-	if n := argInt(args, "number"); n > 0 && (issue == nil || int64(n) != issue.Number) {
-		other, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n))
+	if n := argInt(args, "number"); n > 0 && (issue == nil || issue.IsPull || int64(n) != issue.Number) {
+		other, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n), false)
 		if err != nil {
-			return "", fmt.Errorf("#%d not found", n)
+			return "", fmt.Errorf("issue #%d not found", n)
 		}
 		issue = other
 	}
@@ -929,7 +926,7 @@ func toolSearchIssues(rc *runContext, args map[string]any) (string, error) {
 		for _, l := range labels[is.ID] {
 			names = append(names, l.Name)
 		}
-		fmt.Fprintf(&b, "#%d [%s %s] %s", is.Number, kind, is.State, is.Title)
+		fmt.Fprintf(&b, "%s [%s %s] %s", is.Ref(), kind, is.State, is.Title)
 		if len(names) > 0 {
 			fmt.Fprintf(&b, " labels: %s", strings.Join(names, ", "))
 		}
@@ -948,18 +945,23 @@ func issueIDs(issues []*db.GitIssue) []string {
 
 // ── Write tools ──────────────────────────────────────────────────────────
 
-// Session target, or another issue of the repository by number
+// Session target or another thread by number and kind
 func targetIssue(rc *runContext, args map[string]any) (*db.GitIssue, error) {
 	n := argInt(args, "number")
-	if n <= 0 || (rc.issue != nil && rc.issue.Number == int64(n)) {
+	if n <= 0 {
 		if rc.issue == nil {
 			return nil, fmt.Errorf("this session has no issue or pull request, pass a number")
 		}
 		return rc.issue, nil
 	}
-	issue, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n))
+	_, kindGiven := args["pull"]
+	isPull := argBool(args, "pull")
+	if rc.issue != nil && rc.issue.Number == int64(n) && (!kindGiven || rc.issue.IsPull == isPull) {
+		return rc.issue, nil
+	}
+	issue, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n), isPull)
 	if err != nil {
-		return nil, fmt.Errorf("#%d not found", n)
+		return nil, fmt.Errorf("%s not found", db.IssueRef(isPull, int64(n)))
 	}
 	return issue, nil
 }
@@ -967,18 +969,15 @@ func targetIssue(rc *runContext, args map[string]any) (*db.GitIssue, error) {
 // Session pull request, or another one of the repository by number
 func targetPull(rc *runContext, args map[string]any) (*db.GitIssue, *db.GitPullRequest, error) {
 	n := argInt(args, "number")
-	if n <= 0 || (rc.issue != nil && rc.issue.Number == int64(n)) {
+	if n <= 0 || (rc.issue != nil && rc.issue.IsPull && rc.issue.Number == int64(n)) {
 		if rc.issue == nil || rc.pr == nil {
 			return nil, nil, fmt.Errorf("this session has no pull request, pass a number")
 		}
 		return rc.issue, rc.pr, nil
 	}
-	issue, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n))
+	issue, err := rc.m.forge.Issue(rc.ctx, rc.repo, int64(n), true)
 	if err != nil {
-		return nil, nil, fmt.Errorf("pull request #%d not found", n)
-	}
-	if !issue.IsPull {
-		return nil, nil, fmt.Errorf("#%d is an issue, not a pull request", n)
+		return nil, nil, fmt.Errorf("pull request !%d not found", n)
 	}
 	pr, err := rc.m.forge.Pull(rc.ctx, issue)
 	if err != nil {
@@ -1066,6 +1065,7 @@ func toolCreateIssue(rc *runContext, args map[string]any) (string, error) {
 		return "", err
 	}
 	out := fmt.Sprintf("opened issue #%d: %s", issue.Number, rc.m.forge.IssueURL(rc.ctx, rc.repo, issue))
+	rc.m.recordOpened(rc.ctx, rc, issue)
 	if rc.issue == nil {
 		rc.adoptTarget(issue)
 		out += ", it is now the target of this session"
@@ -1100,7 +1100,7 @@ func toolPostComment(rc *runContext, args map[string]any) (string, error) {
 		rc.posted = true
 		rc.comments = append(rc.comments, c.ID)
 	}
-	return fmt.Sprintf("comment posted on #%d (id %s)", issue.Number, c.ID), nil
+	return fmt.Sprintf("comment posted on %s (id %s)", issue.Ref(), c.ID), nil
 }
 
 func toolSubmitReview(rc *runContext, args map[string]any) (string, error) {
@@ -1157,7 +1157,7 @@ func toolSubmitReview(rc *runContext, args map[string]any) (string, error) {
 		rc.sess.ResultReviewID = rv.ID
 		_ = rc.m.store.UpdateAgentSessionColumns(rc.ctx, rc.sess.ID, map[string]any{"result_review_id": rv.ID})
 	}
-	return fmt.Sprintf("review submitted on #%d as %s with %d inline comments (id %s)", issue.Number, state, len(inputs), rv.ID), nil
+	return fmt.Sprintf("review submitted on !%d as %s with %d inline comments (id %s)", issue.Number, state, len(inputs), rv.ID), nil
 }
 
 func toolUpdateIssue(rc *runContext, args map[string]any) (string, error) {
@@ -1234,7 +1234,7 @@ func toolUpdateIssue(rc *runContext, args map[string]any) (string, error) {
 			rc.issue = fresh
 		}
 	}
-	return fmt.Sprintf("#%d: %s", issue.Number, strings.Join(done, "; ")), nil
+	return fmt.Sprintf("%s: %s", issue.Ref(), strings.Join(done, "; ")), nil
 }
 
 func toolWriteFile(rc *runContext, args map[string]any) (string, error) {
@@ -1365,7 +1365,6 @@ func toolOpenPull(rc *runContext, args map[string]any) (string, error) {
 	if rc.issue != nil && !rc.issue.IsPull && !strings.Contains(strings.ToLower(body), fmt.Sprintf("#%d", rc.issue.Number)) {
 		body = strings.TrimSpace(body + fmt.Sprintf("\n\nCloses #%d", rc.issue.Number))
 	}
-	body += fmt.Sprintf("\n\n---\nOpened by agent @%s from [session %d](%s).", rc.botUser.Username, rc.sess.Number, rc.m.sessionURL(rc.ctx, rc.repo, rc.sess.ID))
 	issue, _, err := rc.m.forge.CreatePull(rc.ctx, rc.repo, rc.actor, forge.NewPull{Base: rc.ws.baseBranch, Head: rc.ws.branch, Title: title, Body: body, Draft: argBool(args, "draft")})
 	if err != nil {
 		if errors.Is(err, forge.ErrConflict) {
@@ -1376,7 +1375,8 @@ func toolOpenPull(rc *runContext, args map[string]any) (string, error) {
 	rc.prOpened = true
 	rc.sess.ResultPullNumber = issue.Number
 	_ = rc.m.store.UpdateAgentSessionColumns(rc.ctx, rc.sess.ID, map[string]any{"result_pull_number": issue.Number})
-	return fmt.Sprintf("opened pull request #%d: %s", issue.Number, rc.m.forge.IssueURL(rc.ctx, rc.repo, issue)), nil
+	rc.m.recordOpened(rc.ctx, rc, issue)
+	return fmt.Sprintf("opened pull request !%d: %s", issue.Number, rc.m.forge.IssueURL(rc.ctx, rc.repo, issue)), nil
 }
 
 func toolRequestReview(rc *runContext, args map[string]any) (string, error) {
@@ -1387,7 +1387,7 @@ func toolRequestReview(rc *runContext, args map[string]any) (string, error) {
 			return "", err
 		}
 	} else if rc.sess.ResultPullNumber > 0 {
-		if is, err := rc.m.forge.Issue(rc.ctx, rc.repo, rc.sess.ResultPullNumber); err == nil {
+		if is, err := rc.m.forge.Issue(rc.ctx, rc.repo, rc.sess.ResultPullNumber, true); err == nil {
 			if p, err := rc.m.forge.Pull(rc.ctx, is); err == nil {
 				issue, pr = is, p
 			}
@@ -1403,7 +1403,7 @@ func toolRequestReview(rc *runContext, args map[string]any) (string, error) {
 	if err := rc.m.forge.RequestReviewers(rc.ctx, rc.repo, rc.actor, issue, ids, nil, false); err != nil {
 		return "", err
 	}
-	out := fmt.Sprintf("requested %d reviewers on #%d", len(ids), issue.Number)
+	out := fmt.Sprintf("requested %d reviewers on !%d", len(ids), issue.Number)
 	if len(unknown) > 0 {
 		out += fmt.Sprintf(", unknown users skipped: %s", strings.Join(unknown, ", "))
 	}
@@ -1418,7 +1418,7 @@ func (m *Manager) describeIssue(ctx context.Context, repo *db.GitRepository, iss
 	if issue.IsPull {
 		kind = "Pull request"
 	}
-	fmt.Fprintf(&b, "%s #%d: %s\nState: %s\n", kind, issue.Number, issue.Title, issue.State)
+	fmt.Fprintf(&b, "%s %s: %s\nState: %s\n", kind, issue.Ref(), issue.Title, issue.State)
 	if u, _ := m.store.GetUserByID(ctx, issue.AuthorID); u != nil {
 		fmt.Fprintf(&b, "Author: @%s\n", u.Username)
 	}

@@ -32,6 +32,12 @@ func (m *Manager) Identity(ctx context.Context, def *Definition) (*db.User, erro
 			if def.Name != "" && u.DisplayName != def.Name {
 				u.DisplayName, changed = def.Name, true
 			}
+			// An uploaded picture outlives definition edits
+			if u.AvatarURL != def.AvatarURL {
+				if uploaded, _ := m.store.HasUserAvatar(ctx, u.ID); !uploaded {
+					u.AvatarURL, changed = def.AvatarURL, true
+				}
+			}
 			if changed {
 				_ = m.store.UpdateUser(ctx, u)
 			}
@@ -42,7 +48,7 @@ func (m *Manager) Identity(ctx context.Context, def *Definition) (*db.User, erro
 	if err != nil {
 		return nil, err
 	}
-	u := &db.User{ID: uuid.New().String(), Username: username, DisplayName: def.Name, AuthProvider: db.AuthProviderAgent, IsActive: true}
+	u := &db.User{ID: uuid.New().String(), Username: username, DisplayName: def.Name, AvatarURL: def.AvatarURL, AuthProvider: db.AuthProviderAgent, IsActive: true}
 	if err := m.store.CreateUser(ctx, u); err != nil {
 		return nil, err
 	}

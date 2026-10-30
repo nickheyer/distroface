@@ -90,6 +90,7 @@ const (
 	EventProjectAdded       = "project_added"
 	EventProjectMoved       = "project_moved"
 	EventProjectRemoved     = "project_removed"
+	EventAgentSession       = "agent_session"
 )
 
 // Appends a timeline event to an issue, payload is stored as json

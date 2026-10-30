@@ -31,3 +31,10 @@ func (s *Store) SetUserAvatar(ctx context.Context, row *db.UserAvatar) error {
 func (s *Store) DeleteUserAvatar(ctx context.Context, userID string) error {
 	return s.db.WithContext(ctx).Delete(&db.UserAvatar{}, "user_id = ?", userID).Error
 }
+
+// Whether an uploaded image exists without loading its bytes
+func (s *Store) HasUserAvatar(ctx context.Context, userID string) (bool, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&db.UserAvatar{}).Where("user_id = ?", userID).Count(&n).Error
+	return n > 0, err
+}

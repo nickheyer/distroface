@@ -40,6 +40,7 @@ import (
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/proto"
 )
 
 // App holds all initialized dependencies and the HTTP server.
@@ -112,6 +113,7 @@ func New() (*App, error) {
 
 	// Typed runtime settings, file seeds once and pins forever
 	resolver := settings.NewResolver(store, cfg.Overrides)
+	seedPublicHostname(cfg)
 	if err := resolver.SeedSystem(ctx, cfg.Settings); err != nil {
 		return fail("seeding settings", err)
 	}
@@ -225,7 +227,11 @@ func New() (*App, error) {
 	if err != nil {
 		return fail("initializing tls engine", err)
 	}
+	certEngine.SetListenPort(cfg.Server.Port)
 	resolver.Subscribe(certEngine.Invalidate)
+	// Unservable tls saves fail with the fix spelled out
+	resolver.AddValidator(settings.TLSRules(cfg.Server.Port))
+	resolver.AddValidator(certEngine.ValidateSettings)
 	portalResolver.SetCertReady(func(ctx context.Context, p *portal.Portal, host string) bool {
 		return certEngine.PortalCertReady(ctx, p.CertSource, p.OrgID, p.ID, host)
 	})
@@ -407,6 +413,20 @@ func New() (*App, error) {
 }
 
 const policySeedMarker = "rbac_policies_seeded"
+
+// A non default port lands in the seeded placeholder hostname
+func seedPublicHostname(cfg *config.Config) {
+	if cfg.Server.Port == "8080" || cfg.Settings.GetServer().GetPublicHostname() != "" {
+		return
+	}
+	if cfg.Settings == nil {
+		cfg.Settings = &v1.Settings{}
+	}
+	if cfg.Settings.Server == nil {
+		cfg.Settings.Server = &v1.ServerSettings{}
+	}
+	cfg.Settings.Server.PublicHostname = proto.String(net.JoinHostPort("localhost", cfg.Server.Port))
+}
 
 // Default grants land once, later restarts never undo admin edits
 func seedPolicies(ctx context.Context, store *stores.Store, enforcer *rbac.Enforcer, log *logger.Logger) error {

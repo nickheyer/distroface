@@ -275,7 +275,7 @@ func (m *Manager) Merge(ctx context.Context, repo *db.GitRepository, actor Actor
 	switch method {
 	case MergeMethodMerge, MergeMethodRebaseMerge:
 		if title == "" {
-			title = fmt.Sprintf("Merge pull request #%d from %s", issue.Number, headRef)
+			title = fmt.Sprintf("Merge pull request !%d from %s", issue.Number, headRef)
 		}
 		if body == "" {
 			body = issue.Title
@@ -283,14 +283,14 @@ func (m *Manager) Merge(ctx context.Context, repo *db.GitRepository, actor Actor
 		message = title + "\n\n" + body + "\n"
 	case MergeMethodSquash:
 		if title == "" {
-			title = fmt.Sprintf("%s (#%d)", issue.Title, issue.Number)
+			title = fmt.Sprintf("%s (!%d)", issue.Title, issue.Number)
 		}
 		if body == "" {
 			body = m.squashBody(ctx, repo, pr)
 		}
 		message = title + "\n\n" + body + "\n"
 	case MergeMethodRebase, MergeMethodFastForward:
-		message = fmt.Sprintf("Merge pull request #%d", issue.Number)
+		message = fmt.Sprintf("Merge pull request !%d", issue.Number)
 	}
 	author := committer
 	if u, _ := m.store.GetUserByID(ctx, issue.AuthorID); u != nil {
@@ -364,11 +364,11 @@ func (m *Manager) Merge(ctx context.Context, repo *db.GitRepository, actor Actor
 	m.notifyIssue(ctx, repo, issue, actor, "merged", issue.Title, nil)
 	m.dispatchIssue(ctx, repo, issue, actor, "merged", nil)
 	m.Trigger(ctx, repo, "pull_request", "closed", "refs/heads/"+pr.BaseBranch, sha.String(), actor.User, m.pullPayloadMap(ctx, repo, issue, pr))
-	m.git.Audit(ctx, auditEvent(actor, "Git/merge", fmt.Sprintf("%s/%s#%d %s %s", repo.Namespace, repo.Name, issue.Number, method, sha.String())))
+	m.git.Audit(ctx, auditEvent(actor, "Git/merge", fmt.Sprintf("%s/%s!%d %s %s", repo.Namespace, repo.Name, issue.Number, method, sha.String())))
 	m.closeReferencedIssues(ctx, repo, actor, issue, sha.String())
 	if req.DeleteBranch || gitrepo.MergeSettingsOf(repo).DeleteBranchOnMerge {
 		if err := m.DeleteHeadBranch(ctx, repo, actor, issue, pr); err != nil {
-			m.log.Debug("delete head branch after merge #%d: %v", issue.Number, err)
+			m.log.Debug("delete head branch after merge !%d: %v", issue.Number, err)
 		}
 	}
 	return sha, nil

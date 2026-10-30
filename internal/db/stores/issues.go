@@ -21,9 +21,10 @@ func (s *Store) CreateGitIssue(ctx context.Context, issue *db.GitIssue) error {
 	return s.db.WithContext(ctx).Create(issue).Error
 }
 
-func (s *Store) GetGitIssue(ctx context.Context, repoID string, number int64) (*db.GitIssue, error) {
+// Each kind numbers separately, the flag picks the sequence
+func (s *Store) GetGitIssue(ctx context.Context, repoID string, number int64, isPull bool) (*db.GitIssue, error) {
 	var issue db.GitIssue
-	err := s.db.WithContext(ctx).First(&issue, "repo_id = ? AND number = ?", repoID, number).Error
+	err := s.db.WithContext(ctx).First(&issue, "repo_id = ? AND number = ? AND is_pull = ?", repoID, number, isPull).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}

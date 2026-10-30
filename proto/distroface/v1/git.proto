@@ -404,6 +404,7 @@ message GitSignature {
   google.protobuf.Timestamp at = 3;
   // Username of the matching local account, empty when none
   string username = 4;
+  bool is_agent = 5;
 }
 
 // Signature verification outcome
@@ -645,6 +646,7 @@ message GitContributor {
   int32 commits = 4;
   int32 additions = 5;
   int32 deletions = 6;
+  bool is_agent = 7;
 }
 
 // One issue template from the repository tree

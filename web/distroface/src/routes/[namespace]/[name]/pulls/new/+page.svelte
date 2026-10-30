@@ -375,7 +375,7 @@
 								number: String(existing.issue?.number ?? 0n)
 							})}
 							class="link font-medium"
-							>#{Number(existing.issue?.number ?? 0n)} {existing.issue?.title}</a
+							>!{Number(existing.issue?.number ?? 0n)} {existing.issue?.title}</a
 						>
 					</span>
 				</AlertDescription>

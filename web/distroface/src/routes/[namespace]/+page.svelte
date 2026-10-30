@@ -26,6 +26,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import UserAvatar from '$lib/components/user-avatar.svelte';
+	import BotBadge from '$lib/components/bot-badge.svelte';
 	import RepoList from '$lib/components/repo-list.svelte';
 	import GitRepoList from '$lib/components/git/git-repo-list.svelte';
 	import ArtifactRepoList from '$lib/components/artifact-repo-list.svelte';
@@ -257,9 +258,13 @@
 						<h1 class="truncate text-xl leading-7 font-semibold tracking-tight">
 							{user.displayName}
 						</h1>
-						<p class="truncate text-base text-muted-foreground">{user.username}</p>
+						<p class="truncate text-base text-muted-foreground">
+							{user.username}{#if user.isAgent}<BotBadge class="ml-1.5 align-middle" />{/if}
+						</p>
 					{:else}
-						<h1 class="truncate text-xl leading-7 font-semibold tracking-tight">{user.username}</h1>
+						<h1 class="truncate text-xl leading-7 font-semibold tracking-tight">
+							{user.username}{#if user.isAgent}<BotBadge class="ml-1.5 align-middle" />{/if}
+						</h1>
 					{/if}
 				</div>
 			</div>

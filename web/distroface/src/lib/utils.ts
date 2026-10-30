@@ -132,6 +132,11 @@ export const gitWebhookEvents: WebhookEvent[] = [
 	WebhookEvent.GIT_AGENT_SESSION
 ];
 
+// Issues read #12 and pull requests read !12
+export function issueRef(isPull: boolean, number: number | bigint | string): string {
+	return `${isPull ? '!' : '#'}${number}`;
+}
+
 export function orgRoleLabel(role: number): string {
 	switch (role) {
 		case OrgRole.OWNER:

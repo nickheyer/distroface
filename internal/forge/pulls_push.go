@@ -92,7 +92,7 @@ func (m *Manager) headMoved(ctx context.Context, repo *db.GitRepository, actor A
 	}
 	_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, cols)
 	if _, err := m.refreshPullRef(ctx, repo, pr, issue.Number, nil); err != nil {
-		m.log.Debug("pull ref refresh #%d: %v", issue.Number, err)
+		m.log.Debug("pull ref refresh !%d: %v", issue.Number, err)
 	}
 	kind := EventHeadPushed
 	if u.Forced {

@@ -3,6 +3,7 @@
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { relativeTime } from '$lib/utils';
 	import UserAvatar from '$lib/components/user-avatar.svelte';
+	import BotBadge from '$lib/components/bot-badge.svelte';
 	import { detailOf, kindNoun, subjectHref, targetHref, targetLabel } from '$lib/activity';
 	import {
 		Archive,
@@ -110,21 +111,21 @@
 					icon: GitPullRequest,
 					tone: 'text-success',
 					verb: 'opened pull request',
-					object: `#${event.subject}`
+					object: `!${event.subject}`
 				};
 			case 'pull_merged':
 				return {
 					icon: GitMerge,
 					tone: 'text-primary',
 					verb: 'merged pull request',
-					object: `#${event.subject}`
+					object: `!${event.subject}`
 				};
 			case 'pull_closed':
 				return {
 					icon: XCircle,
 					tone: 'text-destructive',
 					verb: 'closed pull request',
-					object: `#${event.subject}`
+					object: `!${event.subject}`
 				};
 			case 'star':
 				return { icon: Star, tone: 'text-warning', verb: 'starred' };
@@ -192,7 +193,7 @@
 			{#if event.actor}
 				<a href={actorHref} class="font-semibold hover:text-primary"
 					>{event.actorDisplayName || event.actor}</a
-				>
+				>{#if event.actorIsAgent}<BotBadge class="ml-1 align-middle" />{/if}
 			{:else}
 				<span class="font-semibold">System</span>
 			{/if}

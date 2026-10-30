@@ -24,6 +24,7 @@
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import FormField from '$lib/components/form-field.svelte';
+	import BotBadge from '$lib/components/bot-badge.svelte';
 	import CommitBadge from '$lib/components/git/commit-badge.svelte';
 	import VerificationBadge from '$lib/components/git/verification-badge.svelte';
 	import DiffViewer from '$lib/components/git/diff-viewer.svelte';
@@ -232,6 +233,7 @@
 							href={resolve('/[namespace]', { namespace: commit.author.username })}
 							class="font-medium text-foreground hover:text-primary">{commit.author.username}</a
 						>
+						{#if commit.author.isAgent}<BotBadge />{/if}
 					{:else}
 						<span class="font-medium text-foreground">{commit.author?.name}</span>
 					{/if}

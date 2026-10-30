@@ -37,9 +37,11 @@ type StartParams struct {
 	Prompt      string
 	Ref         string
 	IssueNumber int64
-	Model       string
-	Trigger     string
-	Actor       *auth.AuthenticatedUser
+	// Issues and pull requests number separately
+	IsPull  bool
+	Model   string
+	Trigger string
+	Actor   *auth.AuthenticatedUser
 	// Bypasses the allowed callers check for automatic triggers
 	System bool
 }
@@ -102,9 +104,9 @@ func (m *Manager) StartSession(ctx context.Context, p StartParams) (*db.AgentSes
 		sess.TriggerUserID = p.Actor.ID
 	}
 	if p.IssueNumber > 0 {
-		issue, err := m.forge.Issue(ctx, repo, p.IssueNumber)
+		issue, err := m.forge.Issue(ctx, repo, p.IssueNumber, p.IsPull)
 		if err != nil {
-			return nil, fmt.Errorf("%w: #%d", ErrNotFound, p.IssueNumber)
+			return nil, fmt.Errorf("%w: %s", ErrNotFound, db.IssueRef(p.IsPull, p.IssueNumber))
 		}
 		sess.IssueID, sess.IssueNumber, sess.IsPull = &issue.ID, issue.Number, issue.IsPull
 		if issue.IsPull && sess.Ref == "" {
@@ -112,7 +114,7 @@ func (m *Manager) StartSession(ctx context.Context, p StartParams) (*db.AgentSes
 				sess.Ref, sess.SHA = pr.HeadBranch, pr.HeadSHA
 			}
 		}
-		sess.Title = fmt.Sprintf("#%d %s", issue.Number, issue.Title)
+		sess.Title = fmt.Sprintf("%s %s", issue.Ref(), issue.Title)
 	}
 	if sess.Prompt == "" {
 		sess.Prompt = defaultPrompt(def.Kind, sess.Trigger, sess.IssueNumber, sess.IsPull)
@@ -877,7 +879,7 @@ func (m *Manager) finish(ctx context.Context, sess *db.AgentSession, rc *runCont
 	}
 	if rc != nil && rc.issue != nil && sess.Trigger != TriggerManual && !rc.posted &&
 		(conclusion == ConclusionFailure || conclusion == ConclusionTimedOut || conclusion == ConclusionBudgetExceeded) {
-		body := fmt.Sprintf("I could not finish this task: %s\n\n[Session %d](%s)", errText, sess.Number, m.sessionURL(ctx, rc.repo, sess.ID))
+		body := fmt.Sprintf("I could not finish this task: %s\n\n[Session #%d](%s)", errText, sess.Number, m.sessionURL(ctx, rc.repo, sess.ID))
 		if _, err := m.forge.CreateComment(ctx, rc.repo, rc.actor, rc.issue, body, false); err == nil {
 			rc.posted = true
 		}
@@ -954,16 +956,16 @@ func (m *Manager) wrapUp(rc *runContext, summary *string) {
 			if rc.issue != nil && !rc.issue.IsPull {
 				body += fmt.Sprintf("\n\nCloses #%d", rc.issue.Number)
 			}
-			body += fmt.Sprintf("\n\n---\nOpened by agent @%s from [session %d](%s).", rc.botUser.Username, rc.sess.Number, m.sessionURL(ctx, rc.repo, rc.sess.ID))
 			if issue, _, err := m.forge.CreatePull(ctx, rc.repo, rc.actor, forge.NewPull{Base: rc.ws.baseBranch, Head: rc.ws.branch, Title: title, Body: body}); err == nil {
 				rc.sess.ResultPullNumber = issue.Number
 				rc.prOpened = true
+				m.recordOpened(ctx, rc, issue)
 			}
 		}
 		if rc.issue != nil && !rc.posted && text != "" && (committed || rc.pr != nil) {
 			body := text
 			if rc.sess.ResultPullNumber > 0 && rc.sess.ResultPullNumber != rc.issue.Number {
-				body += fmt.Sprintf("\n\nSee pull request #%d.", rc.sess.ResultPullNumber)
+				body += fmt.Sprintf("\n\nSee pull request !%d.", rc.sess.ResultPullNumber)
 			}
 			if _, err := m.forge.CreateComment(ctx, rc.repo, rc.actor, rc.issue, body, false); err == nil {
 				rc.posted = true
@@ -972,6 +974,21 @@ func (m *Manager) wrapUp(rc *runContext, summary *string) {
 	}
 	if len(rc.ws.pendingPaths()) > 0 {
 		*summary = text + fmt.Sprintf("\n\n(%d edited files were left uncommitted)", len(rc.ws.pendingPaths()))
+	}
+}
+
+// Timeline entry on something this session opened
+func (m *Manager) recordOpened(ctx context.Context, rc *runContext, issue *db.GitIssue) {
+	payload := map[string]any{
+		"session_id": rc.sess.ID, "session_number": rc.sess.Number, "agent": rc.def.Slug, "agent_name": rc.def.Name,
+		"bot": rc.botUser.Username, "trigger": rc.sess.Trigger, "url": m.sessionURL(ctx, rc.repo, rc.sess.ID),
+	}
+	if rc.sess.IssueID != nil && *rc.sess.IssueID != issue.ID && rc.sess.IssueNumber > 0 {
+		payload["from_number"] = rc.sess.IssueNumber
+		payload["from_is_pull"] = rc.sess.IsPull
+	}
+	if _, err := m.forge.AddEvent(ctx, issue, rc.bot, forge.EventAgentSession, payload); err != nil {
+		m.log.Warn("agents: session link on %s: %v", issue.Ref(), err)
 	}
 }
 

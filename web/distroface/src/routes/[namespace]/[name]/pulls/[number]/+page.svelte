@@ -191,7 +191,7 @@
 
 <svelte:head>
 	<title
-		>{issue ? `${issue.title} #${numberParam}` : `Pull request #${numberParam}`} - {repoFullName}</title
+		>{issue ? `${issue.title} !${numberParam}` : `Pull request !${numberParam}`} - {repoFullName}</title
 	>
 </svelte:head>
 
@@ -233,7 +233,7 @@
 	<EmptyState
 		icon={GitPullRequest}
 		message="Pull request not found"
-		description="#{numberParam} does not exist in {repoFullName} or you cannot see it."
+		description="Pull request !{numberParam} does not exist in {repoFullName} or you cannot see it."
 	>
 		{#snippet actions()}
 			<Button variant="outline" href="/{namespace}/{name}/pulls">Back to pull requests</Button>
@@ -271,7 +271,7 @@
 						class="min-w-0 flex-1 text-2xl leading-snug font-semibold tracking-tight wrap-break-word"
 					>
 						{issue.title}
-						<span class="font-normal text-muted-foreground">#{numberParam}</span>
+						<span class="font-normal text-muted-foreground">!{numberParam}</span>
 					</h1>
 					{#if canEdit}
 						<Button

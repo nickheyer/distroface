@@ -31,7 +31,7 @@
 	import type { Project, ProjectCard, ProjectColumn } from '$lib/proto/distroface/v1/project_pb';
 	import { IssueState, type Issue } from '$lib/proto/distroface/v1/issue_pb';
 	import { normalizeHex } from '$lib/components/git/label-chip.svelte';
-	import { cn } from '$lib/utils';
+	import { cn, issueRef } from '$lib/utils';
 	import { toast } from 'svelte-sonner';
 
 	let {
@@ -311,7 +311,7 @@
 				issueId: issue.id,
 				columnId: addColumn
 			});
-			toast.success(`#${issue.number} added`);
+			toast.success(`${issueRef(issue.isPull, issue.number)} added`);
 			onChanged();
 		} catch {
 			// Error interceptor already toasted
@@ -509,7 +509,10 @@
 							{@const present = onBoard.has(issue.id)}
 							<div class="flex items-center gap-2 px-2.5 py-1.5 text-sm">
 								<span class="shrink-0 text-muted-foreground tabular-nums"
-									>{project.repoFullName ? '' : `${issue.repoFullName} `}#{issue.number}</span
+									>{project.repoFullName ? '' : `${issue.repoFullName} `}{issueRef(
+										issue.isPull,
+										issue.number
+									)}</span
 								>
 								<span class="min-w-0 flex-1 truncate" title={issue.title}>{issue.title}</span>
 								<Button

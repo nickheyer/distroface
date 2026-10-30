@@ -80,7 +80,7 @@ func (m *Manager) RetryAutoMerge(ctx context.Context, repo *db.GitRepository, sh
 			continue
 		}
 		if _, err := m.Merge(ctx, repo, actor, issue, pr, MergeRequest{Method: pr.AutoMergeMethod, Title: pr.AutoMergeTitle, Message: pr.AutoMergeMessage, DeleteBranch: pr.AutoMergeDelete}); err != nil {
-			m.log.Debug("auto merge #%d: %v", issue.Number, err)
+			m.log.Debug("auto merge !%d: %v", issue.Number, err)
 		}
 	}
 }

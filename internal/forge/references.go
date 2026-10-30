@@ -9,21 +9,27 @@ import (
 	"github.com/nickheyer/distroface/internal/db"
 )
 
-// Issue references of the forms #12 and ns/name#12
-var refPattern = regexp.MustCompile(`(?i)(?:^|[\s(\[,.:;])(?:([a-z0-9][a-z0-9._-]*)/([a-z0-9][a-z0-9._-]*))?#(\d+)\b`)
+// Issues as #12 or ns/name#12 and pulls as !12
+var refPattern = regexp.MustCompile(`(?i)(?:^|[\s(\[,.:;])(?:([a-z0-9][a-z0-9._-]*)/([a-z0-9][a-z0-9._-]*))?([#!])(\d+)\b`)
 
-// Closing keywords ahead of a reference
+// Closing keywords only ever target issues
 var closePattern = regexp.MustCompile(`(?i)\b(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[:\s]+(?:([a-z0-9][a-z0-9._-]*)/([a-z0-9][a-z0-9._-]*))?#(\d+)\b`)
 
 // User and team mentions
 var mentionPattern = regexp.MustCompile(`(?:^|[^\w@/])@([a-zA-Z0-9][a-zA-Z0-9._-]*(?:/[a-zA-Z0-9][a-zA-Z0-9._-]*)?)`)
 
-// One parsed issue reference
+// One parsed issue or pull request reference
 type IssueReference struct {
 	Namespace string
 	Name      string
 	Number    int64
+	IsPull    bool
 	Closes    bool
+}
+
+// Text form of the reference inside its own repository
+func (r IssueReference) String() string {
+	return db.IssueRef(r.IsPull, r.Number)
 }
 
 // Parses references in markdown or a commit message, fenced code skipped
@@ -31,16 +37,17 @@ func ParseReferences(text string) []IssueReference {
 	text = stripCode(text)
 	seen := map[string]bool{}
 	var out []IssueReference
-	add := func(ns, name, num string, closes bool) {
+	add := func(ns, name, sigil, num string, closes bool) {
 		n, err := strconv.ParseInt(num, 10, 64)
 		if err != nil || n <= 0 {
 			return
 		}
-		key := ns + "/" + name + "#" + num
+		isPull := sigil == "!"
+		key := ns + "/" + name + sigil + num
 		if seen[key] {
 			if closes {
 				for i := range out {
-					if out[i].Namespace == ns && out[i].Name == name && out[i].Number == n {
+					if out[i].Namespace == ns && out[i].Name == name && out[i].Number == n && out[i].IsPull == isPull {
 						out[i].Closes = true
 					}
 				}
@@ -48,13 +55,13 @@ func ParseReferences(text string) []IssueReference {
 			return
 		}
 		seen[key] = true
-		out = append(out, IssueReference{Namespace: ns, Name: name, Number: n, Closes: closes})
+		out = append(out, IssueReference{Namespace: ns, Name: name, Number: n, IsPull: isPull, Closes: closes})
 	}
 	for _, m := range closePattern.FindAllStringSubmatch(text, -1) {
-		add(strings.ToLower(m[2]), strings.ToLower(m[3]), m[4], true)
+		add(strings.ToLower(m[2]), strings.ToLower(m[3]), "#", m[4], true)
 	}
 	for _, m := range refPattern.FindAllStringSubmatch(text, -1) {
-		add(strings.ToLower(m[1]), strings.ToLower(m[2]), m[3], false)
+		add(strings.ToLower(m[1]), strings.ToLower(m[2]), m[3], m[4], false)
 	}
 	return out
 }
@@ -117,7 +124,7 @@ func (m *Manager) resolveReference(ctx context.Context, repo *db.GitRepository, 
 		}
 		target = other
 	}
-	issue, err := m.store.GetGitIssue(ctx, target.ID, ref.Number)
+	issue, err := m.store.GetGitIssue(ctx, target.ID, ref.Number, ref.IsPull)
 	if err != nil || issue == nil {
 		return nil, nil
 	}

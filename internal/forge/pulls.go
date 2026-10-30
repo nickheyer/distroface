@@ -71,14 +71,14 @@ func PullRef(number int64) plumbing.ReferenceName {
 // Loads the pull request half of an issue
 func (m *Manager) Pull(ctx context.Context, issue *db.GitIssue) (*db.GitPullRequest, error) {
 	if !issue.IsPull {
-		return nil, fmt.Errorf("%w: #%d is not a pull request", ErrNotFound, issue.Number)
+		return nil, fmt.Errorf("%w: %s is not a pull request", ErrNotFound, issue.Ref())
 	}
 	pr, err := m.store.GetGitPullRequest(ctx, issue.ID)
 	if err != nil {
 		return nil, err
 	}
 	if pr == nil {
-		return nil, fmt.Errorf("%w: pull request #%d", ErrNotFound, issue.Number)
+		return nil, fmt.Errorf("%w: pull request !%d", ErrNotFound, issue.Number)
 	}
 	return pr, nil
 }
@@ -187,12 +187,12 @@ func (m *Manager) CreatePull(ctx context.Context, repo *db.GitRepository, actor 
 		return nil, nil, fmt.Errorf("%w: head and base are the same branch", ErrInvalid)
 	}
 	if existing, _ := m.store.FindOpenPull(ctx, repo.ID, headRepo.ID, headBranch, base); existing != nil {
-		return nil, nil, fmt.Errorf("%w: pull request #%d already proposes these changes", ErrConflict, existing.Number)
+		return nil, nil, fmt.Errorf("%w: pull request !%d already proposes these changes", ErrConflict, existing.Number)
 	}
 	if !actor.CanWrite {
 		in.LabelIDs, in.AssigneeIDs, in.MilestoneID = nil, nil, ""
 	}
-	number, err := m.store.NextGitCounter(ctx, repo.ID, "issue_counter")
+	number, err := m.store.NextGitCounter(ctx, repo.ID, "pull_counter")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -215,7 +215,7 @@ func (m *Manager) CreatePull(ctx context.Context, repo *db.GitRepository, actor 
 		return nil, nil, err
 	}
 	if _, err := m.refreshPullRef(ctx, repo, pr, number, headRepo); err != nil {
-		m.log.Error("pull ref for #%d: %v", number, err)
+		m.log.Error("pull ref for !%d: %v", number, err)
 	}
 	m.refreshPullStats(ctx, repo, pr)
 	if len(in.LabelIDs) > 0 {

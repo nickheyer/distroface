@@ -13,6 +13,7 @@
 	} from '$lib/components/ui/table';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import EmptyState from '$lib/components/empty-state.svelte';
+	import UserAvatar from '$lib/components/user-avatar.svelte';
 	import { Bot, Plus, Pencil, Trash, FileCode, AlertCircle } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { AgentSource, type Agent } from '$lib/proto/distroface/v1/agents_pb';
@@ -150,26 +151,36 @@
 					{#each agents as a (a.id)}
 						<TableRow>
 							<TableCell>
-								<p class="flex flex-wrap items-center gap-2 font-medium">
-									{a.name}
-									<span class="font-mono text-xs text-muted-foreground"
-										>@{a.botUsername || a.slug}</span
-									>
-									{#if !a.enabled}<Badge variant="outline">Disabled</Badge>{/if}
-									{#if a.source === AgentSource.FILE}
-										<Badge variant="secondary" title={a.filePath}><FileCode />File</Badge>
-									{/if}
-									{#if a.error}
-										<span title={a.error} class="inline-flex"
-											><AlertCircle class="size-3.5 text-warning" /></span
-										>
-									{/if}
-								</p>
-								<p class="mt-0.5 truncate text-xs text-muted-foreground">
-									{a.description || a.providerName || 'Default connector'}{a.model
-										? `, ${a.model}`
-										: ''}
-								</p>
+								<div class="flex items-start gap-3">
+									<UserAvatar
+										username={a.botUsername || a.slug}
+										displayName={a.name}
+										avatarUrl={a.botAvatarUrl}
+										class="mt-0.5 size-8 shrink-0"
+									/>
+									<div class="min-w-0">
+										<p class="flex flex-wrap items-center gap-2 font-medium">
+											{a.name}
+											<span class="font-mono text-xs text-muted-foreground"
+												>@{a.botUsername || a.slug}</span
+											>
+											{#if !a.enabled}<Badge variant="outline">Disabled</Badge>{/if}
+											{#if a.source === AgentSource.FILE}
+												<Badge variant="secondary" title={a.filePath}><FileCode />File</Badge>
+											{/if}
+											{#if a.error}
+												<span title={a.error} class="inline-flex"
+													><AlertCircle class="size-3.5 text-warning" /></span
+												>
+											{/if}
+										</p>
+										<p class="mt-0.5 truncate text-xs text-muted-foreground">
+											{a.description || a.providerName || 'Default connector'}{a.model
+												? `, ${a.model}`
+												: ''}
+										</p>
+									</div>
+								</div>
 							</TableCell>
 							<TableCell
 								><Badge variant="secondary">{kindLabels[a.kind] ?? 'Agent'}</Badge></TableCell

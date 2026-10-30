@@ -17,22 +17,29 @@
 	import UserAvatar from '$lib/components/user-avatar.svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import LabelChip from '$lib/components/git/label-chip.svelte';
+	import BotBadge from '$lib/components/bot-badge.svelte';
 	import { rpcClient, backgroundCallOptions } from '$lib/api/rpc-client';
 	import type { User } from '$lib/proto/distroface/v1/types_pb';
 	import { IssueState, type Issue } from '$lib/proto/distroface/v1/issue_pb';
 	import { CommitStatusState, type GetCommitResponse } from '$lib/proto/distroface/v1/git_pb';
-	import { relativeTime } from '$lib/utils';
+	import { relativeTime, issueRef } from '$lib/utils';
+	import { Bot } from '$lib/icons';
+	import { Badge } from '$lib/components/ui/badge';
+	import type { AgentSession } from '$lib/proto/distroface/v1/agents_pb';
+	import { sessionState, sessionStateLabels, triggerLabel } from '$lib/components/git/agents-state';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { SvelteMap } from 'svelte/reactivity';
 
 	type Target =
 		| { kind: 'user'; key: string; user: string }
-		| { kind: 'issue'; key: string; repo: string; number: string }
-		| { kind: 'commit'; key: string; repo: string; sha: string };
+		| { kind: 'issue'; key: string; repo: string; number: string; pull: boolean }
+		| { kind: 'commit'; key: string; repo: string; sha: string }
+		| { kind: 'session'; key: string; repo: string; id: string };
 	type Card =
 		| { kind: 'user'; user: User }
 		| { kind: 'issue'; issue: Issue }
 		| { kind: 'commit'; repo: string; commit: GetCommitResponse }
+		| { kind: 'session'; repo: string; session: AgentSession }
 		| { kind: 'missing' };
 
 	const SHOW_MS = 350;
@@ -65,13 +72,25 @@
 				return d.user
 					? { kind: 'user', key: `user:${d.user.toLowerCase()}`, user: d.user }
 					: undefined;
-			case 'issue':
+			case 'issue': {
+				const pull = d.pull === '1' || d.pull === 'true';
 				return d.repo && d.number
 					? {
 							kind: 'issue',
-							key: `issue:${d.repo.toLowerCase()}#${d.number}`,
+							key: `issue:${d.repo.toLowerCase()}${issueRef(pull, d.number)}`,
 							repo: d.repo,
-							number: d.number
+							number: d.number,
+							pull
+						}
+					: undefined;
+			}
+			case 'session':
+				return d.repo && d.session
+					? {
+							kind: 'session',
+							key: `session:${d.repo.toLowerCase()}:${d.session}`,
+							repo: d.repo,
+							id: d.session
 						}
 					: undefined;
 			case 'commit':
@@ -97,10 +116,20 @@
 				case 'issue': {
 					const [namespace, name] = t.repo.split('/');
 					const r = await rpcClient.issue.getIssue(
-						{ namespace, name, number: BigInt(t.number) },
+						{ namespace, name, number: BigInt(t.number), isPull: t.pull },
 						backgroundCallOptions
 					);
 					return r.issue ? { kind: 'issue', issue: r.issue } : { kind: 'missing' };
+				}
+				case 'session': {
+					const [namespace, name] = t.repo.split('/');
+					const r = await rpcClient.agents.getAgentSession(
+						{ namespace, name, id: t.id },
+						backgroundCallOptions
+					);
+					return r.session
+						? { kind: 'session', repo: t.repo, session: r.session }
+						: { kind: 'missing' };
 				}
 				case 'commit': {
 					const [namespace, name] = t.repo.split('/');
@@ -257,7 +286,8 @@
 	{@const Icon = issueIcon(i)}
 	<Icon class="mt-0.5 size-4 shrink-0 {issueTone(i)}" />
 	<span class="min-w-0 wrap-break-word"
-		>{i.title} <span class="font-normal text-muted-foreground">#{i.number}</span></span
+		>{i.title}
+		<span class="font-normal text-muted-foreground">{issueRef(i.isPull, i.number)}</span></span
 	>
 {/snippet}
 
@@ -292,7 +322,9 @@
 						href={resolve('/[namespace]', { namespace: u.username })}
 						class="block truncate font-semibold hover:text-primary">{u.displayName || u.username}</a
 					>
-					<p class="truncate text-xs text-muted-foreground">@{u.username}</p>
+					<p class="truncate text-xs text-muted-foreground">
+						@{u.username}{#if u.isAgent}<BotBadge class="ml-1.5 align-middle" />{/if}
+					</p>
 					{#if u.createdAt}
 						<p class="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
 							<Calendar class="size-3" />Joined {relativeTime(timestampDate(u.createdAt))}
@@ -337,6 +369,29 @@
 						<LabelChip name={l.name} color={l.color} size="sm" />
 					{/each}
 				</div>
+			{/if}
+		{:else if card.kind === 'session'}
+			{@const s = card.session}
+			{@const [namespace, name] = card.repo.split('/')}
+			{@const state = sessionState(s.status, s.conclusion)}
+			<p class="flex items-center gap-1.5 text-xs text-muted-foreground">
+				<Bot class="size-3.5" />
+				<span class="truncate">{s.agentName || s.agentSlug}</span>
+				<span>@{s.botUsername || s.agentSlug}</span>
+			</p>
+			<a
+				href={resolve('/[namespace]/[name]/agents/sessions/[id]', { namespace, name, id: s.id })}
+				class="mt-1 block font-semibold wrap-break-word hover:text-primary"
+				>{s.title || s.prompt.split('\n')[0] || 'Session'}
+				<span class="font-normal text-muted-foreground">session #{s.number}</span></a
+			>
+			<p class="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+				<Badge variant="secondary">{sessionStateLabels[state]}</Badge>
+				<span>{triggerLabel(s.trigger)}</span>
+				{#if s.createdAt}<span>started {relativeTime(timestampDate(s.createdAt))}</span>{/if}
+			</p>
+			{#if s.summary}
+				<p class="mt-1 line-clamp-2 text-xs text-muted-foreground">{s.summary}</p>
 			{/if}
 		{:else if card.kind === 'commit' && card.commit.commit}
 			{@const c = card.commit.commit}

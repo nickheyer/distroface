@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
 	import {
 		CircleDot,
 		CheckCircle,
@@ -75,16 +74,6 @@
 			if (silent && !resp.issue) return;
 			issue = resp.issue;
 			notFound = !issue;
-			if (issue?.isPull) {
-				await goto(
-					resolve('/[namespace]/[name]/pulls/[number]', {
-						namespace,
-						name,
-						number: String(number)
-					}),
-					{ replaceState: true }
-				);
-			}
 		} catch {
 			if (silent) return;
 			issue = undefined;

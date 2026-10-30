@@ -9,15 +9,17 @@ import (
 	"github.com/nickheyer/distroface/internal/db"
 )
 
-// Resolves a blocker reference written as a number or ns/name#number
+// Resolves a blocker written as 12 #12 !12 or ns/name#12
 func (m *Manager) resolveDependency(ctx context.Context, repo *db.GitRepository, actor Actor, ref string) (*db.GitIssue, error) {
-	ref = strings.TrimSpace(strings.TrimPrefix(ref, "#"))
-	if n, err := strconv.ParseInt(ref, 10, 64); err == nil {
-		return m.Issue(ctx, repo, n)
+	ref = strings.TrimSpace(ref)
+	isPull := strings.HasPrefix(ref, "!")
+	bare := strings.TrimPrefix(strings.TrimPrefix(ref, "#"), "!")
+	if n, err := strconv.ParseInt(bare, 10, 64); err == nil {
+		return m.Issue(ctx, repo, n, isPull)
 	}
 	refs := ParseReferences(ref)
 	if len(refs) != 1 {
-		return nil, fmt.Errorf("%w: reference must be a number or ns/name#number", ErrInvalid)
+		return nil, fmt.Errorf("%w: reference must be a number, #number, !number, or ns/name#number", ErrInvalid)
 	}
 	_, issue := m.resolveReference(ctx, repo, actor, refs[0])
 	if issue == nil {

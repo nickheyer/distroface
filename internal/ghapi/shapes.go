@@ -18,10 +18,14 @@ func (q *request) userJSON(u *db.User) obj {
 	if u == nil {
 		return q.ghost()
 	}
+	kind := "User"
+	if u.AuthProvider == db.AuthProviderAgent {
+		kind = "Bot"
+	}
 	return obj{
 		"login": u.Username, "id": numID(u.ID), "node_id": "", "avatar_url": "", "gravatar_id": "",
 		"url": q.apiBase() + "/users/" + u.Username, "html_url": q.base() + "/" + u.Username,
-		"type": "User", "site_admin": false, "name": u.DisplayName,
+		"type": kind, "site_admin": false, "name": u.DisplayName,
 	}
 }
 

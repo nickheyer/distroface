@@ -2,6 +2,7 @@ package ghapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -24,13 +25,16 @@ func issueUnit(issue *db.GitIssue) string {
 	return db.GitUnitIssues
 }
 
-// Loads an issue by number and checks read on its unit
+// Numbers without an issue fall back to the pull request
 func (q *request) issue(repo *db.GitRepository) (*db.GitIssue, bool) {
 	number, ok := q.pathInt("number")
 	if !ok {
 		return nil, false
 	}
-	issue, err := q.h.forge.Issue(q.ctx, repo, number)
+	issue, err := q.h.forge.Issue(q.ctx, repo, number, false)
+	if errors.Is(err, forge.ErrNotFound) {
+		issue, err = q.h.forge.Issue(q.ctx, repo, number, true)
+	}
 	if err != nil {
 		q.failErr(err)
 		return nil, false

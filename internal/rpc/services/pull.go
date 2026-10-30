@@ -57,7 +57,7 @@ func (s *PullRequestService) pull(ctx context.Context, namespace, name string, n
 	if err != nil {
 		return nil, nil, nil, nil, forge.Actor{}, err
 	}
-	issue, err := s.forge.Issue(ctx, repo, number)
+	issue, err := s.forge.Issue(ctx, repo, number, true)
 	if err != nil {
 		return nil, nil, nil, nil, forge.Actor{}, mapForgeErr(err)
 	}

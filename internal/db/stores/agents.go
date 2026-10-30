@@ -266,10 +266,12 @@ type AgentSessionListOptions struct {
 	Status      string
 	Conclusion  string
 	IssueNumber int64
-	Actor       string
-	Trigger     string
-	Limit       int
-	Offset      int
+	// Pull targets also match sessions that opened them
+	IsPull  bool
+	Actor   string
+	Trigger string
+	Limit   int
+	Offset  int
 }
 
 func (s *Store) ListAgentSessions(ctx context.Context, opts AgentSessionListOptions) ([]*db.AgentSession, int64, error) {
@@ -287,7 +289,11 @@ func (s *Store) ListAgentSessions(ctx context.Context, opts AgentSessionListOpti
 		q = q.Where("conclusion = ?", opts.Conclusion)
 	}
 	if opts.IssueNumber > 0 {
-		q = q.Where("issue_number = ? OR result_pull_number = ?", opts.IssueNumber, opts.IssueNumber)
+		if opts.IsPull {
+			q = q.Where("(issue_number = ? AND is_pull = ?) OR result_pull_number = ?", opts.IssueNumber, true, opts.IssueNumber)
+		} else {
+			q = q.Where("issue_number = ? AND is_pull = ?", opts.IssueNumber, false)
+		}
 	}
 	if opts.Trigger != "" {
 		q = q.Where("trigger = ?", opts.Trigger)
@@ -350,9 +356,9 @@ func (s *Store) ListQueuedAgentSessions(ctx context.Context, repoID string) ([]*
 }
 
 // Live sessions of one agent on one issue or pull request
-func (s *Store) ListLiveAgentSessionsForIssue(ctx context.Context, repoID, agentID string, issueNumber int64) ([]*db.AgentSession, error) {
+func (s *Store) ListLiveAgentSessionsForIssue(ctx context.Context, repoID, agentID string, issueNumber int64, isPull bool) ([]*db.AgentSession, error) {
 	var out []*db.AgentSession
-	err := s.db.WithContext(ctx).Where("repo_id = ? AND agent_id = ? AND issue_number = ? AND status IN ?", repoID, agentID, issueNumber, []string{"queued", "running", "waiting_approval"}).Find(&out).Error
+	err := s.db.WithContext(ctx).Where("repo_id = ? AND agent_id = ? AND issue_number = ? AND is_pull = ? AND status IN ?", repoID, agentID, issueNumber, isPull, []string{"queued", "running", "waiting_approval"}).Find(&out).Error
 	return out, err
 }
 

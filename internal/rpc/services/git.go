@@ -1483,7 +1483,10 @@ func (s *GitService) ListContributors(ctx context.Context, req *v1.ListContribut
 	users := newGitUserCache(s.store)
 	out := make([]*v1.GitContributor, 0, end-offset)
 	for _, c := range contributors[offset:end] {
-		p := &v1.GitContributor{Username: users.usernameByEmail(ctx, c.Email), DisplayName: c.Name, Email: c.Email, Commits: c.Commits, Additions: c.Additions, Deletions: c.Deletions}
+		p := &v1.GitContributor{DisplayName: c.Name, Email: c.Email, Commits: c.Commits, Additions: c.Additions, Deletions: c.Deletions}
+		if u := users.userByEmail(ctx, c.Email); u != nil {
+			p.Username, p.IsAgent = u.Username, isAgentUser(u)
+		}
 		out = append(out, p)
 	}
 	return &v1.ListContributorsResponse{Contributors: out, Page: pages.Info(offset, limit, total)}, nil

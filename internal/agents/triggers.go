@@ -56,6 +56,7 @@ func (m *Manager) isOwnBot(ctx context.Context, def *Definition, userID string) 
 func (m *Manager) triggerAgent(ctx context.Context, repo *db.GitRepository, def *Definition, event, action string, actor *auth.AuthenticatedUser, payload map[string]any) {
 	t := def.Triggers
 	number := payloadNumber(payload)
+	isPull := payloadIsPull(payload)
 	switch event {
 	case "pull_request":
 		if number == 0 {
@@ -79,7 +80,7 @@ func (m *Manager) triggerAgent(ctx context.Context, repo *db.GitRepository, def 
 			if !m.pathsAllowed(ctx, repo, t, number) {
 				return
 			}
-			m.startReplacing(ctx, repo, def, TriggerPullRequest, actor, number, "")
+			m.startReplacing(ctx, repo, def, TriggerPullRequest, actor, number, true, "")
 		case "review_requested":
 			if !t.ReviewRequested || !m.namesBot(ctx, def, payloadStrings(payload["requested_reviewer_ids"])) {
 				return
@@ -87,15 +88,15 @@ func (m *Manager) triggerAgent(ctx context.Context, repo *db.GitRepository, def 
 			if !branchAllowed(t.BaseBranches, base) {
 				return
 			}
-			m.startReplacing(ctx, repo, def, TriggerPullRequest, actor, number, "")
+			m.startReplacing(ctx, repo, def, TriggerPullRequest, actor, number, true, "")
 		case "assigned":
 			if !t.IssueAssigned || !m.namesBot(ctx, def, payloadStrings(payload["assignee_ids"])) {
 				return
 			}
-			m.startIfIdle(ctx, repo, def, TriggerIssue, actor, number, "")
+			m.startIfIdle(ctx, repo, def, TriggerIssue, actor, number, true, "")
 		case "labeled":
 			if label := payloadLabel(payload); label != "" && containsFold(t.IssueLabels, label) {
-				m.startIfIdle(ctx, repo, def, TriggerLabel, actor, number, "")
+				m.startIfIdle(ctx, repo, def, TriggerLabel, actor, number, true, "")
 			}
 		}
 	case "issues":
@@ -107,10 +108,10 @@ func (m *Manager) triggerAgent(ctx context.Context, repo *db.GitRepository, def 
 			if !t.IssueAssigned || !m.namesBot(ctx, def, payloadStrings(payload["assignee_ids"])) {
 				return
 			}
-			m.startIfIdle(ctx, repo, def, TriggerIssue, actor, number, "")
+			m.startIfIdle(ctx, repo, def, TriggerIssue, actor, number, false, "")
 		case "labeled":
 			if label := payloadLabel(payload); label != "" && containsFold(t.IssueLabels, label) {
-				m.startIfIdle(ctx, repo, def, TriggerLabel, actor, number, "")
+				m.startIfIdle(ctx, repo, def, TriggerLabel, actor, number, false, "")
 			}
 		}
 	case "issue_comment", "pull_request_review_comment":
@@ -134,7 +135,7 @@ func (m *Manager) triggerAgent(ctx context.Context, repo *db.GitRepository, def 
 		} else {
 			prompt = fmt.Sprintf("Comment by @%s:\n%s", actorName(actor), prompt)
 		}
-		if _, err := m.StartSession(ctx, StartParams{Repo: repo, Def: def, Prompt: prompt, IssueNumber: number, Trigger: TriggerMention, Actor: actor, System: true}); err != nil {
+		if _, err := m.StartSession(ctx, StartParams{Repo: repo, Def: def, Prompt: prompt, IssueNumber: number, IsPull: isPull, Trigger: TriggerMention, Actor: actor, System: true}); err != nil {
 			m.log.Warn("agents: mention session for %s: %v", def.Slug, err)
 		}
 	case "pull_request_review":
@@ -150,12 +151,12 @@ func (m *Manager) triggerAgent(ctx context.Context, repo *db.GitRepository, def 
 		if !m.ownsPull(ctx, repo, def, number) {
 			return
 		}
-		prompt := fmt.Sprintf("@%s reviewed pull request #%d (%s).", actorName(actor), number, strings.ReplaceAll(state, "_", " "))
+		prompt := fmt.Sprintf("@%s reviewed pull request !%d (%s).", actorName(actor), number, strings.ReplaceAll(state, "_", " "))
 		if strings.TrimSpace(body) != "" {
 			prompt += "\n\n" + strings.TrimSpace(body)
 		}
 		prompt += "\n\nRead the review comments with get_pull_request, address them with commits to this pull request, and reply with a summary."
-		m.startIfIdle(ctx, repo, def, TriggerReview, actor, number, prompt)
+		m.startIfIdle(ctx, repo, def, TriggerReview, actor, number, true, prompt)
 	}
 }
 
@@ -167,7 +168,7 @@ func (m *Manager) OnRunCompleted(ctx context.Context, repo *db.GitRepository, ru
 	if strings.HasPrefix(run.WorkflowPath, "agent-session-") {
 		return
 	}
-	issue, _ := m.store.GetGitIssue(ctx, repo.ID, run.PullNumber)
+	issue, _ := m.store.GetGitIssue(ctx, repo.ID, run.PullNumber, true)
 	if issue == nil || issue.State != "open" || !m.IsAgentUser(ctx, issue.AuthorID) {
 		return
 	}
@@ -181,49 +182,49 @@ func (m *Manager) OnRunCompleted(ctx context.Context, repo *db.GitRepository, ru
 	}
 	go func() {
 		ctx := context.WithoutCancel(ctx)
-		sessions, _, err := m.store.ListAgentSessions(ctx, stores.AgentSessionListOptions{RepoID: repo.ID, AgentID: def.ID, IssueNumber: issue.Number, Trigger: TriggerWorkflowRun})
+		sessions, _, err := m.store.ListAgentSessions(ctx, stores.AgentSessionListOptions{RepoID: repo.ID, AgentID: def.ID, IssueNumber: issue.Number, IsPull: true, Trigger: TriggerWorkflowRun})
 		if err != nil || len(sessions) >= maxWorkflowFixSessions {
 			return
 		}
-		prompt := fmt.Sprintf("Workflow %s run #%d failed on pull request #%d (run id %s). Read the failing job log with get_workflow_run_log, fix the cause with commits to this pull request, and summarize what you changed.", run.WorkflowName, run.Number, run.PullNumber, run.ID)
+		prompt := fmt.Sprintf("Workflow %s run #%d failed on pull request !%d (run id %s). Read the failing job log with get_workflow_run_log, fix the cause with commits to this pull request, and summarize what you changed.", run.WorkflowName, run.Number, run.PullNumber, run.ID)
 		var actor *auth.AuthenticatedUser
 		if run.TriggerUserID != "" {
 			if u, _ := m.store.GetUserByID(ctx, run.TriggerUserID); u != nil && u.AuthProvider != db.AuthProviderAgent {
 				actor = &auth.AuthenticatedUser{ID: u.ID, Username: u.Username, Provider: u.AuthProvider}
 			}
 		}
-		m.startIfIdle(ctx, repo, def, TriggerWorkflowRun, actor, issue.Number, prompt)
+		m.startIfIdle(ctx, repo, def, TriggerWorkflowRun, actor, issue.Number, true, prompt)
 	}()
 }
 
 // Starts a session unless one is already live for the agent on the target
-func (m *Manager) startIfIdle(ctx context.Context, repo *db.GitRepository, def *Definition, trigger string, actor *auth.AuthenticatedUser, number int64, prompt string) {
-	live, _ := m.store.ListLiveAgentSessionsForIssue(ctx, repo.ID, def.ID, number)
+func (m *Manager) startIfIdle(ctx context.Context, repo *db.GitRepository, def *Definition, trigger string, actor *auth.AuthenticatedUser, number int64, isPull bool, prompt string) {
+	live, _ := m.store.ListLiveAgentSessionsForIssue(ctx, repo.ID, def.ID, number, isPull)
 	if len(live) > 0 {
 		return
 	}
-	if _, err := m.StartSession(ctx, StartParams{Repo: repo, Def: def, Prompt: prompt, IssueNumber: number, Trigger: trigger, Actor: actor, System: true}); err != nil {
-		m.log.Warn("agents: %s session for %s on #%d: %v", trigger, def.Slug, number, err)
+	if _, err := m.StartSession(ctx, StartParams{Repo: repo, Def: def, Prompt: prompt, IssueNumber: number, IsPull: isPull, Trigger: trigger, Actor: actor, System: true}); err != nil {
+		m.log.Warn("agents: %s session for %s on %s: %v", trigger, def.Slug, db.IssueRef(isPull, number), err)
 	}
 }
 
 // Starts a session, cancelling a live one on the same target first
-func (m *Manager) startReplacing(ctx context.Context, repo *db.GitRepository, def *Definition, trigger string, actor *auth.AuthenticatedUser, number int64, prompt string) {
-	live, _ := m.store.ListLiveAgentSessionsForIssue(ctx, repo.ID, def.ID, number)
+func (m *Manager) startReplacing(ctx context.Context, repo *db.GitRepository, def *Definition, trigger string, actor *auth.AuthenticatedUser, number int64, isPull bool, prompt string) {
+	live, _ := m.store.ListLiveAgentSessionsForIssue(ctx, repo.ID, def.ID, number, isPull)
 	for _, s := range live {
 		if s.Trigger == TriggerPullRequest {
 			_ = m.Cancel(ctx, s, nil)
 		}
 	}
-	if _, err := m.StartSession(ctx, StartParams{Repo: repo, Def: def, Prompt: prompt, IssueNumber: number, Trigger: trigger, Actor: actor, System: true}); err != nil {
-		m.log.Warn("agents: %s session for %s on #%d: %v", trigger, def.Slug, number, err)
+	if _, err := m.StartSession(ctx, StartParams{Repo: repo, Def: def, Prompt: prompt, IssueNumber: number, IsPull: isPull, Trigger: trigger, Actor: actor, System: true}); err != nil {
+		m.log.Warn("agents: %s session for %s on %s: %v", trigger, def.Slug, db.IssueRef(isPull, number), err)
 	}
 }
 
 // Whether the pull request was opened by this agent
 func (m *Manager) ownsPull(ctx context.Context, repo *db.GitRepository, def *Definition, number int64) bool {
-	issue, _ := m.store.GetGitIssue(ctx, repo.ID, number)
-	if issue == nil || !issue.IsPull {
+	issue, _ := m.store.GetGitIssue(ctx, repo.ID, number, true)
+	if issue == nil {
 		return false
 	}
 	return m.isOwnBot(ctx, def, issue.AuthorID)
@@ -289,6 +290,12 @@ func actorName(actor *auth.AuthenticatedUser) string {
 		return "someone"
 	}
 	return actor.Username
+}
+
+// Whether the event names a pull request
+func payloadIsPull(payload map[string]any) bool {
+	_, ok := payload["pull_request"].(map[string]any)
+	return ok
 }
 
 func payloadNumber(payload map[string]any) int64 {
@@ -363,7 +370,7 @@ func (m *Manager) pathsAllowed(ctx context.Context, repo *db.GitRepository, t *v
 	if len(t.Paths) == 0 && len(t.PathsIgnore) == 0 {
 		return true
 	}
-	issue, _ := m.store.GetGitIssue(ctx, repo.ID, number)
+	issue, _ := m.store.GetGitIssue(ctx, repo.ID, number, true)
 	if issue == nil {
 		return true
 	}
