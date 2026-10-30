@@ -317,7 +317,7 @@ func (s *Store) ActionsWorkflowStats(ctx context.Context, repoID string) (map[st
 	var rows []struct {
 		WorkflowPath string
 		Count        int32
-		Last         time.Time
+		Last         sqlTime
 	}
 	err := s.db.WithContext(ctx).Model(&db.ActionsRun{}).Select("workflow_path, COUNT(*) as count, MAX(created_at) as last").
 		Where("repo_id = ?", repoID).Group("workflow_path").Scan(&rows).Error
@@ -327,7 +327,7 @@ func (s *Store) ActionsWorkflowStats(ctx context.Context, repoID string) (map[st
 	counts, last := map[string]int32{}, map[string]time.Time{}
 	for _, r := range rows {
 		counts[r.WorkflowPath] = r.Count
-		last[r.WorkflowPath] = r.Last
+		last[r.WorkflowPath] = r.Last.Time
 	}
 	return counts, last, nil
 }

@@ -169,7 +169,7 @@ func (s *Store) AgentSessionStats(ctx context.Context, agentIDs []string) (map[s
 	var rows []struct {
 		AgentID string
 		Count   int64
-		Last    time.Time
+		Last    sqlTime
 	}
 	err := s.db.WithContext(ctx).Model(&db.AgentSession{}).
 		Select("agent_id, COUNT(*) AS count, MAX(created_at) AS last").
@@ -179,7 +179,7 @@ func (s *Store) AgentSessionStats(ctx context.Context, agentIDs []string) (map[s
 	}
 	for _, r := range rows {
 		counts[r.AgentID] = r.Count
-		last[r.AgentID] = r.Last
+		last[r.AgentID] = r.Last.Time
 	}
 	return counts, last, nil
 }
