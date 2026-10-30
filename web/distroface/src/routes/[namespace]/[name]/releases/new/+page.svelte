@@ -15,7 +15,7 @@
 	const name = $derived(page.params.name ?? '');
 	const repo = $derived(gitRepoStore.repo);
 	const base = $derived(resolve('/[namespace]/[name]/releases', { namespace, name }));
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.RELEASES) && !repo?.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.RELEASES) && !gitRepoStore.readOnly);
 	const presetTag = $derived(page.url.searchParams.get('tag') ?? '');
 
 	$effect(() => {
@@ -24,11 +24,24 @@
 
 	// Drafts continue on the edit page where assets attach
 	function onCreated(r: Release) {
-		void goto(resolve('/[namespace]/[name]/releases/[tag]/edit', { namespace, name, tag: encodeURIComponent(r.tag) }), { replaceState: true });
+		void goto(
+			resolve('/[namespace]/[name]/releases/[tag]/edit', {
+				namespace,
+				name,
+				tag: encodeURIComponent(r.tag)
+			}),
+			{ replaceState: true }
+		);
 	}
 
 	function onSaved(r: Release) {
-		void goto(resolve('/[namespace]/[name]/releases/[tag]', { namespace, name, tag: encodeURIComponent(r.tag) }));
+		void goto(
+			resolve('/[namespace]/[name]/releases/[tag]', {
+				namespace,
+				name,
+				tag: encodeURIComponent(r.tag)
+			})
+		);
 	}
 
 	function onCancel() {
@@ -47,7 +60,7 @@
 			<p class="section-subtitle">Tag a version with notes, assets, and images</p>
 		</div>
 		<Button variant="outline" size="sm" class="h-8 shrink-0" href={base}>
-			<ChevronLeft class="h-3.5 w-3.5 mr-1" />Releases
+			<ChevronLeft class="mr-1 h-3.5 w-3.5" />Releases
 		</Button>
 	</div>
 
@@ -55,11 +68,20 @@
 		<Alert>
 			<Lock class="h-4 w-4" />
 			<AlertDescription>
-				{repo.isArchived ? 'This repository is archived and read only.' : 'You need write access to the releases unit to draft a release.'}
+				{gitRepoStore.readOnlyReason ||
+					'You need write access to the releases unit to draft a release.'}
 			</AlertDescription>
 		</Alert>
 	{:else if repo}
-		<ReleaseEditor {namespace} {name} defaultBranch={repo.defaultBranch} initialTag={presetTag} {onCreated} {onSaved} {onCancel} />
+		<ReleaseEditor
+			{namespace}
+			{name}
+			defaultBranch={repo.defaultBranch}
+			initialTag={presetTag}
+			{onCreated}
+			{onSaved}
+			{onCancel}
+		/>
 	{:else}
 		<Skeleton class="h-96 w-full rounded-xl" />
 	{/if}

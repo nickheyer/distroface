@@ -59,6 +59,8 @@ service GitService {
   rpc DismissGitImport(DismissGitImportRequest) returns (DismissGitImportResponse) {}
   // GenerateMirrorKey creates the ssh key pair used for ssh upstreams.
   rpc GenerateMirrorKey(GenerateMirrorKeyRequest) returns (GenerateMirrorKeyResponse) {}
+  // DetachMirror stops following the upstream and makes the repository standard
+  rpc DetachMirror(DetachMirrorRequest) returns (DetachMirrorResponse) {}
   // ListPushMirrors returns the push mirrors of a repository.
   rpc ListPushMirrors(ListPushMirrorsRequest) returns (ListPushMirrorsResponse) {}
   // CreatePushMirror adds a remote the repository pushes to.
@@ -1027,6 +1029,17 @@ message GenerateMirrorKeyRequest {
 // GenerateMirrorKeyResponse contains the public key to install upstream.
 message GenerateMirrorKeyResponse {
   string public_key = 1;
+}
+
+// DetachMirrorRequest identifies a mirror
+message DetachMirrorRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// DetachMirrorResponse carries the repository, now standard
+message DetachMirrorResponse {
+  GitRepository repository = 1;
 }
 
 // ListPushMirrorsRequest identifies a repository.

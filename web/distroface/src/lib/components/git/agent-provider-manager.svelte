@@ -179,8 +179,9 @@
 								</TableCell>
 							{/if}
 							<TableCell class="hidden text-xs text-muted-foreground tabular-nums md:table-cell">
-								{formatTokens(p.tokensToday)} tokens{#if p.tokensPerDay > 0n}
-									/ {formatTokens(p.tokensPerDay)}{/if}
+								{formatTokens(p.tokensToday)} tokens {#if p.tokensPerDay > 0n}/ {formatTokens(
+										p.tokensPerDay
+									)}{/if}
 							</TableCell>
 							<TableCell class="hidden text-xs text-muted-foreground md:table-cell">
 								{#if p.lastTestedAt}

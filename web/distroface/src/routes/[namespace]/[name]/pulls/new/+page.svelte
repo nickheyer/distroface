@@ -47,7 +47,10 @@
 	const repoFullName = $derived(`${namespace}/${name}`);
 	const orgId = $derived(repo.isOrgNamespace ? repo.ownerId : '');
 	const canOpen = $derived(
-		authStore.isAuthenticated && !repo.isArchived && gitRepoStore.unitEnabled(GitUnit.PULLS)
+		authStore.isAuthenticated &&
+			!repo.isArchived &&
+			!gitRepoStore.isMirror &&
+			gitRepoStore.unitEnabled(GitUnit.PULLS)
 	);
 
 	// Fork heads arrive prefixed with their repo
@@ -291,9 +294,11 @@
 	<EmptyState
 		icon={GitPullRequest}
 		message="Cannot open a pull request"
-		description={authStore.isAuthenticated
-			? 'Pull requests are disabled or the repository is archived.'
-			: 'Sign in to open a pull request.'}
+		description={!authStore.isAuthenticated
+			? 'Sign in to open a pull request.'
+			: gitRepoStore.isMirror
+				? 'This repository is a mirror and only takes changes from its upstream.'
+				: 'Pull requests are disabled or the repository is archived.'}
 	>
 		{#snippet actions()}
 			<Button variant="outline" href="/{namespace}/{name}/pulls">Back to pull requests</Button>

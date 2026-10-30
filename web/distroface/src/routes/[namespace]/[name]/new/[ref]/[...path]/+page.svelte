@@ -28,7 +28,7 @@
 			path: dir
 		})
 	);
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.repo?.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 
 	let fileName = $state('');
 	let content = $state('');
@@ -235,9 +235,7 @@
 		<Alert>
 			<Lock />
 			<AlertDescription>
-				{gitRepoStore.repo.isArchived
-					? 'This repository is archived and read only.'
-					: 'You need write access to add files here.'}
+				{gitRepoStore.readOnlyReason || 'You need write access to add files here.'}
 			</AlertDescription>
 		</Alert>
 	{:else if refError}

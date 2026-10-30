@@ -19,8 +19,10 @@
 	const tag = $derived(decodeURIComponent(page.params.tag ?? ''));
 	const repo = $derived(gitRepoStore.repo);
 	const base = $derived(resolve('/[namespace]/[name]/releases', { namespace, name }));
-	const releaseHref = $derived(resolve('/[namespace]/[name]/releases/[tag]', { namespace, name, tag: encodeURIComponent(tag) }));
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.RELEASES) && !repo?.isArchived);
+	const releaseHref = $derived(
+		resolve('/[namespace]/[name]/releases/[tag]', { namespace, name, tag: encodeURIComponent(tag) })
+	);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.RELEASES) && !gitRepoStore.readOnly);
 
 	let release = $state<Release | undefined>();
 	let loading = $state(true);
@@ -47,18 +49,31 @@
 			release = resp.release;
 		} catch (err) {
 			release = undefined;
-			error = err instanceof ConnectError ? err.rawMessage || err.message : 'Failed to load release';
+			error =
+				err instanceof ConnectError ? err.rawMessage || err.message : 'Failed to load release';
 		} finally {
 			loading = false;
 		}
 	}
 
 	function onSaved(r: Release) {
-		void goto(resolve('/[namespace]/[name]/releases/[tag]', { namespace, name, tag: encodeURIComponent(r.tag) }));
+		void goto(
+			resolve('/[namespace]/[name]/releases/[tag]', {
+				namespace,
+				name,
+				tag: encodeURIComponent(r.tag)
+			})
+		);
 	}
 
 	function onCancel() {
-		void goto(resolve('/[namespace]/[name]/releases/[tag]', { namespace, name, tag: encodeURIComponent(tag) }));
+		void goto(
+			resolve('/[namespace]/[name]/releases/[tag]', {
+				namespace,
+				name,
+				tag: encodeURIComponent(tag)
+			})
+		);
 	}
 </script>
 
@@ -70,10 +85,14 @@
 	<div class="section-header">
 		<div class="min-w-0">
 			<h2 class="section-title truncate">Edit release <span class="font-mono">{tag}</span></h2>
-			<p class="section-subtitle">{release?.draft ? 'Draft, not yet visible to readers' : 'Changes apply to the published release'}</p>
+			<p class="section-subtitle">
+				{release?.draft
+					? 'Draft, not yet visible to readers'
+					: 'Changes apply to the published release'}
+			</p>
 		</div>
 		<Button variant="outline" size="sm" class="h-8 shrink-0" href={releaseHref}>
-			<ChevronLeft class="h-3.5 w-3.5 mr-1" />Release
+			<ChevronLeft class="mr-1 h-3.5 w-3.5" />Release
 		</Button>
 	</div>
 
@@ -81,20 +100,32 @@
 		<Alert>
 			<Lock class="h-4 w-4" />
 			<AlertDescription>
-				{repo.isArchived ? 'This repository is archived and read only.' : 'You need write access to the releases unit to edit a release.'}
+				{gitRepoStore.readOnlyReason ||
+					'You need write access to the releases unit to edit a release.'}
 			</AlertDescription>
 		</Alert>
 	{:else if loading || !repo}
 		<Skeleton class="h-96 w-full rounded-xl" />
 	{:else if !release}
-		<EmptyState icon={Rocket} message="Release not found" description={error || `No release is tagged ${tag}.`}>
+		<EmptyState
+			icon={Rocket}
+			message="Release not found"
+			description={error || `No release is tagged ${tag}.`}
+		>
 			{#snippet actions()}
 				<Button variant="outline" href={base}>Back to releases</Button>
 			{/snippet}
 		</EmptyState>
 	{:else}
 		{#key release.id}
-			<ReleaseEditor {namespace} {name} defaultBranch={repo.defaultBranch} {release} {onSaved} {onCancel} />
+			<ReleaseEditor
+				{namespace}
+				{name}
+				defaultBranch={repo.defaultBranch}
+				{release}
+				{onSaved}
+				{onCancel}
+			/>
 		{/key}
 	{/if}
 </div>

@@ -18,6 +18,7 @@
 	import ReviewCard from './review-card.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import { CommentType } from '$lib/proto/distroface/v1/issue_pb';
 	import type { Comment, IssueUser } from '$lib/proto/distroface/v1/issue_pb';
 	import type { PullRequest, Review, ReviewComment } from '$lib/proto/distroface/v1/pull_pb';
@@ -152,6 +153,12 @@
 
 	let comment = $state('');
 	let posting = $state(false);
+	let commentBox = $state<ReturnType<typeof CommentBox>>();
+
+	function insertReply(text: string) {
+		comment = comment.trim() ? `${comment.trimEnd()}\n\n${text}` : text;
+		void commentBox?.focus();
+	}
 
 	async function postComment() {
 		if (!comment.trim() || posting) return;
@@ -313,6 +320,7 @@
 					canModerate={canWrite}
 					{knownUsers}
 					onChanged={refreshAll}
+					onReply={insertReply}
 				/>
 			{/if}
 		{/each}
@@ -337,10 +345,18 @@
 			</div>
 		{/if}
 
-		<MergeBox {namespace} {name} {pull} canMerge={canWrite} {canEdit} {onChanged} />
+		<MergeBox
+			{namespace}
+			{name}
+			{pull}
+			canMerge={canWrite && !gitRepoStore.isMirror}
+			{canEdit}
+			{onChanged}
+		/>
 
 		{#if canComment}
 			<CommentBox
+				bind:this={commentBox}
 				bind:value={comment}
 				placeholder="Leave a comment"
 				submitLabel="Comment"
@@ -367,7 +383,7 @@
 				<Lock />
 				<AlertDescription>
 					<span
-						>This conversation has been locked{#if issue.lockReason}&#32;as <strong
+						>This conversation has been locked {#if issue.lockReason}as <strong
 								class="text-foreground">{issue.lockReason}</strong
 							>{/if} and limited to collaborators with write access.</span
 					>
@@ -404,7 +420,14 @@
 				{onChanged}
 			/>
 		</section>
-		<AgentSessionsPanel {namespace} {name} issueNumber={number} isPull canStart={canWrite} {tick} />
+		<AgentSessionsPanel
+			{namespace}
+			{name}
+			issueNumber={number}
+			isPull
+			canStart={canWrite && !gitRepoStore.isMirror}
+			{tick}
+		/>
 		{#if isFork}
 			<section class="space-y-2 lg:border-t lg:pt-5">
 				<div class="flex min-h-6 items-center">

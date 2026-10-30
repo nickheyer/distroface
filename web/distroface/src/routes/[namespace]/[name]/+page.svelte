@@ -57,7 +57,7 @@
 	const namespace = $derived(repo.namespace);
 	const name = $derived(repo.name);
 	const ref = $derived(repo.defaultBranch);
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !repo.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 	const params = $derived({ namespace, name });
 	const refParams = $derived({ namespace, name, ref: ref || 'main', path: '' });
 
@@ -199,43 +199,49 @@
 				</div>
 
 				<div class="space-y-5 p-4">
-					<p class="text-sm text-muted-foreground">
-						This repository is empty. Push something to get started.
-					</p>
+					{#if gitRepoStore.isMirror}
+						<p class="text-sm text-muted-foreground">
+							Nothing has been fetched from the upstream yet. Branches and tags appear here after
+							the first sync.
+						</p>
+					{:else}
+						<p class="text-sm text-muted-foreground">
+							This repository is empty. Push something to get started.
+						</p>
 
-					<div class="space-y-2">
-						<h3 class="text-sm font-semibold">Push an existing repository</h3>
-						<div class="relative">
-							<pre
-								class="code-inline overflow-x-auto pr-10 whitespace-pre">git remote add origin {httpUrl}
+						<div class="space-y-2">
+							<h3 class="text-sm font-semibold">Push an existing repository</h3>
+							<div class="relative">
+								<pre
+									class="code-inline overflow-x-auto pr-10 whitespace-pre">git remote add origin {httpUrl}
 git push -u origin {ref || 'main'}</pre>
-							<div class="absolute top-1.5 right-1.5">
-								<CopyButton
-									text={`git remote add origin ${httpUrl}\ngit push -u origin ${ref || 'main'}`}
-									label="Commands copied"
-								/>
+								<div class="absolute top-1.5 right-1.5">
+									<CopyButton
+										text={`git remote add origin ${httpUrl}\ngit push -u origin ${ref || 'main'}`}
+										label="Commands copied"
+									/>
+								</div>
 							</div>
 						</div>
-					</div>
 
-					<div class="space-y-2">
-						<h3 class="text-sm font-semibold">Start a new one on the command line</h3>
-						<div class="relative">
-							<pre class="code-inline overflow-x-auto pr-10 whitespace-pre">git init -b {ref ||
-									'main'}
+						<div class="space-y-2">
+							<h3 class="text-sm font-semibold">Start a new one on the command line</h3>
+							<div class="relative">
+								<pre class="code-inline overflow-x-auto pr-10 whitespace-pre">git init -b {ref ||
+										'main'}
 git add README.md
 git commit -m "first commit"
 git remote add origin {httpUrl}
 git push -u origin {ref || 'main'}</pre>
-							<div class="absolute top-1.5 right-1.5">
-								<CopyButton
-									text={`git init -b ${ref || 'main'}\ngit add README.md\ngit commit -m "first commit"\ngit remote add origin ${httpUrl}\ngit push -u origin ${ref || 'main'}`}
-									label="Commands copied"
-								/>
+								<div class="absolute top-1.5 right-1.5">
+									<CopyButton
+										text={`git init -b ${ref || 'main'}\ngit add README.md\ngit commit -m "first commit"\ngit remote add origin ${httpUrl}\ngit push -u origin ${ref || 'main'}`}
+										label="Commands copied"
+									/>
+								</div>
 							</div>
 						</div>
-					</div>
-
+					{/if}
 					<PermissionGate allowed={canWrite}>
 						<div class="flex flex-wrap items-center gap-2 border-t pt-4">
 							<span class="text-sm text-muted-foreground">Or start in the browser</span>
@@ -411,7 +417,9 @@ git push -u origin {ref || 'main'}</pre>
 					{:else}
 						<p class="text-sm text-muted-foreground">
 							No releases published.
-							<PermissionGate allowed={gitRepoStore.canWrite(GitUnit.RELEASES)}>
+							<PermissionGate
+								allowed={gitRepoStore.canWrite(GitUnit.RELEASES) && !gitRepoStore.isMirror}
+							>
 								<a href={resolve('/[namespace]/[name]/releases/new', params)} class="link"
 									>Create one</a
 								>

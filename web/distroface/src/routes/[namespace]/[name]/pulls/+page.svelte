@@ -41,7 +41,10 @@
 	const name = $derived(repo.name);
 	const repoFullName = $derived(`${namespace}/${name}`);
 	const canOpen = $derived(
-		authStore.isAuthenticated && !repo.isArchived && gitRepoStore.canRead(GitUnit.PULLS)
+		authStore.isAuthenticated &&
+			!repo.isArchived &&
+			!gitRepoStore.isMirror &&
+			gitRepoStore.canRead(GitUnit.PULLS)
 	);
 
 	type Tab = 'open' | 'closed' | 'merged';

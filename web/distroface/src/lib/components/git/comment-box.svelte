@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { Snippet } from 'svelte';
+	import { tick, type Snippet } from 'svelte';
 	import { Bold, Italic, Code, Link, List, ListChecks, Quote, Loader } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import Markdown from '$lib/components/git/markdown.svelte';
@@ -79,6 +79,16 @@
 	$effect(() => {
 		if (autofocus && textarea) textarea.focus();
 	});
+
+	export async function focus() {
+		tab = 'write';
+		await tick();
+		const el = textarea;
+		if (!el) return;
+		el.setSelectionRange(value.length, value.length);
+		el.scrollIntoView({ block: 'center' });
+		el.focus({ preventScroll: true });
+	}
 
 	const tools = [
 		{ icon: Bold, title: 'Bold', run: () => wrap('**') },

@@ -44,28 +44,13 @@
 	const me = $derived(authStore.user);
 	const gitOn = $derived(configStore.gitEnabled);
 
-	type FeedTab = { key: string; label: string; feed: ActivityFeed; hint: string };
-	const tabs = $derived<FeedTab[]>([
-		...(signedIn
-			? [
-					{
-						key: 'home',
-						label: 'For you',
-						feed: ActivityFeed.HOME,
-						hint: 'Your repositories, your organizations, and everything you star or watch'
-					},
-					{ key: 'mine', label: 'Mine', feed: ActivityFeed.MINE, hint: 'Things you did' }
-				]
-			: []),
-		{
-			key: 'all',
-			label: 'Everyone',
-			feed: ActivityFeed.PUBLIC,
-			hint: 'Public activity across the instance'
-		}
-	]);
-	let tabKey = $state('');
-	const tab = $derived(tabs.find((t) => t.key === tabKey) ?? tabs[0]);
+	let everyone = $state(false);
+	const feed = $derived(signedIn && !everyone ? ActivityFeed.HOME : ActivityFeed.PUBLIC);
+	const home = $derived(feed === ActivityFeed.HOME);
+	const scopes = [
+		{ everyone: false, label: 'For you' },
+		{ everyone: true, label: 'Everyone' }
+	];
 
 	let group = $state('');
 	const kinds = $derived(activityGroups.find((g) => g.key === group)?.kinds ?? []);
@@ -361,36 +346,41 @@
 					<Activity class="size-5 text-muted-foreground" />
 					Home
 				</h1>
-				<div class="flex shrink-0 items-center gap-1">
+				<Button
+					variant="ghost-muted"
+					size="icon-sm"
+					class="shrink-0"
+					aria-label="Refresh"
+					onclick={() => feedView?.refresh()}
+				>
+					<RefreshCw />
+				</Button>
+			</div>
+			<div class="mt-1 flex items-center justify-between gap-3">
+				<p class="text-sm text-muted-foreground">
+					{home ? 'Your personalized activity feed' : 'The public activity feed'}
+				</p>
+				{#if signedIn}
 					<nav
-						class="flex items-center gap-0.5 rounded-md border bg-muted/40 p-0.5"
+						class="flex shrink-0 items-center gap-0.5 rounded-md border bg-muted/40 p-0.5"
 						aria-label="Feed"
 					>
-						{#each tabs as t (t.key)}
+						{#each scopes as s (s.label)}
 							<button
 								type="button"
-								onclick={() => (tabKey = t.key)}
-								aria-pressed={tab.key === t.key}
+								onclick={() => (everyone = s.everyone)}
+								aria-pressed={everyone === s.everyone}
 								class={cn(
 									'rounded px-2.5 py-1 text-xs font-medium transition-colors',
-									tab.key === t.key
+									everyone === s.everyone
 										? 'bg-background text-foreground shadow-xs'
 										: 'text-muted-foreground hover:text-foreground'
-								)}>{t.label}</button
+								)}>{s.label}</button
 							>
 						{/each}
 					</nav>
-					<Button
-						variant="ghost-muted"
-						size="icon-sm"
-						aria-label="Refresh"
-						onclick={() => feedView?.refresh()}
-					>
-						<RefreshCw />
-					</Button>
-				</div>
+				{/if}
 			</div>
-			<p class="mt-1 text-sm text-muted-foreground">{tab.hint}</p>
 		</div>
 
 		<div class="scrollbar-none flex items-center gap-1.5 overflow-x-auto">
@@ -418,18 +408,14 @@
 			{/each}
 		</div>
 
-		{#key `${tab.key}:${group}`}
+		{#key `${feed}:${group}`}
 			<ActivityFeedView
 				bind:this={feedView}
-				feed={tab.feed}
+				{feed}
 				{kinds}
 				poll={60}
-				emptyMessage={tab.key === 'home'
-					? 'Your feed is quiet'
-					: tab.key === 'mine'
-						? 'You have not done anything yet'
-						: 'Nothing has happened yet'}
-				emptyDescription={tab.key === 'home'
+				emptyMessage={home ? 'Your feed is quiet' : 'Nothing has happened yet'}
+				emptyDescription={home
 					? 'Star repositories, join organizations, or push something and it shows up here.'
 					: 'Pushes, releases, issues, stars, and uploads show up here as they happen.'}
 			/>

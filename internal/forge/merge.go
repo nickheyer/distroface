@@ -10,6 +10,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/gitrepo"
+	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 )
 
 // One unmet merge rule
@@ -33,6 +34,8 @@ func (m *Manager) Mergeability(ctx context.Context, repo *db.GitRepository, acto
 	switch {
 	case repo.IsArchived:
 		out.Blockers = append(out.Blockers, Blocker{"archived", "the repository is archived"})
+	case repo.Type == v1.GitRepoType_GIT_REPO_TYPE_MIRROR:
+		out.Blockers = append(out.Blockers, Blocker{"mirror", "the repository is a mirror"})
 	case pr.MergedAt != nil:
 		out.Blockers = append(out.Blockers, Blocker{"closed", "the pull request is already merged"})
 	case issue.State != "open":

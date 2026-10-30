@@ -559,8 +559,9 @@
 								variant="ghost"
 								size="sm"
 								class={cn('font-normal', labelFilter.length && 'text-primary')}
-								>Labels{#if labelFilter.length}
-									({labelFilter.length}){/if}<ChevronDown class="text-muted-foreground" /></Button
+								>Labels {#if labelFilter.length}({labelFilter.length}){/if}<ChevronDown
+									class="text-muted-foreground"
+								/></Button
 							>
 						{/snippet}
 					</DropdownMenuTrigger>

@@ -3,7 +3,6 @@
 	import {
 		Tag,
 		Rocket,
-		FileArchive,
 		Package,
 		Container,
 		ChevronDown,
@@ -233,13 +232,13 @@
 							{#if r.zipUrl}
 								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 								<a href={r.zipUrl} class="link inline-flex items-center gap-1 font-medium">
-									<FileArchive class="size-3.5" />Source code (zip)
+									<Download class="size-3.5" />Source code (zip)
 								</a>
 							{/if}
 							{#if r.tarUrl}
 								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
 								<a href={r.tarUrl} class="link inline-flex items-center gap-1 font-medium">
-									<FileArchive class="size-3.5" />Source code (tar.gz)
+									<Download class="size-3.5" />Source code (tar.gz)
 								</a>
 							{/if}
 						</div>

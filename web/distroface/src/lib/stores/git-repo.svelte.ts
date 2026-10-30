@@ -2,6 +2,7 @@ import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rp
 import { ConnectError } from '@connectrpc/connect';
 import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 import { GitUnit, GitAccessLevel } from '$lib/proto/distroface/v1/git_pb';
+import { GitRepoType } from '$lib/proto/distroface/v1/types_pb';
 
 // Repository the project pages are currently showing
 class GitRepoStore {
@@ -112,6 +113,24 @@ class GitRepoStore {
 
 	get isOwner(): boolean {
 		return this.repo?.viewer?.isOwner === true;
+	}
+
+	get isMirror(): boolean {
+		return this.repo?.type === GitRepoType.MIRROR;
+	}
+
+	// Archived or mirror, issues and wiki still take changes
+	get readOnly(): boolean {
+		return !!this.repo && (this.repo.isArchived || this.isMirror);
+	}
+
+	// Why a change is refused, empty when allowed
+	get readOnlyReason(): string {
+		if (this.repo?.isArchived) return 'This repository is archived and read only.';
+		if (this.isMirror) {
+			return 'This repository is a mirror and only takes changes from its upstream. Detach it in mirror settings to edit it here.';
+		}
+		return '';
 	}
 
 	// Manual time entries and time open, off unless the repo opts in

@@ -31,7 +31,7 @@
 	const ref = $derived(page.params.ref ?? '');
 	const path = $derived((page.params.path ?? '').replace(/\/+$/, ''));
 	const encodedRef = $derived(encodeURIComponent(ref));
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !repo.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 
 	let entries = $state<GitTreeEntry[]>([]);
 	let lastCommit = $state<GitCommit | undefined>();

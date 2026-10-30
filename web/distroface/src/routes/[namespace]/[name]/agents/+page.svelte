@@ -278,13 +278,13 @@
 							{/each}
 						</SelectContent>
 					</Select>
-					<PermissionGate allowed={canWrite && !!overview?.canStart}>
+					<PermissionGate allowed={canWrite && !gitRepoStore.isMirror && !!overview?.canStart}>
 						<Button class="shrink-0" href={newTaskHref}><Plus />New task</Button>
 					</PermissionGate>
 				</div>
 
 				<div class="hidden space-y-0.5 lg:block lg:border-r lg:pr-4">
-					<PermissionGate allowed={canWrite && !!overview?.canStart}>
+					<PermissionGate allowed={canWrite && !gitRepoStore.isMirror && !!overview?.canStart}>
 						<Button size="sm" class="mb-2 w-full" href={newTaskHref} disabled={agents.length === 0}>
 							<Plus />New task
 						</Button>

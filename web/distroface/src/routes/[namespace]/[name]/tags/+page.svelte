@@ -32,7 +32,7 @@
 	const repo = $derived(gitRepoStore.repo!);
 	const namespace = $derived(repo.namespace);
 	const name = $derived(repo.name);
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !repo.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 	const releasesEnabled = $derived(gitRepoStore.unitEnabled(GitUnit.RELEASES));
 
 	let tags = $state<GitTag[]>([]);

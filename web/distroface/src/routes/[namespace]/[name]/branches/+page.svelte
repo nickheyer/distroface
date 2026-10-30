@@ -42,8 +42,8 @@
 	const repo = $derived(gitRepoStore.repo!);
 	const namespace = $derived(repo.namespace);
 	const name = $derived(repo.name);
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !repo.isArchived);
-	const pullsEnabled = $derived(gitRepoStore.unitEnabled(GitUnit.PULLS));
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
+	const pullsEnabled = $derived(gitRepoStore.unitEnabled(GitUnit.PULLS) && !gitRepoStore.isMirror);
 
 	let branches = $state<GitBranchMsg[]>([]);
 	let loading = $state(true);
@@ -224,8 +224,8 @@
 		<TableCell class="hidden text-sm whitespace-nowrap text-muted-foreground md:table-cell">
 			{#if b.commit?.author}<span class="font-medium text-foreground"
 					>{b.commit.author.username || b.commit.author.name}</span
-				>{/if}{#if b.commit?.author && date},
-			{/if}{#if date}<span title={date.toLocaleString()}>{relativeTime(date)}</span>{/if}
+				>{/if}{#if b.commit?.author && date},{/if}
+			{#if date}<span title={date.toLocaleString()}>{relativeTime(date)}</span>{/if}
 		</TableCell>
 		<TableCell class="hidden lg:table-cell">
 			{#if !b.isDefault}

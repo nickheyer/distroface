@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Terminal, Download, FileArchive } from '$lib/icons';
+	import { Terminal, Download } from '$lib/icons';
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { portalStore } from '$lib/stores/portal.svelte';
@@ -109,15 +109,11 @@
 			<span>Download</span>
 			{#if zipUrl}
 				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-				<a href={zipUrl} class="link inline-flex items-center gap-1 font-medium">
-					<FileArchive class="size-3" />zip
-				</a>
+				<a href={zipUrl} class="link inline-flex items-center gap-1 font-medium"> zip </a>
 			{/if}
 			{#if tarUrl}
 				<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
-				<a href={tarUrl} class="link inline-flex items-center gap-1 font-medium">
-					<FileArchive class="size-3" />tar.gz
-				</a>
+				<a href={tarUrl} class="link inline-flex items-center gap-1 font-medium"> tar.gz </a>
 			{/if}
 		</div>
 	{/if}

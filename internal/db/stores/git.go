@@ -209,6 +209,18 @@ func (s *Store) SetGitRepoMirrorStatus(ctx context.Context, id string, at time.T
 	return s.UpdateGitRepositoryColumns(ctx, id, map[string]any{"mirror_last_sync": at, "mirror_last_error": errMsg, "mirror_state": state})
 }
 
+// Drops the upstream and every trace of it, the repository becomes standard
+func (s *Store) DetachGitRepoMirror(ctx context.Context, id string) error {
+	return s.UpdateGitRepositoryColumns(ctx, id, map[string]any{
+		"type":              v1.GitRepoType_GIT_REPO_TYPE_STANDARD,
+		"mirror_config":     "",
+		"mirror_state":      "",
+		"mirror_last_sync":  nil,
+		"mirror_last_error": "",
+		"updated_at":        time.Now().UTC(),
+	})
+}
+
 func (s *Store) ListMirrorGitRepositories(ctx context.Context) ([]*db.GitRepository, error) {
 	var repos []*db.GitRepository
 	err := s.db.WithContext(ctx).Where("type = ?", v1.GitRepoType_GIT_REPO_TYPE_MIRROR).Order("namespace ASC, name ASC").Find(&repos).Error

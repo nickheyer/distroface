@@ -19,7 +19,9 @@
 	const namespace = $derived(page.params.namespace ?? '');
 	const name = $derived(page.params.name ?? '');
 	const repo = $derived(gitRepoStore.repo);
-	const canWrite = $derived(!!repo && gitRepoStore.canWrite(GitUnit.CODE) && !repo.isArchived);
+	const canWrite = $derived(
+		!!repo && gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly
+	);
 	const listHref = $derived(resolve('/[namespace]/[name]/tags', { namespace, name }));
 
 	let tag = $state('');
@@ -67,9 +69,7 @@
 	<EmptyState
 		icon={Tag}
 		message="You cannot create tags"
-		description={repo.isArchived
-			? 'This repository is archived.'
-			: 'Write access to code is required.'}
+		description={gitRepoStore.readOnlyReason || 'Write access to code is required.'}
 	>
 		{#snippet actions()}
 			<Button variant="outline" href={listHref}>Back to tags</Button>

@@ -377,6 +377,7 @@ var ProcedurePermissions = map[string]ProcedurePermission{
 	distrofacev1connect.GitServiceStopGitRepositorySyncProcedure:      {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 	distrofacev1connect.GitServiceDismissGitImportProcedure:           {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 	distrofacev1connect.GitServiceGenerateMirrorKeyProcedure:          {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
+	distrofacev1connect.GitServiceDetachMirrorProcedure:               {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 	distrofacev1connect.GitServiceListPushMirrorsProcedure:            {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 	distrofacev1connect.GitServiceCreatePushMirrorProcedure:           {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},
 	distrofacev1connect.GitServiceUpdatePushMirrorProcedure:           {Resource: ResourceGit, Action: ActionUpdate, ObjectIDField: "namespace+name"},

@@ -19,7 +19,7 @@
 	const name = $derived(repo.name);
 	const ref = $derived(page.params.ref ?? '');
 	const path = $derived(page.params.path ?? '');
-	const canEdit = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !repo.isArchived);
+	const canEdit = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 
 	let blob = $state<GitBlob | undefined>();
 	let lastCommit = $state<GitCommit | undefined>();

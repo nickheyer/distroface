@@ -302,13 +302,15 @@
 					{/if}
 				</div>
 			</FormField>
-			<FormField
-				label="Template repository"
-				layout="toggle"
-				help="Offer this repository as a starting point for new ones"
-			>
-				<Switch bind:checked={isTemplate} />
-			</FormField>
+			{#if repo?.type === GitRepoType.STANDARD || repo?.type === GitRepoType.TEMPLATE}
+				<FormField
+					label="Template repository"
+					layout="toggle"
+					help="Offer this repository as a starting point for new ones"
+				>
+					<Switch bind:checked={isTemplate} />
+				</FormField>
+			{/if}
 			{#snippet footer()}
 				{@render saveButton(savingDetails, saveDetails)}
 			{/snippet}

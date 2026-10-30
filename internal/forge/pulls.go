@@ -161,6 +161,9 @@ func (m *Manager) CreatePull(ctx context.Context, repo *db.GitRepository, actor 
 	if repo.IsArchived {
 		return nil, nil, gitrepo.ErrArchived
 	}
+	if repo.Type == v1.GitRepoType_GIT_REPO_TYPE_MIRROR {
+		return nil, nil, gitrepo.ErrMirror
+	}
 	if !gitrepo.UnitEnabled(repo, db.GitUnitPulls) {
 		return nil, nil, fmt.Errorf("%w: pull requests are disabled on this repository", ErrForbidden)
 	}

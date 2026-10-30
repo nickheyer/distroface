@@ -973,6 +973,32 @@ func (s *GitService) GenerateMirrorKey(ctx context.Context, req *v1.GenerateMirr
 	return &v1.GenerateMirrorKeyResponse{PublicKey: pub}, nil
 }
 
+// Works without the monitor so a mirror never gets stuck when mirroring is off
+func (s *GitService) DetachMirror(ctx context.Context, req *v1.DetachMirrorRequest) (*v1.DetachMirrorResponse, error) {
+	user := auth.UserFromContext(ctx)
+	repo, err := s.repoForWrite(ctx, user, req.Namespace, req.Name, gitrepo.LevelAdmin)
+	if err != nil {
+		return nil, err
+	}
+	if repo.IsArchived {
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "repository is archived")
+	}
+	if repo.Type != v1.GitRepoType_GIT_REPO_TYPE_MIRROR {
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "repository is not a mirror")
+	}
+	if s.mirrors != nil && s.mirrors.IsSyncing("git:"+repo.ID) {
+		return nil, connect.Errorf(connect.CodeFailedPrecondition, "a sync is running, stop it before detaching")
+	}
+	if err := s.store.DetachGitRepoMirror(ctx, repo.ID); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	repo, err = s.store.GetGitRepositoryByID(ctx, repo.ID)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	return &v1.DetachMirrorResponse{Repository: s.gitRepoToProto(ctx, user, repo, nil, true)}, nil
+}
+
 func (s *GitService) ListPushMirrors(ctx context.Context, req *v1.ListPushMirrorsRequest) (*v1.ListPushMirrorsResponse, error) {
 	user := auth.UserFromContext(ctx)
 	repo, err := s.repoForWrite(ctx, user, req.Namespace, req.Name, gitrepo.LevelAdmin)

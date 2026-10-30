@@ -189,6 +189,12 @@
 	// New comment and state changes
 	let draft = $state('');
 	let posting = $state(false);
+	let commentBox = $state<ReturnType<typeof CommentBox>>();
+
+	function insertReply(text: string) {
+		draft = draft.trim() ? `${draft.trimEnd()}\n\n${text}` : text;
+		void commentBox?.focus();
+	}
 
 	async function postComment() {
 		if (!issue || !draft.trim() || posting) return;
@@ -324,37 +330,11 @@
 					</DropdownMenu>
 				</div>
 			{/if}
-			<div class="flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+			<div class="flex flex-wrap items-center gap-2">
 				{#if isOpen}
 					<Badge variant="success"><CircleDot />Open</Badge>
 				{:else}
 					<Badge variant="done"><CheckCircle />Closed</Badge>
-				{/if}
-				{#if issue.author}
-					<a
-						href={resolve('/[namespace]', { namespace: issue.author.username })}
-						class="font-medium text-foreground hover:text-primary"
-						data-hover="user"
-						data-user={issue.author.username}>{issue.author.username}</a
-					>
-				{/if}
-				<span
-					>opened this issue{#if issue.createdAt}
-						<span title={timestampDate(issue.createdAt).toLocaleString()}
-							>{relativeTime(timestampDate(issue.createdAt))}</span
-						>{/if}</span
-				>
-				<span class="text-muted-foreground/50">/</span>
-				<span>{issue.commentCount} comment{issue.commentCount === 1 ? '' : 's'}</span>
-				{#if !isOpen && issue.closedBy}
-					<span class="text-muted-foreground/50">/</span>
-					<span
-						>closed by <a
-							href={resolve('/[namespace]', { namespace: issue.closedBy.username })}
-							class="hover:text-primary">{issue.closedBy.username}</a
-						>{#if issue.closedAt}
-							{relativeTime(timestampDate(issue.closedAt))}{/if}</span
-					>
 				{/if}
 			</div>
 		</header>
@@ -364,7 +344,7 @@
 				<Lock />
 				<AlertDescription>
 					<span
-						>This conversation has been locked{#if issue.lockReason}&#32;as <strong
+						>This conversation has been locked {#if issue.lockReason}as <strong
 								class="text-foreground">{issue.lockReason}</strong
 							>{/if} and limited to collaborators with write access.</span
 					>
@@ -459,6 +439,7 @@
 					canModerate={canWrite}
 					loading={commentsLoading && comments.length === 0}
 					onChanged={refresh}
+					onReply={insertReply}
 					{knownUsers}
 				/>
 
@@ -479,7 +460,12 @@
 
 				{#if canComment}
 					<div class="border-t pt-4">
-						<CommentBox bind:value={draft} submitting={posting} onSubmit={postComment}>
+						<CommentBox
+							bind:this={commentBox}
+							bind:value={draft}
+							submitting={posting}
+							onSubmit={postComment}
+						>
 							{#snippet extra()}
 								{#if canEditIssue}
 									{#if isOpen}
@@ -533,7 +519,7 @@
 					{namespace}
 					{name}
 					issueNumber={issue.number}
-					canStart={canWrite}
+					canStart={canWrite && !gitRepoStore.isMirror}
 					tick={pollTick}
 				/>
 			</aside>

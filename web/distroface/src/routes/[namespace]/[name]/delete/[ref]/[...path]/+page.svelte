@@ -26,7 +26,7 @@
 			path
 		})
 	);
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.repo?.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 
 	let size = $state(0);
 	let headSha = $state('');
@@ -142,9 +142,8 @@
 		<Alert>
 			<Lock />
 			<AlertDescription>
-				{gitRepoStore.repo.isArchived
-					? 'This repository is archived and read only.'
-					: 'You need write access to delete files here. Fork the repository to propose changes.'}
+				{gitRepoStore.readOnlyReason ||
+					'You need write access to delete files here. Fork the repository to propose changes.'}
 			</AlertDescription>
 		</Alert>
 	{/if}

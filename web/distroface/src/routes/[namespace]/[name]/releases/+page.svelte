@@ -16,7 +16,7 @@
 	const namespace = $derived(page.params.namespace ?? '');
 	const name = $derived(page.params.name ?? '');
 	const repo = $derived(gitRepoStore.repo);
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.RELEASES) && !repo?.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.RELEASES) && !gitRepoStore.readOnly);
 
 	let releases = $state<Release[]>([]);
 	let latestTag = $state('');
@@ -85,27 +85,52 @@
 </svelte:head>
 
 <div class="space-y-4">
-	<div class="flex items-center gap-2 flex-wrap">
+	<div class="flex flex-wrap items-center gap-2">
 		<div class="relative w-full sm:w-64">
-			<Search class="h-3.5 w-3.5 text-muted-foreground absolute left-2.5 top-1/2 -translate-y-1/2" />
-			<Input bind:value={query} oninput={onQuery} placeholder="Search releases" class="h-8 pl-8 text-[13px]" />
+			<Search
+				class="absolute top-1/2 left-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+			/>
+			<Input
+				bind:value={query}
+				oninput={onQuery}
+				placeholder="Search releases"
+				class="h-8 pl-8 text-[13px]"
+			/>
 		</div>
 		<span class="text-[12.5px] text-muted-foreground tabular-nums">
-			{pager.totalCount || releases.length} release{(pager.totalCount || releases.length) !== 1 ? 's' : ''}
+			{pager.totalCount || releases.length} release{(pager.totalCount || releases.length) !== 1
+				? 's'
+				: ''}
 		</span>
 		<div class="ml-auto flex items-center gap-2">
-			<Button variant="outline" size="sm" class="h-8" href={resolve('/[namespace]/[name]/tags', { namespace, name })}>
-				<Tag class="h-3.5 w-3.5 mr-1.5" />Tags
+			<Button
+				variant="outline"
+				size="sm"
+				class="h-8"
+				href={resolve('/[namespace]/[name]/tags', { namespace, name })}
+			>
+				<Tag class="mr-1.5 h-3.5 w-3.5" />Tags
 			</Button>
 			<PermissionGate allowed={canWrite}>
-				<Button size="sm" class="h-8" href={resolve('/[namespace]/[name]/releases/new', { namespace, name })}>
-					<Plus class="h-3.5 w-3.5 mr-1.5" />New Release
+				<Button
+					size="sm"
+					class="h-8"
+					href={resolve('/[namespace]/[name]/releases/new', { namespace, name })}
+				>
+					<Plus class="mr-1.5 h-3.5 w-3.5" />New Release
 				</Button>
 			</PermissionGate>
 		</div>
 	</div>
 
-	<ReleaseList {releases} {namespace} {name} {latestTag} {loading} emptyMessage={query ? 'No releases match' : 'No releases yet'} />
+	<ReleaseList
+		{releases}
+		{namespace}
+		{name}
+		{latestTag}
+		{loading}
+		emptyMessage={query ? 'No releases match' : 'No releases yet'}
+	/>
 
 	<DataPagination {pager} onChange={load} pageSizeOptions={[10, 20, 50]} />
 </div>

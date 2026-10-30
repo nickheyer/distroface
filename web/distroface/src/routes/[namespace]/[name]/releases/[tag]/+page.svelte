@@ -10,7 +10,6 @@
 		Package,
 		Container,
 		GitCommit,
-		FileArchive,
 		Download,
 		ChevronLeft,
 		ExternalLink,
@@ -44,9 +43,8 @@
 	const namespace = $derived(page.params.namespace ?? '');
 	const name = $derived(page.params.name ?? '');
 	const tag = $derived(decodeURIComponent(page.params.tag ?? ''));
-	const repo = $derived(gitRepoStore.repo);
 	const releasesHref = $derived(resolve('/[namespace]/[name]/releases', { namespace, name }));
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.RELEASES) && !repo?.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.RELEASES) && !gitRepoStore.readOnly);
 
 	let release = $state<Release | undefined>();
 	let latestTag = $state('');
@@ -350,7 +348,7 @@
 									href={zipUrl}
 									class="inline-flex items-center gap-1 text-[12.5px] font-medium text-primary hover:underline"
 								>
-									<FileArchive class="h-3.5 w-3.5" />Source code (zip)
+									<Download class="h-3.5 w-3.5" />Source code (zip)
 								</a>
 							{/if}
 							{#if tarUrl}
@@ -359,7 +357,7 @@
 									href={tarUrl}
 									class="inline-flex items-center gap-1 text-[12.5px] font-medium text-primary hover:underline"
 								>
-									<FileArchive class="h-3.5 w-3.5" />Source code (tar.gz)
+									<Download class="h-3.5 w-3.5" />Source code (tar.gz)
 								</a>
 							{/if}
 						</div>

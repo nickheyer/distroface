@@ -99,7 +99,10 @@
 	}
 
 	const canOpenPull = $derived(
-		authStore.isAuthenticated && gitRepoStore.unitEnabled(GitUnit.PULLS) && !repo.isArchived
+		authStore.isAuthenticated &&
+			gitRepoStore.unitEnabled(GitUnit.PULLS) &&
+			!repo.isArchived &&
+			!gitRepoStore.isMirror
 	);
 	const pullHref = $derived(
 		resolve(

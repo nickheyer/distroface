@@ -26,7 +26,7 @@
 			path: dir
 		})
 	);
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.repo?.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 
 	type Picked = { key: string; relPath: string; file: File };
 
@@ -198,9 +198,7 @@
 		<Alert>
 			<Lock />
 			<AlertDescription>
-				{gitRepoStore.repo.isArchived
-					? 'This repository is archived and read only.'
-					: 'You need write access to upload files here.'}
+				{gitRepoStore.readOnlyReason || 'You need write access to upload files here.'}
 			</AlertDescription>
 		</Alert>
 	{/if}

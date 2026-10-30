@@ -18,7 +18,9 @@
 	const namespace = $derived(page.params.namespace ?? '');
 	const name = $derived(page.params.name ?? '');
 	const repo = $derived(gitRepoStore.repo);
-	const canWrite = $derived(!!repo && gitRepoStore.canWrite(GitUnit.CODE) && !repo.isArchived);
+	const canWrite = $derived(
+		!!repo && gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly
+	);
 	const listHref = $derived(resolve('/[namespace]/[name]/branches', { namespace, name }));
 
 	let branch = $state(page.url.searchParams.get('name') ?? '');
@@ -64,9 +66,7 @@
 	<EmptyState
 		icon={GitBranch}
 		message="You cannot create branches"
-		description={repo.isArchived
-			? 'This repository is archived.'
-			: 'Write access to code is required.'}
+		description={gitRepoStore.readOnlyReason || 'Write access to code is required.'}
 	>
 		{#snippet actions()}
 			<Button variant="outline" href={listHref}>Back to branches</Button>

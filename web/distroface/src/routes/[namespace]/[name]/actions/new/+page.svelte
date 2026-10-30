@@ -17,7 +17,7 @@
 		if (namespace && name) gitRepoStore.load(namespace, name);
 	});
 
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !repo?.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 </script>
 
 <svelte:head>
@@ -49,9 +49,7 @@
 			<Alert>
 				<Lock />
 				<AlertDescription>
-					{repo.isArchived
-						? 'This repository is archived and read only.'
-						: 'You need write access to add workflows.'}
+					{gitRepoStore.readOnlyReason || 'You need write access to add workflows.'}
 				</AlertDescription>
 			</Alert>
 		{/if}

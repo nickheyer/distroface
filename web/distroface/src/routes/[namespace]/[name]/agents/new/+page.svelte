@@ -36,7 +36,9 @@
 	const namespace = $derived(page.params.namespace ?? '');
 	const name = $derived(page.params.name ?? '');
 	const repo = $derived(gitRepoStore.repo);
-	const canWrite = $derived(!!repo && gitRepoStore.canWrite(GitUnit.AGENTS) && !repo.isArchived);
+	const canWrite = $derived(
+		!!repo && gitRepoStore.canWrite(GitUnit.AGENTS) && !gitRepoStore.readOnly
+	);
 	const agentsHref = $derived(resolve('/[namespace]/[name]/agents', { namespace, name }));
 
 	let overview = $state<GetRepoAgentsResponse | undefined>();
@@ -157,7 +159,8 @@
 		message="Cannot start a session"
 		description={!configStore.agentsEnabled || !overview?.enabled
 			? 'Agents are disabled by policy.'
-			: 'Write access to the agents unit is required to start sessions.'}
+			: gitRepoStore.readOnlyReason ||
+				'Write access to the agents unit is required to start sessions.'}
 	>
 		{#snippet actions()}
 			<Button variant="outline" href={agentsHref}>Back to agents</Button>

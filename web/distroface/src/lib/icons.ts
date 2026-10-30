@@ -55,7 +55,6 @@ export { default as ExternalLink } from 'carbon-icons-svelte/lib/Launch.svelte';
 export { default as Eye } from 'carbon-icons-svelte/lib/View.svelte';
 export { default as EyeOff } from 'carbon-icons-svelte/lib/ViewOff.svelte';
 export { default as File } from 'carbon-icons-svelte/lib/Document.svelte';
-export { default as FileArchive } from 'carbon-icons-svelte/lib/Zip.svelte';
 export { default as FileCode } from 'carbon-icons-svelte/lib/Script.svelte';
 export { default as FileDiff } from 'carbon-icons-svelte/lib/FileDiff.svelte';
 export { default as FileImage } from 'carbon-icons-svelte/lib/Image.svelte';

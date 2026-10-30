@@ -40,7 +40,7 @@
 	const namespace = $derived(repo.namespace);
 	const name = $derived(repo.name);
 	const sha = $derived(page.params.sha ?? '');
-	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !repo.isArchived);
+	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 
 	let commit = $state<GitCommit | undefined>();
 	let statuses = $state<GitCommitStatus[]>([]);

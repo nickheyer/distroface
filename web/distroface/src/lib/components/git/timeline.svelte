@@ -33,7 +33,9 @@
 		Mail,
 		Ban,
 		History,
-		Bot
+		Bot,
+		Reply,
+		Quote
 	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -67,6 +69,7 @@
 		canModerate,
 		loading = false,
 		onChanged,
+		onReply,
 		knownUsers = []
 	}: {
 		namespace: string;
@@ -78,6 +81,8 @@
 		canModerate: boolean;
 		loading?: boolean;
 		onChanged?: () => void;
+		// Hands reply text to the host comment box
+		onReply?: (text: string) => void;
 		// Username hints for events carrying only user ids
 		knownUsers?: IssueUser[];
 	} = $props();
@@ -266,6 +271,26 @@
 		const url = `${location.origin}${path}#comment-${c.id}`;
 		navigator.clipboard?.writeText(url).then(() => toast.success('Link copied'));
 	}
+
+	// Quotes the selection inside the card, else the whole body
+	function quoted(c: Comment): string {
+		const sel = window.getSelection();
+		const card = document.getElementById(`comment-${c.id}`);
+		const picked = sel?.toString().trim() ?? '';
+		const inCard =
+			!!picked && !!sel?.rangeCount && !!card?.contains(sel.getRangeAt(0).commonAncestorContainer);
+		const source = (inCard ? picked : c.body).replace(/\r\n/g, '\n').trim();
+		if (!source) return '';
+		return source
+			.split('\n')
+			.map((l) => (l.trim() ? `> ${l}` : '>'))
+			.join('\n');
+	}
+
+	function replyText(c: Comment, handle: string, quote: boolean): string {
+		const q = quote ? quoted(c) : '';
+		return q ? `${q}\n\n${handle}` : handle;
+	}
 </script>
 
 {#snippet actor(c: Comment)}
@@ -412,8 +437,8 @@
 				changed the title <span class="line-through">{str(p, 'from')}</span>
 				<span class="font-medium text-foreground">{str(p, 'to')}</span>
 			{:else if c.type === CommentType.LOCKED}
-				locked this conversation{#if str(p, 'reason')}&#32;as <span
-						class="font-medium text-foreground">{str(p, 'reason')}</span
+				locked this conversation {#if str(p, 'reason')}as <span class="font-medium text-foreground"
+						>{str(p, 'reason')}</span
 					>{/if}
 			{:else if c.type === CommentType.UNLOCKED}
 				unlocked this conversation
@@ -506,12 +531,10 @@
 				)}
 			{:else if c.type === CommentType.MERGED}
 				merged commit {@render shaLink('', str(p, 'sha'))} into
-				<span class="font-mono text-xs text-foreground">{str(p, 'base')}</span
-				>{#if str(p, 'method')}
-					by {str(p, 'method').replace(/_/g, ' ')}{/if}
+				<span class="font-mono text-xs text-foreground">{str(p, 'base')}</span>
+				{#if str(p, 'method')}by {str(p, 'method').replace(/_/g, ' ')}{/if}
 			{:else if c.type === CommentType.AUTO_MERGE_ARMED}
-				enabled auto merge{#if str(p, 'method')}
-					({str(p, 'method').replace(/_/g, ' ')}){/if}
+				enabled auto merge {#if str(p, 'method')}({str(p, 'method').replace(/_/g, ' ')}){/if}
 			{:else if c.type === CommentType.AUTO_MERGE_CANCELLED}
 				disabled auto merge
 			{:else if c.type === CommentType.CONVERTED_TO_DRAFT}
@@ -544,7 +567,9 @@
 	{@const t = when(c)}
 	{@const p = payload(c)}
 	{@const imported = !c.author && !!p.imported}
-	{@const u = c.author?.username || (imported ? str(p, 'author') : '') || 'system'}
+	{@const who = c.author?.username || (imported ? str(p, 'author') : '')}
+	{@const u = who || 'system'}
+	{@const handle = who ? `@${who} ` : ''}
 	<div id="comment-{c.id}" class="box scroll-mt-20">
 		<div class="box-header">
 			<div
@@ -580,6 +605,14 @@
 				</DropdownMenuTrigger>
 				<DropdownMenuContent align="end" class="w-40">
 					<DropdownMenuItem onclick={() => copyLink(c)}><Link2 />Copy link</DropdownMenuItem>
+					{#if canComment && onReply}
+						<DropdownMenuItem onclick={() => onReply?.(replyText(c, handle, false))}
+							><Reply />Reply</DropdownMenuItem
+						>
+						<DropdownMenuItem onclick={() => onReply?.(replyText(c, handle, true))}
+							><Quote />Quote reply</DropdownMenuItem
+						>
+					{/if}
 					{#if canEdit(c)}
 						<DropdownMenuItem onclick={() => startEdit(c)}><Pencil />Edit</DropdownMenuItem>
 						<DropdownMenuItem

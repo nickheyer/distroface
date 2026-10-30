@@ -50,7 +50,7 @@
 	});
 
 	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.ACTIONS) && !repo?.isArchived);
-	const canEdit = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !repo?.isArchived);
+	const canEdit = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 	const unitEnabled = $derived(repo?.units?.actions !== false);
 	const defaultBranch = $derived(repo?.defaultBranch ?? '');
 	const actionsHref = $derived(resolve('/[namespace]/[name]/actions', { namespace, name }));

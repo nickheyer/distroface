@@ -11,12 +11,13 @@
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
+	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import MirrorConfigFields, {
 		mirrorFormFrom,
 		mirrorInit,
 		type MirrorForm
 	} from '$lib/components/mirror-config-fields.svelte';
-	import { Save, RefreshCw, Square, Key, Info, Loader } from '$lib/icons';
+	import { Save, RefreshCw, Square, Key, Info, Loader, Unlink } from '$lib/icons';
 	import { GitRepoType } from '$lib/proto/distroface/v1/types_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');
@@ -34,6 +35,8 @@
 	let stopping = $state(false);
 	let generating = $state(false);
 	let publicKey = $state('');
+	let detachOpen = $state(false);
+	let detaching = $state(false);
 
 	$effect(() => {
 		if (repo && repo.fullName !== seededFor) {
@@ -90,6 +93,20 @@
 			// Error interceptor already toasted
 		} finally {
 			stopping = false;
+		}
+	}
+
+	async function detach() {
+		detaching = true;
+		try {
+			await rpcClient.git.detachMirror({ namespace, name });
+			toast.success('Upstream detached');
+			detachOpen = false;
+			await gitRepoStore.reload();
+		} catch {
+			// Error interceptor already toasted
+		} finally {
+			detaching = false;
 		}
 	}
 
@@ -202,5 +219,42 @@
 				</Button>
 			{/snippet}
 		</FormSection>
+
+		<FormSection
+			title="Detach upstream"
+			description="Stop following the upstream for good. Pushes, edits, and workflows then land here."
+		>
+			<p class="text-sm text-muted-foreground">
+				Everything fetched so far stays. Push mirrors and linked image mirrors keep running on their
+				own. There is no reattach, create a new mirror instead.
+			</p>
+			{#snippet footer()}
+				<Button
+					variant="outline-destructive"
+					onclick={() => (detachOpen = true)}
+					disabled={syncing || detaching}
+				>
+					<Unlink />Detach upstream
+				</Button>
+				{#if syncing}
+					<span class="text-xs text-muted-foreground">Stop the running sync first.</span>
+				{/if}
+			{/snippet}
+		</FormSection>
 	</FormPage>
+
+	<ConfirmDialog
+		bind:open={detachOpen}
+		title="Detach upstream"
+		confirmLabel={detaching ? 'Detaching' : 'Detach upstream'}
+		onConfirm={detach}
+		loading={detaching}
+		icon={Unlink}
+	>
+		{#snippet description()}
+			<strong class="font-mono">{namespace}/{name}</strong> stops syncing from
+			<strong class="font-mono">{repo.mirror?.upstream}</strong> and becomes a standard repository. This
+			cannot be undone.
+		{/snippet}
+	</ConfirmDialog>
 {/if}
