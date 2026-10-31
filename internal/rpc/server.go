@@ -43,6 +43,7 @@ type ServerDeps struct {
 	RegistryHandler     http.Handler
 	RegistryAccess      *registry.RegistryAccess
 	RegistryStoragePath string
+	RegistryHealth      func(context.Context) map[string]string // Nil skips subsystem checks
 	TokenHandler        *auth.TokenHandler
 	AuthManager         *auth.Manager
 	Enforcer            *rbac.Enforcer
@@ -161,7 +162,9 @@ func (s *Server) setupHandler() {
 	mux.Handle("GET /api/avatars/{id}", s.avatarHandler())
 
 	// Register RPC services
-	distrofacev1connect.RegisterHealthServiceHandler(rpcServer, services.NewHealthService(s.Log))
+	healthService := services.NewHealthService(s.Log)
+	healthService.SetChecks(s.RegistryHealth)
+	distrofacev1connect.RegisterHealthServiceHandler(rpcServer, healthService)
 	distrofacev1connect.RegisterAuthServiceHandler(rpcServer, services.NewAuthService(s.Store, s.AuthManager, s.Enforcer, s.OIDCHandler, s.MailService, s.Log))
 	distrofacev1connect.RegisterUserServiceHandler(rpcServer, services.NewUserService(s.Store, s.AuthManager, s.Enforcer, s.GitManager, s.Log))
 	repoService := services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.MirrorMonitor, s.GitManager, s.Log)

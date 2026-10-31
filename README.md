@@ -91,6 +91,17 @@ docker run -p 8080:8080 -v distroface:/app/data \
   nickheyer/distroface:latest
 ```
 
+### Registry
+
+Images live under `registry.storage_path` in the upstream distribution layout. Layer existence checks go through a blob descriptor cache that sits in process memory by default and is sized with `registry.blob_cache_size`. Point `registry.redis.url` at a redis server and the cache moves there, so it survives restarts and can be shared by several instances on the same storage. The url takes the go-redis query options such as `?dial_timeout=2s`, and `rediss://` turns on TLS against the host trust store unless `registry.redis.tls_ca_file` names a bundle. A client certificate pair is supported too. Use `registry.redis.addrs` with `registry.redis.master_name` for sentinels, several addresses without a master name mean a cluster. Timeouts default to one second with a single retry so a stalled redis slows lookups instead of hanging them, every miss falls back to disk. Run redis with `allkeys-lru` eviction since the registry never expires keys. An unreachable redis only logs a warning at startup. The compose file carries a `cache` profile:
+
+```bash
+DISTROFACE_REGISTRY_REDIS_URL=redis://127.0.0.1:6379/0 docker compose --profile cache up
+```
+
+Pushed manifests are validated the way upstream does it. Manifests carrying layer urls, Windows base images for one, are refused unless `registry.manifest_urls_allow` lists a pattern that matches them. Image indexes must reference manifests that exist, `registry.index_platforms` set to `none` or `list` relaxes that. Abandoned upload sessions are purged after `registry.upload_purge_age`, a week by default. Storage is probed every ten seconds and the registry answers 503 once three probes in a row fail, the health endpoint reports `degraded` meanwhile.
+
+Garbage collection pauses registry writes for the length of a run, because a manifest pushed mid sweep could lose layers. Pushes, deletes and mirror syncs that arrive meanwhile get a 503 with a `Retry-After` header, pulls keep flowing. A run waits up to two minutes for uploads already in flight and gives up otherwise. The descriptor cache is cleared once the sweep finishes, in memory and in redis alike, so no swept layer is still reported as present. Dry runs never pause anything.
 
 ## TLS and ACME
 

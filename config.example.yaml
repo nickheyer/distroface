@@ -27,6 +27,35 @@ database:
 registry:
   # storage_path: "./data/registry"   # Derived from storage.data_dir when unset
 
+  # Registry optimizations:
+  # blob_cache_size: 10000            # Layer descriptors kept in memory, ignored with redis
+  # manifest_urls_allow: ['^https://mcr\.microsoft\.com/']
+  # manifest_urls_deny: []
+  # index_platforms: all                # all, none or list
+  # index_platform_list: ["linux/amd64", "linux/arm64"]
+  # upload_purge_age: 168h             # Abandoned upload sessions removed past this age
+  # upload_purge_interval: 24h
+  # tag_lookup_concurrency: 0          # Parallel tag reads on manifest delete, zero means cpu count
+
+  # redis:
+  #   url: "redis://127.0.0.1:6379/0"      # single node, redis:// or rediss://, or addrs below
+  #   # addrs: ["10.0.0.1:26379", "10.0.0.2:26379"]
+  #   # master_name: ""
+  #   # username: ""
+  #   # password: ""
+  #   # db: 0
+  #   # tls: false
+  #   # tls_ca_file: ""
+  #   # tls_cert_file: ""
+  #   # tls_key_file: ""
+  #   # dial_timeout: 1s
+  #   # read_timeout: 1s
+  #   # write_timeout: 1s
+  #   # max_retries: 1
+  #   # pool_size: 0
+  #   # min_idle_conns: 0
+  #   # conn_max_idle_time: 30m
+
 artifacts:
   # storage_path: "./data/artifacts"  # Derived from storage.data_dir when unset
 

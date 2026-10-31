@@ -73,7 +73,7 @@ func NewTokenService(dataDir, issuer, service string, res *settings.Resolver) (*
 		return nil, err
 	}
 
-	ts.keyID = token.GetRFC7638Thumbprint(ts.privateKey.Public())
+	ts.keyID = token.GetJWKThumbprint(ts.privateKey.Public())
 
 	return ts, nil
 }

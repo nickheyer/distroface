@@ -1,6 +1,7 @@
 package config
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,9 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"github.com/redis/go-redis/v9"
 	"github.com/spf13/viper"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -61,11 +66,8 @@ type AuthConfig struct {
 }
 
 type DatabaseConfig struct {
-	// sqlite or postgres, inferred from dsn when empty
-	Driver string `mapstructure:"driver"`
-	// Sqlite file, derived from storage.data_dir when unset
-	Path string `mapstructure:"path"`
-	// Server connection string for network backends
+	Driver          string `mapstructure:"driver"` // Supported: sqlite, postgres
+	Path            string `mapstructure:"path"`
 	DSN             string `mapstructure:"dsn"`
 	MaxConnections  int    `mapstructure:"max_connections"`
 	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
@@ -111,7 +113,7 @@ func dsnLooksLikePostgres(dsn string) bool {
 }
 
 // Connection string safe for logs, credentials blanked
-func (d DatabaseConfig) Redacted() string {
+func (d *DatabaseConfig) Redacted() string {
 	if d.Driver == DatabaseSQLite {
 		return d.Path
 	}
@@ -145,7 +147,182 @@ type StorageConfig struct {
 }
 
 type RegistryConfig struct {
-	StoragePath string `mapstructure:"storage_path"`
+	StoragePath          string        `mapstructure:"storage_path"`
+	BlobCacheSize        int           `mapstructure:"blob_cache_size"`
+	Redis                RedisConfig   `mapstructure:"redis"`
+	ManifestURLsAllow    []string      `mapstructure:"manifest_urls_allow"`
+	ManifestURLsDeny     []string      `mapstructure:"manifest_urls_deny"`
+	IndexPlatforms       string        `mapstructure:"index_platforms"`
+	IndexPlatformList    []string      `mapstructure:"index_platform_list"`
+	UploadPurgeAge       time.Duration `mapstructure:"upload_purge_age"`
+	UploadPurgeInterval  time.Duration `mapstructure:"upload_purge_interval"`
+	TagLookupConcurrency int           `mapstructure:"tag_lookup_concurrency"`
+}
+
+// Checks registry knobs and folds the redis url
+func (r *RegistryConfig) Normalize() error {
+	if r.BlobCacheSize < 0 {
+		return errors.New("registry.blob_cache_size must not be negative")
+	}
+	for _, expr := range slices.Concat(r.ManifestURLsAllow, r.ManifestURLsDeny) {
+		if _, err := regexp.Compile(expr); err != nil {
+			return fmt.Errorf("registry manifest url pattern %q: %w", expr, err)
+		}
+	}
+	r.IndexPlatforms = strings.ToLower(strings.TrimSpace(r.IndexPlatforms))
+	switch r.IndexPlatforms {
+	case "", "all", "none":
+		if len(r.IndexPlatformList) > 0 {
+			return errors.New("registry.index_platform_list needs index_platforms set to list")
+		}
+	case "list":
+		if len(r.IndexPlatformList) == 0 {
+			return errors.New("registry.index_platforms list needs at least one index_platform_list entry")
+		}
+		for _, entry := range r.IndexPlatformList {
+			osName, arch, ok := strings.Cut(entry, "/")
+			if !ok || osName == "" || arch == "" {
+				return fmt.Errorf("registry.index_platform_list entry %q must look like os/arch", entry)
+			}
+		}
+	default:
+		return fmt.Errorf("registry.index_platforms must be all, none or list, got %q", r.IndexPlatforms)
+	}
+	if r.UploadPurgeAge < 0 || r.UploadPurgeInterval < 0 {
+		return errors.New("registry upload purge durations must not be negative")
+	}
+	if r.TagLookupConcurrency < 0 {
+		return errors.New("registry.tag_lookup_concurrency must not be negative")
+	}
+	return r.Redis.resolve()
+}
+
+// Connection wiring for the optional redis blob descriptor cache
+type RedisConfig struct {
+	URL      string   `mapstructure:"url"`
+	Addrs    []string `mapstructure:"addrs"`
+	Username string   `mapstructure:"username"`
+	Password string   `mapstructure:"password"`
+	DB       int      `mapstructure:"db"`
+	// Resp version, zero keeps the client default of three
+	Protocol         int           `mapstructure:"protocol"`
+	MasterName       string        `mapstructure:"master_name"`
+	SentinelUsername string        `mapstructure:"sentinel_username"`
+	SentinelPassword string        `mapstructure:"sentinel_password"`
+	TLS              bool          `mapstructure:"tls"`
+	TLSCAFile        string        `mapstructure:"tls_ca_file"`
+	TLSCertFile      string        `mapstructure:"tls_cert_file"`
+	TLSKeyFile       string        `mapstructure:"tls_key_file"`
+	MaxRetries       int           `mapstructure:"max_retries"`
+	DialTimeout      time.Duration `mapstructure:"dial_timeout"`
+	ReadTimeout      time.Duration `mapstructure:"read_timeout"`
+	WriteTimeout     time.Duration `mapstructure:"write_timeout"`
+	PoolTimeout      time.Duration `mapstructure:"pool_timeout"`
+	PoolSize         int           `mapstructure:"pool_size"`
+	MinIdleConns     int           `mapstructure:"min_idle_conns"`
+	MaxIdleConns     int           `mapstructure:"max_idle_conns"`
+	MaxActiveConns   int           `mapstructure:"max_active_conns"`
+	ConnMaxIdleTime  time.Duration `mapstructure:"conn_max_idle_time"`
+	ConnMaxLifetime  time.Duration `mapstructure:"conn_max_lifetime"`
+	// Cluster read routing
+	RouteByLatency bool `mapstructure:"route_by_latency"`
+	RouteRandomly  bool `mapstructure:"route_randomly"`
+}
+
+// Reports whether a redis cache was configured
+func (r *RedisConfig) Enabled() bool {
+	return len(r.Addrs) > 0
+}
+
+// Splits comma joined addresses and consumes the url
+func (r *RedisConfig) resolve() error {
+	var addrs []string
+	for _, raw := range r.Addrs {
+		for part := range strings.SplitSeq(raw, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				addrs = append(addrs, part)
+			}
+		}
+	}
+	r.Addrs = addrs
+	r.URL = strings.TrimSpace(r.URL)
+	if r.URL != "" {
+		if len(r.Addrs) > 0 {
+			return errors.New("registry.redis.url and registry.redis.addrs are exclusive, set one")
+		}
+		if err := r.applyURL(); err != nil {
+			return err
+		}
+		r.URL = ""
+	}
+	if !r.Enabled() {
+		return nil
+	}
+	if r.DB < 0 {
+		return errors.New("registry.redis.db must not be negative")
+	}
+	if (r.TLSCertFile == "") != (r.TLSKeyFile == "") {
+		return errors.New("registry.redis.tls_cert_file and registry.redis.tls_key_file go together")
+	}
+	if r.TLSCAFile != "" || r.TLSCertFile != "" {
+		r.TLS = true
+	}
+	return nil
+}
+
+func (r *RedisConfig) applyURL() error {
+	parsed, err := redis.ParseURL(r.URL)
+	if err != nil {
+		return fmt.Errorf("invalid registry.redis.url: %w", err)
+	}
+	if parsed.Network != "tcp" {
+		return errors.New("registry.redis.url must start with redis:// or rediss://")
+	}
+	r.Addrs = []string{parsed.Addr}
+	r.TLS = r.TLS || parsed.TLSConfig != nil
+	r.Username = cmp.Or(r.Username, parsed.Username)
+	r.Password = cmp.Or(r.Password, parsed.Password)
+	r.DB = cmp.Or(r.DB, parsed.DB)
+	r.Protocol = cmp.Or(r.Protocol, parsed.Protocol)
+	r.MaxRetries = cmp.Or(r.MaxRetries, parsed.MaxRetries)
+	r.DialTimeout = cmp.Or(r.DialTimeout, parsed.DialTimeout)
+	r.ReadTimeout = cmp.Or(r.ReadTimeout, parsed.ReadTimeout)
+	r.WriteTimeout = cmp.Or(r.WriteTimeout, parsed.WriteTimeout)
+	r.PoolTimeout = cmp.Or(r.PoolTimeout, parsed.PoolTimeout)
+	r.PoolSize = cmp.Or(r.PoolSize, parsed.PoolSize)
+	r.MinIdleConns = cmp.Or(r.MinIdleConns, parsed.MinIdleConns)
+	r.MaxIdleConns = cmp.Or(r.MaxIdleConns, parsed.MaxIdleConns)
+	r.MaxActiveConns = cmp.Or(r.MaxActiveConns, parsed.MaxActiveConns)
+	r.ConnMaxIdleTime = cmp.Or(r.ConnMaxIdleTime, parsed.ConnMaxIdleTime)
+	r.ConnMaxLifetime = cmp.Or(r.ConnMaxLifetime, parsed.ConnMaxLifetime)
+	return nil
+}
+
+// Connection summary safe for logs, credentials left out
+func (r *RedisConfig) Redacted() string {
+	if !r.Enabled() {
+		return "disabled"
+	}
+	var b strings.Builder
+	if r.TLS {
+		b.WriteString("rediss://")
+	} else {
+		b.WriteString("redis://")
+	}
+	if r.Username != "" {
+		b.WriteString(r.Username)
+		b.WriteString("@")
+	}
+	b.WriteString(strings.Join(r.Addrs, ","))
+	if r.DB != 0 {
+		b.WriteString("/")
+		b.WriteString(strconv.Itoa(r.DB))
+	}
+	if r.MasterName != "" {
+		b.WriteString(" master=")
+		b.WriteString(r.MasterName)
+	}
+	return b.String()
 }
 
 type ArtifactsConfig struct {
@@ -173,11 +350,10 @@ type BootstrapConfig struct {
 }
 
 type BootstrapUser struct {
-	Username string `mapstructure:"username"`
-	Password string `mapstructure:"password"`
-	Email    string `mapstructure:"email"`
-	// System roles granted default roles when empty
-	Roles []string `mapstructure:"roles"`
+	Username string   `mapstructure:"username"`
+	Password string   `mapstructure:"password"`
+	Email    string   `mapstructure:"email"`
+	Roles    []string `mapstructure:"roles"`
 }
 
 type BootstrapOrg struct {
@@ -189,8 +365,7 @@ type BootstrapOrg struct {
 
 type BootstrapOrgMember struct {
 	Username string `mapstructure:"username"`
-	// Owner admin or member defaults to member
-	Role string `mapstructure:"role"`
+	Role     string `mapstructure:"role"`
 }
 
 type MigrateConfig struct {
@@ -235,6 +410,21 @@ func Load(configPath string) (*Config, error) {
 	_ = v.BindEnv("database.path")
 	_ = v.BindEnv("database.dsn")
 	_ = v.BindEnv("registry.storage_path")
+	_ = v.BindEnv("registry.blob_cache_size")
+	for _, key := range []string{
+		"manifest_urls_allow", "manifest_urls_deny", "index_platforms", "index_platform_list",
+		"upload_purge_age", "upload_purge_interval", "tag_lookup_concurrency",
+	} {
+		_ = v.BindEnv("registry." + key)
+	}
+	for _, key := range []string{
+		"url", "addrs", "username", "password", "db", "master_name", "sentinel_username",
+		"sentinel_password", "tls", "tls_ca_file", "tls_cert_file", "tls_key_file", "pool_size", "protocol", "max_retries",
+		"dial_timeout", "read_timeout", "write_timeout", "pool_timeout", "min_idle_conns", "max_idle_conns",
+		"max_active_conns", "conn_max_idle_time", "conn_max_lifetime", "route_by_latency", "route_randomly",
+	} {
+		_ = v.BindEnv("registry.redis." + key)
+	}
 	_ = v.BindEnv("artifacts.storage_path")
 	_ = v.BindEnv("git.storage_path")
 	_ = v.BindEnv("logging.dir")
@@ -447,6 +637,9 @@ func validateConfig(cfg *Config) error {
 	cfg.Registry.StoragePath, err = filepath.Abs(cfg.Registry.StoragePath)
 	if err != nil {
 		return fmt.Errorf("invalid registry storage path: %w", err)
+	}
+	if err := cfg.Registry.Normalize(); err != nil {
+		return err
 	}
 
 	cfg.Artifacts.StoragePath, err = filepath.Abs(cfg.Artifacts.StoragePath)

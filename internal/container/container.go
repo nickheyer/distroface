@@ -2,6 +2,7 @@ package container
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/http"
@@ -14,7 +15,6 @@ import (
 
 	"github.com/nickheyer/distroface/pkg/utils"
 
-	"github.com/distribution/distribution/v3/registry/handlers"
 	"github.com/nickheyer/distroface/internal/actions"
 	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/admin"
@@ -58,6 +58,7 @@ type App struct {
 	GitSSH         *gitrepo.SSHManager
 	Forge          *forge.Manager
 	Server         *http.Server
+	Registry       *registry.Engine
 	cancel         context.CancelFunc
 }
 
@@ -169,10 +170,6 @@ func New() (*App, error) {
 		DisableTimestamp: true,
 	})
 
-	if err := os.MkdirAll(cfg.Registry.StoragePath, 0755); err != nil {
-		return fail("creating registry storage directory", err)
-	}
-
 	dispatcher := webhook.NewDispatcher(store, registryLog, resolver)
 
 	// Recorder self gates on the live audit setting
@@ -182,9 +179,17 @@ func New() (*App, error) {
 
 	registry.RegisterListenerMiddleware(store, registryLog, dispatcher, auditRecorder)
 
-	registryCfg := registry.BuildConfig(cfg.Registry.StoragePath, tokenService.CertPath(), cfg.Server.Host, cfg.Server.Port)
-	registryApp := handlers.NewApp(ctx, registryCfg)
-	registryLog.Info("Distribution v3 initialized")
+	// Upload state outlives restarts via a derived secret
+	eng, err := registry.New(ctx, registry.Options{
+		RegistryConfig: cfg.Registry,
+		CertPath:       tokenService.CertPath(),
+		Addr:           net.JoinHostPort(cfg.Server.Host, cfg.Server.Port),
+		HTTPSecret:     hex.EncodeToString(authManager.DerivedKey("registry-http")),
+		Log:            registryLog,
+	})
+	if err != nil {
+		return fail("initializing registry", err)
+	}
 
 	registryAccess, err := registry.NewRegistryAccess(cfg.Registry.StoragePath)
 	if err != nil {
@@ -212,7 +217,7 @@ func New() (*App, error) {
 	})
 
 	tokenHandler := auth.NewTokenHandler(tokenService, store, authManager, enforcer, portalResolver, authLimiter, auditRecorder, registryLog)
-	registryHandler := registry.JobTokenGuard(registry.PullRateLimit(registryApp, tokenService, pullLimiter, anonPullLimiter, registryLog), tokenService, registryLog)
+	registryHandler := registry.JobTokenGuard(registry.PullRateLimit(eng.Handler(), tokenService, pullLimiter, anonPullLimiter, registryLog), tokenService, registryLog)
 
 	blobStore, err := artifacts.NewBlobStore(cfg.Artifacts.StoragePath)
 	if err != nil {
@@ -261,6 +266,9 @@ func New() (*App, error) {
 	if err != nil {
 		return fail("initializing garbage collector", err)
 	}
+	gcCollector.SetWriteGate(eng.Gate)
+	// Swept blobs would stay cached as present otherwise
+	gcCollector.SetCacheReset(eng.ResetCache)
 	gcCollector.Schedule(ctx, resolver)
 
 	if removed, err := blobStore.CleanStaleUploads(artifactManager.StaleUploadAge(ctx)); err != nil {
@@ -273,7 +281,7 @@ func New() (*App, error) {
 	artifactReaper.Schedule(ctx)
 
 	// Pushes go straight into the embedded registry handler
-	ociSyncer := mirror.NewOCISyncer(registryApp, tokenService)
+	ociSyncer := mirror.NewOCISyncer(eng.Handler(), tokenService)
 	mirrorMonitor := mirror.NewMonitor(store, resolver, artifactManager, ociSyncer, log)
 	mirrorMonitor.SetSealer(authManager.Sealer("mirror"), authManager.LegacySealer("mirror"))
 
@@ -351,6 +359,7 @@ func New() (*App, error) {
 		RegistryHandler:     registryHandler,
 		RegistryAccess:      registryAccess,
 		RegistryStoragePath: cfg.Registry.StoragePath,
+		RegistryHealth:      eng.Health,
 		TokenHandler:        tokenHandler,
 		AuthManager:         authManager,
 		Enforcer:            enforcer,
@@ -413,6 +422,7 @@ func New() (*App, error) {
 		CertEngine:     certEngine,
 		GitSSH:         gitSSH,
 		Server:         srv,
+		Registry:       eng,
 		cancel:         cancel,
 	}, nil
 }
@@ -516,6 +526,11 @@ func (a *App) Start() error {
 	if err := a.Server.Shutdown(ctx); err != nil {
 		a.Log.Error("Server forced to shutdown: %v", err)
 	}
+	if a.Registry != nil {
+		if err := a.Registry.Close(); err != nil {
+			a.Log.Error("Registry shutdown: %v", err)
+		}
+	}
 	if a.Forge != nil {
 		a.Forge.Wait(ctx)
 	}
@@ -534,6 +549,9 @@ func (a *App) Close() {
 	}
 	if a.PortalProxies != nil {
 		a.PortalProxies.Close()
+	}
+	if a.Registry != nil {
+		_ = a.Registry.Close()
 	}
 	if a.Store != nil {
 		a.Store.Close()

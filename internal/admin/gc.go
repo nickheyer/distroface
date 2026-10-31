@@ -19,6 +19,15 @@ import (
 
 var ErrAlreadyRunning = errors.New("garbage collection is already running")
 
+// Pauses registry writes for the length of a sweep
+type WriteGate interface {
+	Freeze(ctx context.Context) error
+	Thaw()
+}
+
+// Longest wait for running uploads before a run gives up
+const gcDrainTimeout = 2 * time.Minute
+
 // Run is one completed collection
 type Run struct {
 	StartedAt      time.Time
@@ -36,6 +45,8 @@ type Collector struct {
 	registry    distribution.Namespace
 	storagePath string
 	log         *logger.Logger
+	gate        WriteGate
+	resetCache  func(context.Context) error
 
 	mu      sync.Mutex
 	running bool
@@ -61,6 +72,16 @@ func NewCollector(storagePath string, log *logger.Logger) (*Collector, error) {
 		return nil, fmt.Errorf("creating registry namespace: %w", err)
 	}
 	return &Collector{driver: d, registry: reg, storagePath: storagePath, log: log}, nil
+}
+
+// Runs hold registry writes while they sweep
+func (c *Collector) SetWriteGate(g WriteGate) {
+	c.gate = g
+}
+
+// Drops blob descriptor caches once a sweep finishes
+func (c *Collector) SetCacheReset(fn func(context.Context) error) {
+	c.resetCache = fn
 }
 
 // Start begins a background run rejecting overlap
@@ -125,6 +146,21 @@ func (c *Collector) Schedule(ctx context.Context, res *settings.Resolver) {
 func (c *Collector) collect(dryRun, removeUntagged bool) {
 	run := &Run{StartedAt: time.Now().UTC(), DryRun: dryRun, RemoveUntagged: removeUntagged}
 	c.log.Info("GC started (dry_run=%v remove_untagged=%v)", dryRun, removeUntagged)
+	defer c.finish(run)
+
+	// A manifest landing mid sweep could lose layers
+	if !dryRun && c.gate != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), gcDrainTimeout)
+		err := c.gate.Freeze(ctx)
+		cancel()
+		if err != nil {
+			run.Err = fmt.Sprintf("pausing registry writes: %v", err)
+			c.log.Error("GC aborted: %s", run.Err)
+			return
+		}
+		defer c.gate.Thaw()
+		c.log.Info("GC paused registry writes")
+	}
 
 	beforeCount, beforeBytes := c.blobStats()
 
@@ -141,13 +177,28 @@ func (c *Collector) collect(dryRun, removeUntagged bool) {
 	afterCount, afterBytes := c.blobStats()
 	run.BlobsDeleted = beforeCount - afterCount
 	run.BytesFreed = beforeBytes - afterBytes
-	run.FinishedAt = time.Now().UTC()
+
+	// Cached descriptors would keep reporting swept blobs as present
+	if !dryRun && c.resetCache != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		rerr := c.resetCache(ctx)
+		cancel()
+		if rerr != nil {
+			c.log.Error("GC blob cache reset failed: %v", rerr)
+			if run.Err == "" {
+				run.Err = fmt.Sprintf("resetting blob cache: %v", rerr)
+			}
+		}
+	}
 
 	if err == nil {
 		c.log.Info("GC finished in %s: %d blobs removed, %d bytes freed",
-			run.FinishedAt.Sub(run.StartedAt).Round(time.Millisecond), run.BlobsDeleted, run.BytesFreed)
+			time.Since(run.StartedAt).Round(time.Millisecond), run.BlobsDeleted, run.BytesFreed)
 	}
+}
 
+func (c *Collector) finish(run *Run) {
+	run.FinishedAt = time.Now().UTC()
 	c.mu.Lock()
 	c.running = false
 	c.last = run

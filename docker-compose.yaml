@@ -14,12 +14,40 @@ services:
       # - DISTROFACE_DATA_DIR=/srv/distroface
       # Metadata in postgres instead of the sqlite file, see the db service
       # - DISTROFACE_DATABASE_DSN=postgres://distroface:distroface@127.0.0.1:5432/distroface?sslmode=disable
+      # Registry blob descriptors in redis instead of process memory, see the
+      # cache service. Empty keeps the in memory cache
+      - DISTROFACE_REGISTRY_REDIS_URL=${DISTROFACE_REGISTRY_REDIS_URL:-}
     # volumes:
     #   - /srv/distroface:/srv/distroface
     #   - /var/run/docker.sock:/var/run/docker.sock
     # depends_on:
     #   db:
     #     condition: service_healthy
+
+  # Optional shared blob descriptor cache for the registry. Start it with
+  #   DISTROFACE_REGISTRY_REDIS_URL=redis://127.0.0.1:6379/0 docker compose --profile cache up
+  # Nothing in it needs to survive a restart. The registry never expires keys,
+  # so lru eviction is what keeps memory bounded
+  cache:
+    image: redis:8-alpine
+    container_name: distroface-cache
+    profiles: ["cache"]
+    network_mode: host
+    command:
+      - redis-server
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   # db:
   #   image: postgres:18-alpine
