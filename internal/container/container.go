@@ -93,16 +93,21 @@ func New() (*App, error) {
 		return nil, fmt.Errorf("creating data directory: %w", err)
 	}
 
-	store, err := stores.NewSQLiteStore(cfg.Database.Path, stores.DBConfig{
-		MaxOpenConns:    cfg.Database.MaxConnections,
-		MaxIdleConns:    cfg.Database.MaxIdleConns,
-		ConnMaxLifetime: time.Duration(cfg.Database.ConnMaxLifetime) * time.Second,
+	store, err := stores.Open(stores.Options{
+		Driver: stores.Driver(cfg.Database.Driver),
+		DSN:    cfg.Database.DSN,
+		DBConfig: stores.DBConfig{
+			MaxOpenConns:    cfg.Database.MaxConnections,
+			MaxIdleConns:    cfg.Database.MaxIdleConns,
+			ConnMaxLifetime: time.Duration(cfg.Database.ConnMaxLifetime) * time.Second,
+		},
 	})
 	if err != nil {
 		cancel()
 		log.Close()
 		return nil, fmt.Errorf("initializing storage: %w", err)
 	}
+	log.Info("Database %s at %s", cfg.Database.Driver, cfg.Database.Redacted())
 
 	fail := func(step string, err error) (*App, error) {
 		cancel()

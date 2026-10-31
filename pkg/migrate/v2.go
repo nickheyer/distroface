@@ -20,17 +20,20 @@ var groupRoleMap = map[string]string{
 
 const roleSource = "migration"
 
-// V2 wraps direct writes to the v2 database. The v2 server may be running
-// concurrently: both sides open sqlite in WAL mode with busy timeouts.
+// Direct writes to the v2 database while the server may be running
 type V2 struct {
 	Store *stores.Store
 }
 
-func OpenV2(path string) (*V2, error) {
-	if _, err := os.Stat(path); err != nil {
-		return nil, fmt.Errorf("v2 db not found (has the v2 server been started once?): %w", err)
+// Takes a sqlite path or a postgres dsn
+func OpenV2(dsn string) (*V2, error) {
+	driver := stores.DetectDriver(dsn)
+	if driver == stores.DriverSQLite {
+		if _, err := os.Stat(dsn); err != nil {
+			return nil, fmt.Errorf("v2 db not found (has the v2 server been started once?): %w", err)
+		}
 	}
-	store, err := stores.NewSQLiteStore(path)
+	store, err := stores.Open(stores.Options{Driver: driver, DSN: dsn})
 	if err != nil {
 		return nil, err
 	}

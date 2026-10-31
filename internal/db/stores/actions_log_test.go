@@ -1,28 +1,24 @@
-package stores
+package stores_test
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 )
 
 // Server notes take the next index and a runner continues after them
 func TestPutActionsJobLog(t *testing.T) {
-	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "s.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
+	store := storetest.New(t)
 	ctx := context.Background()
-	if err := store.db.Create(&db.GitRepository{ID: "r1", Namespace: "ns", Name: "app"}).Error; err != nil {
+	if err := store.DB().Create(&db.GitRepository{ID: "r1", Namespace: "ns", Name: "app"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Create(&db.ActionsRun{ID: "run1", RepoID: "r1", Number: 1, WorkflowPath: "ci.yml"}).Error; err != nil {
+	if err := store.DB().Create(&db.ActionsRun{ID: "run1", RepoID: "r1", Number: 1, WorkflowPath: "ci.yml"}).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := store.db.Create(&db.ActionsJob{ID: "job1", RunID: "run1", Name: "build", JobKey: "build"}).Error; err != nil {
+	if err := store.DB().Create(&db.ActionsJob{ID: "job1", RunID: "run1", Name: "build", JobKey: "build"}).Error; err != nil {
 		t.Fatal(err)
 	}
 

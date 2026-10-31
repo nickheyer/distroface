@@ -24,7 +24,7 @@ func bindFlags(fs *flag.FlagSet) *config.MigrateConfig {
 	cfg := &config.MigrateConfig{}
 	fs.StringVar(&cfg.V1DB, "v1-db", "distro.db", "path to v1 distro.db")
 	fs.StringVar(&cfg.V1Root, "v1-root", "", "path to v1 storage root directory")
-	fs.StringVar(&cfg.V2DB, "v2-db", "", "path to v2 sqlite database")
+	fs.StringVar(&cfg.V2DB, "v2-db", "", "v2 database, sqlite path or postgres dsn")
 	fs.StringVar(&cfg.V2Artifacts, "v2-artifacts", "", "path to v2 artifact storage root (config artifacts.storage_path)")
 	fs.StringVar(&cfg.Registry, "v2-url", "", "v2 registry host[:port], e.g. registry.example.com:8080")
 	fs.StringVar(&cfg.User, "v2-user", "", "v2 username for registry pushes")

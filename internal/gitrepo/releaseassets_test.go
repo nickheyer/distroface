@@ -16,6 +16,7 @@ import (
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/internal/webhook"
@@ -37,11 +38,7 @@ func newAssetHarness(t *testing.T) *assetHarness {
 	t.Helper()
 	root := t.TempDir()
 	log := logger.New()
-	store, err := stores.NewSQLiteStore(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := storetest.New(t)
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
 		t.Fatal(err)

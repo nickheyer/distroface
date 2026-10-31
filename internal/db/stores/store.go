@@ -7,7 +7,6 @@ import (
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/migrations"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -18,47 +17,78 @@ type DBConfig struct {
 	ConnMaxLifetime time.Duration
 }
 
-type Store struct {
-	db *gorm.DB
+// Everything needed to reach one database
+type Options struct {
+	// Empty detects from the dsn shape
+	Driver Driver
+	// File path for sqlite, connection url or keyword string otherwise
+	DSN string
+	DBConfig
 }
 
+type Store struct {
+	db     *gorm.DB
+	driver Driver
+}
+
+// Path only constructor kept for existing callers and tests
 func NewSQLiteStore(dbPath string, config ...DBConfig) (*Store, error) {
-	dsn := dbPath + "?_journal_mode=WAL&_busy_timeout=5000&_foreign_keys=on&_txlock=immediate"
-	gdb, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+	opts := Options{Driver: DriverSQLite, DSN: dbPath}
+	if len(config) > 0 {
+		opts.DBConfig = config[0]
+	}
+	return Open(opts)
+}
+
+// Connects and brings the schema up to date
+func Open(opts Options) (*Store, error) {
+	gdb, driver, err := OpenDB(opts)
+	if err != nil {
+		return nil, err
+	}
+	store := &Store{db: gdb, driver: driver}
+	if err := store.Migrate(); err != nil {
+		_ = store.Close()
+		return nil, fmt.Errorf("failed to migrate database: %w", err)
+	}
+	return store, nil
+}
+
+// Connects without touching the schema, callers own migration
+func OpenDB(opts Options) (*gorm.DB, Driver, error) {
+	driver := opts.Driver
+	if driver == "" {
+		driver = DetectDriver(opts.DSN)
+	}
+	dial, err := newDialector(driver, opts.DSN)
+	if err != nil {
+		return nil, "", err
+	}
+	gdb, err := gorm.Open(dial, &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 		NowFunc: func() time.Time {
 			return time.Now().UTC()
 		},
+		TranslateError: true,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, "", fmt.Errorf("failed to open %s database: %w", driver, err)
 	}
 
 	sqlDB, err := gdb.DB()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get database handle: %w", err)
+		return nil, "", fmt.Errorf("failed to get database handle: %w", err)
 	}
-
-	if len(config) > 0 {
-		cfg := config[0]
-		if cfg.MaxOpenConns > 0 {
-			sqlDB.SetMaxOpenConns(cfg.MaxOpenConns)
-		}
-		if cfg.MaxIdleConns > 0 {
-			sqlDB.SetMaxIdleConns(cfg.MaxIdleConns)
-		}
-		if cfg.ConnMaxLifetime > 0 {
-			sqlDB.SetConnMaxLifetime(cfg.ConnMaxLifetime)
-		}
+	if opts.MaxOpenConns > 0 {
+		sqlDB.SetMaxOpenConns(opts.MaxOpenConns)
 	}
-
-	store := &Store{db: gdb}
-
-	if err := store.Migrate(); err != nil {
-		return nil, fmt.Errorf("failed to migrate database: %w", err)
+	if opts.MaxIdleConns > 0 {
+		sqlDB.SetMaxIdleConns(opts.MaxIdleConns)
 	}
-
-	return store, nil
+	if opts.ConnMaxLifetime > 0 {
+		sqlDB.SetConnMaxLifetime(opts.ConnMaxLifetime)
+	}
+	return gdb, driver, nil
 }
 
 func (s *Store) DB() *gorm.DB {
@@ -85,7 +115,11 @@ func (s *Store) Migrate() error {
 	})
 }
 
+// Sqlite copies tables to add constraints, cascades stay off
 func (s *Store) migrateSchema() error {
+	if !s.isSQLite() {
+		return s.migrateTables()
+	}
 	if err := s.db.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
 		return fmt.Errorf("failed to disable foreign keys for migration: %w", err)
 	}
@@ -97,6 +131,119 @@ func (s *Store) migrateSchema() error {
 }
 
 func (s *Store) migrateTables() error {
+	if s.isSQLite() {
+		if err := s.migrateLegacySQLite(); err != nil {
+			return err
+		}
+	}
+	migrated, err := s.autoMigrate()
+	if err != nil {
+		return err
+	}
+	if migrated && s.isSQLite() {
+		// Drop old indexes that conflict with new schema
+		s.db.Exec("DROP INDEX IF EXISTS idx_users_username")
+		s.db.Exec("DROP INDEX IF EXISTS idx_users_email")
+		s.db.Exec("DROP INDEX IF EXISTS uni_users_username")
+		s.db.Exec("DROP INDEX IF EXISTS uni_users_email")
+	}
+	return nil
+}
+
+// Every table automigrate owns
+var schemaModels = []any{
+	&db.User{},
+	&db.Role{},
+	&db.UserRole{},
+	&db.Session{},
+	&db.APIToken{},
+	&db.Organization{},
+	&db.OrgMember{},
+	&db.Repository{},
+	&db.Star{},
+	&db.UserAvatar{},
+	&db.ActivityEvent{},
+	&db.SystemSetting{},
+	&db.SettingsRow{},
+	&db.RegistrationInvite{},
+	&db.Webhook{},
+	&db.WebhookDelivery{},
+	&db.RegistryPortal{},
+	&db.ArtifactRepository{},
+	&db.Artifact{},
+	&db.ArtifactProperty{},
+	&db.CertificateDomain{},
+	&db.ACMECacheEntry{},
+	&db.ACMEAccount{},
+	&db.TLSCertificate{},
+	&db.AuditEvent{},
+	&db.GitRepository{},
+	&db.GitRedirect{},
+	&db.GitTransfer{},
+	&db.GitTopic{},
+	&db.GitWatch{},
+	&db.GitCollaborator{},
+	&db.OrgTeam{},
+	&db.OrgTeamMember{},
+	&db.OrgTeamRepo{},
+	&db.SSHKey{},
+	&db.GPGKey{},
+	&db.GitBranchProtection{},
+	&db.GitTagProtection{},
+	&db.GitCommitStatus{},
+	&db.LFSObject{},
+	&db.GitLFSLink{},
+	&db.LFSLock{},
+	&db.GitRelease{},
+	&db.GitReleaseImage{},
+	&db.GitReleaseAsset{},
+	&db.GitPushMirror{},
+	&db.GitImport{},
+	&db.GitIssue{},
+	&db.GitPullRequest{},
+	&db.GitLabel{},
+	&db.GitIssueLabel{},
+	&db.GitMilestone{},
+	&db.GitIssueAssignee{},
+	&db.GitComment{},
+	&db.GitReaction{},
+	&db.GitIssueDependency{},
+	&db.GitTrackedTime{},
+	&db.GitIssueSubscription{},
+	&db.GitReviewRequest{},
+	&db.GitReview{},
+	&db.GitReviewComment{},
+	&db.GitProject{},
+	&db.GitProjectColumn{},
+	&db.GitProjectIssue{},
+	&db.GitNotification{},
+	&db.UserNotificationPrefs{},
+	&db.MailMessage{},
+	&db.MailInboundToken{},
+	&db.PasswordReset{},
+	&db.EmailVerification{},
+	&db.ActionsRunner{},
+	&db.ActionsRunnerToken{},
+	&db.ActionsWorkflowState{},
+	&db.ActionsRun{},
+	&db.ActionsJob{},
+	&db.ActionsJobLog{},
+	&db.ActionsJobExec{},
+	&db.ActionsSecret{},
+	&db.ActionsVariable{},
+	&db.ActionsArtifact{},
+	&db.ActionsRunImage{},
+	&db.ActionsCache{},
+	&db.AgentProvider{},
+	&db.Agent{},
+	&db.AgentIdentity{},
+	&db.AgentSession{},
+	&db.AgentSessionEvent{},
+	&db.AgentApproval{},
+}
+
+// Pre multi backend databases only ever lived in sqlite
+func (s *Store) migrateLegacySQLite() error {
 	// Rename old webhook secret column keeping stored values
 	if s.db.Migrator().HasTable("webhooks") &&
 		s.db.Migrator().HasColumn(&db.Webhook{}, "secret_hash") &&
@@ -172,105 +319,6 @@ func (s *Store) migrateTables() error {
 			return fmt.Errorf("failed to migrate certificate domain scopes: %w", err)
 		}
 	}
-
-	if err := s.db.AutoMigrate(
-		&db.User{},
-		&db.Role{},
-		&db.UserRole{},
-		&db.Session{},
-		&db.APIToken{},
-		&db.Organization{},
-		&db.OrgMember{},
-		&db.Repository{},
-		&db.Star{},
-		&db.UserAvatar{},
-		&db.ActivityEvent{},
-		&db.SystemSetting{},
-		&db.SettingsRow{},
-		&db.RegistrationInvite{},
-		&db.Webhook{},
-		&db.WebhookDelivery{},
-		&db.RegistryPortal{},
-		&db.ArtifactRepository{},
-		&db.Artifact{},
-		&db.ArtifactProperty{},
-		&db.CertificateDomain{},
-		&db.ACMECacheEntry{},
-		&db.ACMEAccount{},
-		&db.TLSCertificate{},
-		&db.AuditEvent{},
-		&db.GitRepository{},
-		&db.GitRedirect{},
-		&db.GitTransfer{},
-		&db.GitTopic{},
-		&db.GitWatch{},
-		&db.GitCollaborator{},
-		&db.OrgTeam{},
-		&db.OrgTeamMember{},
-		&db.OrgTeamRepo{},
-		&db.SSHKey{},
-		&db.GPGKey{},
-		&db.GitBranchProtection{},
-		&db.GitTagProtection{},
-		&db.GitCommitStatus{},
-		&db.LFSObject{},
-		&db.GitLFSLink{},
-		&db.LFSLock{},
-		&db.GitRelease{},
-		&db.GitReleaseImage{},
-		&db.GitReleaseAsset{},
-		&db.GitPushMirror{},
-		&db.GitImport{},
-		&db.GitIssue{},
-		&db.GitPullRequest{},
-		&db.GitLabel{},
-		&db.GitIssueLabel{},
-		&db.GitMilestone{},
-		&db.GitIssueAssignee{},
-		&db.GitComment{},
-		&db.GitReaction{},
-		&db.GitIssueDependency{},
-		&db.GitTrackedTime{},
-		&db.GitIssueSubscription{},
-		&db.GitReviewRequest{},
-		&db.GitReview{},
-		&db.GitReviewComment{},
-		&db.GitProject{},
-		&db.GitProjectColumn{},
-		&db.GitProjectIssue{},
-		&db.GitNotification{},
-		&db.UserNotificationPrefs{},
-		&db.MailMessage{},
-		&db.MailInboundToken{},
-		&db.PasswordReset{},
-		&db.EmailVerification{},
-		&db.ActionsRunner{},
-		&db.ActionsRunnerToken{},
-		&db.ActionsWorkflowState{},
-		&db.ActionsRun{},
-		&db.ActionsJob{},
-		&db.ActionsJobLog{},
-		&db.ActionsJobExec{},
-		&db.ActionsSecret{},
-		&db.ActionsVariable{},
-		&db.ActionsArtifact{},
-		&db.ActionsRunImage{},
-		&db.ActionsCache{},
-		&db.AgentProvider{},
-		&db.Agent{},
-		&db.AgentIdentity{},
-		&db.AgentSession{},
-		&db.AgentSessionEvent{},
-		&db.AgentApproval{},
-	); err != nil {
-		return fmt.Errorf("failed to auto-migrate: %w", err)
-	}
-
-	// Drop old indexes that conflict with new schema
-	s.db.Exec("DROP INDEX IF EXISTS idx_users_username")
-	s.db.Exec("DROP INDEX IF EXISTS idx_users_email")
-	s.db.Exec("DROP INDEX IF EXISTS uni_users_username")
-	s.db.Exec("DROP INDEX IF EXISTS uni_users_email")
 	return nil
 }
 
@@ -315,13 +363,18 @@ func (s *Store) migrateData() error {
 
 // Pre explicit-source portals become manual when material exists, else none
 func (s *Store) backfillPortalCertSource() error {
+	unset := "cert_source = 0"
+	if s.isSQLite() {
+		// Pre enum rows may still hold the empty string
+		unset = "cert_source IN ('', 0)"
+	}
 	if err := s.db.Exec(`UPDATE registry_portals SET cert_source = ?
-		WHERE cert_source IN ('', 0) AND EXISTS (
+		WHERE `+unset+` AND EXISTS (
 			SELECT 1 FROM tls_certificates t
 			WHERE t.scope = ? AND t.portal_id = registry_portals.id)`,
 		int32(v1.CertSource_CERT_SOURCE_MANUAL), int32(v1.TLSScope_TLS_SCOPE_PORTAL)).Error; err != nil {
 		return err
 	}
-	return s.db.Exec(`UPDATE registry_portals SET cert_source = ? WHERE cert_source IN ('', 0)`,
+	return s.db.Exec(`UPDATE registry_portals SET cert_source = ? WHERE `+unset,
 		int32(v1.CertSource_CERT_SOURCE_NONE)).Error
 }

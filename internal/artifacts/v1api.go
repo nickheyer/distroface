@@ -24,6 +24,7 @@ import (
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
 	"github.com/nickheyer/distroface/pkg/utils"
+	"gorm.io/gorm"
 )
 
 // Drop in v1 rest facade for old dfcli and ci
@@ -942,7 +943,7 @@ func (a *V1API) handleRename(w http.ResponseWriter, r *http.Request, user *auth.
 	}
 
 	if err := a.store.UpdateArtifact(r.Context(), artifact); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			http.Error(w, "CONFLICT", http.StatusConflict)
 			return
 		}

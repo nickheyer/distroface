@@ -17,7 +17,9 @@ storage:
   data_dir: "./data"
 
 database:
-  # path: "./data/distroface.db"    # Derived from storage.data_dir when unset
+  # driver: "sqlite" # or "postgres"
+  # path: "./data/distroface.db"
+  # dsn: "postgres://distroface:secret@db:5432/distroface?sslmode=disable"
   max_connections: 25
   max_idle_conns: 5
   conn_max_lifetime: 300

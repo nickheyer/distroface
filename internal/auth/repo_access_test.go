@@ -2,11 +2,11 @@ package auth
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/rbac"
 )
 
@@ -22,11 +22,7 @@ type accessEnv struct {
 func newAccessEnv(t *testing.T) *accessEnv {
 	t.Helper()
 	ctx := context.Background()
-	store, err := stores.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
+	store := storetest.New(t)
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
 		t.Fatalf("NewEnforcer: %v", err)

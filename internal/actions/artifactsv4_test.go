@@ -19,7 +19,7 @@ import (
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
-	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/forge"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/mailer"
@@ -43,11 +43,7 @@ func newResultsHarness(t *testing.T) *resultsHarness {
 	ctx := context.Background()
 	root := t.TempDir()
 	log := logger.New()
-	store, err := stores.NewSQLiteStore(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := storetest.New(t)
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
 		t.Fatal(err)
@@ -74,6 +70,7 @@ func newResultsHarness(t *testing.T) *resultsHarness {
 	}
 	gitMgr := gitrepo.NewManager(store, engine, blobs, res, gitrepo.NewAccess(store, enforcer), webhook.NewDispatcher(store, log, res), audit.NewRecorder(store, res, log), log)
 	forgeMgr := forge.NewManager(store, gitMgr, mailer.NewService(store, res, log), res, log)
+	t.Cleanup(func() { forgeMgr.Wait(context.Background()) })
 	m := NewManager(store, gitMgr, forgeMgr, artifactMgr, authMgr, res, log)
 
 	repo := &db.GitRepository{ID: uuid.New().String(), Namespace: "acme", Name: "app", DefaultBranch: "main"}

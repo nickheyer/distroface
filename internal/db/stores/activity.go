@@ -89,7 +89,7 @@ func (s *Store) PruneActivityEvents(ctx context.Context, keep int) error {
 	if keep <= 0 {
 		return nil
 	}
-	return s.db.WithContext(ctx).Exec(
-		`DELETE FROM activity_events WHERE id IN (SELECT id FROM activity_events ORDER BY created_at DESC LIMIT -1 OFFSET ?)`, keep,
-	).Error
+	tx := s.db.WithContext(ctx)
+	stale := tx.Model(&db.ActivityEvent{}).Select("id").Order("created_at DESC").Offset(keep)
+	return tx.Where("id IN (?)", stale).Delete(&db.ActivityEvent{}).Error
 }

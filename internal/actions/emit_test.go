@@ -15,6 +15,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/forge"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/mailer"
@@ -110,11 +111,7 @@ func newEmitHarness(t *testing.T) *emitHarness {
 	ctx := context.Background()
 	root := t.TempDir()
 	log := logger.New()
-	store, err := stores.NewSQLiteStore(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := storetest.New(t)
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
 		t.Fatal(err)
@@ -140,6 +137,7 @@ func newEmitHarness(t *testing.T) *emitHarness {
 	}
 	gitMgr := gitrepo.NewManager(store, engine, blobs, res, gitrepo.NewAccess(store, enforcer), webhook.NewDispatcher(store, log, res), audit.NewRecorder(store, res, log), log)
 	forgeMgr := forge.NewManager(store, gitMgr, mailer.NewService(store, res, log), res, log)
+	t.Cleanup(func() { forgeMgr.Wait(context.Background()) })
 	m := NewManager(store, gitMgr, forgeMgr, artifacts.NewManager(store, blobs, res, log), authMgr, res, log)
 	enable := &v1.Settings{Git: &v1.GitSettings{Enabled: proto.Bool(true), Actions: &v1.GitActionsSettings{Enabled: proto.Bool(true)}}}
 	if _, err := res.Update(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "", enable, []string{"git.enabled", "git.actions.enabled"}); err != nil {

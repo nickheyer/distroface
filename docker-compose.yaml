@@ -12,6 +12,30 @@ services:
       # containers over the docker socket, so the data dir must sit at the
       # same path on the host and in the container
       # - DISTROFACE_DATA_DIR=/srv/distroface
+      # Metadata in postgres instead of the sqlite file, see the db service
+      # - DISTROFACE_DATABASE_DSN=postgres://distroface:distroface@127.0.0.1:5432/distroface?sslmode=disable
     # volumes:
     #   - /srv/distroface:/srv/distroface
     #   - /var/run/docker.sock:/var/run/docker.sock
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
+
+  # db:
+  #   image: postgres:18-alpine
+  #   container_name: distroface-db
+  #   network_mode: host
+  #   environment:
+  #     - POSTGRES_USER=distroface
+  #     - POSTGRES_PASSWORD=distroface
+  #     - POSTGRES_DB=distroface
+  #   volumes:
+  #     - distroface-db:/var/lib/postgresql
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U distroface"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+# volumes:
+#   distroface-db:

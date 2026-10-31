@@ -26,6 +26,7 @@ import (
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 var _ distrofacev1connect.ArtifactServiceHandler = (*ArtifactService)(nil)
@@ -588,7 +589,7 @@ func (s *ArtifactService) UpdateArtifact(ctx context.Context, req *v1.UpdateArti
 	}
 
 	if err := s.store.UpdateArtifact(ctx, artifact); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return nil, connect.Errorf(connect.CodeAlreadyExists, "an artifact with that version and path already exists")
 		}
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)

@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -59,11 +61,84 @@ type AuthConfig struct {
 }
 
 type DatabaseConfig struct {
-	Path            string `mapstructure:"path"`
+	// sqlite or postgres, inferred from dsn when empty
+	Driver string `mapstructure:"driver"`
+	// Sqlite file, derived from storage.data_dir when unset
+	Path string `mapstructure:"path"`
+	// Server connection string for network backends
+	DSN             string `mapstructure:"dsn"`
 	MaxConnections  int    `mapstructure:"max_connections"`
 	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
 	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"`
 }
+
+const (
+	DatabaseSQLite   = "sqlite"
+	DatabasePostgres = "postgres"
+)
+
+// Normalizes the driver name and fills dsn for sqlite
+func (d *DatabaseConfig) resolve() error {
+	switch strings.ToLower(strings.TrimSpace(d.Driver)) {
+	case "":
+		d.Driver = DatabaseSQLite
+		if dsnLooksLikePostgres(d.DSN) {
+			d.Driver = DatabasePostgres
+		}
+	case "sqlite", "sqlite3":
+		d.Driver = DatabaseSQLite
+	case "postgres", "postgresql", "pg", "pgx":
+		d.Driver = DatabasePostgres
+	default:
+		return fmt.Errorf("unsupported database.driver %q, want sqlite or postgres", d.Driver)
+	}
+	if d.Driver == DatabaseSQLite {
+		if d.DSN == "" {
+			d.DSN = d.Path
+		}
+		return nil
+	}
+	if d.DSN == "" {
+		return fmt.Errorf("database.dsn is required when database.driver is %s", d.Driver)
+	}
+	return nil
+}
+
+func dsnLooksLikePostgres(dsn string) bool {
+	lower := strings.ToLower(strings.TrimSpace(dsn))
+	return strings.HasPrefix(lower, "postgres://") || strings.HasPrefix(lower, "postgresql://") ||
+		strings.Contains(lower, "host=") || strings.Contains(lower, "dbname=")
+}
+
+// Connection string safe for logs, credentials blanked
+func (d DatabaseConfig) Redacted() string {
+	if d.Driver == DatabaseSQLite {
+		return d.Path
+	}
+	if u, err := url.Parse(d.DSN); err == nil && u.Host != "" {
+		if u.User != nil {
+			u.User = url.User(u.User.Username())
+		}
+		u.RawQuery = redactQuery(u.Query())
+		return u.Redacted()
+	}
+	return passwordKV.ReplaceAllString(d.DSN, "${1}=***")
+}
+
+// Libpq also accepts the password as a url parameter
+func redactQuery(q url.Values) string {
+	for key := range q {
+		if passwordKey.MatchString(key) {
+			q.Set(key, "***")
+		}
+	}
+	return q.Encode()
+}
+
+var (
+	passwordKV  = regexp.MustCompile(`(?i)\b(password|passfile)=\S+`)
+	passwordKey = regexp.MustCompile(`(?i)^(password|passfile)$`)
+)
 
 type StorageConfig struct {
 	DataDir string `mapstructure:"data_dir"`
@@ -121,7 +196,7 @@ type BootstrapOrgMember struct {
 type MigrateConfig struct {
 	V1DB        string // Path to v1 distro.db
 	V1Root      string // V1 storage root (contains blobs/, repositories/, artifacts/)
-	V2DB        string // Path to v2 sqlite db (direct writes: users, orgs, visibility, webhook toggle)
+	V2DB        string // V2 sqlite path or postgres dsn (direct writes: users, orgs, visibility, webhook toggle)
 	V2Artifacts string // V2 artifact storage root (config artifacts.storage_path) for blob import
 	Registry    string // V2 registry host[:port] for docker API push-replay
 	User        string // V2 username for registry auth
@@ -156,7 +231,9 @@ func Load(configPath string) (*Config, error) {
 	_ = v.BindEnv("storage.data_dir", "DISTROFACE_STORAGE_DATA_DIR", "DISTROFACE_DATA_DIR")
 
 	// Keys without defaults need explicit env binding
+	_ = v.BindEnv("database.driver")
 	_ = v.BindEnv("database.path")
+	_ = v.BindEnv("database.dsn")
 	_ = v.BindEnv("registry.storage_path")
 	_ = v.BindEnv("artifacts.storage_path")
 	_ = v.BindEnv("git.storage_path")
@@ -357,6 +434,9 @@ func validateConfig(cfg *Config) error {
 	cfg.Database.Path, err = filepath.Abs(cfg.Database.Path)
 	if err != nil {
 		return fmt.Errorf("invalid database path: %w", err)
+	}
+	if err := cfg.Database.resolve(); err != nil {
+		return err
 	}
 
 	cfg.Storage.DataDir, err = filepath.Abs(cfg.Storage.DataDir)

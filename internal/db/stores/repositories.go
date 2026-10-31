@@ -220,7 +220,8 @@ func (s *Store) ListRepositoriesByGitRepo(ctx context.Context, gitRepoID string)
 // Image repos named ns/name or ns/name/anything that carry no link yet
 func (s *Store) ListUnlinkedRepositoriesForGit(ctx context.Context, namespace, name string) ([]*db.Repository, error) {
 	var repos []*db.Repository
-	err := s.db.WithContext(ctx).Where("namespace = ? AND git_repo_id IS NULL AND (name = ? OR name LIKE ? ESCAPE '\\')", namespace, name, pages.LikePrefix(name+"/")).Find(&repos).Error
+	tx := s.db.WithContext(ctx)
+	err := tx.Where("namespace = ? AND git_repo_id IS NULL AND (name = ? OR name "+pages.LikeOp(tx)+" ? ESCAPE '\\')", namespace, name, pages.LikePrefix(name+"/")).Find(&repos).Error
 	return repos, err
 }
 

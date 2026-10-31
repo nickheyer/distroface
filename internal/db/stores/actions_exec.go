@@ -25,14 +25,22 @@ func (s *Store) CreateActionsJobExec(ctx context.Context, e *db.ActionsJobExec) 
 	if e.Status == "" {
 		e.Status = ExecQueued
 	}
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var last int
-		if err := tx.Model(&db.ActionsJobExec{}).Where("job_id = ?", e.JobID).Select("COALESCE(MAX(number), 0)").Scan(&last).Error; err != nil {
+	var err error
+	// Concurrent appends read the same max, the loser renumbers
+	for attempt := 0; attempt < 3; attempt++ {
+		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var last int
+			if err := tx.Model(&db.ActionsJobExec{}).Where("job_id = ?", e.JobID).Select("COALESCE(MAX(number), 0)").Scan(&last).Error; err != nil {
+				return err
+			}
+			e.Number = last + 1
+			return tx.Create(e).Error
+		})
+		if err == nil || !errors.Is(err, gorm.ErrDuplicatedKey) {
 			return err
 		}
-		e.Number = last + 1
-		return tx.Create(e).Error
-	})
+	}
+	return err
 }
 
 func (s *Store) GetActionsJobExec(ctx context.Context, id string) (*db.ActionsJobExec, error) {

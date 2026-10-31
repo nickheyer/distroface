@@ -135,16 +135,17 @@ func (s *Store) issueQuery(ctx context.Context, opts IssueListOptions) *gorm.DB 
 	if opts.Author != "" {
 		q = q.Where("git_issues.author_id IN (SELECT id FROM users WHERE username = ? OR id = ?)", opts.Author, opts.Author)
 	}
+	like := pages.LikeOp(q)
 	if opts.Mentioned != "" {
 		pattern := pages.LikeContains("@" + opts.Mentioned)
-		q = q.Where("(git_issues.body LIKE ? ESCAPE '\\' OR git_issues.id IN (SELECT issue_id FROM git_comments WHERE body LIKE ? ESCAPE '\\'))", pattern, pattern)
+		q = q.Where("(git_issues.body "+like+" ? ESCAPE '\\' OR git_issues.id IN (SELECT issue_id FROM git_comments WHERE body "+like+" ? ESCAPE '\\'))", pattern, pattern)
 	}
 	if opts.Involved != "" {
 		pattern := pages.LikeContains("@" + opts.Involved)
 		q = q.Where("(git_issues.author_id = ? OR git_issues.id IN (SELECT issue_id FROM git_issue_assignees WHERE user_id = ?) "+
 			"OR git_issues.id IN (SELECT issue_id FROM git_comments WHERE author_id = ?) "+
 			"OR git_issues.id IN (SELECT issue_id FROM git_review_requests WHERE user_id = ?) "+
-			"OR git_issues.body LIKE ? ESCAPE '\\')", opts.Involved, opts.Involved, opts.Involved, opts.Involved, pattern)
+			"OR git_issues.body "+like+" ? ESCAPE '\\')", opts.Involved, opts.Involved, opts.Involved, opts.Involved, pattern)
 	}
 	if opts.ProjectID != "" {
 		q = q.Where("git_issues.id IN (SELECT issue_id FROM git_project_issues WHERE project_id = ?)", opts.ProjectID)

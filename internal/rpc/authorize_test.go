@@ -2,12 +2,11 @@ package rpc
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
-	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -16,11 +15,7 @@ import (
 
 func newAuthorizeServer(t *testing.T) *Server {
 	t.Helper()
-	store, err := stores.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := storetest.New(t)
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
 		t.Fatalf("NewEnforcer: %v", err)

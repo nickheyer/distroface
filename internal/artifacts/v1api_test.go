@@ -19,6 +19,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -45,11 +46,7 @@ func newTestEnv(t *testing.T, retention *v1proto.ArtifactRetentionSettings) *tes
 	t.Helper()
 	dir := t.TempDir()
 
-	store, err := stores.NewSQLiteStore(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
+	store := storetest.New(t)
 
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {

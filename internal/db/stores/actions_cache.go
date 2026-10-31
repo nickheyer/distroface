@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/pkg/pages"
 	"gorm.io/gorm"
 )
 
@@ -61,7 +62,7 @@ func (s *Store) ListActionsCachesByPrefix(ctx context.Context, repoID, prefix, v
 	var out []*db.ActionsCache
 	q := s.db.WithContext(ctx).
 		Where("repo_id = ? AND version = ? AND state = ?", repoID, version, ActionsCacheComplete).
-		Where("cache_key LIKE ? ESCAPE '\\'", likePrefix(prefix)).
+		Where("cache_key "+pages.LikeOp(s.db)+" ? ESCAPE '\\'", likePrefix(prefix)).
 		Order("created_at DESC")
 	if limit > 0 {
 		q = q.Limit(limit)

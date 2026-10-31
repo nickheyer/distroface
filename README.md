@@ -81,6 +81,17 @@ Repos are addressed as `[namespace/]name`, bare names resolve to your own namesp
 
 One `config.yaml`, every default is in [`config.example.yaml`](config.example.yaml). Any key works as a `DISTROFACE_*` env var. Seed users and orgs on first boot with the `bootstrap:` block.
 
+### Database
+
+SQLite is the default and lives at `database.path` under the data dir. Postgres requires a DSN instead, so set `database.dsn` to the url of a postgres server. The driver is inferred from the dsn or set explicitly with `database.driver`. There is a postgres example in the docker-compose.yaml file. Every start compares a fingerprint of the expected schema with the one stored in the `schema_states` table and only runs the full schema migration when they differ. Delete that row to force a full pass on the next start.
+
+```bash
+docker run -p 8080:8080 -v distroface:/app/data \
+  -e DISTROFACE_DATABASE_DSN='postgres://distroface:secret@db:5432/distroface?sslmode=disable' \
+  nickheyer/distroface:latest
+```
+
+
 ## TLS and ACME
 
 The main listener (`server.port`, default 8080) answers TLS and cleartext on the same port and picks the certificate by SNI. Nothing is served over TLS until a certificate source resolves, so a fresh install is reached over plain `http://` and stays reachable that way until a certificate is ready, even in HTTPS only mode. Everything below lives under Admin, Network security and Admin, Certificate authority, and can be seeded on first boot through the `settings:` block or `DISTROFACE_SETTINGS_JSON`. The status line under the hostname on Network security reports why a certificate is not issued yet and what to do next.

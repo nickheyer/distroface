@@ -1,25 +1,22 @@
-package stores
+package stores_test
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
+	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 )
 
-func artifactStore(t *testing.T) (*Store, *db.GitRepository, *db.ActionsRun) {
+func artifactStore(t *testing.T) (*stores.Store, *db.GitRepository, *db.ActionsRun) {
 	t.Helper()
-	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "a.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := storetest.New(t)
 	repo := &db.GitRepository{ID: uuid.New().String(), Namespace: "acme", Name: "app", DefaultBranch: "main"}
-	if err := store.db.Create(repo).Error; err != nil {
+	if err := store.DB().Create(repo).Error; err != nil {
 		t.Fatal(err)
 	}
 	run := &db.ActionsRun{ID: uuid.New().String(), RepoID: repo.ID, Number: 1, WorkflowPath: "ci.yml", Status: "running"}
@@ -69,11 +66,11 @@ func TestCreateActionsArtifactOrReuse(t *testing.T) {
 		t.Fatalf("second name = %+v, %v, %v", other, fresh2, err)
 	}
 	var counter int64
-	store.db.Model(&db.GitRepository{}).Where("id = ?", repo.ID).Pluck("artifact_counter", &counter)
+	store.DB().Model(&db.GitRepository{}).Where("id = ?", repo.ID).Pluck("artifact_counter", &counter)
 	if counter != 2 {
 		t.Fatalf("artifact_counter = %d", counter)
 	}
-	if err := store.db.Create(&db.ActionsArtifact{ID: uuid.New().String(), RunID: run.ID, Name: "dist"}).Error; err == nil {
+	if err := store.DB().Create(&db.ActionsArtifact{ID: uuid.New().String(), RunID: run.ID, Name: "dist"}).Error; err == nil {
 		t.Fatal("duplicate name in a run was accepted")
 	}
 }
@@ -111,14 +108,14 @@ func TestListActionsCachesForRepo(t *testing.T) {
 	store, repo, _ := artifactStore(t)
 	ctx := context.Background()
 	elsewhere := &db.GitRepository{ID: uuid.New().String(), Namespace: "acme", Name: "elsewhere", DefaultBranch: "main"}
-	if err := store.db.Create(elsewhere).Error; err != nil {
+	if err := store.DB().Create(elsewhere).Error; err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
 	for _, c := range []*db.ActionsCache{
-		{RepoID: repo.ID, Key: "a", Version: "1", State: ActionsCacheReserved, LastUsedAt: now},
-		{RepoID: repo.ID, Key: "b", Version: "1", State: ActionsCacheComplete, Digest: "sha256:b", LastUsedAt: now},
-		{RepoID: elsewhere.ID, Key: "c", Version: "1", State: ActionsCacheComplete, Digest: "sha256:c", LastUsedAt: now},
+		{RepoID: repo.ID, Key: "a", Version: "1", State: stores.ActionsCacheReserved, LastUsedAt: now},
+		{RepoID: repo.ID, Key: "b", Version: "1", State: stores.ActionsCacheComplete, Digest: "sha256:b", LastUsedAt: now},
+		{RepoID: elsewhere.ID, Key: "c", Version: "1", State: stores.ActionsCacheComplete, Digest: "sha256:c", LastUsedAt: now},
 	} {
 		if err := store.CreateActionsCache(ctx, c); err != nil {
 			t.Fatal(err)

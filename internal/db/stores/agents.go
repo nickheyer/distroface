@@ -398,20 +398,28 @@ func (s *Store) ListFinishedAgentSessionsBefore(ctx context.Context, repoID stri
 
 // Appends one event assigning the next sequence number
 func (s *Store) AppendAgentSessionEvent(ctx context.Context, ev *db.AgentSessionEvent) error {
-	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var last struct{ Seq int64 }
-		if err := tx.Model(&db.AgentSessionEvent{}).Select("COALESCE(MAX(seq), 0) AS seq").Where("session_id = ?", ev.SessionID).Scan(&last).Error; err != nil {
+	var err error
+	// Runner and user appends race, the loser takes the next seq
+	for attempt := 0; attempt < 3; attempt++ {
+		err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var last struct{ Seq int64 }
+			if err := tx.Model(&db.AgentSessionEvent{}).Select("COALESCE(MAX(seq), 0) AS seq").Where("session_id = ?", ev.SessionID).Scan(&last).Error; err != nil {
+				return err
+			}
+			ev.Seq = last.Seq + 1
+			if ev.CreatedAt.IsZero() {
+				ev.CreatedAt = time.Now().UTC()
+			}
+			if err := tx.Create(ev).Error; err != nil {
+				return err
+			}
+			return tx.Model(&db.AgentSession{}).Where("id = ?", ev.SessionID).Updates(map[string]any{"event_count": ev.Seq, "updated_at": time.Now().UTC()}).Error
+		})
+		if err == nil || !errors.Is(err, gorm.ErrDuplicatedKey) {
 			return err
 		}
-		ev.Seq = last.Seq + 1
-		if ev.CreatedAt.IsZero() {
-			ev.CreatedAt = time.Now().UTC()
-		}
-		if err := tx.Create(ev).Error; err != nil {
-			return err
-		}
-		return tx.Model(&db.AgentSession{}).Where("id = ?", ev.SessionID).Updates(map[string]any{"event_count": ev.Seq, "updated_at": time.Now().UTC()}).Error
-	})
+	}
+	return err
 }
 
 func (s *Store) ListAgentSessionEvents(ctx context.Context, sessionID string, afterSeq int64, limit int) ([]*db.AgentSessionEvent, error) {

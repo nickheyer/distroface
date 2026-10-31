@@ -20,6 +20,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/forge"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/mailer"
@@ -108,11 +109,7 @@ func newHarness(t *testing.T, turns []scriptedTurn) *harness {
 	ctx := context.Background()
 	root := t.TempDir()
 	log := logger.New()
-	store, err := stores.NewSQLiteStore(filepath.Join(root, "test.db"))
-	if err != nil {
-		t.Fatalf("store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := storetest.New(t)
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
 		t.Fatalf("enforcer: %v", err)
@@ -146,6 +143,7 @@ func newHarness(t *testing.T, turns []scriptedTurn) *harness {
 	gitMgr := gitrepo.NewManager(store, engine, blobs, res, gitrepo.NewAccess(store, enforcer), dispatcher, recorder, log)
 	mail := mailer.NewService(store, res, log)
 	forgeMgr := forge.NewManager(store, gitMgr, mail, res, log)
+	t.Cleanup(func() { forgeMgr.Wait(context.Background()) })
 	actionsMgr := actions.NewManager(store, gitMgr, forgeMgr, artifactMgr, authMgr, res, log)
 	agentsMgr := NewManager(store, gitMgr, forgeMgr, actionsMgr, authMgr, res, log)
 	forgeMgr.SetTrigger(agentsMgr.Trigger)
