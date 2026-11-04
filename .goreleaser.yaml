@@ -1,6 +1,5 @@
 # goreleaser config for dfcli cross-platform static binaries. The distroface
-# server is intentionally NOT built here: it needs CGO for sqlite, so the
-# release workflow builds it on native runners instead.
+# server is built by the release workflow instead, see the build-distroface job.
 version: 2
 
 project_name: dfcli

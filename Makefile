@@ -1,9 +1,11 @@
-.PHONY: dev prod clean build build-frontend dfcli run deps test fmt lint check help kill-dev image dev-docker proto proto-clean proto-lint proto-format proto-breaking gen dev-auth seed
+.PHONY: dev prod clean build build-frontend dfcli run deps test fmt lint check help kill-dev image dev-docker proto proto-clean proto-lint proto-format proto-breaking gen dev-auth seed bench docs docs-dev
 
 DATA_DIR := ./data
 DB_FILE := $(DATA_DIR)/distroface.db
 FRONTEND_DIR := web/distroface
 DISTROFACE_BIN := build/distroface
+
+export CGO_ENABLED ?= 0
 
 ifneq (,$(wildcard dev.env))
 include dev.env
@@ -65,10 +67,15 @@ build: build-frontend
 seed:
 	go run ./scripts/seeder $(SEED_ARGS)
 
+# Run the benchmark harness against a running distroface instance
+# (see scripts/bench/README.md; point BENCH_BASE_URL at a scratch server)
+bench:
+	go run ./scripts/bench $(BENCH_ARGS)
+
 # Build the dfcli binary
 dfcli:
 	@echo "Building dfcli..."
-	CGO_ENABLED=0 go build -ldflags "-s -w -X main.Version=$${DFCLI_VERSION:-dev}" -o build/dfcli ./cmd/dfcli
+	go build -ldflags "-s -w -X main.Version=$${DFCLI_VERSION:-dev}" -o build/dfcli ./cmd/dfcli
 
 # Clean development data
 clean:
@@ -151,7 +158,15 @@ proto-breaking:
 	$(BUF_RUN) breaking --against '.git#branch=main'
 	@echo "Breaking change check complete!"
 
-# Help
+# Doc site built from docs/
+docs:
+	@echo "Building doc site..."
+	cd website && npm install --no-fund --no-audit && npm run build
+
+docs-dev:
+	@echo "Serving doc site..."
+	cd website && npm install --no-fund --no-audit && npm run dev
+
 help:
 	@echo "Available commands:"
 	@echo "  make dev            - Run in development mode (frontend + backend)"
@@ -172,4 +187,8 @@ help:
 	@echo "  make proto-lint     - Lint proto files for style and correctness (via Docker)"
 	@echo "  make proto-format   - Format proto files (via Docker)"
 	@echo "  make proto-breaking - Check for breaking changes against main (via Docker)"
+	@echo "  make seed           - Seed a running instance with data (SEED_ARGS)"
+	@echo "  make bench          - Run benchmark harness against a running server (BENCH_ARGS)"
+	@echo "  make docs           - Build the documentation site into website/dist"
+	@echo "  make docs-dev       - Serve the documentation site with live reload"
 	@echo "  make help           - Show this help message"

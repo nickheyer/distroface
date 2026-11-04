@@ -70,7 +70,7 @@ func (e *Engine) ReconcileAppCADependents(ctx context.Context) []string {
 			orphaned = append(orphaned, row.OrgID)
 		}
 	}
-	e.Invalidate(ctx)
+	e.Invalidate()
 	return orphaned
 }
 

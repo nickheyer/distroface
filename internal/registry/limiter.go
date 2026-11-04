@@ -2,7 +2,6 @@ package registry
 
 import (
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -16,7 +15,19 @@ type SubjectVerifier interface {
 	VerifyTokenSubject(raw string) (string, error)
 }
 
-var manifestPathRe = regexp.MustCompile(`^/v2/.+/manifests/[^/]+$`)
+// GET or HEAD of /v2/<name>/manifests/<reference>, a scan instead of a regexp
+func isManifestPath(p string) bool {
+	rest, ok := strings.CutPrefix(p, "/v2/")
+	if !ok {
+		return false
+	}
+	i := strings.LastIndex(rest, "/manifests/")
+	if i <= 0 {
+		return false
+	}
+	ref := rest[i+len("/manifests/"):]
+	return ref != "" && !strings.Contains(ref, "/")
+}
 
 // Throttle manifest pulls per user or per ip
 func PullRateLimit(next http.Handler, verifier SubjectVerifier, userLimiter, anonLimiter *admin.Limiter, log *logger.Logger) http.Handler {
@@ -25,7 +36,7 @@ func PullRateLimit(next http.Handler, verifier SubjectVerifier, userLimiter, ano
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if (r.Method != http.MethodGet && r.Method != http.MethodHead) || !manifestPathRe.MatchString(r.URL.Path) {
+		if (r.Method != http.MethodGet && r.Method != http.MethodHead) || !isManifestPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -44,13 +55,20 @@ func PullRateLimit(next http.Handler, verifier SubjectVerifier, userLimiter, ano
 				key = "user:" + sub
 			}
 		}
-		if limiter == nil || limiter.Limit() <= 0 {
+		// One limits lookup per request, the closure runs dynamic
+		// redis work so calling it three times added needless latency
+		if limiter == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		limit := limiter.Limit()
+		if limit <= 0 {
 			next.ServeHTTP(w, r)
 			return
 		}
 
 		allowed, remaining, resetAt := limiter.Take(key)
-		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limiter.Limit()))
+		w.Header().Set("X-RateLimit-Limit", strconv.Itoa(limit))
 		w.Header().Set("X-RateLimit-Remaining", strconv.Itoa(remaining))
 		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(resetAt.Unix(), 10))
 

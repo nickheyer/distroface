@@ -83,28 +83,20 @@ jobs:
     name: Build DistroFace Binaries
     needs: [generate-proto, build-frontend]
     if: ${{ startsWith(github.ref, 'refs/tags/') && !endsWith(github.ref_name, '-dev') }}
-    runs-on: ${{ matrix.runner }}
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - goos: linux
             goarch: amd64
-            runner: ubuntu-latest
           - goos: linux
             goarch: arm64
-            runner: ubuntu-latest
-            cc: aarch64-linux-gnu-gcc
           - goos: darwin
             goarch: amd64
-            runner: macos-15-intel
           - goos: darwin
             goarch: arm64
-            runner: macos-latest
           - goos: windows
             goarch: amd64
-            runner: ubuntu-latest
-            cc: x86_64-w64-mingw32-gcc
-            cxx: x86_64-w64-mingw32-g++
 
     steps:
       - name: Checkout code
@@ -127,25 +119,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install cross-compiler (Linux ARM64)
-        if: matrix.goos == 'linux' && matrix.goarch == 'arm64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu
-
-      - name: Install cross-compiler (Windows)
-        if: matrix.goos == 'windows'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
-
       - name: Build binary
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: '1'
-          CC: ${{ matrix.cc || '' }}
-          CXX: ${{ matrix.cxx || '' }}
+          CGO_ENABLED: '0'
         run: |
           BIN=distroface
           if [ "${{ matrix.goos }}" = "windows" ]; then BIN=distroface.exe; fi

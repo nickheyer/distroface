@@ -47,7 +47,17 @@ func ValidateTemplate(tmplStr string) error {
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, sample); err != nil {
-		return fmt.Errorf("template execution failed: %w", err)
+		// Git payloads carry different fields, accept templates written for them
+		gitSample := GitPayload{
+			Event: "git_push", Action: "updated", Timestamp: "2024-01-01T00:00:00Z",
+			Repository: GitRepoPayload{Namespace: "example", Name: "repo", FullName: "example/repo", DefaultBranch: "main"},
+			Sender:     Sender{Username: "user"},
+			Push:       &PushPayload{Ref: "refs/heads/main", Before: "0000000", After: "abc123", Pusher: "user"},
+		}
+		buf.Reset()
+		if err2 := tmpl.Execute(&buf, gitSample); err2 != nil {
+			return fmt.Errorf("template execution failed: %w", err)
+		}
 	}
 
 	return nil
@@ -55,7 +65,7 @@ func ValidateTemplate(tmplStr string) error {
 
 // RenderTemplate renders the template with the given payload.
 // Returns nil, nil for empty string (caller falls back to default).
-func RenderTemplate(tmplStr string, payload WebhookPayload) ([]byte, error) {
+func RenderTemplate(tmplStr string, payload any) ([]byte, error) {
 	if tmplStr == "" {
 		return nil, nil
 	}

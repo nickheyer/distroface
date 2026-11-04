@@ -12,7 +12,6 @@ import (
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // Applies portal rules at the token endpoint, portals resolve by hostnames/ports
@@ -59,7 +58,13 @@ func NewTokenHandler(ts *TokenService, store *stores.Store, manager *Manager, en
 	}
 }
 
+// Installs the source repository access hook, set once at startup
+func (h *TokenHandler) SetLinkedAccess(l LinkedAccess) {
+	h.repoAccess.SetLinkedAccess(l)
+}
+
 func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	service, scopeStr, account := r.FormValue("service"), r.FormValue("scope"), r.FormValue("account")
 
 	username, password, hasCreds := r.BasicAuth()
@@ -98,7 +103,8 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "internal error", http.StatusInternalServerError)
 				return
 			}
-			if u == nil || bcrypt.CompareHashAndPassword([]byte(u.PasswordHash), []byte(password)) != nil {
+			// Deactivated accounts and wrong passwords look the same to the client
+			if !h.authManager.VerifyPassword(u, password) {
 				h.recordAuthFailure(clientIP)
 				h.auditLogin(r, nil, username, clientIP, audit.OutcomeDenied)
 				w.Header().Set("WWW-Authenticate", `Basic realm="`+service+`"`)
@@ -122,6 +128,12 @@ func (h *TokenHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		if account == "" && authUser != nil {
 			account = authUser.Username
+		}
+		// Pushes made with a job token are attributed to the run
+		if authUser != nil && authUser.TokenID != "" {
+			if job, _ := h.store.GetActionsJobByTokenID(r.Context(), authUser.TokenID); job != nil {
+				account = JobSubject(job.ID, authUser.Username)
+			}
 		}
 		if h.authLimiter != nil {
 			h.authLimiter.Reset(clientIP)
@@ -217,7 +229,15 @@ func (h *TokenHandler) resolveAccess(r *http.Request, user *AuthenticatedUser, s
 		resourceName := parts[1]
 		requestedActions := strings.Split(parts[2], ",")
 
-		if resourceType != "repository" {
+		switch resourceType {
+		case "registry":
+			// The catalog is the only registry level resource docker asks for
+			if resourceName == "catalog" && h.canListCatalog(r, user) {
+				result = append(result, &ResourceActions{Type: resourceType, Name: resourceName, Actions: []string{"*"}})
+			}
+			continue
+		case "repository":
+		default:
 			continue
 		}
 
@@ -230,8 +250,10 @@ func (h *TokenHandler) resolveAccess(r *http.Request, user *AuthenticatedUser, s
 		}
 
 		granted := h.filterActions(r, user, resourceName, requestedActions)
+		// Portals that refuse pushes refuse every write
 		if h.policy != nil && !h.policy.AllowPush(r) {
 			granted = withoutAction(granted, "push")
+			granted = withoutAction(granted, "delete")
 		}
 		if len(granted) > 0 {
 			result = append(result, &ResourceActions{
@@ -272,33 +294,53 @@ func (h *TokenHandler) filterActions(r *http.Request, user *AuthenticatedUser, r
 	for _, action := range requested {
 		switch action {
 		case "pull":
-			if h.canPull(r, user, namespace, repo) {
+			if h.canPull(r, user, repoName, repo) {
 				granted = append(granted, "pull")
 			}
 		case "push":
-			if h.canPush(r, user, namespace) {
+			if h.canPush(r, user, repoName, repo) {
 				granted = append(granted, "push")
+			}
+		case "delete":
+			if h.canDelete(r, user, repoName, repo) {
+				granted = append(granted, "delete")
 			}
 		}
 	}
 	return granted
 }
 
-func (h *TokenHandler) canPull(r *http.Request, user *AuthenticatedUser, namespace string, repo *storage.Repository) bool {
+// Objects a credential scope may match for one package, source repo last
+func (h *TokenHandler) scopeIDs(r *http.Request, repoName string, repo *storage.Repository) []string {
+	namespace, _, _ := strings.Cut(repoName, "/")
+	ids := []string{repoName, namespace}
+	if repo != nil {
+		if src := h.repoAccess.sourceName(r.Context(), repo); src != "" {
+			ids = append(ids, src)
+		}
+	}
+	return ids
+}
+
+func (h *TokenHandler) canPull(r *http.Request, user *AuthenticatedUser, repoName string, repo *storage.Repository) bool {
 	if user == nil {
 		return false
 	}
 	// Unknown repo, accounts get the registry's 404, anonymous gets denied
 	if repo == nil {
-		return !user.IsAnonymous()
+		return !user.IsAnonymous() && ScopeAllows(user, rbac.ActionPull, h.scopeIDs(r, repoName, nil)...)
 	}
 	return h.repoAccess.Can(r.Context(), user, repo, rbac.ActionPull)
 }
 
-func (h *TokenHandler) canPush(r *http.Request, user *AuthenticatedUser, namespace string) bool {
+func (h *TokenHandler) canPush(r *http.Request, user *AuthenticatedUser, repoName string, repo *storage.Repository) bool {
 	if user == nil || user.IsAnonymous() {
 		return false
 	}
+	if !ScopeAllows(user, rbac.ActionPush, h.scopeIDs(r, repoName, repo)...) {
+		return false
+	}
+	namespace, _, _ := strings.Cut(repoName, "/")
 	// Namespace owner can always push
 	if user.Username == namespace {
 		return true
@@ -323,4 +365,29 @@ func (h *TokenHandler) canPush(r *http.Request, user *AuthenticatedUser, namespa
 		}
 	}
 	return false
+}
+
+// Destructive, so the rule that deletes a package in the ui applies:
+// owner, org owner or admin, manage, or an explicit grant
+func (h *TokenHandler) canDelete(r *http.Request, user *AuthenticatedUser, repoName string, repo *storage.Repository) bool {
+	if user == nil || user.IsAnonymous() || repo == nil {
+		return false
+	}
+	if !ScopeAllows(user, rbac.ActionDelete, h.scopeIDs(r, repoName, repo)...) {
+		return false
+	}
+	return h.repoAccess.HasRepoAccess(r.Context(), user, repo, rbac.ActionDelete)
+}
+
+// The catalog lists every repository, so only the manage capability
+// sees it, never anonymous or scoped credentials, and never through a
+// portal whose listing could not be confined to its org
+func (h *TokenHandler) canListCatalog(r *http.Request, user *AuthenticatedUser) bool {
+	if user == nil || user.IsAnonymous() || user.IsScoped() || h.enforcer == nil {
+		return false
+	}
+	if h.policy != nil && h.policy.IsPortalHost(r.Host) {
+		return false
+	}
+	return h.enforcer.HasPermission(user.Roles, rbac.ResourceRepositories, rbac.ActionManage)
 }

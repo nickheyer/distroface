@@ -19,6 +19,7 @@ import (
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
@@ -45,11 +46,7 @@ func newTestEnv(t *testing.T, retention *v1proto.ArtifactRetentionSettings) *tes
 	t.Helper()
 	dir := t.TempDir()
 
-	store, err := stores.NewSQLiteStore(filepath.Join(dir, "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
+	store := storetest.New(t)
 
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
@@ -198,7 +195,9 @@ func TestV1LoginAndRefresh(t *testing.T) {
 	var refreshResp struct {
 		Token string `json:"token"`
 	}
-	json.Unmarshal(rec.Body.Bytes(), &refreshResp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &refreshResp); err != nil {
+		t.Fatal(err)
+	}
 	if refreshResp.Token == "" {
 		t.Fatalf("refresh returned empty token")
 	}
@@ -401,7 +400,9 @@ func TestV1SearchQuirks(t *testing.T) {
 
 	// Property filter as arbitrary query param
 	rec = e.do(http.MethodGet, "/api/v1/artifacts/search?repo=myrepo&build=2", token, nil)
-	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
 	if resp.Total != 1 {
 		t.Fatalf("property search: got %d results", resp.Total)
 	}
@@ -650,11 +651,25 @@ func TestV1AccessControl(t *testing.T) {
 		t.Fatalf("private repo leaked in listing: %s", rec.Body.String())
 	}
 
-	// V1 quirk, chunk PATCH has no permission gate
+	// Sessions belong to the principal that opened them
 	rec = e.do(http.MethodPost, "/api/v1/artifacts/secret/upload", owner, nil)
 	location := rec.Header().Get("Location")
-	if rec := e.do(http.MethodPatch, location, other, strings.NewReader("x")); rec.Code != http.StatusAccepted {
-		t.Fatalf("chunk PATCH permission quirk: got %d", rec.Code)
+	if rec := e.do(http.MethodPatch, location, other, strings.NewReader("x")); rec.Code != http.StatusForbidden {
+		t.Fatalf("chunk PATCH by another user: got %d", rec.Code)
+	}
+	qualified := strings.Replace(location, "/api/v1/artifacts/secret/", "/api/v1/artifacts/_ns/alice/secret/", 1)
+	if rec := e.doJSON(http.MethodPut, qualified+"?version=1.0.0&path=x.txt", other, nil); rec.Code != http.StatusForbidden {
+		t.Fatalf("complete PUT by another user: got %d", rec.Code)
+	}
+	if rec := e.do(http.MethodPatch, location, owner, strings.NewReader("x")); rec.Code != http.StatusAccepted {
+		t.Fatalf("chunk PATCH by the owner: got %d", rec.Code)
+	}
+	unknown := strings.TrimSuffix(location, rec.Header().Get("Upload-ID")) + "00000000-0000-4000-8000-000000000000"
+	if rec := e.do(http.MethodPatch, unknown, owner, strings.NewReader("x")); rec.Code != http.StatusNotFound {
+		t.Fatalf("chunk PATCH on an unknown session: got %d", rec.Code)
+	}
+	if rec := e.do(http.MethodPut, unknown+"?version=1.0.0&path=x.txt", owner, nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("complete PUT on an unknown session: got %d", rec.Code)
 	}
 
 	// Owner retains full control
@@ -697,7 +712,7 @@ func (e *testEnv) artifactID(repo, version, path string) string {
 func (e *testEnv) blobFiles() []string {
 	e.t.Helper()
 	var files []string
-	filepath.WalkDir(filepath.Join(e.blobRoot, "blobs"), func(p string, d fs.DirEntry, err error) error {
+	_ = filepath.WalkDir(filepath.Join(e.blobRoot, "blobs"), func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

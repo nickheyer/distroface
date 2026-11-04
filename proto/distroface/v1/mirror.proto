@@ -27,9 +27,9 @@ enum SyncPhase {
 
 // SyncEvent is one mirror repository changing sync state.
 message SyncEvent {
-  // Either "image" or "artifact"
+  // One of image, artifact, git, git_push, import
   string kind = 1;
-  // Uuid for image repos, numeric for artifact repos
+  // Uuid for image and git repos, numeric for artifact repos, push mirror id for git_push
   string repo_id = 2;
   string namespace = 3;
   string name = 4;
@@ -37,4 +37,6 @@ message SyncEvent {
   // Set only on SYNC_PHASE_FAILED
   string error = 6;
   google.protobuf.Timestamp at = 7;
+  // Progress line for long running imports
+  string message = 8;
 }

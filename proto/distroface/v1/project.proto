@@ -1,0 +1,249 @@
+syntax = "proto3";
+
+package distroface.v1;
+
+import "distroface/v1/pagination.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nickheyer/distroface/pkg/proto/distroface/v1;distrofacev1";
+
+// ProjectService manages kanban boards on repositories and organizations.
+service ProjectService {
+  // CreateProject creates a board for a repository or an organization.
+  rpc CreateProject(CreateProjectRequest) returns (CreateProjectResponse) {}
+  // GetProject returns a board with its columns and cards.
+  rpc GetProject(GetProjectRequest) returns (GetProjectResponse) {}
+  // ListProjects pages boards.
+  rpc ListProjects(ListProjectsRequest) returns (ListProjectsResponse) {}
+  // UpdateProject changes title and description.
+  rpc UpdateProject(UpdateProjectRequest) returns (UpdateProjectResponse) {}
+  // DeleteProject removes a board.
+  rpc DeleteProject(DeleteProjectRequest) returns (DeleteProjectResponse) {}
+  // CloseProject closes or reopens a board.
+  rpc CloseProject(CloseProjectRequest) returns (CloseProjectResponse) {}
+  // CreateColumn adds a column.
+  rpc CreateColumn(CreateColumnRequest) returns (CreateColumnResponse) {}
+  // UpdateColumn renames or recolors a column.
+  rpc UpdateColumn(UpdateColumnRequest) returns (UpdateColumnResponse) {}
+  // DeleteColumn removes a column, moving its cards to the default column.
+  rpc DeleteColumn(DeleteColumnRequest) returns (DeleteColumnResponse) {}
+  // MoveColumn reorders columns.
+  rpc MoveColumn(MoveColumnRequest) returns (MoveColumnResponse) {}
+  // AddIssueToProject places an issue on the board.
+  rpc AddIssueToProject(AddIssueToProjectRequest) returns (AddIssueToProjectResponse) {}
+  // MoveIssue moves a card between columns or within a column.
+  rpc MoveIssue(MoveIssueRequest) returns (MoveIssueResponse) {}
+  // RemoveIssueFromProject takes an issue off the board.
+  rpc RemoveIssueFromProject(RemoveIssueFromProjectRequest) returns (RemoveIssueFromProjectResponse) {}
+}
+
+// Starting column layouts
+enum ProjectTemplate {
+  PROJECT_TEMPLATE_UNSPECIFIED = 0;
+  PROJECT_TEMPLATE_NONE = 1;
+  PROJECT_TEMPLATE_BASIC_KANBAN = 2;
+  PROJECT_TEMPLATE_BUG_TRIAGE = 3;
+}
+
+// One card on a board
+message ProjectCard {
+  string issue_id = 1;
+  int64 number = 2;
+  string title = 3;
+  string state = 4;
+  bool is_pull = 5;
+  string repo_full_name = 6;
+  repeated string labels = 7;
+  repeated string assignees = 8;
+  int32 position = 9;
+}
+
+// One column of a board
+message ProjectColumn {
+  string id = 1;
+  string title = 2;
+  string color = 3;
+  int32 position = 4;
+  bool is_default = 5;
+  repeated ProjectCard cards = 6;
+}
+
+// Project is a kanban board.
+message Project {
+  string id = 1;
+  // Set for repository boards
+  string repo_full_name = 2;
+  // Set for organization boards
+  string org_id = 3;
+  string title = 4;
+  string description = 5;
+  // open or closed
+  string state = 6;
+  repeated ProjectColumn columns = 7;
+  int32 open_count = 8;
+  int32 closed_count = 9;
+  string creator = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+  // Visible to everyone who can see the repository or organization, otherwise only to collaborators or members
+  bool public = 13;
+}
+
+// CreateProjectRequest creates a board.
+message CreateProjectRequest {
+  // Repository scope
+  string namespace = 1;
+  string name = 2;
+  // Organization scope, used when namespace and name are empty
+  string org_id = 3;
+  string title = 4;
+  string description = 5;
+  ProjectTemplate template = 6;
+  // Boards are private to collaborators or members unless set
+  bool public = 7;
+}
+
+// CreateProjectResponse contains the board.
+message CreateProjectResponse {
+  Project project = 1;
+}
+
+// GetProjectRequest identifies a board.
+message GetProjectRequest {
+  string id = 1;
+}
+
+// GetProjectResponse contains the board with cards.
+message GetProjectResponse {
+  Project project = 1;
+}
+
+// ListProjectsRequest pages boards for a repository or organization.
+message ListProjectsRequest {
+  PageRequest page = 1;
+  string namespace = 2;
+  string name = 3;
+  string org_id = 4;
+  // open or closed, empty lists both
+  string state = 5;
+}
+
+// ListProjectsResponse contains boards without cards.
+message ListProjectsResponse {
+  repeated Project projects = 1;
+  PageInfo page = 2;
+}
+
+// UpdateProjectRequest changes the set fields.
+message UpdateProjectRequest {
+  string id = 1;
+  optional string title = 2;
+  optional string description = 3;
+  optional bool public = 4;
+}
+
+// UpdateProjectResponse contains the board.
+message UpdateProjectResponse {
+  Project project = 1;
+}
+
+// DeleteProjectRequest identifies a board.
+message DeleteProjectRequest {
+  string id = 1;
+}
+
+// DeleteProjectResponse is empty on success.
+message DeleteProjectResponse {}
+
+// CloseProjectRequest closes or reopens a board.
+message CloseProjectRequest {
+  string id = 1;
+  bool closed = 2;
+}
+
+// CloseProjectResponse contains the board.
+message CloseProjectResponse {
+  Project project = 1;
+}
+
+// CreateColumnRequest adds a column.
+message CreateColumnRequest {
+  string project_id = 1;
+  string title = 2;
+  string color = 3;
+}
+
+// CreateColumnResponse contains the column.
+message CreateColumnResponse {
+  ProjectColumn column = 1;
+}
+
+// UpdateColumnRequest changes the set fields.
+message UpdateColumnRequest {
+  string project_id = 1;
+  string id = 2;
+  optional string title = 3;
+  optional string color = 4;
+  optional bool is_default = 5;
+}
+
+// UpdateColumnResponse contains the column.
+message UpdateColumnResponse {
+  ProjectColumn column = 1;
+}
+
+// DeleteColumnRequest identifies a column.
+message DeleteColumnRequest {
+  string project_id = 1;
+  string id = 2;
+}
+
+// DeleteColumnResponse is empty on success.
+message DeleteColumnResponse {}
+
+// MoveColumnRequest reorders a column.
+message MoveColumnRequest {
+  string project_id = 1;
+  string id = 2;
+  int32 position = 3;
+}
+
+// MoveColumnResponse contains the board.
+message MoveColumnResponse {
+  Project project = 1;
+}
+
+// AddIssueToProjectRequest places an issue on a board.
+message AddIssueToProjectRequest {
+  string project_id = 1;
+  string issue_id = 2;
+  // Empty uses the default column
+  string column_id = 3;
+}
+
+// AddIssueToProjectResponse contains the card.
+message AddIssueToProjectResponse {
+  ProjectCard card = 1;
+}
+
+// MoveIssueRequest moves a card.
+message MoveIssueRequest {
+  string project_id = 1;
+  string issue_id = 2;
+  string column_id = 3;
+  int32 position = 4;
+}
+
+// MoveIssueResponse contains the board.
+message MoveIssueResponse {
+  Project project = 1;
+}
+
+// RemoveIssueFromProjectRequest removes a card.
+message RemoveIssueFromProjectRequest {
+  string project_id = 1;
+  string issue_id = 2;
+}
+
+// RemoveIssueFromProjectResponse is empty on success.
+message RemoveIssueFromProjectResponse {}

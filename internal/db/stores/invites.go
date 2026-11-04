@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
@@ -23,7 +24,7 @@ func (s *Store) GetRegistrationInvite(ctx context.Context, id string) (*db.Regis
 	var invite db.RegistrationInvite
 	err := s.db.WithContext(ctx).First(&invite, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -35,7 +36,7 @@ func (s *Store) GetRegistrationInviteByCode(ctx context.Context, code string) (*
 	var invite db.RegistrationInvite
 	err := s.db.WithContext(ctx).First(&invite, "code = ?", code).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err

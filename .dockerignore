@@ -10,6 +10,7 @@ distroface
 web/distroface/build/
 web/distroface/node_modules/
 web/distroface/.svelte-kit/
+website/
 data/
 tmp/
 sandbox/

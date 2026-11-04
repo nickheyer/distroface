@@ -2,12 +2,11 @@ package rpc
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 
 	"connectrpc.com/connect/v2"
 	"github.com/nickheyer/distroface/internal/auth"
-	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -16,11 +15,7 @@ import (
 
 func newAuthorizeServer(t *testing.T) *Server {
 	t.Helper()
-	store, err := stores.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := storetest.New(t)
 	enforcer, err := rbac.NewEnforcer(store.DB())
 	if err != nil {
 		t.Fatalf("NewEnforcer: %v", err)
@@ -110,5 +105,36 @@ func TestAuthorizeSearchUsersIsAccountTier(t *testing.T) {
 	list := &v1.ListUsersRequest{}
 	if err := s.authorize(ctx, list, member, distrofacev1connect.UserServiceListUsersProcedure); connect.CodeOf(err) != connect.CodePermissionDenied {
 		t.Fatalf("admin listing still needs users/read, got %v", err)
+	}
+}
+
+func TestPortalWriteProcedure(t *testing.T) {
+	writes := []string{
+		distrofacev1connect.GitServiceStarGitRepositoryProcedure,
+		distrofacev1connect.GitServiceWatchGitRepositoryProcedure,
+		distrofacev1connect.IssueServiceSubscribeIssueProcedure,
+		distrofacev1connect.GitServiceRejectTransferProcedure,
+		distrofacev1connect.ActionsServiceDispatchWorkflowProcedure,
+		distrofacev1connect.ActionsServiceSetSecretProcedure,
+		distrofacev1connect.GitServiceUpdateGitRepositoryProcedure,
+		distrofacev1connect.ArtifactServiceInitiateArtifactUploadProcedure,
+	}
+	for _, p := range writes {
+		if !portalWriteProcedure(p) {
+			t.Errorf("%s must count as a portal write", p)
+		}
+	}
+	reads := []string{
+		distrofacev1connect.GitServiceListPushMirrorsProcedure,
+		distrofacev1connect.GitServiceGetGitRepositoryProcedure,
+		distrofacev1connect.ActionsServiceListSecretsProcedure,
+		distrofacev1connect.ActionsServiceListWorkflowRunsProcedure,
+		distrofacev1connect.UserServiceUpdateUserProcedure,
+		distrofacev1connect.SettingsServiceUpdateSettingsProcedure,
+	}
+	for _, p := range reads {
+		if portalWriteProcedure(p) {
+			t.Errorf("%s must pass a read only portal", p)
+		}
 	}
 }

@@ -92,6 +92,16 @@ func (s *MirrorService) visible(ctx context.Context, ev mirror.Event) bool {
 	case "artifact":
 		repo := &db.ArtifactRepository{Namespace: ev.Namespace, Name: ev.Name, OwnerID: ev.OwnerID, IsPrivate: true}
 		return s.access.HasRepoAccess(ctx, user, repo, rbac.ActionRead)
+	case "git", "git_push", "import":
+		g := s.monitor.GitManager()
+		if g == nil {
+			return false
+		}
+		repo, err := g.Store().GetGitRepository(ctx, ev.Namespace, ev.Name)
+		if err != nil || repo == nil {
+			return false
+		}
+		return g.Access().CanSee(ctx, user, repo)
 	}
 	return false
 }
@@ -113,6 +123,7 @@ func eventToProto(ev mirror.Event) *v1.SyncEvent {
 		Name:      ev.Name,
 		Phase:     phase,
 		Error:     ev.Err,
+		Message:   ev.Message,
 		At:        timestamppb.New(ev.At),
 	}
 }

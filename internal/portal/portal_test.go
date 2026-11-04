@@ -12,12 +12,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 	"time"
 
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -25,11 +25,7 @@ import (
 
 func newTestStore(t *testing.T) *stores.Store {
 	t.Helper()
-	store, err := stores.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
+	store := storetest.New(t)
 	return store
 }
 
@@ -548,6 +544,21 @@ func TestMiddlewareOIDCBounce(t *testing.T) {
 	}
 }
 
+func TestMiddlewareInProcessOrigin(t *testing.T) {
+	store := newTestStore(t)
+	res := NewResolver(store, nil, logger.New())
+
+	var scheme string
+	h := res.Middleware(func() string { return "registry.example.com" }, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		scheme = SchemeFromContext(r.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://builtin.test/api/v1/ping", nil))
+	if scheme != "http" {
+		t.Errorf("in process scheme = %q, must not upgrade built links to https", scheme)
+	}
+}
+
 func TestRealmRewrite(t *testing.T) {
 	store := newTestStore(t)
 	res := NewResolver(store, nil, logger.New())
@@ -931,4 +942,55 @@ func TestResolverAnonymousTiers(t *testing.T) {
 		t.Error("portal allow must override the org deny")
 	}
 	_ = inherit
+}
+
+func TestTrustedOrigin(t *testing.T) {
+	hostPortal := &Portal{}
+	catchAll := &Portal{CatchAll: true}
+	pinned := &Portal{CatchAll: true, PublicHost: "portal.example.com"}
+	pinnedPort := &Portal{PublicHost: "portal.example.com:8443"}
+	cases := []struct {
+		name    string
+		portal  *Portal
+		host    string
+		port    int
+		primary string
+		want    string
+	}{
+		{"no portal echoes the request", nil, "evil.example.com:9", 8080, "reg.example.com", "evil.example.com:9"},
+		{"hostname portal echoes the request", hostPortal, "acme.example.com", 8080, "reg.example.com", "acme.example.com"},
+		{"catch-all pins to the primary and listener", catchAll, "evil.example.com", 8443, "reg.example.com", "reg.example.com:8443"},
+		{"catch-all drops the primary port", catchAll, "evil.example.com", 8443, "reg.example.com:8080", "reg.example.com:8443"},
+		{"catch-all without a listener port", catchAll, "evil.example.com", 0, "reg.example.com", "reg.example.com"},
+		{"catch-all without a primary keeps the request", catchAll, "whatever.example.com", 8443, "", "whatever.example.com"},
+		{"public host wins on catch-alls", pinned, "evil.example.com", 8443, "reg.example.com", "portal.example.com"},
+		{"public host wins on hostname portals", pinnedPort, "acme.example.com:6666", 8080, "reg.example.com", "portal.example.com:8443"},
+	}
+	for _, c := range cases {
+		r := portalRequest(http.MethodGet, "/", c.host, c.port)
+		if got := trustedOrigin(r, c.portal, c.primary); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+	}
+}
+
+func TestNormalizePublicHost(t *testing.T) {
+	good := map[string]string{
+		"":                        "",
+		" Portal.Example.COM ":    "portal.example.com",
+		"portal.example.com:8443": "portal.example.com:8443",
+		"10.0.0.5:443":            "10.0.0.5:443",
+		"[2001:db8::1]:8443":      "[2001:db8::1]:8443",
+	}
+	for in, want := range good {
+		got, err := normalizePublicHost(in)
+		if err != nil || got != want {
+			t.Errorf("normalizePublicHost(%q) = %q, %v, want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{"http://portal.example.com", "portal.example.com:0", "portal.example.com:70000", "portal example", "a/b"} {
+		if _, err := normalizePublicHost(bad); err == nil {
+			t.Errorf("normalizePublicHost(%q) accepted", bad)
+		}
+	}
 }

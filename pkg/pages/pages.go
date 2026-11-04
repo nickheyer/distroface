@@ -166,15 +166,28 @@ func (s Spec) Validate(q Query) error {
 	return nil
 }
 
-// SQL renders the query as a where fragment for raw statements
+// Case folding pattern operator for the connected dialect
+func LikeOp(tx *gorm.DB) string {
+	if tx != nil && tx.Dialector != nil && tx.Dialector.Name() == "postgres" {
+		return "ILIKE"
+	}
+	return "LIKE"
+}
+
+// Where fragment for raw statements, sqlite like semantics
 func (s Spec) SQL(q Query) (string, []any) {
+	return s.sqlWith("LIKE", q)
+}
+
+func (s Spec) sqlWith(like string, q Query) (string, []any) {
 	var conds []string
 	var args []any
+	match := " " + like + ` ? ESCAPE '\'`
 
 	if q.Text != "" && len(s.Text) > 0 {
 		parts := make([]string, len(s.Text))
 		for i, col := range s.Text {
-			parts[i] = col + ` LIKE ? ESCAPE '\'`
+			parts[i] = col + match
 			args = append(args, LikeContains(q.Text))
 		}
 		conds = append(conds, "("+strings.Join(parts, " OR ")+")")
@@ -190,10 +203,10 @@ func (s Spec) SQL(q Query) (string, []any) {
 			conds = append(conds, col+" = ?")
 			args = append(args, f.Value)
 		case MatchPrefix:
-			conds = append(conds, col+` LIKE ? ESCAPE '\'`)
+			conds = append(conds, col+match)
 			args = append(args, LikePrefix(f.Value))
 		default:
-			conds = append(conds, col+` LIKE ? ESCAPE '\'`)
+			conds = append(conds, col+match)
 			args = append(args, LikeContains(f.Value))
 		}
 	}
@@ -203,8 +216,8 @@ func (s Spec) SQL(q Query) (string, []any) {
 
 // Scope applies the query as a gorm scope, non allowlisted fields dropped
 func (s Spec) Scope(q Query) func(*gorm.DB) *gorm.DB {
-	cond, args := s.SQL(q)
 	return func(tx *gorm.DB) *gorm.DB {
+		cond, args := s.sqlWith(LikeOp(tx), q)
 		if cond == "" {
 			return tx
 		}

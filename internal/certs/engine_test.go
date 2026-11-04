@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,7 @@ import (
 
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -28,11 +30,7 @@ import (
 
 func newTestStore(t *testing.T) *stores.Store {
 	t.Helper()
-	store, err := stores.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
+	store := storetest.New(t)
 	return store
 }
 
@@ -233,7 +231,7 @@ func TestDBCacheRoundTrip(t *testing.T) {
 	cache := dbCache{store: store}
 	ctx := context.Background()
 
-	if _, err := cache.Get(ctx, "missing"); err != autocert.ErrCacheMiss {
+	if _, err := cache.Get(ctx, "missing"); !errors.Is(err, autocert.ErrCacheMiss) {
 		t.Fatalf("Get(missing) = %v, want ErrCacheMiss", err)
 	}
 	if err := cache.Put(ctx, "k", []byte("v1")); err != nil {
@@ -249,7 +247,7 @@ func TestDBCacheRoundTrip(t *testing.T) {
 	if err := cache.Delete(ctx, "k"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cache.Get(ctx, "k"); err != autocert.ErrCacheMiss {
+	if _, err := cache.Get(ctx, "k"); !errors.Is(err, autocert.ErrCacheMiss) {
 		t.Fatalf("Get after delete = %v, want ErrCacheMiss", err)
 	}
 }
@@ -483,7 +481,7 @@ func TestGetCertificateSources(t *testing.T) {
 	seedSystem(t, res, &v1.Settings{
 		Tls: &v1.TLSSettings{PrimarySource: v1.CertSource_CERT_SOURCE_MANUAL.Enum()},
 	}, "tls.primary_source")
-	e.Invalidate(ctx)
+	e.Invalidate()
 	cert, err = e.getCertificate(&tls.ClientHelloInfo{ServerName: "unknown.example.com"})
 	if err != nil {
 		t.Fatalf("manual primary source: %v", err)

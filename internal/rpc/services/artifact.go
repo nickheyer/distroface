@@ -7,14 +7,17 @@ import (
 	"path"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"connectrpc.com/connect/v2"
+	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/mirror"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
@@ -23,6 +26,7 @@ import (
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"gorm.io/gorm"
 )
 
 var _ distrofacev1connect.ArtifactServiceHandler = (*ArtifactService)(nil)
@@ -30,15 +34,24 @@ var _ distrofacev1connect.ArtifactServiceHandler = (*ArtifactService)(nil)
 var artifactRepoNamePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$`)
 
 type ArtifactService struct {
-	store   *stores.Store
-	manager *artifacts.Manager
-	access  *artifacts.Access
-	mirrors *mirror.Monitor
-	log     *logger.Logger
+	store    *stores.Store
+	manager  *artifacts.Manager
+	access   *artifacts.Access
+	mirrors  *mirror.Monitor
+	git      *gitrepo.Manager
+	activity *activity.Recorder
+	log      *logger.Logger
 }
 
-func NewArtifactService(store *stores.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, log *logger.Logger) *ArtifactService {
-	return &ArtifactService{store: store, manager: manager, access: artifacts.NewAccess(store, enforcer), mirrors: mirrors, log: log}
+// Installs the activity recorder, nil keeps the feed quiet
+func (s *ArtifactService) SetActivity(rec *activity.Recorder) { s.activity = rec }
+
+func NewArtifactService(store *stores.Store, manager *artifacts.Manager, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, git *gitrepo.Manager, log *logger.Logger) *ArtifactService {
+	access := artifacts.NewAccess(store, enforcer)
+	if git != nil {
+		access.SetLinkedAccess(git.Access())
+	}
+	return &ArtifactService{store: store, manager: manager, access: access, mirrors: mirrors, git: git, log: log}
 }
 
 // ── Repositories ─────────────────────────────────────────────────────────
@@ -75,7 +88,7 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *v1.
 		if err := s.mirrors.ValidateArtifactMirror(ctx, repoType, msg.Mirror); err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		if mirrorCfg, err = mirror.EncodeConfig(msg.Mirror); err != nil {
+		if mirrorCfg, err = s.mirrors.EncodeConfig(msg.Mirror); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 	} else if msg.Mirror != nil {
@@ -85,6 +98,9 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *v1.
 	isPrivate := msg.IsPrivate
 	if !isPrivate && ns != user.Username {
 		isPrivate = s.manager.EffectivePrivateByDefault(ctx, ns)
+	}
+	if src, _ := s.store.GetGitRepository(ctx, ns, name); src != nil && src.IsPrivate {
+		isPrivate = true
 	}
 	repo := &storage.ArtifactRepository{
 		Namespace:    ns,
@@ -97,6 +113,12 @@ func (s *ArtifactService) CreateArtifactRepository(ctx context.Context, req *v1.
 	}
 	if err := s.store.CreateArtifactRepository(ctx, repo); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	if s.git != nil {
+		s.git.LinkArtifactByName(ctx, repo)
+	}
+	if s.activity != nil {
+		s.activity.Artifact(repo, user, activity.KindCreated, "", "")
 	}
 
 	return &v1.CreateArtifactRepositoryResponse{
@@ -116,9 +138,9 @@ func (s *ArtifactService) GetArtifactRepository(ctx context.Context, req *v1.Get
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	return &v1.GetArtifactRepositoryResponse{
-		Repository: s.repoToProto(ctx, repo, stats),
-	}, nil
+	out := s.repoToProto(ctx, repo, stats)
+	s.attachStars(ctx, []*v1.ArtifactRepository{out})
+	return &v1.GetArtifactRepositoryResponse{Repository: out}, nil
 }
 
 func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *v1.ListArtifactRepositoriesRequest) (*v1.ListArtifactRepositoriesResponse, error) {
@@ -154,11 +176,115 @@ func (s *ArtifactService) ListArtifactRepositories(ctx context.Context, req *v1.
 	for i, r := range repos {
 		protoRepos[i] = s.repoToProto(ctx, r, stats)
 	}
+	s.attachStars(ctx, protoRepos)
 
 	return &v1.ListArtifactRepositoriesResponse{
 		Repositories: protoRepos,
 		Page:         pages.Info(offset, limit, total),
 	}, nil
+}
+
+// ── Stars ────────────────────────────────────────────────────────────────
+
+// Fills star counts and the caller's starred flags
+func (s *ArtifactService) attachStars(ctx context.Context, repos []*v1.ArtifactRepository) {
+	if len(repos) == 0 {
+		return
+	}
+	ids := make([]string, len(repos))
+	for i, r := range repos {
+		ids[i] = strconv.FormatInt(r.Id, 10)
+	}
+	counts, err := s.store.StarCounts(ctx, storage.StarKindArtifact, ids)
+	if err != nil {
+		s.log.Error("loading artifact star counts: %v", err)
+		return
+	}
+	var starred map[string]bool
+	if user := auth.UserFromContext(ctx); user != nil && !user.IsAnonymous() {
+		if starred, err = s.store.StarredSet(ctx, user.ID, storage.StarKindArtifact, ids); err != nil {
+			s.log.Error("loading artifact starred set: %v", err)
+		}
+	}
+	for i, r := range repos {
+		r.StarCount = counts[ids[i]]
+		r.IsStarred = starred[ids[i]]
+	}
+}
+
+func (s *ArtifactService) star(ctx context.Context, namespace, name string, star bool) (int64, error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil || user.IsAnonymous() {
+		return 0, connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	repo, err := s.visibleRepo(ctx, user, namespace, name)
+	if err != nil {
+		return 0, err
+	}
+	id := strconv.FormatInt(repo.ID, 10)
+	if star {
+		created, err := s.store.Star(ctx, user.ID, storage.StarKindArtifact, id)
+		if err != nil {
+			return 0, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+		}
+		if created && s.activity != nil {
+			s.activity.Artifact(repo, user, activity.KindStar, "", "")
+		}
+	} else if err := s.store.Unstar(ctx, user.ID, storage.StarKindArtifact, id); err != nil {
+		return 0, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	n, err := s.store.CountStars(ctx, storage.StarKindArtifact, id)
+	if err != nil {
+		return 0, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	return n, nil
+}
+
+func (s *ArtifactService) StarArtifactRepository(ctx context.Context, req *v1.StarArtifactRepositoryRequest) (*v1.StarArtifactRepositoryResponse, error) {
+	n, err := s.star(ctx, req.Namespace, req.Name, true)
+	if err != nil {
+		return nil, err
+	}
+	return &v1.StarArtifactRepositoryResponse{StarCount: n}, nil
+}
+
+func (s *ArtifactService) UnstarArtifactRepository(ctx context.Context, req *v1.UnstarArtifactRepositoryRequest) (*v1.UnstarArtifactRepositoryResponse, error) {
+	n, err := s.star(ctx, req.Namespace, req.Name, false)
+	if err != nil {
+		return nil, err
+	}
+	return &v1.UnstarArtifactRepositoryResponse{StarCount: n}, nil
+}
+
+func (s *ArtifactService) ListStarredArtifactRepositories(ctx context.Context, req *v1.ListStarredArtifactRepositoriesRequest) (*v1.ListStarredArtifactRepositoriesResponse, error) {
+	user := auth.UserFromContext(ctx)
+	targetID, err := starredTarget(ctx, s.store, user, req.Username)
+	if err != nil {
+		return nil, err
+	}
+	limit, offset := pages.Parse(req.Page)
+	opts := s.access.ListOptions(user, "")
+	opts.StarredBy = targetID
+	opts.Limit = limit
+	opts.Offset = offset
+	repos, total, err := s.store.ListArtifactRepositories(ctx, opts)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	ids := make([]int64, len(repos))
+	for i, r := range repos {
+		ids[i] = r.ID
+	}
+	stats, err := s.store.GetArtifactRepoStats(ctx, ids)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	out := make([]*v1.ArtifactRepository, len(repos))
+	for i, r := range repos {
+		out[i] = s.repoToProto(ctx, r, stats)
+	}
+	s.attachStars(ctx, out)
+	return &v1.ListStarredArtifactRepositoriesResponse{Repositories: out, Page: pages.Info(offset, limit, total)}, nil
 }
 
 func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *v1.UpdateArtifactRepositoryRequest) (*v1.UpdateArtifactRepositoryResponse, error) {
@@ -178,11 +304,11 @@ func (s *ArtifactService) UpdateArtifactRepository(ctx context.Context, req *v1.
 		if repo.Type == v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "file repositories do not take mirror settings")
 		}
-		merged, err := mirror.ApplyUpdate(repo.MirrorConfig, req.Mirror)
+		merged, err := s.mirrors.ApplyUpdate(repo.MirrorConfig, req.Mirror)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		full, err := mirror.ParseConfig(merged)
+		full, err := s.mirrors.Config(merged)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}
@@ -248,7 +374,7 @@ func (s *ArtifactService) InitiateArtifactUpload(ctx context.Context, req *v1.In
 		return nil, err
 	}
 
-	uploadID, err := s.manager.Blobs().InitiateUpload()
+	uploadID, err := s.manager.Blobs().InitiateOwnedUpload(auth.UploadOwner(user))
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -267,9 +393,15 @@ func (s *ArtifactService) CompleteArtifactUpload(ctx context.Context, req *v1.Co
 		return nil, err
 	}
 
+	if err := s.manager.Blobs().VerifyUploadOwner(msg.UploadId, auth.UploadOwners(user)...); err != nil {
+		return nil, mapArtifactErr(err)
+	}
 	artifact, err := s.manager.CompleteUpload(ctx, repo, msg.UploadId, msg.Version, msg.Path, msg.Metadata, msg.Properties)
 	if err != nil {
 		return nil, mapArtifactErr(err)
+	}
+	if s.activity != nil {
+		s.activity.Artifact(repo, user, activity.KindArtifactUpload, artifact.Version, artifact.Path)
 	}
 
 	return &v1.CompleteArtifactUploadResponse{
@@ -339,13 +471,9 @@ func (s *ArtifactService) ListArtifactVersions(ctx context.Context, req *v1.List
 	for _, a := range list { // Already newest first
 		grouped[a.Version] = append(grouped[a.Version], a)
 	}
-
 	versions := make([]*v1.ArtifactVersionGroup, len(order))
 	for i, ver := range order {
-		versions[i] = &v1.ArtifactVersionGroup{
-			Version:   ver,
-			Artifacts: artifactsToProto(grouped[ver]),
-		}
+		versions[i] = &v1.ArtifactVersionGroup{Version: ver, Artifacts: artifactsToProto(grouped[ver])}
 	}
 
 	return &v1.ListArtifactVersionsResponse{
@@ -461,7 +589,7 @@ func (s *ArtifactService) UpdateArtifact(ctx context.Context, req *v1.UpdateArti
 	}
 
 	if err := s.store.UpdateArtifact(ctx, artifact); err != nil {
-		if strings.Contains(err.Error(), "UNIQUE constraint") {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return nil, connect.Errorf(connect.CodeAlreadyExists, "an artifact with that version and path already exists")
 		}
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
@@ -675,6 +803,8 @@ func mapArtifactErr(err error) error {
 		return connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	case errors.Is(err, artifacts.ErrUploadNotFound):
 		return connect.NewError(connect.CodeNotFound, err.Error()).WithCause(err)
+	case errors.Is(err, artifacts.ErrUploadDenied):
+		return connect.NewError(connect.CodePermissionDenied, err.Error()).WithCause(err)
 	default:
 		return connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -736,6 +866,11 @@ func (s *ArtifactService) repoToProto(ctx context.Context, repo *storage.Artifac
 	if st, ok := stats[repo.ID]; ok {
 		out.ArtifactCount = st.Count
 		out.TotalSize = st.Size
+	}
+	if repo.GitRepoID != nil {
+		if g, err := s.store.GetGitRepositoryByID(ctx, *repo.GitRepoID); err == nil && g != nil {
+			out.SourceRepository = g.Namespace + "/" + g.Name
+		}
 	}
 	return out
 }

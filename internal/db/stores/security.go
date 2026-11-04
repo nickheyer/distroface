@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -25,7 +26,7 @@ func (s *Store) GetCertificateDomain(ctx context.Context, id string) (*db.Certif
 	var d db.CertificateDomain
 	err := s.db.WithContext(ctx).Preload("Org").First(&d, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -41,7 +42,7 @@ func (s *Store) GetCertificateDomainByName(ctx context.Context, domain string) (
 	var d db.CertificateDomain
 	err := s.db.WithContext(ctx).First(&d, "domain = ?", domain).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -143,7 +144,7 @@ func (s *Store) GetTLSCertificate(ctx context.Context, scope v1.TLSScope, orgID,
 	err := s.db.WithContext(ctx).
 		First(&cert, "scope = ? AND org_id = ? AND portal_id = ?", scope, orgID, portalID).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -184,7 +185,7 @@ func (s *Store) GetACMECacheEntry(ctx context.Context, key string) ([]byte, erro
 	var entry db.ACMECacheEntry
 	err := s.db.WithContext(ctx).First(&entry, "key = ?", key).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err

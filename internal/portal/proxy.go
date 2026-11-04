@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/nickheyer/distroface/pkg/utils"
 	"net"
 	"net/http"
 	"strconv"
@@ -104,7 +105,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("port %d: no handler set", port))
 			continue
 		}
-		raw, err := net.Listen("tcp", net.JoinHostPort(m.bindHost, strconv.Itoa(port)))
+		raw, err := (&net.ListenConfig{}).Listen(ctx, "tcp", net.JoinHostPort(m.bindHost, strconv.Itoa(port)))
 		if err != nil {
 			errs = append(errs, fmt.Errorf("port %d: %w", port, err))
 			m.log.Error("portal proxy failed to bind port %d: %v", port, err)
@@ -117,6 +118,7 @@ func (m *Manager) Reconcile(ctx context.Context) error {
 		}
 		srv := &http.Server{
 			Handler:           m.handler,
+			Protocols:         utils.CleartextProtocols(),
 			ReadHeaderTimeout: m.timeouts.ReadHeader,
 			IdleTimeout:       m.timeouts.Idle,
 		}

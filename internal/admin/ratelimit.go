@@ -1,11 +1,14 @@
 package admin
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nickheyer/distroface/internal/cache"
 )
 
 // Counts events per key inside sliding window
@@ -15,6 +18,9 @@ type Limiter struct {
 	events map[string][]time.Time
 
 	lastPrune time.Time
+
+	shared *cache.Client
+	name   string
 }
 
 // Make limiter with fixed limit and window
@@ -31,6 +37,23 @@ func NewDynamicLimiter(limits func() (int, time.Duration)) *Limiter {
 	}
 }
 
+// Counts across instances under a name, redis misses fall back local
+func (l *Limiter) SetShared(c *cache.Client, name string) {
+	l.mu.Lock()
+	l.shared, l.name = c, name
+	l.mu.Unlock()
+}
+
+func (l *Limiter) sharedKey(key string) string {
+	return cache.Prefix + "rl:" + l.name + ":" + key
+}
+
+func (l *Limiter) sharedClient() *cache.Client {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.shared
+}
+
 // Max events per window
 func (l *Limiter) Limit() int {
 	limit, _ := l.limits()
@@ -43,6 +66,12 @@ func (l *Limiter) Take(key string) (allowed bool, remaining int, resetAt time.Ti
 	limit, window := l.limits()
 	if limit <= 0 {
 		return true, 0, now
+	}
+	if shared := l.sharedClient(); shared.Enabled() {
+		ok, count, oldest, err := shared.Window(context.Background(), l.sharedKey(key), limit, window, true)
+		if err == nil {
+			return ok, max(limit-count, 0), oldest.Add(window)
+		}
 	}
 
 	l.mu.Lock()
@@ -67,6 +96,11 @@ func (l *Limiter) Record(key string) {
 	if limit <= 0 {
 		return
 	}
+	if shared := l.sharedClient(); shared.Enabled() {
+		if _, _, _, err := shared.Window(context.Background(), l.sharedKey(key), 0, window, true); err == nil {
+			return
+		}
+	}
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -80,6 +114,11 @@ func (l *Limiter) Blocked(key string) bool {
 	limit, window := l.limits()
 	if limit <= 0 {
 		return false
+	}
+	if shared := l.sharedClient(); shared.Enabled() {
+		if _, count, _, err := shared.Window(context.Background(), l.sharedKey(key), limit, window, false); err == nil {
+			return count >= limit
+		}
 	}
 
 	l.mu.Lock()
@@ -96,6 +135,9 @@ func (l *Limiter) Blocked(key string) bool {
 
 // Wipe events for key after good login
 func (l *Limiter) Reset(key string) {
+	if shared := l.sharedClient(); shared.Enabled() {
+		_ = shared.Delete(context.Background(), l.sharedKey(key))
+	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	delete(l.events, key)

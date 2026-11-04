@@ -10,8 +10,8 @@ import (
 
 	"github.com/distribution/distribution/v3"
 	regstorage "github.com/distribution/distribution/v3/registry/storage"
-	"github.com/distribution/distribution/v3/registry/storage/driver/filesystem"
 	"github.com/distribution/reference"
+	"github.com/nickheyer/distroface/internal/registry/fsdriver"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/utils"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
@@ -27,10 +27,8 @@ type RegistryAccess struct {
 // NewRegistryAccess creates a RegistryAccess backed by the filesystem storage driver
 // at the given path. This path must match the registry's configured storage path.
 func NewRegistryAccess(storagePath string) (*RegistryAccess, error) {
-	driver := filesystem.New(filesystem.DriverParameters{
-		RootDirectory: storagePath,
-		MaxThreads:    100,
-	})
+	// Reads only, the sync mode never matters here
+	driver := fsdriver.New(fsdriver.Params{RootDirectory: storagePath})
 
 	reg, err := regstorage.NewRegistry(context.Background(), driver)
 	if err != nil {
@@ -44,6 +42,35 @@ func NewRegistryAccess(storagePath string) (*RegistryAccess, error) {
 func (r *RegistryAccess) DeleteNamespace(namespace string) error {
 	repoPath := filepath.Join(r.storagePath, "docker", "registry", "v2", "repositories", namespace)
 	return os.RemoveAll(repoPath)
+}
+
+// Removes the registry link tree for one repository, blobs stay in the global store
+func (r *RegistryAccess) DeleteRepository(namespace, name string) error {
+	repoPath := filepath.Join(r.storagePath, "docker", "registry", "v2", "repositories", namespace, name)
+	return os.RemoveAll(repoPath)
+}
+
+// Moves the registry link tree of a repository, refused while uploads are in flight
+func (r *RegistryAccess) MoveRepository(oldNamespace, oldName, newNamespace, newName string) error {
+	base := filepath.Join(r.storagePath, "docker", "registry", "v2", "repositories")
+	src := filepath.Join(base, oldNamespace, oldName)
+	if _, err := os.Stat(src); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if entries, err := os.ReadDir(filepath.Join(src, "_uploads")); err == nil && len(entries) > 0 {
+		return fmt.Errorf("repository %s/%s has uploads in progress", oldNamespace, oldName)
+	}
+	dst := filepath.Join(base, newNamespace, newName)
+	if _, err := os.Stat(dst); err == nil {
+		return fmt.Errorf("repository %s/%s already exists in registry storage", newNamespace, newName)
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(src, dst)
 }
 
 // ListTags returns all tags for a repository as proto Tag messages.

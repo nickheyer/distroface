@@ -96,7 +96,7 @@ stored token without touching the config file.`,
 					Server:    server,
 				}
 				if err := saveConfig(config); err != nil {
-					return fmt.Errorf("failed to save config: %v", err)
+					return fmt.Errorf("failed to save config: %w", err)
 				}
 				fmt.Printf("Personal access token for %s stored\n", owner)
 				return nil
@@ -104,13 +104,13 @@ stored token without touching the config file.`,
 
 			if username == "" {
 				fmt.Print("Username: ")
-				fmt.Scanln(&username)
+				_, _ = fmt.Scanln(&username)
 			}
 			if password == "" {
 				fmt.Print("Password: ")
 				bytePassword, err := term.ReadPassword(int(syscall.Stdin))
 				if err != nil {
-					return fmt.Errorf("failed to read password: %v", err)
+					return fmt.Errorf("failed to read password: %w", err)
 				}
 				password = string(bytePassword)
 				fmt.Println()
@@ -118,7 +118,7 @@ stored token without touching the config file.`,
 
 			token, canonical, expiry, err := login(cmd.Context(), username, password)
 			if err != nil {
-				return fmt.Errorf("login failed: %v", err)
+				return fmt.Errorf("login failed: %w", err)
 			}
 
 			config := AuthConfig{
@@ -128,7 +128,7 @@ stored token without touching the config file.`,
 				ExpiresAt: expiry,
 			}
 			if err := saveConfig(config); err != nil {
-				return fmt.Errorf("failed to save config: %v", err)
+				return fmt.Errorf("failed to save config: %w", err)
 			}
 
 			fmt.Printf("Successfully logged in as %s on %s\n", canonical, server)
@@ -158,7 +158,7 @@ func newLogoutCmd() *cobra.Command {
 			}
 
 			if err := os.Remove(configPath()); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("failed to remove config: %v", err)
+				return fmt.Errorf("failed to remove config: %w", err)
 			}
 			fmt.Println("Successfully logged out")
 			return nil

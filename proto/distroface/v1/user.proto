@@ -29,6 +29,10 @@ service UserService {
   rpc AdminBulkUpdateUsers(AdminBulkUpdateUsersRequest) returns (AdminBulkUpdateUsersResponse) {}
   // AdminBulkDeleteUsers deletes many users (admin).
   rpc AdminBulkDeleteUsers(AdminBulkDeleteUsersRequest) returns (AdminBulkDeleteUsersResponse) {}
+  // SetAvatar stores an uploaded profile image for the current local user.
+  rpc SetAvatar(SetAvatarRequest) returns (SetAvatarResponse) {}
+  // RemoveAvatar drops the uploaded profile image of the current user.
+  rpc RemoveAvatar(RemoveAvatarRequest) returns (RemoveAvatarResponse) {}
 }
 
 // GetUserRequest identifies a user to retrieve.
@@ -142,4 +146,23 @@ message AdminBulkDeleteUsersRequest {
 message AdminBulkDeleteUsersResponse {
   int32 deleted_count = 1;
   repeated BulkOperationError errors = 2;
+}
+
+// SetAvatarRequest carries one png, jpeg, gif, or webp image under one megabyte.
+message SetAvatarRequest {
+  bytes data = 1;
+  string content_type = 2;
+}
+
+// SetAvatarResponse contains the updated user.
+message SetAvatarResponse {
+  User user = 1;
+}
+
+// RemoveAvatarRequest is empty.
+message RemoveAvatarRequest {}
+
+// RemoveAvatarResponse contains the updated user.
+message RemoveAvatarResponse {
+  User user = 1;
 }

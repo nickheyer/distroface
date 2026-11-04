@@ -18,11 +18,15 @@ type Logger struct {
 	*log.Logger
 	module     string
 	fileLogger *lumberjack.Logger
-	mu         sync.Mutex
-	buffer     []string
-	maxBuffer  int
-	config     *Config
-	children   []*Logger
+	// Queue shared with every module, nil for the synchronous cli logger
+	async *asyncWriter
+	// Root stops the queue, modules only flush it
+	ownsAsync bool
+	mu        sync.Mutex
+	buffer    []string
+	maxBuffer int
+	config    *Config
+	children  []*Logger
 }
 
 type Config struct {
@@ -45,7 +49,10 @@ func New() *Logger {
 }
 
 func NewWithConfig(cfg *Config) *Logger {
-	module := cfg.DefaultModule
+	module := "distroface"
+	if cfg != nil && cfg.DefaultModule != "" {
+		module = cfg.DefaultModule
+	}
 
 	writers := []io.Writer{os.Stdout}
 
@@ -61,12 +68,14 @@ func NewWithConfig(cfg *Config) *Logger {
 		writers = append(writers, fileLogger)
 	}
 
-	multiWriter := io.MultiWriter(writers...)
+	async := newAsyncWriter(io.MultiWriter(writers...), asyncDepth)
 
 	return &Logger{
-		Logger:     log.New(multiWriter, "", 0),
+		Logger:     log.New(async, "", 0),
 		module:     module,
 		fileLogger: fileLogger,
+		async:      async,
+		ownsAsync:  true,
 		buffer:     make([]string, 0, 1000),
 		maxBuffer:  1000,
 		config:     cfg,
@@ -75,6 +84,7 @@ func NewWithConfig(cfg *Config) *Logger {
 
 // Module creates a child logger that writes to stdout and its own
 // <dir>/<name>.log file using the same rotation settings as the root.
+// It feeds the root queue so lines across modules keep their order
 func (l *Logger) Module(name string) *Logger {
 	writers := []io.Writer{os.Stdout}
 
@@ -90,12 +100,16 @@ func (l *Logger) Module(name string) *Logger {
 		writers = append(writers, fileLogger)
 	}
 
-	multiWriter := io.MultiWriter(writers...)
+	out := io.Writer(io.MultiWriter(writers...))
+	if l.async != nil {
+		out = l.async.sink(out)
+	}
 
 	child := &Logger{
-		Logger:     log.New(multiWriter, "", 0),
+		Logger:     log.New(out, "", 0),
 		module:     name,
 		fileLogger: fileLogger,
+		async:      l.async,
 		buffer:     make([]string, 0, 1000),
 		maxBuffer:  1000,
 	}
@@ -140,7 +154,15 @@ func (l *Logger) Debug(format string, args ...any) {
 
 func (l *Logger) Fatal(format string, args ...any) {
 	l.log("FATAL", format, args...)
+	l.Flush()
 	os.Exit(1)
+}
+
+// Blocks until every line logged so far reached the sinks
+func (l *Logger) Flush() {
+	if l.async != nil {
+		l.async.Flush()
+	}
 }
 
 func (l *Logger) GetRecentLogs() []string {
@@ -158,10 +180,17 @@ func (l *Logger) Close() error {
 	children := l.children
 	l.mu.Unlock()
 
+	// The queue drains before any file it feeds closes
+	if l.async != nil {
+		if l.ownsAsync {
+			l.async.Close()
+		} else {
+			l.async.Flush()
+		}
+	}
 	for _, child := range children {
 		child.Close()
 	}
-
 	if l.fileLogger != nil {
 		return l.fileLogger.Close()
 	}

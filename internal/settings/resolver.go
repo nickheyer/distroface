@@ -16,6 +16,8 @@ type Store interface {
 	SetSettingsValue(ctx context.Context, scope v1.SettingsScopeType, scopeID, value string) error
 	DeleteSettingsValue(ctx context.Context, scope v1.SettingsScopeType, scopeID string) error
 	GetPortalOrgID(ctx context.Context, portalID string) (string, error)
+	// Org id owning a git repository, empty for user namespaces
+	GetGitRepoOrgID(ctx context.Context, repoID string) (string, error)
 }
 
 type scopeKey struct {
@@ -31,8 +33,19 @@ type Resolver struct {
 
 	mu        sync.RWMutex
 	rows      map[scopeKey]*v1.Settings
+	effective map[scopeKey]effectiveEntry
 	portalOrg map[string]string
+	repoOrg   map[string]string
 	subs      []func()
+	checks    []Validator
+	// Tells other instances about a local write
+	broadcast func()
+}
+
+// Merged result of one scope, handed out as clones
+type effectiveEntry struct {
+	settings *v1.Settings
+	prov     []*v1.FieldProvenance
 }
 
 func NewResolver(store Store, fileOverrides *v1.Settings) *Resolver {
@@ -40,7 +53,9 @@ func NewResolver(store Store, fileOverrides *v1.Settings) *Resolver {
 		store:     store,
 		overrides: fileOverrides,
 		rows:      map[scopeKey]*v1.Settings{},
+		effective: map[scopeKey]effectiveEntry{},
 		portalOrg: map[string]string{},
+		repoOrg:   map[string]string{},
 	}
 	if fileOverrides != nil {
 		r.locked = setLeafPaths(fileOverrides)
@@ -60,12 +75,57 @@ func (r *Resolver) Subscribe(fn func()) {
 	r.subs = append(r.subs, fn)
 }
 
+// Registers a check run before every update is saved
+func (r *Resolver) AddValidator(fn Validator) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.checks = append(r.checks, fn)
+}
+
+// Installs the cross instance announcer run after local writes
+func (r *Resolver) SetBroadcaster(fn func()) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.broadcast = fn
+}
+
+// Applies a write made on another instance, caches drop and dependents rerun
+func (r *Resolver) Refresh() {
+	r.Invalidate()
+	r.notify()
+}
+
+func (r *Resolver) announce() {
+	r.mu.RLock()
+	fn := r.broadcast
+	r.mu.RUnlock()
+	if fn != nil {
+		fn()
+	}
+}
+
 // Invalidate drops all cached rows
 func (r *Resolver) Invalidate() {
 	r.mu.Lock()
 	r.rows = map[scopeKey]*v1.Settings{}
+	r.effective = map[scopeKey]effectiveEntry{}
 	r.portalOrg = map[string]string{}
+	r.repoOrg = map[string]string{}
 	r.mu.Unlock()
+}
+
+// Drops what is cached for one repository after a move or delete
+func (r *Resolver) ForgetRepo(repoID string) {
+	r.mu.Lock()
+	delete(r.repoOrg, repoID)
+	delete(r.rows, scopeKey{v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, repoID})
+	delete(r.effective, scopeKey{v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, repoID})
+	r.mu.Unlock()
+}
+
+// RepoOrgID is the cached org behind a repository, empty for user namespaces
+func (r *Resolver) RepoOrgID(ctx context.Context, repoID string) (string, error) {
+	return r.orgForRepo(ctx, repoID)
 }
 
 func (r *Resolver) notify() {
@@ -135,15 +195,83 @@ func (r *Resolver) orgForPortal(ctx context.Context, portalID string) (string, e
 	return orgID, nil
 }
 
-// Effective resolves the full chain for a scope with provenance
+func (r *Resolver) orgForRepo(ctx context.Context, repoID string) (string, error) {
+	r.mu.RLock()
+	orgID, ok := r.repoOrg[repoID]
+	r.mu.RUnlock()
+	if ok {
+		return orgID, nil
+	}
+	orgID, err := r.store.GetGitRepoOrgID(ctx, repoID)
+	if err != nil {
+		return "", err
+	}
+	r.mu.Lock()
+	r.repoOrg[repoID] = orgID
+	r.mu.Unlock()
+	return orgID, nil
+}
+
+// Repo resolves the repository tier falling back to system on lookup failure
+func (r *Resolver) Repo(ctx context.Context, repoID string) *v1.Settings {
+	eff, _, err := r.Effective(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, repoID)
+	if err != nil {
+		return r.System(ctx)
+	}
+	return eff
+}
+
+// One stored row and the tier it speaks for
+type tierRow struct {
+	row  *v1.Settings
+	tier v1.SettingsTier
+}
+
+// Effective resolves the full chain for a scope with provenance, merged once per write
 func (r *Resolver) Effective(ctx context.Context, scope v1.SettingsScopeType, scopeID string) (*v1.Settings, []*v1.FieldProvenance, error) {
-	type tierRow struct {
-		row  *v1.Settings
-		tier v1.SettingsTier
+	key := scopeKey{scope, scopeID}
+	r.mu.RLock()
+	cached, ok := r.effective[key]
+	r.mu.RUnlock()
+	if ok {
+		return cached.clone()
+	}
+	eff, prov, err := r.merge(ctx, scope, scopeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	entry := effectiveEntry{settings: eff, prov: prov}
+	r.mu.Lock()
+	r.effective[key] = entry
+	r.mu.Unlock()
+	return entry.clone()
+}
+
+// Callers may edit what they get, the cached copy stays pristine
+func (e effectiveEntry) clone() (*v1.Settings, []*v1.FieldProvenance, error) {
+	prov := make([]*v1.FieldProvenance, len(e.prov))
+	for i, p := range e.prov {
+		prov[i] = proto.Clone(p).(*v1.FieldProvenance)
+	}
+	return proto.Clone(e.settings).(*v1.Settings), prov, nil
+}
+
+// Merges stored tiers over defaults under file pins
+func (r *Resolver) merge(ctx context.Context, scope v1.SettingsScopeType, scopeID string) (*v1.Settings, []*v1.FieldProvenance, error) {
+	return r.mergeWith(ctx, scope, scopeID, nil)
+}
+
+// Merge with unsaved rows standing in for stored tiers
+func (r *Resolver) mergeWith(ctx context.Context, scope v1.SettingsScopeType, scopeID string, pending map[scopeKey]*v1.Settings) (*v1.Settings, []*v1.FieldProvenance, error) {
+	stored := func(sc v1.SettingsScopeType, id string) (*v1.Settings, error) {
+		if row, ok := pending[scopeKey{sc, id}]; ok {
+			return row, nil
+		}
+		return r.Stored(ctx, sc, id)
 	}
 	chain := []tierRow{}
 
-	system, err := r.Stored(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
+	system, err := stored(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -151,7 +279,7 @@ func (r *Resolver) Effective(ctx context.Context, scope v1.SettingsScopeType, sc
 
 	switch scope {
 	case v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG:
-		org, err := r.Stored(ctx, scope, scopeID)
+		org, err := stored(scope, scopeID)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -161,17 +289,34 @@ func (r *Resolver) Effective(ctx context.Context, scope v1.SettingsScopeType, sc
 		if err != nil {
 			return nil, nil, err
 		}
-		org, err := r.Stored(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, orgID)
+		org, err := stored(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, orgID)
 		if err != nil {
 			return nil, nil, err
 		}
-		portal, err := r.Stored(ctx, scope, scopeID)
+		portal, err := stored(scope, scopeID)
 		if err != nil {
 			return nil, nil, err
 		}
 		chain = append(chain,
 			tierRow{org, v1.SettingsTier_SETTINGS_TIER_ORG},
 			tierRow{portal, v1.SettingsTier_SETTINGS_TIER_PORTAL})
+	case v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO:
+		orgID, err := r.orgForRepo(ctx, scopeID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if orgID != "" {
+			org, err := stored(v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, orgID)
+			if err != nil {
+				return nil, nil, err
+			}
+			chain = append(chain, tierRow{org, v1.SettingsTier_SETTINGS_TIER_ORG})
+		}
+		repo, err := stored(scope, scopeID)
+		if err != nil {
+			return nil, nil, err
+		}
+		chain = append(chain, tierRow{repo, v1.SettingsTier_SETTINGS_TIER_REPO})
 	}
 
 	eff := proto.Clone(Defaults()).(*v1.Settings)
@@ -179,10 +324,85 @@ func (r *Resolver) Effective(ctx context.Context, scope v1.SettingsScopeType, sc
 	for _, t := range chain {
 		overlay(eff.ProtoReflect(), t.row.ProtoReflect(), "", t.tier, prov)
 	}
+	sealMail(eff, chain, prov)
 	if r.overrides != nil {
 		overlay(eff.ProtoReflect(), r.overrides.ProtoReflect(), "", v1.SettingsTier_SETTINGS_TIER_FILE, prov)
 	}
+	if scope != v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM {
+		sys := proto.Clone(Defaults()).(*v1.Settings)
+		overlay(sys.ProtoReflect(), system.ProtoReflect(), "", v1.SettingsTier_SETTINGS_TIER_SYSTEM, map[string]v1.SettingsTier{})
+		if r.overrides != nil {
+			overlay(sys.ProtoReflect(), r.overrides.ProtoReflect(), "", v1.SettingsTier_SETTINGS_TIER_FILE, map[string]v1.SettingsTier{})
+		}
+		clampGit(eff, sys.GetGit(), prov)
+	}
 	return eff, provenanceList(prov), nil
+}
+
+// Lower tiers may tighten the instance git limits, a looser value falls back to the instance
+func clampGit(eff *v1.Settings, sys *v1.GitSettings, prov map[string]v1.SettingsTier) {
+	g := eff.GetGit()
+	if g == nil || sys == nil {
+		return
+	}
+	if sys.GetMaxRepoSizeMb() > 0 && (g.GetMaxRepoSizeMb() <= 0 || g.GetMaxRepoSizeMb() > sys.GetMaxRepoSizeMb()) {
+		g.MaxRepoSizeMb = new(sys.GetMaxRepoSizeMb())
+		prov["git.max_repo_size_mb"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	}
+	if !sys.GetLfsEnabled() && g.GetLfsEnabled() {
+		g.LfsEnabled = new(false)
+		prov["git.lfs_enabled"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	}
+	// RETENTION
+	a, sa := g.GetActions(), sys.GetActions()
+	if a == nil || sa == nil {
+		return
+	}
+	if limit := sa.GetArtifactRetentionDays(); limit > 0 && (a.GetArtifactRetentionDays() <= 0 || a.GetArtifactRetentionDays() > limit) {
+		a.ArtifactRetentionDays = new(limit)
+		prov["git.actions.artifact_retention_days"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	}
+	if limit := sa.GetLogRetentionDays(); limit > 0 && (a.GetLogRetentionDays() <= 0 || a.GetLogRetentionDays() > limit) {
+		a.LogRetentionDays = new(limit)
+		prov["git.actions.log_retention_days"] = v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	}
+	clampAgents(g.GetAgents(), sys.GetAgents(), prov)
+}
+
+// Lower tiers may only tighten agent limits and never switch on what the instance forbids
+func clampAgents(a, sa *v1.GitAgentsSettings, prov map[string]v1.SettingsTier) {
+	if a == nil || sa == nil {
+		return
+	}
+	sys := v1.SettingsTier_SETTINGS_TIER_SYSTEM
+	capInt32 := func(path string, limit int32, cur *int32) *int32 {
+		if limit > 0 && (cur == nil || *cur <= 0 || *cur > limit) {
+			prov[path] = sys
+			return new(limit)
+		}
+		return cur
+	}
+	a.MaxTurns = capInt32("git.agents.max_turns", sa.GetMaxTurns(), a.MaxTurns)
+	a.MaxSessionMinutes = capInt32("git.agents.max_session_minutes", sa.GetMaxSessionMinutes(), a.MaxSessionMinutes)
+	a.MaxSessionsPerDay = capInt32("git.agents.max_sessions_per_day", sa.GetMaxSessionsPerDay(), a.MaxSessionsPerDay)
+	a.MaxConcurrentSessions = capInt32("git.agents.max_concurrent_sessions", sa.GetMaxConcurrentSessions(), a.MaxConcurrentSessions)
+	a.LogRetentionDays = capInt32("git.agents.log_retention_days", sa.GetLogRetentionDays(), a.LogRetentionDays)
+	a.CommandTimeoutMinutes = capInt32("git.agents.command_timeout_minutes", sa.GetCommandTimeoutMinutes(), a.CommandTimeoutMinutes)
+	if limit := sa.GetTokenBudgetPerSession(); limit > 0 && (a.GetTokenBudgetPerSession() <= 0 || a.GetTokenBudgetPerSession() > limit) {
+		a.TokenBudgetPerSession = new(limit)
+		prov["git.agents.token_budget_per_session"] = sys
+	}
+	forbid := func(path string, allowed bool, cur *bool) *bool {
+		if !allowed && cur != nil && *cur {
+			prov[path] = sys
+			return new(false)
+		}
+		return cur
+	}
+	a.AllowCommands = forbid("git.agents.allow_commands", sa.GetAllowCommands(), a.AllowCommands)
+	a.AllowRepoProviders = forbid("git.agents.allow_repo_providers", sa.GetAllowRepoProviders(), a.AllowRepoProviders)
+	a.AllowRepoAgents = forbid("git.agents.allow_repo_agents", sa.GetAllowRepoAgents(), a.AllowRepoAgents)
+	a.AllowFileAgents = forbid("git.agents.allow_file_agents", sa.GetAllowFileAgents(), a.AllowFileAgents)
 }
 
 // System is the common case shorthand
@@ -237,11 +457,35 @@ func (r *Resolver) Update(ctx context.Context, scope v1.SettingsScopeType, scope
 	if err := applyMask(stored, patch, paths); err != nil {
 		return nil, err
 	}
+	if err := r.validate(ctx, scope, scopeID, paths, stored); err != nil {
+		return nil, err
+	}
 	if err := r.save(ctx, scope, scopeID, stored); err != nil {
 		return nil, err
 	}
 	r.notify()
+	r.announce()
 	return stored, nil
+}
+
+// Runs the checks against the merge the row would produce
+func (r *Resolver) validate(ctx context.Context, scope v1.SettingsScopeType, scopeID string, paths []string, pending *v1.Settings) error {
+	r.mu.RLock()
+	checks := append([]Validator{}, r.checks...)
+	r.mu.RUnlock()
+	if len(checks) == 0 {
+		return nil
+	}
+	eff, _, err := r.mergeWith(ctx, scope, scopeID, map[scopeKey]*v1.Settings{{scope, scopeID}: pending})
+	if err != nil {
+		return err
+	}
+	for _, check := range checks {
+		if err := check(ctx, scope, scopeID, paths, eff); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // DeleteScope removes a scope's row on org or portal deletion
@@ -251,6 +495,7 @@ func (r *Resolver) DeleteScope(ctx context.Context, scope v1.SettingsScopeType, 
 	}
 	r.Invalidate()
 	r.notify()
+	r.announce()
 	return nil
 }
 
@@ -264,6 +509,8 @@ func (r *Resolver) save(ctx context.Context, scope v1.SettingsScopeType, scopeID
 	}
 	r.mu.Lock()
 	r.rows[scopeKey{scope, scopeID}] = row
+	// Any tier may feed lower scopes, merged results start over
+	r.effective = map[scopeKey]effectiveEntry{}
 	r.mu.Unlock()
 	return nil
 }

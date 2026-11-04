@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,7 +26,7 @@ func unpackZip(zipPath, destPath string, flat bool) error {
 		} else {
 			targetPath = filepath.Join(destPath, f.Name)
 		}
-		if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(destPath)) {
+		if !insideDir(destPath, targetPath) {
 			continue // Zip slip guard
 		}
 
@@ -49,8 +50,10 @@ func unpackZip(zipPath, destPath string, flat bool) error {
 			return err
 		}
 		_, err = io.Copy(outFile, rc)
-		rc.Close()
-		outFile.Close()
+		_ = rc.Close()
+		if cerr := outFile.Close(); err == nil {
+			err = cerr
+		}
 		if err != nil {
 			return err
 		}
@@ -74,7 +77,7 @@ func unpackTarGz(tarPath, destPath string, flat bool) error {
 	tr := tar.NewReader(gzr)
 	for {
 		header, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -87,7 +90,7 @@ func unpackTarGz(tarPath, destPath string, flat bool) error {
 		} else {
 			targetPath = filepath.Join(destPath, header.Name)
 		}
-		if !strings.HasPrefix(filepath.Clean(targetPath), filepath.Clean(destPath)) {
+		if !insideDir(destPath, targetPath) {
 			continue // Tar slip guard
 		}
 
@@ -107,13 +110,24 @@ func unpackTarGz(tarPath, destPath string, flat bool) error {
 				return err
 			}
 			if _, err := io.Copy(outFile, tr); err != nil {
-				outFile.Close()
+				_ = outFile.Close()
 				return err
 			}
-			outFile.Close()
+			if err := outFile.Close(); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
+}
+
+// Rejects entries that would land outside the destination
+func insideDir(dest, target string) bool {
+	rel, err := filepath.Rel(dest, target)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func isZipMagic(magic []byte) bool {

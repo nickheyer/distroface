@@ -7,7 +7,8 @@ import (
 	"os"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	// Registers the sqlite driver for the v1 database
+	_ "github.com/ncruces/go-sqlite3/driver"
 )
 
 // V1 domain types, matching the schema on the v1 main branch (internal/db/schema.go).
@@ -72,7 +73,7 @@ func OpenV1DB(path string) (*V1DB, error) {
 	if _, err := os.Stat(path); err != nil {
 		return nil, fmt.Errorf("v1 db not found: %w", err)
 	}
-	db, err := sql.Open("sqlite3", "file:"+path+"?mode=ro&_busy_timeout=5000")
+	db, err := sql.Open("sqlite3", "file:"+path+"?mode=ro&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, err
 	}

@@ -22,22 +22,22 @@ services:
       - TZ=UTC
 
       #  ------------------------------------ AUTH CONFIG STARTS HERE FOR DISTROFACE + KEYCLOAK ------------------------------------
-      - DISTROFACE_AUTH_LOCAL_ENABLED=true
-      - DISTROFACE_AUTH_OIDC_ENABLED=true
+      - DISTROFACE_SETTINGS_AUTH_LOCAL_ENABLED=true
+      - DISTROFACE_SETTINGS_AUTH_OIDC_ENABLED=true
 
       # ONLY CHANGE THIS IF YOU ARE HOSTING OIDC ON ANOTHER MACHINE OR WITH A DIFFERENT "realm" NAME
-      - DISTROFACE_AUTH_OIDC_ISSUER_URI=http://localhost:8180/realms/distroface
+      - DISTROFACE_SETTINGS_AUTH_OIDC_ISSUER_URI=http://localhost:8180/realms/distroface
 
       # ONLY CHANGE THIS IF YOUR CLIENT NAME IS DIFFERENT
-      - DISTROFACE_AUTH_OIDC_CLIENT_ID=distroface
+      - DISTROFACE_SETTINGS_AUTH_OIDC_CLIENT_ID=distroface
 
       # YOU SHOULD CHANGE THIS HERE AS WELL AS IN oidc/keycloak/config/realm.json (inside the clients object)
-      - DISTROFACE_AUTH_OIDC_CLIENT_SECRET=distroface-dev-secret
+      - DISTROFACE_SETTINGS_AUTH_OIDC_CLIENT_SECRET=distroface-dev-secret
 
       # YOU SHOULD CHANGE "localhost:8080" TO WHATEVER YOUR PUBLIC DOMAIN IS FOR DISTROFACE (ie: https://myregistry.com/api/v1/auth/oidc/callback)
-      - DISTROFACE_AUTH_OIDC_REDIRECT_URL=http://localhost:8080/api/v1/auth/oidc/callback
+      - DISTROFACE_SETTINGS_AUTH_OIDC_REDIRECT_URL=http://localhost:8080/api/v1/auth/oidc/callback
 
-      - DISTROFACE_AUTH_OIDC_ROLE_CLAIM=groups
+      - DISTROFACE_SETTINGS_AUTH_OIDC_ROLE_CLAIM=groups
 
     depends_on:
       keycloak:

@@ -48,12 +48,12 @@ func upstreamRepo(upstream string) (name.Repository, error) {
 	}
 	repo, err := name.NewRepository(s)
 	if err != nil {
-		return name.Repository{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+		return name.Repository{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	if repo.RegistryStr() == name.DefaultRegistry && !strings.Contains(repo.RepositoryStr(), "/") {
 		repo, err = name.NewRepository(name.DefaultRegistry + "/library/" + repo.RepositoryStr())
 		if err != nil {
-			return name.Repository{}, fmt.Errorf("%w: %v", ErrInvalid, err)
+			return name.Repository{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 	}
 	return repo, nil
@@ -102,7 +102,7 @@ func (o *ociSyncer) validate(ctx context.Context, cfg *v1.MirrorConfig) error {
 		return err
 	}
 	if _, err := remote.List(src, o.srcOpts(ctx, cfg)...); err != nil {
-		return fmt.Errorf("%w: cannot list tags for %s: %v", ErrInvalid, src.String(), err)
+		return fmt.Errorf("%w: cannot list tags for %s: %w", ErrInvalid, src.String(), err)
 	}
 	return nil
 }

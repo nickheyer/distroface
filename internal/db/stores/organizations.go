@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
@@ -23,7 +24,7 @@ func (s *Store) GetOrganization(ctx context.Context, name string) (*db.Organizat
 	var org db.Organization
 	err := s.db.WithContext(ctx).First(&org, "name = ?", name).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -35,7 +36,7 @@ func (s *Store) GetOrganizationByID(ctx context.Context, id string) (*db.Organiz
 	var org db.Organization
 	err := s.db.WithContext(ctx).First(&org, "id = ?", id).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -56,9 +57,13 @@ var OrgsQuery = pages.Spec{
 	Text: []string{"name", "display_name"},
 }
 
-func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, q pages.Query, limit, offset int) ([]*db.Organization, int64, error) {
+func (s *Store) ListOrganizations(ctx context.Context, userID string, canManage bool, memberOf string, q pages.Query, limit, offset int) ([]*db.Organization, int64, error) {
 	tx := s.db.WithContext(ctx).Model(&db.Organization{}).Scopes(OrgsQuery.Scope(q))
 
+	// Narrows to one user's memberships on top of the viewer's own bounds
+	if memberOf != "" {
+		tx = tx.Where("id IN (SELECT org_id FROM org_members WHERE user_id = ?)", memberOf)
+	}
 	if !canManage && userID != "" {
 		tx = tx.Where("id IN (SELECT org_id FROM org_members WHERE user_id = ?)", userID)
 	} else if !canManage {
@@ -97,6 +102,9 @@ func (s *Store) DeleteOrganization(ctx context.Context, id, orgName string) ([]d
 		}
 		return tx.Delete(&db.Organization{}, "id = ?", id).Error
 	})
+	if err == nil {
+		_ = s.PruneOrphanStars(ctx)
+	}
 	return deletedRepos, err
 }
 
@@ -119,7 +127,7 @@ func (s *Store) GetOrgMember(ctx context.Context, orgID, userID string) (*db.Org
 	var member db.OrgMember
 	err := s.db.WithContext(ctx).First(&member, "org_id = ? AND user_id = ?", orgID, userID).Error
 	if err != nil {
-		if err == gorm.ErrRecordNotFound {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}
 		return nil, err
@@ -156,6 +164,15 @@ func (s *Store) ListOrgMembers(ctx context.Context, orgID string, q pages.Query,
 	return members, total, err
 }
 
+// Names of every organization the user belongs to
+func (s *Store) ListUserOrgNames(ctx context.Context, userID string) ([]string, error) {
+	var names []string
+	err := s.db.WithContext(ctx).Model(&db.Organization{}).
+		Where("id IN (SELECT org_id FROM org_members WHERE user_id = ?)", userID).
+		Order("name ASC").Pluck("name", &names).Error
+	return names, err
+}
+
 // Caller's role per org id, single query
 func (s *Store) ListUserOrgRoles(ctx context.Context, userID string) (map[string]string, error) {
 	var members []db.OrgMember
@@ -181,8 +198,14 @@ func (s *Store) UpdateOrgMember(ctx context.Context, member *db.OrgMember) error
 	return s.db.WithContext(ctx).Save(member).Error
 }
 
+// Drops the membership and every team seat it carried
 func (s *Store) RemoveOrgMember(ctx context.Context, orgID, userID string) error {
-	return s.db.WithContext(ctx).Where("org_id = ? AND user_id = ?", orgID, userID).Delete(&db.OrgMember{}).Error
+	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("user_id = ? AND team_id IN (SELECT id FROM org_teams WHERE org_id = ?)", userID, orgID).Delete(&db.OrgTeamMember{}).Error; err != nil {
+			return err
+		}
+		return tx.Where("org_id = ? AND user_id = ?", orgID, userID).Delete(&db.OrgMember{}).Error
+	})
 }
 
 // Memberships a user got from one source with orgs preloaded
@@ -202,4 +225,20 @@ func (s *Store) IsOrgMember(ctx context.Context, orgName, userID string) (bool, 
 		return false, "", err
 	}
 	return true, member.Role, nil
+}
+
+// Roles of the users in one org, absent for non members
+func (s *Store) OrgMemberRoles(ctx context.Context, orgID string, userIDs []string) (map[string]string, error) {
+	out := map[string]string{}
+	if len(userIDs) == 0 {
+		return out, nil
+	}
+	var rows []db.OrgMember
+	if err := s.db.WithContext(ctx).Where("org_id = ? AND user_id IN ?", orgID, userIDs).Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	for _, m := range rows {
+		out[m.UserID] = m.Role
+	}
+	return out, nil
 }

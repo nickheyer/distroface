@@ -8,3 +8,53 @@ services:
     network_mode: host
     environment:
       - TZ=UTC
+      # - DISTROFACE_DATA_DIR=/srv/distroface # Data dir must sit at the same path on the host and in the container
+      # - DISTROFACE_DATABASE_DSN=postgres://distroface:distroface@127.0.0.1:5432/distroface?sslmode=disable
+      # - DISTROFACE_REDIS_URL=redis://127.0.0.1:6379/0 # Shared cache
+    # volumes:
+    #   - /srv/distroface:/srv/distroface
+    #   - /var/run/docker.sock:/var/run/docker.sock
+    # depends_on:
+      # cache:
+      #   condition: service_healthy
+      # db:
+      #   condition: service_healthy
+
+  # db:
+  #   image: postgres:18-alpine
+  #   container_name: distroface-db
+  #   network_mode: host
+  #   environment:
+  #     - POSTGRES_USER=distroface
+  #     - POSTGRES_PASSWORD=distroface
+  #     - POSTGRES_DB=distroface
+  #   volumes:
+  #     - distroface-db:/var/lib/postgresql
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U distroface"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+  # cache:
+  #   image: redis:8-alpine
+  #   container_name: distroface-cache
+  #   network_mode: host
+  #   command:
+  #     - redis-server
+  #     - --maxmemory
+  #     - 256mb
+  #     - --maxmemory-policy
+  #     - allkeys-lru
+  #     - --save
+  #     - ""
+  #     - --appendonly
+  #     - "no"
+  #   healthcheck:
+  #     test: ["CMD", "redis-cli", "ping"]
+  #     interval: 5s
+  #     timeout: 3s
+  #     retries: 10
+
+# volumes:
+#   distroface-db:

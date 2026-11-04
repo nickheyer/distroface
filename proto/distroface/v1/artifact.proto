@@ -24,6 +24,8 @@ service ArtifactService {
   rpc SyncArtifactRepository(SyncArtifactRepositoryRequest) returns (SyncArtifactRepositoryResponse) {}
   // StopArtifactRepositorySync cancels the running mirror sync, if any.
   rpc StopArtifactRepositorySync(StopArtifactRepositorySyncRequest) returns (StopArtifactRepositorySyncResponse) {}
+  // MoveArtifactRepository renames a repository or transfers it to another namespace.
+  rpc MoveArtifactRepository(MoveArtifactRepositoryRequest) returns (MoveArtifactRepositoryResponse) {}
 
   // InitiateArtifactUpload starts a chunked upload session and returns its ID.
   rpc InitiateArtifactUpload(InitiateArtifactUploadRequest) returns (InitiateArtifactUploadResponse) {}
@@ -45,6 +47,13 @@ service ArtifactService {
   rpc SetArtifactProperties(SetArtifactPropertiesRequest) returns (SetArtifactPropertiesResponse) {}
   // DeleteArtifact removes an artifact (and its blob when unreferenced).
   rpc DeleteArtifact(DeleteArtifactRequest) returns (DeleteArtifactResponse) {}
+
+  // StarArtifactRepository stars a repository for the current user.
+  rpc StarArtifactRepository(StarArtifactRepositoryRequest) returns (StarArtifactRepositoryResponse) {}
+  // UnstarArtifactRepository removes the current user's star.
+  rpc UnstarArtifactRepository(UnstarArtifactRepositoryRequest) returns (UnstarArtifactRepositoryResponse) {}
+  // ListStarredArtifactRepositories returns repositories a user starred, newest star first.
+  rpc ListStarredArtifactRepositories(ListStarredArtifactRepositoriesRequest) returns (ListStarredArtifactRepositoriesResponse) {}
 }
 
 // CreateArtifactRepositoryRequest is the request to create an artifact repository.
@@ -131,6 +140,19 @@ message StopArtifactRepositorySyncRequest {
 // StopArtifactRepositorySyncResponse is empty.
 message StopArtifactRepositorySyncResponse {}
 
+// MoveArtifactRepositoryRequest renames or transfers a repository, empty fields keep the current value.
+message MoveArtifactRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+  string new_namespace = 3;
+  string new_name = 4;
+}
+
+// MoveArtifactRepositoryResponse contains the repository at its new address.
+message MoveArtifactRepositoryResponse {
+  ArtifactRepository repository = 1;
+}
+
 // InitiateArtifactUploadRequest is the request to start an upload session.
 message InitiateArtifactUploadRequest {
   string repo_name = 1;
@@ -181,6 +203,7 @@ message ListArtifactsRequest {
   // version filters to a single version when set.
   string version = 3;
   string namespace = 4;
+  reserved 5;
 }
 
 // ListArtifactsResponse is the paginated list of artifacts.
@@ -194,12 +217,14 @@ message ListArtifactVersionsRequest {
   PageRequest page = 1;
   string repo_name = 2;
   string namespace = 3;
+  reserved 4;
 }
 
 // ArtifactVersionGroup is a version string with its artifacts.
 message ArtifactVersionGroup {
   string version = 1;
   repeated Artifact artifacts = 2;
+  reserved 3, 4;
 }
 
 // ListArtifactVersionsResponse groups a repository's artifacts by version.
@@ -219,6 +244,7 @@ message SearchArtifactsRequest {
   map<string, string> properties = 3;
   // namespace limits the search to one namespace when set.
   string namespace = 4;
+  reserved 5;
 }
 
 // SearchArtifactsResponse is the paginated search result.
@@ -268,3 +294,38 @@ message DeleteArtifactRequest {
 
 // DeleteArtifactResponse is the response after deleting an artifact.
 message DeleteArtifactResponse {}
+
+// StarArtifactRepositoryRequest identifies a repository.
+message StarArtifactRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// StarArtifactRepositoryResponse contains the new star count.
+message StarArtifactRepositoryResponse {
+  int64 star_count = 1;
+}
+
+// UnstarArtifactRepositoryRequest identifies a repository.
+message UnstarArtifactRepositoryRequest {
+  string namespace = 1;
+  string name = 2;
+}
+
+// UnstarArtifactRepositoryResponse contains the new star count.
+message UnstarArtifactRepositoryResponse {
+  int64 star_count = 1;
+}
+
+// ListStarredArtifactRepositoriesRequest pages one user's stars.
+message ListStarredArtifactRepositoriesRequest {
+  PageRequest page = 1;
+  // Empty lists the caller's stars
+  string username = 2;
+}
+
+// ListStarredArtifactRepositoriesResponse contains a page of starred repositories.
+message ListStarredArtifactRepositoriesResponse {
+  repeated ArtifactRepository repositories = 1;
+  PageInfo page = 2;
+}

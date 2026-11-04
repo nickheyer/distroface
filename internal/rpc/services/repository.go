@@ -5,13 +5,16 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"connectrpc.com/connect/v2"
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/activity"
 	"github.com/nickheyer/distroface/internal/auth"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/mirror"
 	"github.com/nickheyer/distroface/internal/portal"
 	"github.com/nickheyer/distroface/internal/rbac"
@@ -32,18 +35,22 @@ type RepositoryService struct {
 	enforcer *rbac.Enforcer
 	access   *auth.RepoAccess
 	mirrors  *mirror.Monitor
+	git      *gitrepo.Manager
+	activity *activity.Recorder
 	log      *logger.Logger
 }
 
-func NewRepositoryService(store *stores.Store, reg *registry.RegistryAccess, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, log *logger.Logger) *RepositoryService {
+// Installs the activity recorder, nil keeps the feed quiet
+func (s *RepositoryService) SetActivity(rec *activity.Recorder) { s.activity = rec }
+
+func NewRepositoryService(store *stores.Store, reg *registry.RegistryAccess, enforcer *rbac.Enforcer, mirrors *mirror.Monitor, git *gitrepo.Manager, log *logger.Logger) *RepositoryService {
 	return &RepositoryService{
 		store:    store,
 		registry: reg,
 		enforcer: enforcer,
 		access:   auth.NewRepoAccess(store, enforcer),
 		mirrors:  mirrors,
-		log:      log,
-	}
+		log:      log, git: git}
 }
 
 var imageRepoNamePattern = regexp.MustCompile(`^[a-z0-9]+(?:[._-][a-z0-9]+)*$`)
@@ -97,7 +104,7 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, req *v1.Create
 		if err := s.mirrors.ValidateRegistryMirror(ctx, msg.Mirror); err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		if mirrorCfg, err = mirror.EncodeConfig(msg.Mirror); err != nil {
+		if mirrorCfg, err = s.mirrors.EncodeConfig(msg.Mirror); err != nil {
 			return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 		}
 	} else if msg.Mirror != nil {
@@ -113,13 +120,24 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, req *v1.Create
 		}
 	}
 
+	isPrivate := msg.Visibility == v1.Visibility_VISIBILITY_PRIVATE
+	if msg.Visibility == v1.Visibility_VISIBILITY_UNSPECIFIED {
+		// New packages follow their source repository's visibility
+		first := msg.Name
+		if i := strings.IndexByte(first, '/'); i > 0 {
+			first = first[:i]
+		}
+		if src, _ := s.store.GetGitRepository(ctx, ns, first); src != nil {
+			isPrivate = src.IsPrivate
+		}
+	}
 	repo := &storage.Repository{
 		ID:             uuid.New().String(),
 		Namespace:      ns,
 		Name:           msg.Name,
 		Description:    msg.Description,
 		OwnerID:        ownerID,
-		IsPrivate:      msg.Visibility == v1.Visibility_VISIBILITY_PRIVATE,
+		IsPrivate:      isPrivate,
 		IsOrgNamespace: isOrgNamespace,
 		Type:           repoType,
 		MirrorConfig:   mirrorCfg,
@@ -127,9 +145,18 @@ func (s *RepositoryService) CreateRepository(ctx context.Context, req *v1.Create
 	if err := s.store.CreateRepository(ctx, repo); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	if s.git != nil {
+		s.git.LinkImageByName(ctx, repo)
+	}
+	if s.activity != nil {
+		s.activity.Image(repo, user, activity.KindCreated, "", nil)
+	}
+
+	proto := s.repoToProto(repo)
+	s.fillSources(ctx, []*storage.Repository{repo}, []*v1.Repository{proto})
 
 	return &v1.CreateRepositoryResponse{
-		Repository: s.repoToProto(repo),
+		Repository: proto,
 	}, nil
 }
 
@@ -160,6 +187,7 @@ func (s *RepositoryService) GetRepository(ctx context.Context, req *v1.GetReposi
 
 	proto := s.repoToProto(repo)
 	s.attachStars(ctx, []*v1.Repository{proto})
+	s.fillSources(ctx, []*storage.Repository{repo}, []*v1.Repository{proto})
 
 	return &v1.GetRepositoryResponse{
 		Repository: proto,
@@ -172,25 +200,22 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *v1.ListRe
 	// Resolve visibility: admin sees all, authenticated users see public +
 	// owned + org membership + RBAC grants, anonymous sees public only.
 	user := auth.UserFromContext(ctx)
-	var userID string
-	var canManage bool
-	var grantedRepos []string
-
+	opts := stores.RepoListOptions{Namespace: portal.ScopeNamespace(ctx, req.Namespace), Limit: pageSize, Offset: offset}
 	if user != nil {
-		userID = user.ID
-		canManage, _ = s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, "*")
-		if !canManage {
-			grantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceRepositories, rbac.ActionRead)
+		opts.ViewerID = user.ID
+		opts.IncludePrivate, _ = s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, "*")
+		if !opts.IncludePrivate {
+			opts.GrantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceRepositories, rbac.ActionRead)
 		}
+		opts.OnlyRepo, opts.OnlyNamespace = user.ListingScope()
 	}
 
-	namespace := portal.ScopeNamespace(ctx, req.Namespace)
-	q := pages.ParseQuery(req.Page)
-	if err := stores.ReposQuery.Validate(q); err != nil {
+	opts.Query = pages.ParseQuery(req.Page)
+	if err := stores.ReposQuery.Validate(opts.Query); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 
-	repos, total, err := s.store.ListRepositories(ctx, namespace, q, userID, canManage, grantedRepos, pageSize, offset)
+	repos, total, err := s.store.ListRepositories(ctx, opts)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -200,6 +225,7 @@ func (s *RepositoryService) ListRepositories(ctx context.Context, req *v1.ListRe
 		protoRepos[i] = s.repoToProto(r)
 	}
 	s.attachStars(ctx, protoRepos)
+	s.fillSources(ctx, repos, protoRepos)
 
 	return &v1.ListRepositoriesResponse{
 		Repositories: protoRepos,
@@ -267,6 +293,7 @@ func (s *RepositoryService) ListTags(ctx context.Context, req *v1.ListTagsReques
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	s.markReleases(ctx, repo, tags)
 
 	page := req.Page
 	if page == nil {
@@ -365,11 +392,11 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, req *v1.Update
 		if repo.Type != v1.RepositoryType_REPOSITORY_TYPE_MIRROR {
 			return nil, connect.Errorf(connect.CodeInvalidArgument, "standard repositories do not take mirror settings")
 		}
-		merged, err := mirror.ApplyUpdate(repo.MirrorConfig, req.Mirror)
+		merged, err := s.mirrors.ApplyUpdate(repo.MirrorConfig, req.Mirror)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}
-		full, err := mirror.ParseConfig(merged)
+		full, err := s.mirrors.Config(merged)
 		if err != nil {
 			return nil, mapMirrorErr(err)
 		}
@@ -385,8 +412,11 @@ func (s *RepositoryService) UpdateRepository(ctx context.Context, req *v1.Update
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
+	proto := s.repoToProto(repo)
+	s.fillSources(ctx, []*storage.Repository{repo}, []*v1.Repository{proto})
+
 	return &v1.UpdateRepositoryResponse{
-		Repository: s.repoToProto(repo),
+		Repository: proto,
 	}, nil
 }
 
@@ -457,11 +487,15 @@ func (s *RepositoryService) StarRepository(ctx context.Context, req *v1.StarRepo
 	}
 
 	user := auth.UserFromContext(ctx)
-	if err := s.store.StarRepository(ctx, user.ID, repo.ID); err != nil {
+	created, err := s.store.Star(ctx, user.ID, storage.StarKindImage, repo.ID)
+	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	if created && s.activity != nil {
+		s.activity.Image(repo, user, activity.KindStar, "", nil)
+	}
 
-	count, err := s.store.CountStars(ctx, repo.ID)
+	count, err := s.store.CountStars(ctx, storage.StarKindImage, repo.ID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -475,11 +509,11 @@ func (s *RepositoryService) UnstarRepository(ctx context.Context, req *v1.Unstar
 	}
 
 	user := auth.UserFromContext(ctx)
-	if err := s.store.UnstarRepository(ctx, user.ID, repo.ID); err != nil {
+	if err := s.store.Unstar(ctx, user.ID, storage.StarKindImage, repo.ID); err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 
-	count, err := s.store.CountStars(ctx, repo.ID)
+	count, err := s.store.CountStars(ctx, storage.StarKindImage, repo.ID)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -488,13 +522,23 @@ func (s *RepositoryService) UnstarRepository(ctx context.Context, req *v1.Unstar
 
 func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *v1.ListStarredRepositoriesRequest) (*v1.ListStarredRepositoriesResponse, error) {
 	user := auth.UserFromContext(ctx)
-	if user == nil {
-		return nil, connect.NewError(connect.CodeUnauthenticated, "")
+	targetID, err := starredTarget(ctx, s.store, user, req.Username)
+	if err != nil {
+		return nil, err
 	}
 
 	limit, offset := pages.Parse(req.Page)
+	opts := stores.RepoListOptions{Limit: limit, Offset: offset}
+	if user != nil {
+		opts.ViewerID = user.ID
+		opts.IncludePrivate, _ = s.enforcer.Enforce(user.Roles, rbac.ResourceRepositories, rbac.ActionManage, "*")
+		if !opts.IncludePrivate {
+			opts.GrantedRepos = s.enforcer.GetGrantedObjects(user.Roles, rbac.ResourceRepositories, rbac.ActionRead)
+		}
+		opts.OnlyRepo, opts.OnlyNamespace = user.ListingScope()
+	}
 
-	repos, total, err := s.store.ListStarredRepositories(ctx, user.ID, limit, offset)
+	repos, total, err := s.store.ListStarredRepositories(ctx, targetID, opts)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
@@ -516,11 +560,30 @@ func (s *RepositoryService) ListStarredRepositories(ctx context.Context, req *v1
 		protoRepos[i] = s.repoToProto(r)
 	}
 	s.attachStars(ctx, protoRepos)
+	s.fillSources(ctx, repos, protoRepos)
 
 	return &v1.ListStarredRepositoriesResponse{
 		Repositories: protoRepos,
 		Page:         pages.Info(offset, limit, total),
 	}, nil
+}
+
+// Resolves whose stars a listing shows, the caller's when no username is given
+func starredTarget(ctx context.Context, store *stores.Store, user *auth.AuthenticatedUser, username string) (string, error) {
+	if username == "" || (user != nil && username == user.Username) {
+		if user == nil || user.IsAnonymous() {
+			return "", connect.NewError(connect.CodeUnauthenticated, "")
+		}
+		return user.ID, nil
+	}
+	u, err := store.GetUserByUsername(ctx, username)
+	if err != nil {
+		return "", connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
+	if u == nil {
+		return "", connect.Errorf(connect.CodeNotFound, "user not found")
+	}
+	return u.ID, nil
 }
 
 // Validates auth and read access for star mutations
@@ -552,7 +615,7 @@ func (s *RepositoryService) attachStars(ctx context.Context, repos []*v1.Reposit
 		ids[i] = r.Id
 	}
 
-	counts, err := s.store.GetStarCounts(ctx, ids)
+	counts, err := s.store.StarCounts(ctx, storage.StarKindImage, ids)
 	if err != nil {
 		s.log.Error("loading star counts: %v", err)
 		return
@@ -560,7 +623,7 @@ func (s *RepositoryService) attachStars(ctx context.Context, repos []*v1.Reposit
 
 	var starred map[string]bool
 	if user := auth.UserFromContext(ctx); user != nil {
-		if starred, err = s.store.GetStarredSet(ctx, user.ID, ids); err != nil {
+		if starred, err = s.store.StarredSet(ctx, user.ID, storage.StarKindImage, ids); err != nil {
 			s.log.Error("loading starred set: %v", err)
 		}
 	}
@@ -568,6 +631,43 @@ func (s *RepositoryService) attachStars(ctx context.Context, repos []*v1.Reposit
 	for _, r := range repos {
 		r.StarCount = counts[r.Id]
 		r.IsStarred = starred[r.Id]
+	}
+}
+
+// Fills source_repository from the linked git repositories
+func (s *RepositoryService) fillSources(ctx context.Context, rows []*storage.Repository, protos []*v1.Repository) {
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if r.GitRepoID != nil {
+			ids = append(ids, *r.GitRepoID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	gits, err := s.store.GetGitRepositoriesByIDs(ctx, ids)
+	if err != nil {
+		return
+	}
+	for i, r := range rows {
+		if r.GitRepoID == nil || i >= len(protos) {
+			continue
+		}
+		if g := gits[*r.GitRepoID]; g != nil {
+			protos[i].SourceRepository = g.Namespace + "/" + g.Name
+		}
+	}
+}
+
+// Flags tags matching or pinned by a release of the source repository
+func (s *RepositoryService) markReleases(ctx context.Context, repo *storage.Repository, tags []*v1.Tag) {
+	if repo.GitRepoID == nil {
+		return
+	}
+	byTag, _ := s.store.GitReleaseTags(ctx, *repo.GitRepoID)
+	pinned, _ := s.store.GitReleaseImageTags(ctx, repo.ID)
+	for _, t := range tags {
+		t.HasRelease = byTag[t.Name] || pinned[t.Name] != ""
 	}
 }
 

@@ -1,19 +1,14 @@
 package rbac
 
 import (
-	"path/filepath"
 	"testing"
 
-	"github.com/nickheyer/distroface/internal/db/stores"
+	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 )
 
 func newTestEnforcer(t *testing.T) *Enforcer {
 	t.Helper()
-	store, err := stores.NewSQLiteStore(filepath.Join(t.TempDir(), "test.db"))
-	if err != nil {
-		t.Fatalf("NewSQLiteStore: %v", err)
-	}
-	t.Cleanup(func() { store.Close() })
+	store := storetest.New(t)
 	e, err := NewEnforcer(store.DB())
 	if err != nil {
 		t.Fatalf("NewEnforcer: %v", err)
@@ -73,8 +68,8 @@ func TestEnsureAdminPolicyIdempotent(t *testing.T) {
 func TestSeedDefaultPoliciesAnonymousDefaults(t *testing.T) {
 	e := newTestEnforcer(t)
 	perms := e.GetPermissionsForRole("anonymous")
-	if len(perms) != 4 {
-		t.Fatalf("anonymous seed = %+v, want read and pull on repositories and artifacts", perms)
+	if len(perms) != 6 {
+		t.Fatalf("anonymous seed = %+v, want read and pull on repositories, artifacts, and git", perms)
 	}
 	for _, p := range perms {
 		if p.ObjectID != "*" || (p.Action != ActionRead && p.Action != ActionPull) {
