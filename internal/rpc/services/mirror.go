@@ -23,15 +23,14 @@ var _ distrofacev1connect.MirrorServiceHandler = (*MirrorService)(nil)
 const watchKeepalive = 45 * time.Second
 
 type MirrorService struct {
-	monitor  *mirror.Monitor
-	enforcer *rbac.Enforcer
-	access   *artifacts.Access
-	repos    *auth.RepoAccess
-	log      *logger.Logger
+	monitor *mirror.Monitor
+	access  *artifacts.Access
+	repos   *auth.RepoAccess
+	log     *logger.Logger
 }
 
-func NewMirrorService(monitor *mirror.Monitor, enforcer *rbac.Enforcer, access *artifacts.Access, repos *auth.RepoAccess, log *logger.Logger) *MirrorService {
-	return &MirrorService{monitor: monitor, enforcer: enforcer, access: access, repos: repos, log: log}
+func NewMirrorService(monitor *mirror.Monitor, access *artifacts.Access, repos *auth.RepoAccess, log *logger.Logger) *MirrorService {
+	return &MirrorService{monitor: monitor, access: access, repos: repos, log: log}
 }
 
 func (s *MirrorService) WatchSyncs(ctx context.Context, req *v1.WatchSyncsRequest, stream distrofacev1connect.MirrorServiceWatchSyncsServerStream) error {
@@ -109,7 +108,11 @@ func (s *MirrorService) visible(ctx context.Context, ev mirror.Event) bool {
 			return false
 		}
 		repo, err := g.Store().GetGitRepository(ctx, ev.Namespace, ev.Name)
-		if err != nil || repo == nil {
+		if err != nil {
+			s.log.Warn("Sync visibility lookup for %s/%s: %v", ev.Namespace, ev.Name, err)
+			return false
+		}
+		if repo == nil {
 			return false
 		}
 		return g.Access().CanSee(ctx, user, repo)

@@ -60,22 +60,6 @@ func LevelFromString(s string) Level {
 	}
 }
 
-// Level from the proto enum
-func LevelFromProto(l v1.GitAccessLevel) Level {
-	switch l {
-	case v1.GitAccessLevel_GIT_ACCESS_LEVEL_READ:
-		return LevelRead
-	case v1.GitAccessLevel_GIT_ACCESS_LEVEL_WRITE:
-		return LevelWrite
-	case v1.GitAccessLevel_GIT_ACCESS_LEVEL_ADMIN:
-		return LevelAdmin
-	case v1.GitAccessLevel_GIT_ACCESS_LEVEL_OWNER:
-		return LevelOwner
-	default:
-		return LevelNone
-	}
-}
-
 // Stored string for a level
 func (l Level) String() string {
 	switch l {

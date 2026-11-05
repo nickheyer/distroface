@@ -247,21 +247,6 @@ func (s *Store) GetArtifact(ctx context.Context, id string) (*db.Artifact, error
 	return &artifact, nil
 }
 
-// Rows for the given ids, missing ids are skipped
-func (s *Store) GetArtifactsByIDs(ctx context.Context, ids []string) ([]*db.Artifact, error) {
-	if len(ids) == 0 {
-		return nil, nil
-	}
-	var artifacts []*db.Artifact
-	if err := s.db.WithContext(ctx).Where("id IN ?", ids).Find(&artifacts).Error; err != nil {
-		return nil, err
-	}
-	if err := s.loadArtifactProperties(ctx, artifacts); err != nil {
-		return nil, err
-	}
-	return artifacts, nil
-}
-
 // Newest match, property variants can share version and path
 func (s *Store) GetArtifactByPathVersion(ctx context.Context, repoID int64, version, path string) (*db.Artifact, error) {
 	var artifact db.Artifact
@@ -648,19 +633,6 @@ func (s *Store) LatestArtifactVersions(ctx context.Context, repoIDs []int64) (ma
 	}
 	for _, r := range rows {
 		out[r.RepoID] = r.Version
-	}
-	return out, nil
-}
-
-// Distinct versions of a repo, for release badges
-func (s *Store) ArtifactVersionsSet(ctx context.Context, repoID int64) (map[string]bool, error) {
-	var versions []string
-	if err := s.db.WithContext(ctx).Model(&db.Artifact{}).Where("repo_id = ?", repoID).Distinct().Pluck("version", &versions).Error; err != nil {
-		return nil, err
-	}
-	out := make(map[string]bool, len(versions))
-	for _, v := range versions {
-		out[v] = true
 	}
 	return out, nil
 }

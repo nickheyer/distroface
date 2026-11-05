@@ -74,7 +74,3 @@ export function artifactMirrorLabel(t: ArtifactRepoType): string {
 			return '';
 	}
 }
-
-export function isMirrorArtifactType(t: ArtifactRepoType): boolean {
-	return t !== ArtifactRepoType.FILE && t !== ArtifactRepoType.UNSPECIFIED;
-}

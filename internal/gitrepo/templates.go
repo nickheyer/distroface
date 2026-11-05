@@ -2,7 +2,6 @@ package gitrepo
 
 import (
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -20,25 +19,10 @@ var gitignoreTemplates = map[string]string{
 	"Global": ".DS_Store\nThumbs.db\n*.swp\n*.swo\n*~\n.idea/\n.vscode/\n",
 }
 
-// Names of the gitignore templates
-func GitignoreTemplates() []string {
-	out := make([]string, 0, len(gitignoreTemplates))
-	for k := range gitignoreTemplates {
-		out = append(out, k)
-	}
-	sortStrings(out)
-	return out
-}
-
 // Body of a gitignore template
 func GitignoreTemplate(name string) (string, bool) {
 	body, ok := gitignoreTemplates[name]
 	return body, ok
-}
-
-// License identifiers offered at repository creation
-func LicenseTemplates() []string {
-	return []string{"MIT", "Apache-2.0", "BSD-3-Clause", "GPL-3.0", "Unlicense"}
 }
 
 // Body of a license with the holder and year filled in
@@ -141,12 +125,4 @@ For more information, please refer to <https://unlicense.org>
 `, true
 	}
 	return "", false
-}
-
-func sortStrings(s []string) {
-	for i := 1; i < len(s); i++ {
-		for j := i; j > 0 && strings.ToLower(s[j]) < strings.ToLower(s[j-1]); j-- {
-			s[j], s[j-1] = s[j-1], s[j]
-		}
-	}
 }

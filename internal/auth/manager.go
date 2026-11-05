@@ -399,10 +399,6 @@ func (m *Manager) IsAnyAuthEnabled() bool {
 	return a.GetLocalEnabled() || a.GetOidc().GetEnabled()
 }
 
-func (m *Manager) IsLocalAuthEnabled() bool {
-	return m.auth(context.Background()).GetLocalEnabled()
-}
-
 func (m *Manager) IsRegistrationAllowed() bool {
 	a := m.auth(context.Background())
 	return a.GetLocalEnabled() && a.GetLocalAllowRegistration()

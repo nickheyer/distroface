@@ -177,10 +177,6 @@ export function parseSuggestions(body: string): BodySegment[] {
 	return out;
 }
 
-export function hasSuggestion(body: string): boolean {
-	return /```suggestion/.test(body);
-}
-
 // Threads keyed by root id, root first
 export function groupThreads(comments: ReviewComment[]): Map<string, ReviewComment[]> {
 	const threads = new Map<string, ReviewComment[]>();

@@ -97,16 +97,21 @@ func (m *Monitor) beginSync(key string, ev Event) {
 	m.events.publish(ev)
 }
 
-// Republishes a running sync with a fresh progress line
+// Republishes a running sync with a fresh line, keeps start time
 func (m *Monitor) progress(key string, ev Event, msg string) {
 	ev.Phase = PhaseStarted
 	ev.Message = msg
-	ev.At = time.Now().UTC()
 	m.mu.Lock()
-	if _, ok := m.activeSyncs[key]; ok {
+	cur, ok := m.activeSyncs[key]
+	if ok {
+		ev.At = cur.At
 		m.activeSyncs[key] = ev
 	}
 	m.mu.Unlock()
+	// Late lines after the end must not revive badges
+	if !ok {
+		return
+	}
 	m.events.publish(ev)
 }
 

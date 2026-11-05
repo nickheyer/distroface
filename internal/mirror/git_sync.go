@@ -427,10 +427,11 @@ func (m *Monitor) execGitSync(ctx context.Context, repo *db.GitRepository, cfg *
 	m.armCancel(key, cancel)
 	m.beginSync(key, ev)
 
-	syncErr := m.syncGitRepo(runCtx, repo, cfg, &state)
+	report := func(msg string) { m.progress(key, ev, msg) }
+	syncErr := m.syncGitRepo(runCtx, repo, cfg, &state, report)
 	if syncErr == nil && cfg.GetMirrorReleases() {
 		if up, err := parseGitUpstream(cfg.GetUpstream()); err == nil {
-			syncErr = m.syncGitReleases(runCtx, repo, cfg, up, &state)
+			syncErr = m.syncGitReleases(runCtx, repo, cfg, up, &state, report)
 		}
 	}
 	cancel()
@@ -471,7 +472,7 @@ func (m *Monitor) writeGitMirrorStatus(ctx context.Context, repo *db.GitReposito
 }
 
 // Fetches branches and tags, prunes what upstream or pattern dropped
-func (m *Monitor) syncGitRepo(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, state *GitMirrorState) error {
+func (m *Monitor) syncGitRepo(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, state *GitMirrorState, progress func(string)) error {
 	up, err := parseGitUpstream(cfg.GetUpstream())
 	if err != nil {
 		return err
@@ -486,6 +487,7 @@ func (m *Monitor) syncGitRepo(ctx context.Context, repo *db.GitRepository, cfg *
 	refspecs := mirrorRefspecs
 	var wanted map[plumbing.ReferenceName]bool
 	if pattern := cfg.GetPattern(); pattern != "" {
+		progress("listing upstream branches and tags")
 		refs, err := m.git.ListRemote(ctx, up.URL, auth, gitProbeTimeout)
 		if err != nil {
 			return classifyGitErr(err)
@@ -495,10 +497,12 @@ func (m *Monitor) syncGitRepo(ctx context.Context, repo *db.GitRepository, cfg *
 			return &nothingMirroredError{reason: fmt.Sprintf("no upstream branches or tags match pattern %q", pattern)}
 		}
 	}
+	progress("fetching branches and tags")
 	if err := m.git.FetchRemote(ctx, repo, false, up.URL, refspecs, auth); err != nil {
 		return classifyGitErr(err)
 	}
 	if wanted != nil {
+		progress("pruning refs outside the pattern")
 		m.pruneUnwanted(ctx, repo, wanted)
 	}
 	return nil

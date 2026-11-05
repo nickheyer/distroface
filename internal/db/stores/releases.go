@@ -197,24 +197,6 @@ func (s *Store) ListGitReleaseAssetsByRepo(ctx context.Context, repoID string) (
 	return out, err
 }
 
-// Asset counts per release, for listings
-func (s *Store) CountGitReleaseAssets(ctx context.Context, releaseIDs []string) (map[string]int64, error) {
-	out := map[string]int64{}
-	if len(releaseIDs) == 0 {
-		return out, nil
-	}
-	var rows []struct {
-		ReleaseID string
-		Count     int64
-	}
-	err := s.db.WithContext(ctx).Model(&db.GitReleaseAsset{}).Select("release_id, COUNT(*) as count").
-		Where("release_id IN ?", releaseIDs).Group("release_id").Scan(&rows).Error
-	for _, r := range rows {
-		out[r.ReleaseID] = r.Count
-	}
-	return out, err
-}
-
 func (s *Store) UpdateGitReleaseAsset(ctx context.Context, a *db.GitReleaseAsset) error {
 	return s.db.WithContext(ctx).Save(a).Error
 }

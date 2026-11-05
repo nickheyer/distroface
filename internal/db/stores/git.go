@@ -12,9 +12,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// Returned when a redirect resolves an old address
-var ErrGitRepoMoved = errors.New("repository moved")
-
 // ── Repositories ─────────────────────────────────────────────────────────
 
 func (s *Store) CreateGitRepository(ctx context.Context, repo *db.GitRepository) error {
@@ -354,15 +351,6 @@ func (s *Store) CreateGitTransfer(ctx context.Context, t *db.GitTransfer) error 
 func (s *Store) GetGitTransfer(ctx context.Context, id string) (*db.GitTransfer, error) {
 	var t db.GitTransfer
 	err := s.db.WithContext(ctx).First(&t, "id = ?", id).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	return &t, err
-}
-
-func (s *Store) GetGitTransferByRepo(ctx context.Context, repoID string) (*db.GitTransfer, error) {
-	var t db.GitTransfer
-	err := s.db.WithContext(ctx).First(&t, "repo_id = ?", repoID).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}

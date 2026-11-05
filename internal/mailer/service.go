@@ -83,29 +83,6 @@ func (s *Service) Enabled(ctx context.Context, scope Scope) bool {
 	return ms.GetEnabled() && ms.GetSmtpHost() != ""
 }
 
-// Scope owning the relay a repository event sends through, or the nearest tier that turned mail off
-func (s *Service) ScopeFor(ctx context.Context, repoID, orgID string) Scope {
-	if repoID != "" {
-		sc := Scope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO, ID: repoID}
-		if !s.Enabled(ctx, sc) || s.ownsRelay(ctx, sc) {
-			return sc
-		}
-	}
-	if orgID != "" {
-		sc := Scope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG, ID: orgID}
-		if !s.Enabled(ctx, sc) || s.ownsRelay(ctx, sc) {
-			return sc
-		}
-	}
-	return Scope{Type: v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM}
-}
-
-// Whether the scope's own row names an smtp host
-func (s *Service) ownsRelay(ctx context.Context, sc Scope) bool {
-	row, err := s.res.Stored(ctx, sc.Type, sc.ID)
-	return err == nil && row.GetMail() != nil && row.GetMail().SmtpHost != nil
-}
-
 // Instance name shown in mail layouts
 func (s *Service) InstanceName(ctx context.Context) string {
 	if host := s.res.System(ctx).GetServer().GetPublicHostname(); host != "" {

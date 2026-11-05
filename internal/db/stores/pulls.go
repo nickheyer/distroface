@@ -40,10 +40,6 @@ func (s *Store) GetGitPullRequests(ctx context.Context, issueIDs []string) (map[
 	return out, nil
 }
 
-func (s *Store) UpdateGitPullRequest(ctx context.Context, pr *db.GitPullRequest) error {
-	return s.db.WithContext(ctx).Save(pr).Error
-}
-
 func (s *Store) UpdateGitPullRequestColumns(ctx context.Context, issueID string, cols map[string]any) error {
 	return s.db.WithContext(ctx).Model(&db.GitPullRequest{}).Where("issue_id = ?", issueID).Updates(cols).Error
 }
@@ -265,12 +261,6 @@ func (s *Store) ListGitReviewComments(ctx context.Context, issueID, path, viewer
 	q = q.Where("pending = ? OR author_id = ?", false, viewerID)
 	var out []*db.GitReviewComment
 	err := q.Order("thread_id ASC, created_at ASC").Find(&out).Error
-	return out, err
-}
-
-func (s *Store) ListGitReviewCommentsByReview(ctx context.Context, reviewID string) ([]*db.GitReviewComment, error) {
-	var out []*db.GitReviewComment
-	err := s.db.WithContext(ctx).Where("review_id = ?", reviewID).Order("created_at ASC").Find(&out).Error
 	return out, err
 }
 

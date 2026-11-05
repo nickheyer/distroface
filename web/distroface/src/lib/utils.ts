@@ -1,6 +1,6 @@
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
-import { OrgRole, Visibility, WebhookEvent } from '$lib/proto/distroface/v1/types_pb';
+import { OrgRole, WebhookEvent } from '$lib/proto/distroface/v1/types_pb';
 
 export function cn(...inputs: ClassValue[]) {
 	return twMerge(clsx(inputs));
@@ -23,20 +23,6 @@ export function formatBytes(bytes: number, decimals = 2): string {
 	const i = Math.floor(Math.log(bytes) / Math.log(k));
 
 	return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
-}
-
-export function getStringForEnum(map: Record<string, string | number>, val: unknown) {
-	return Object.keys(map).find((key) => map[key] === val);
-}
-
-export function enumToString(map: Record<string, string | number>, val: unknown): string {
-	const enumKey = getStringForEnum(map, val);
-	if (!enumKey) return '';
-	const parts = enumKey.split('_');
-	if (parts.length > 2) {
-		return parts.slice(2).join('_').toLowerCase();
-	}
-	return enumKey.toLowerCase();
 }
 
 export function relativeTime(date: Date | string): string {
@@ -77,21 +63,6 @@ export function truncateDigest(digest: string, len = 16): string {
 		return `sha256:${digest.slice(7, 7 + len)}`;
 	}
 	return digest.slice(0, len);
-}
-
-export function visibilityLabel(v: number): string {
-	switch (v) {
-		case Visibility.PUBLIC:
-			return 'Public';
-		case Visibility.PRIVATE:
-			return 'Private';
-		default:
-			return 'Public';
-	}
-}
-
-export function toggleInArray<T>(arr: T[], item: T): T[] {
-	return arr.includes(item) ? arr.filter((x) => x !== item) : [...arr, item];
 }
 
 export const webhookEventLabels: Record<number, string> = {

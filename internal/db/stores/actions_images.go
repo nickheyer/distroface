@@ -2,12 +2,10 @@ package stores
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/db"
-	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -40,15 +38,4 @@ func (s *Store) ListActionsRunImagesForRef(ctx context.Context, repoID, ref stri
 		Order("actions_run_images.created_at ASC").
 		Find(&out).Error
 	return out, err
-}
-
-func (s *Store) GetActionsRunImage(ctx context.Context, id string) (*db.ActionsRunImage, error) {
-	var img db.ActionsRunImage
-	if err := s.db.WithContext(ctx).Where("id = ?", id).First(&img).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return &img, nil
 }

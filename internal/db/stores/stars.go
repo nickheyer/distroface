@@ -94,18 +94,6 @@ func (s *Store) CountStarsByUser(ctx context.Context, userID string) (map[string
 	return out, nil
 }
 
-// Stars received across everything under a namespace
-func (s *Store) CountStarsReceived(ctx context.Context, namespace string) (int64, error) {
-	var count int64
-	err := s.db.WithContext(ctx).Model(&db.Star{}).Where(
-		"(kind = ? AND target_id IN (SELECT id FROM git_repositories WHERE namespace = ?))"+
-			" OR (kind = ? AND target_id IN (SELECT id FROM repositories WHERE namespace = ?))"+
-			" OR (kind = ? AND target_id IN (SELECT CAST(id AS TEXT) FROM artifact_repositories WHERE namespace = ?))",
-		db.StarKindGit, namespace, db.StarKindImage, namespace, db.StarKindArtifact, namespace,
-	).Count(&count).Error
-	return count, err
-}
-
 // Drops every star on one target
 func (s *Store) DeleteStarsFor(ctx context.Context, kind, targetID string) error {
 	return s.db.WithContext(ctx).Where("kind = ? AND target_id = ?", kind, targetID).Delete(&db.Star{}).Error

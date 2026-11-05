@@ -144,7 +144,7 @@ func (m *Monitor) syncReleaseAssets(ctx context.Context, repo *db.GitRepository,
 }
 
 // Mirrors upstream releases and their files onto a git mirror repository
-func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, state *GitMirrorState) error {
+func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, state *GitMirrorState, progress func(string)) error {
 	// A remembered forge beats host name guessing
 	if state.Forge != "" {
 		up.Forge = state.Forge
@@ -161,6 +161,7 @@ func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, c
 		return fmt.Errorf("releases: %s has no release api", up.Host)
 	}
 	state.Forge = up.Forge
+	progress("listing upstream releases")
 	assets, err := m.upstreamReleaseAssets(ctx, up, cfg.GetAuthToken())
 	if err != nil {
 		return fmt.Errorf("releases: %w", err)
@@ -180,6 +181,7 @@ func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, c
 				continue
 			}
 			seen[rel.Tag] = true
+			progress("syncing release " + rel.Tag)
 			row, err := m.upsertMirroredRelease(ctx, repo, rel)
 			if err != nil {
 				return err

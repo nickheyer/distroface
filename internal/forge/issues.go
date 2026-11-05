@@ -14,7 +14,6 @@ import (
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	"github.com/nickheyer/distroface/internal/webhook"
-	"github.com/nickheyer/distroface/pkg/pages"
 )
 
 // Caller errors the services map onto connect codes
@@ -507,20 +506,6 @@ func (m *Manager) recordBlockerState(ctx context.Context, repo *db.GitRepository
 	for _, b := range blocked {
 		_, _ = m.AddEvent(ctx, b, actor.User, kind, payload)
 	}
-}
-
-// Closes or reopens through the public api
-func (m *Manager) SetIssueState(ctx context.Context, repo *db.GitRepository, actor Actor, issue *db.GitIssue, state string) error {
-	if actor.User == nil || actor.User.IsAnonymous() {
-		return ErrForbidden
-	}
-	if repo.IsArchived {
-		return gitrepo.ErrArchived
-	}
-	if !m.canEdit(actor, issue) {
-		return ErrForbidden
-	}
-	return m.setState(ctx, repo, actor, issue, nil, state, "")
 }
 
 func (m *Manager) setMilestone(ctx context.Context, repo *db.GitRepository, actor Actor, issue *db.GitIssue, id string, cols map[string]any) error {
@@ -1034,13 +1019,4 @@ func (m *Manager) teamMembers(ctx context.Context, repo *db.GitRepository, ref s
 	}
 	ids, _ := m.store.TeamUserIDs(ctx, team)
 	return ids
-}
-
-// Builds a query from caller filters with defaults applied
-func IssueListOptionsFrom(repoID string, state string, page *pages.Query, orderBy string, limit, offset int) stores.IssueListOptions {
-	opts := stores.IssueListOptions{RepoID: repoID, State: state, OrderBy: orderBy, Limit: limit, Offset: offset}
-	if page != nil {
-		opts.Query = *page
-	}
-	return opts
 }

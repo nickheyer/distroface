@@ -332,10 +332,6 @@ func (s *Store) ActionsWorkflowStats(ctx context.Context, repoID string) (map[st
 	return counts, last, nil
 }
 
-func (s *Store) UpdateActionsRun(ctx context.Context, run *db.ActionsRun) error {
-	return s.db.WithContext(ctx).Save(run).Error
-}
-
 func (s *Store) UpdateActionsRunColumns(ctx context.Context, id string, cols map[string]any) error {
 	return s.db.WithContext(ctx).Model(&db.ActionsRun{}).Where("id = ?", id).Updates(cols).Error
 }
@@ -375,10 +371,6 @@ func (s *Store) GetActionsJob(ctx context.Context, id string) (*db.ActionsJob, e
 		return nil, nil
 	}
 	return &j, err
-}
-
-func (s *Store) UpdateActionsJob(ctx context.Context, j *db.ActionsJob) error {
-	return s.db.WithContext(ctx).Save(j).Error
 }
 
 func (s *Store) UpdateActionsJobColumns(ctx context.Context, id string, cols map[string]any) error {
@@ -531,13 +523,6 @@ func (s *Store) ListQueuedActionsJobsBefore(ctx context.Context, cutoff time.Tim
 	return out, err
 }
 
-// Queued jobs, oldest first, across every repo a runner can serve
-func (s *Store) ListQueuedActionsJobs(ctx context.Context, limit int) ([]*db.ActionsJob, error) {
-	var out []*db.ActionsJob
-	err := s.db.WithContext(ctx).Where("status = ?", "queued").Order("created_at ASC").Limit(limit).Find(&out).Error
-	return out, err
-}
-
 // Queued jobs in one runner scope minus excluded ids
 func (s *Store) ListQueuedActionsJobsInScope(ctx context.Context, scopeKind, scopeID string, exclude []string, limit, offset int) ([]*db.ActionsJob, error) {
 	q := s.db.WithContext(ctx).Model(&db.ActionsJob{}).
@@ -644,13 +629,6 @@ func (s *Store) ListActionsJobLogs(ctx context.Context, jobID string, fromIndex,
 
 func (s *Store) DeleteActionsJobLogs(ctx context.Context, jobID string) error {
 	return s.db.WithContext(ctx).Where("job_id = ?", jobID).Delete(&db.ActionsJobLog{}).Error
-}
-
-// Runs older than the cutoff whose logs can be dropped
-func (s *Store) ListFinishedRunsBefore(ctx context.Context, cutoff time.Time, limit int) ([]*db.ActionsRun, error) {
-	var out []*db.ActionsRun
-	err := s.db.WithContext(ctx).Where("status = ? AND finished_at < ?", "completed", cutoff).Order("finished_at ASC").Limit(limit).Find(&out).Error
-	return out, err
 }
 
 // ── Secrets and variables ────────────────────────────────────────────────
@@ -788,22 +766,6 @@ func (s *Store) GetActionsArtifactByNumber(ctx context.Context, repoID string, n
 		return nil, nil
 	}
 	return &a, err
-}
-
-// Confirmed artifacts of a repository, newest first, optionally one name
-func (s *Store) ListActionsArtifactsForRepo(ctx context.Context, repoID, name string, limit, offset int) ([]*db.ActionsArtifact, int64, error) {
-	q := s.db.WithContext(ctx).Model(&db.ActionsArtifact{}).
-		Where("status = ? AND run_id IN (SELECT id FROM actions_runs WHERE repo_id = ?)", "confirmed", repoID)
-	if name != "" {
-		q = q.Where("name = ?", name)
-	}
-	var total int64
-	if err := q.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	var out []*db.ActionsArtifact
-	err := q.Order("created_at DESC").Limit(limit).Offset(offset).Find(&out).Error
-	return out, total, err
 }
 
 func (s *Store) ListExpiredActionsArtifacts(ctx context.Context, limit int) ([]*db.ActionsArtifact, error) {

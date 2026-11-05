@@ -496,7 +496,7 @@ func (m *Monitor) runImport(ctx context.Context, repo *db.GitRepository, imp *db
 		var err error
 		switch imp.Phase {
 		case importPhaseFetch:
-			err = m.importFetch(ctx, repo, cfg)
+			err = m.importFetch(ctx, repo, cfg, progress)
 		case importPhaseWiki:
 			if st.Options.Wiki {
 				err = m.importWiki(ctx, repo, cfg, up, st)
@@ -569,9 +569,9 @@ func (m *Monitor) detectForge(ctx context.Context, up gitUpstream) (string, erro
 	return "", fmt.Errorf("%w: cannot tell which forge hosts %s, use a github, gitlab, or gitea url", ErrInvalid, up.Host)
 }
 
-func (m *Monitor) importFetch(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig) error {
+func (m *Monitor) importFetch(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, progress func(string)) error {
 	state := parseGitMirrorState(repo.MirrorState)
-	err := m.syncGitRepo(ctx, repo, cfg, &state)
+	err := m.syncGitRepo(ctx, repo, cfg, &state, progress)
 	var nothing *nothingMirroredError
 	if errors.As(err, &nothing) {
 		err = nil

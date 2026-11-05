@@ -27,7 +27,6 @@ import (
 	"github.com/nickheyer/distroface/internal/webhook"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
-	"google.golang.org/protobuf/encoding/protojson"
 )
 
 // Caller errors mapped to InvalidArgument
@@ -1179,15 +1178,6 @@ func diffSnapshots(before, after map[plumbing.ReferenceName]plumbing.Hash) []Ref
 		}
 	}
 	return out
-}
-
-// Parses stored mirror configuration
-func ParseMirrorConfig(raw string) *v1.MirrorConfig {
-	cfg := &v1.MirrorConfig{}
-	if strings.TrimSpace(raw) != "" {
-		_ = protojson.Unmarshal([]byte(raw), cfg)
-	}
-	return cfg
 }
 
 // Validates an upstream git url for mirrors

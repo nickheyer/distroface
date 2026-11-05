@@ -208,12 +208,6 @@ func (s *Store) CreateAgentIdentity(ctx context.Context, id *db.AgentIdentity) e
 	return s.db.WithContext(ctx).Create(id).Error
 }
 
-func (s *Store) ListAgentIdentities(ctx context.Context) ([]*db.AgentIdentity, error) {
-	var out []*db.AgentIdentity
-	err := s.db.WithContext(ctx).Find(&out).Error
-	return out, err
-}
-
 // User ids of every agent bot account
 func (s *Store) AgentUserIDs(ctx context.Context) (map[string]bool, error) {
 	var ids []string
@@ -313,10 +307,6 @@ func (s *Store) ListAgentSessions(ctx context.Context, opts AgentSessionListOpti
 	return out, total, err
 }
 
-func (s *Store) UpdateAgentSession(ctx context.Context, sess *db.AgentSession) error {
-	return s.db.WithContext(ctx).Save(sess).Error
-}
-
 func (s *Store) UpdateAgentSessionColumns(ctx context.Context, id string, cols map[string]any) error {
 	return s.db.WithContext(ctx).Model(&db.AgentSession{}).Where("id = ?", id).Updates(cols).Error
 }
@@ -360,16 +350,6 @@ func (s *Store) ListLiveAgentSessionsForIssue(ctx context.Context, repoID, agent
 	var out []*db.AgentSession
 	err := s.db.WithContext(ctx).Where("repo_id = ? AND agent_id = ? AND issue_number = ? AND is_pull = ? AND status IN ?", repoID, agentID, issueNumber, isPull, []string{"queued", "running", "waiting_approval"}).Find(&out).Error
 	return out, err
-}
-
-// Newest session that opened a given pull request
-func (s *Store) AgentSessionForResultPull(ctx context.Context, repoID string, pullNumber int64) (*db.AgentSession, error) {
-	var sess db.AgentSession
-	err := s.db.WithContext(ctx).Where("repo_id = ? AND result_pull_number = ?", repoID, pullNumber).Order("created_at DESC").First(&sess).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	return &sess, err
 }
 
 func (s *Store) DeleteAgentSession(ctx context.Context, id string) error {
@@ -436,10 +416,6 @@ func (s *Store) CountAgentSessionEvents(ctx context.Context, sessionID string) (
 	var n int64
 	err := s.db.WithContext(ctx).Model(&db.AgentSessionEvent{}).Where("session_id = ?", sessionID).Count(&n).Error
 	return n, err
-}
-
-func (s *Store) DeleteAgentSessionEvents(ctx context.Context, sessionID string) error {
-	return s.db.WithContext(ctx).Where("session_id = ?", sessionID).Delete(&db.AgentSessionEvent{}).Error
 }
 
 // ── Approvals ────────────────────────────────────────────────────────────

@@ -45,13 +45,6 @@ func (c *gitUserCache) userByEmail(ctx context.Context, email string) *storage.U
 	return u
 }
 
-func (c *gitUserCache) usernameByEmail(ctx context.Context, email string) string {
-	if u := c.userByEmail(ctx, email); u != nil {
-		return u.Username
-	}
-	return ""
-}
-
 // Fills the local account fields of a signature
 func (c *gitUserCache) resolveSignature(ctx context.Context, sig *v1.GitSignature) {
 	if sig == nil {

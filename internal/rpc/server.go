@@ -198,7 +198,7 @@ func (s *Server) setupHandler() {
 			artifactAccess.SetLinkedAccess(s.GitManager.Access())
 			repoAccess.SetLinkedAccess(s.GitManager.Access())
 		}
-		distrofacev1connect.RegisterMirrorServiceHandler(rpcServer, services.NewMirrorService(s.MirrorMonitor, s.Enforcer, artifactAccess, repoAccess, s.Log))
+		distrofacev1connect.RegisterMirrorServiceHandler(rpcServer, services.NewMirrorService(s.MirrorMonitor, artifactAccess, repoAccess, s.Log))
 	}
 
 	// Git hosting and the forge features ride on the git manager

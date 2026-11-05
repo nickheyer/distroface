@@ -249,20 +249,12 @@ func (s *Store) CountOpenGitIssues(ctx context.Context, repoIDs []string) (map[s
 	return issues, pulls, nil
 }
 
-func (s *Store) UpdateGitIssue(ctx context.Context, issue *db.GitIssue) error {
-	return s.db.WithContext(ctx).Save(issue).Error
-}
-
 func (s *Store) UpdateGitIssueColumns(ctx context.Context, id string, cols map[string]any) error {
 	return s.db.WithContext(ctx).Model(&db.GitIssue{}).Where("id = ?", id).Updates(cols).Error
 }
 
 func (s *Store) DeleteGitIssue(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Delete(&db.GitIssue{}, "id = ?", id).Error
-}
-
-func (s *Store) TouchGitIssue(ctx context.Context, id string) error {
-	return s.db.WithContext(ctx).Model(&db.GitIssue{}).Where("id = ?", id).Update("updated_at", time.Now().UTC()).Error
 }
 
 // Highest pin order plus one, capped by the caller
@@ -814,18 +806,6 @@ func (s *Store) GetGitIssueSubscriptionsForUser(ctx context.Context, issueIDs []
 		out[r.IssueID] = r.Subscribed
 	}
 	return out, nil
-}
-
-func (s *Store) GetGitIssueSubscription(ctx context.Context, issueID, userID string) (*bool, error) {
-	var existing db.GitIssueSubscription
-	err := s.db.WithContext(ctx).First(&existing, "issue_id = ? AND user_id = ?", issueID, userID).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &existing.Subscribed, nil
 }
 
 // Closed and reopened events of many issues, oldest first

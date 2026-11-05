@@ -37,8 +37,9 @@
 	import { ActivityFeed } from '$lib/proto/distroface/v1/activity_pb';
 	import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 	import type { Organization, Repository } from '$lib/proto/distroface/v1/types_pb';
-	import type { SyncEvent } from '$lib/proto/distroface/v1/mirror_pb';
-	import { cn } from '$lib/utils';
+	import { SyncPhase, type SyncEvent } from '$lib/proto/distroface/v1/mirror_pb';
+	import { timestampDate } from '@bufbuild/protobuf/wkt';
+	import { cn, relativeTime } from '$lib/utils';
 
 	const signedIn = $derived(authStore.isAuthenticated);
 	const me = $derived(authStore.user);
@@ -115,6 +116,7 @@
 	});
 
 	const liveSyncs = $derived(Object.values(mirrorSyncStore.activeEvents) as SyncEvent[]);
+	const lastSync = $derived(mirrorSyncStore.lastFinished);
 
 	function syncHref(ev: SyncEvent): string {
 		switch (ev.kind) {
@@ -455,15 +457,34 @@
 										<span class="truncate text-sm font-medium">{ev.namespace}/{ev.name}</span>
 										<Badge variant="outline" class="shrink-0">{syncLabel(ev.kind)}</Badge>
 									</span>
-									{#if mirrorSyncStore.messages[`${ev.kind}:${ev.repoId}`]}
-										<span class="mt-0.5 block truncate text-xs text-muted-foreground"
-											>{mirrorSyncStore.messages[`${ev.kind}:${ev.repoId}`]}</span
+									<span
+										class="mt-0.5 flex items-center justify-between gap-2 text-xs text-muted-foreground"
+									>
+										<span class="truncate"
+											>{mirrorSyncStore.messages[`${ev.kind}:${ev.repoId}`] ?? ''}</span
 										>
-									{/if}
+										{#if ev.at}
+											<span class="shrink-0">started {relativeTime(timestampDate(ev.at))}</span>
+										{/if}
+									</span>
 								</a>
 							</li>
 						{/each}
 					</ul>
+				{/if}
+				{#if lastSync}
+					<p class="text-xs text-muted-foreground">
+						<a href={syncHref(lastSync)} class="font-medium hover:underline"
+							>{lastSync.namespace}/{lastSync.name}</a
+						>
+						{lastSync.phase === SyncPhase.FAILED ? 'failed' : 'finished'}
+						{#if lastSync.at}{relativeTime(timestampDate(lastSync.at))}{/if}
+						{#if lastSync.error}
+							<span class="block truncate text-destructive" title={lastSync.error}
+								>{lastSync.error}</span
+							>
+						{/if}
+					</p>
 				{/if}
 			</section>
 		{/if}

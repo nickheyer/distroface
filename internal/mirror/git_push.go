@@ -115,6 +115,7 @@ func (m *Monitor) execPushSync(ctx context.Context, repo *db.GitRepository, pm *
 	m.armCancel(key, cancel)
 	m.beginSync(key, ev)
 
+	m.progress(key, ev, "pushing branches and tags")
 	syncErr := m.pushToMirror(runCtx, repo, pm, &state)
 	cancel()
 	if m.disarmCancel(key) && syncErr != nil {

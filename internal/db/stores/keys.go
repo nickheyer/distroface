@@ -49,23 +49,12 @@ func (s *Store) ListSSHKeys(ctx context.Context, ownerType, ownerID string, limi
 	return out, total, err
 }
 
-// Signing capable keys of a user
-func (s *Store) ListUserSigningKeys(ctx context.Context, userID string) ([]*db.SSHKey, error) {
-	var out []*db.SSHKey
-	err := s.db.WithContext(ctx).Where("owner_type = ? AND owner_id = ? AND usage IN ?", db.SSHKeyOwnerUser, userID, []string{"signing", "both"}).Find(&out).Error
-	return out, err
-}
-
 func (s *Store) TouchSSHKey(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Model(&db.SSHKey{}).Where("id = ?", id).Update("last_used_at", time.Now().UTC()).Error
 }
 
 func (s *Store) DeleteSSHKey(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Delete(&db.SSHKey{}, "id = ?", id).Error
-}
-
-func (s *Store) DeleteSSHKeysByOwner(ctx context.Context, ownerType, ownerID string) error {
-	return s.db.WithContext(ctx).Where("owner_type = ? AND owner_id = ?", ownerType, ownerID).Delete(&db.SSHKey{}).Error
 }
 
 func (s *Store) CreateGPGKey(ctx context.Context, k *db.GPGKey) error {
