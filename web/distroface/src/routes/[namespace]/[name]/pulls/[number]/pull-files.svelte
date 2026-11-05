@@ -129,6 +129,9 @@
 		return map;
 	});
 	const outdated = $derived(threads.filter((t) => t[0].outdated));
+	const extraAt = (path: string, side: DiffSide, line: number) =>
+		inline.has(threadKey(path, side, line)) ||
+		(!!draft && draft.path === path && draft.side === side && draft.line === line);
 	const commentCounts = $derived.by(() => {
 		const map = new SvelteMap<string, number>();
 		for (const t of threads) map.set(t[0].path, (map.get(t[0].path) ?? 0) + t.length);
@@ -369,6 +372,7 @@
 		onFile={(f) => (currentFile = f)}
 		onLineClick={canComment ? onLineClick : undefined}
 		{lineExtra}
+		{extraAt}
 		{viewed}
 		onToggleViewed={toggleViewed}
 		{commentCounts}

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import UserLink from '$lib/components/git/user-link.svelte';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
@@ -321,10 +322,7 @@
 								>
 									<span>!{n}</span>
 									<span>opened {opened(p)} by</span>
-									<a
-										href={resolve('/[namespace]', { namespace: p.issue?.author?.username ?? '' })}
-										class="hover:text-primary">{p.issue?.author?.username ?? 'unknown'}</a
-									>
+									<UserLink user={p.issue?.author} hover={false} />
 									<span class="text-muted-foreground/50">|</span>
 									<span class="font-mono">{headLabel(p, repoFullName)}</span>
 									<span>into</span>

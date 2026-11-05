@@ -65,7 +65,7 @@ func (m *Manager) onPushPulls(ctx context.Context, ev gitrepo.RefEvent) {
 		retry = true
 	}
 	for base, ids := range stale {
-		m.queuePullStats(base, ids)
+		m.QueuePullStats(base, ids)
 	}
 	if retry {
 		go m.RetryAutoMerge(context.WithoutCancel(ctx), repo, "")

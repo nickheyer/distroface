@@ -39,14 +39,18 @@
 		className
 	)}
 >
-	<a
-		href={resolve('/[namespace]/[name]/commit/[sha]', { namespace, name, sha })}
-		class="px-1.5 text-muted-foreground transition-colors hover:text-primary"
-		title={sha}
-	>
-		{sha.slice(0, length)}
-	</a>
-	{#if copy}
+	{#if sha}
+		<a
+			href={resolve('/[namespace]/[name]/commit/[sha]', { namespace, name, sha })}
+			class="px-1.5 text-muted-foreground transition-colors hover:text-primary"
+			title={sha}
+		>
+			{sha.slice(0, length)}
+		</a>
+	{:else}
+		<span class="px-1.5 text-muted-foreground">unknown</span>
+	{/if}
+	{#if copy && sha}
 		<button
 			type="button"
 			class="border-l px-1 text-muted-foreground transition-colors hover:text-foreground"

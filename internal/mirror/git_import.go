@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -50,7 +51,11 @@ const (
 	commentKindImported = "imported"
 	commentKindClosed   = "closed"
 	commentKindMerged   = "merged"
+	commentKindReviewed = "reviewed"
 )
+
+// Staging namespace for pull heads fetched in bulk
+const importStageRefs = "refs/import/pulls/"
 
 // A dismissed import must not return through a late save
 var errImportDismissed = errors.New("import was dismissed")
@@ -209,12 +214,31 @@ type forgePull struct {
 }
 
 type forgeReview struct {
+	ID          string
 	Author      forgeUser
 	State       string
 	Body        string
 	CommitSHA   string
 	SubmittedAt *time.Time
 	Dismissed   bool
+}
+
+// One inline comment on a pull request diff, line and side name the anchor
+type forgeReviewComment struct {
+	ID        string
+	ReviewID  string
+	InReplyTo string
+	Author    forgeUser
+	Path      string
+	Line      int
+	StartLine int
+	Side      string
+	Outdated  bool
+	DiffHunk  string
+	Body      string
+	CommitSHA string
+	Resolved  bool
+	CreatedAt time.Time
 }
 
 type forgeRelease struct {
@@ -245,8 +269,50 @@ type forgeDriver interface {
 	pulls(ctx context.Context, f forgeCtx, page int) ([]forgePull, bool, error)
 	pullComments(ctx context.Context, f forgeCtx, number int64, page int) ([]forgeComment, bool, error)
 	reviews(ctx context.Context, f forgeCtx, number int64) ([]forgeReview, error)
+	reviewComments(ctx context.Context, f forgeCtx, number int64) ([]forgeReviewComment, error)
 	releases(ctx context.Context, f forgeCtx, page int) ([]forgeRelease, bool, error)
 	pullHeadRef(number int64) string
+	// Refspec source matching every pull head at once
+	pullHeadPattern() string
+}
+
+// Anchor of the last line in a diff hunk, zero when the header is unreadable
+func hunkAnchor(hunk string) (int, string) {
+	oldNo, newNo := 0, 0
+	line, side := 0, "new"
+	headed := false
+	for _, l := range strings.Split(hunk, "\n") {
+		if strings.HasPrefix(l, "@@") {
+			var oldStart, newStart int
+			fields := strings.Fields(l)
+			if len(fields) < 3 {
+				return 0, side
+			}
+			fmt.Sscanf(strings.TrimPrefix(fields[1], "-"), "%d", &oldStart)
+			fmt.Sscanf(strings.TrimPrefix(fields[2], "+"), "%d", &newStart)
+			oldNo, newNo = oldStart-1, newStart-1
+			headed = true
+			continue
+		}
+		// Only a trailing newline yields an empty entry, real blank lines keep their space
+		if !headed || l == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(l, "+"):
+			newNo++
+			line, side = newNo, "new"
+		case strings.HasPrefix(l, "-"):
+			oldNo++
+			line, side = oldNo, "old"
+		case strings.HasPrefix(l, "\\"):
+		default:
+			oldNo++
+			newNo++
+			line, side = newNo, "new"
+		}
+	}
+	return line, side
 }
 
 func forgeDriverFor(name string) forgeDriver {
@@ -312,6 +378,11 @@ func isHexHash(s string) bool {
 
 // Payload marking rows that came from another forge
 func importMarker(source string, u forgeUser, link string) string {
+	return importMarkerWith(source, u, link, nil)
+}
+
+// Marker plus event fields the timeline renders, such as a merge sha
+func importMarkerWith(source string, u forgeUser, link string, extra map[string]any) string {
 	p := map[string]any{"imported": true, "source": source}
 	if u.Login != "" {
 		p["author"] = u.Login
@@ -321,6 +392,9 @@ func importMarker(source string, u forgeUser, link string) string {
 	}
 	if link != "" {
 		p["url"] = link
+	}
+	for k, v := range extra {
+		p[k] = v
 	}
 	b, _ := json.Marshal(p)
 	return string(b)
@@ -885,6 +959,8 @@ func (m *Monitor) importIssueRow(ctx context.Context, repo *db.GitRepository, st
 		ClosedAt:  is.ClosedAt,
 		CreatedAt: is.CreatedAt,
 		UpdatedAt: is.UpdatedAt,
+
+		ImportedAuthor: is.Author.Login,
 	}
 	if row.CreatedAt.IsZero() {
 		row.CreatedAt = time.Now().UTC()
@@ -1054,6 +1130,108 @@ func (m *Monitor) pullNumber(st *importState, upstream int64) int64 {
 	return upstream
 }
 
+// Points the local pull ref at the staged upstream head, false when nothing was staged
+func (m *Monitor) adoptStagedRef(repo *db.GitRepository, upstream int64, localRef string) bool {
+	unlock := m.git.Engine().LockStore(repo.ID)
+	defer unlock()
+	r, err := m.git.Engine().OpenRepo(repo.Namespace, repo.Name, false)
+	if err != nil {
+		return false
+	}
+	defer r.Close()
+	h, err := r.Resolve(importStageRefs + strconv.FormatInt(upstream, 10))
+	if err != nil || h.IsZero() {
+		return false
+	}
+	current, _ := r.Resolve(localRef)
+	if current == h {
+		return true
+	}
+	return r.UpdateRef(plumbing.ReferenceName(localRef), current, h) == nil
+}
+
+// Drops the staging refs once every pull owns its head
+func (m *Monitor) clearStagedRefs(repo *db.GitRepository) {
+	unlock := m.git.Engine().LockStore(repo.ID)
+	defer unlock()
+	r, err := m.git.Engine().OpenRepo(repo.Namespace, repo.Name, false)
+	if err != nil {
+		return
+	}
+	defer r.Close()
+	iter, err := r.Repo.References()
+	if err != nil {
+		return
+	}
+	var names []plumbing.ReferenceName
+	_ = iter.ForEach(func(ref *plumbing.Reference) error {
+		if strings.HasPrefix(ref.Name().String(), importStageRefs) {
+			names = append(names, ref.Name())
+		}
+		return nil
+	})
+	for _, n := range names {
+		_ = r.Storer.RemoveReference(n)
+	}
+}
+
+// Inline comments keep their threads, anchors, and upstream authors
+func (m *Monitor) writeReviewComments(ctx context.Context, st *importState, issue *db.GitIssue, number int64, headSHA string, reviewIDs map[string]string, items []forgeReviewComment) error {
+	sort.SliceStable(items, func(i, j int) bool { return items[i].CreatedAt.Before(items[j].CreatedAt) })
+	local := map[string]string{}
+	// Forges without reply links thread by anchor
+	roots := map[string]string{}
+	for _, c := range items {
+		if c.Path == "" || c.Line <= 0 {
+			st.note("inline comment on pull request %d lost its anchor and was skipped", number)
+			continue
+		}
+		side := "new"
+		if c.Side == "old" {
+			side = "old"
+		}
+		at := c.CreatedAt
+		if at.IsZero() {
+			at = time.Now().UTC()
+		}
+		row := &db.GitReviewComment{
+			IssueID: issue.ID, Path: c.Path, Line: c.Line, Side: side, StartLine: c.StartLine, DiffHunk: c.DiffHunk, Body: c.Body,
+			CommitSHA: c.CommitSHA, ImportedAuthor: c.Author.Login, CreatedAt: at, UpdatedAt: at,
+		}
+		if c.Outdated {
+			row.OutdatedSHA = headSHA
+			if row.OutdatedSHA == "" {
+				row.OutdatedSHA = c.CommitSHA
+			}
+		}
+		if id, ok := reviewIDs[c.ReviewID]; ok {
+			rid := id
+			row.ReviewID = &rid
+		}
+		key := c.Path + "\n" + side + "\n" + strconv.Itoa(c.Line)
+		switch {
+		case c.InReplyTo != "" && local[c.InReplyTo] != "":
+			row.ThreadID = local[c.InReplyTo]
+		case c.InReplyTo == "" && roots[key] != "":
+			row.ThreadID = roots[key]
+		}
+		if err := m.store.CreateGitReviewComment(ctx, row); err != nil {
+			return err
+		}
+		if c.ID != "" {
+			local[c.ID] = row.ID
+		}
+		if row.ThreadID == row.ID {
+			roots[key] = row.ID
+			if c.Resolved {
+				_ = m.store.ResolveGitReviewThread(ctx, issue.ID, row.ID, "", true)
+			}
+		}
+		st.Counts["review_comments"]++
+	}
+	return nil
+}
+
 func (m *Monitor) localRefHash(repo *db.GitRepository, ref string) string {
 	r, err := m.git.Engine().OpenRepo(repo.Namespace, repo.Name, false)
 	if err != nil {
@@ -1085,11 +1263,21 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 	if err != nil {
 		return err
 	}
+	// Every head arrives in one fetch, the per pull fetch below only covers stragglers
+	staged := true
+	if err := m.git.FetchRemote(ctx, repo, false, up.URL, []string{"+" + drv.pullHeadPattern() + ":" + importStageRefs + "*"}, auth); err != nil {
+		if _, limited := RetryAfter(classifyGitErr(err)); limited {
+			return err
+		}
+		staged = false
+	}
+	defer m.clearStagedRefs(repo)
 	for page := max(st.Cursor["pulls"], 1); page <= importMaxPages; page++ {
 		items, more, err := drv.pulls(ctx, f, page)
 		if err != nil {
 			return err
 		}
+		var imported []string
 		for i, pr := range items {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -1104,11 +1292,13 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 				continue
 			}
 			localRef := fmt.Sprintf("refs/pull/%d/head", number)
-			if err := m.git.FetchRemote(ctx, repo, false, up.URL, []string{"+" + drv.pullHeadRef(pr.Number) + ":" + localRef}, auth); err != nil {
-				if _, limited := RetryAfter(classifyGitErr(err)); limited {
-					return err
+			if !staged || !m.adoptStagedRef(repo, pr.Number, localRef) {
+				if err := m.git.FetchRemote(ctx, repo, false, up.URL, []string{"+" + drv.pullHeadRef(pr.Number) + ":" + localRef}, auth); err != nil {
+					if _, limited := RetryAfter(classifyGitErr(err)); limited {
+						return err
+					}
+					st.note("head of pull request %d could not be fetched", pr.Number)
 				}
-				st.note("head of pull request %d could not be fetched", pr.Number)
 			}
 			headSHA := pr.HeadSHA
 			if headSHA == "" {
@@ -1123,6 +1313,11 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 				return err
 			}
 			reviews, err := drv.reviews(ctx, f, pr.Number)
+			if err != nil {
+				return err
+			}
+			// Fetched before any row lands so a cut off resumes without half a pull
+			inline, err := drv.reviewComments(ctx, f, pr.Number)
 			if err != nil {
 				return err
 			}
@@ -1149,6 +1344,7 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 			if err := m.writeComments(ctx, st, row, comments); err != nil {
 				return err
 			}
+			reviewIDs := map[string]string{}
 			for _, rv := range reviews {
 				state, ok := normalizeReviewState(rv.State)
 				if !ok {
@@ -1160,19 +1356,38 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 				}
 				// Upstream reviewers are not local accounts, so the review never counts
 				review := &db.GitReview{
-					IssueID:     row.ID,
-					State:       state,
-					Body:        rv.Body,
-					CommitSHA:   rv.CommitSHA,
-					Dismissed:   rv.Dismissed,
-					Imported:    true,
-					SubmittedAt: &at,
-					CreatedAt:   at,
+					IssueID:        row.ID,
+					State:          state,
+					Body:           rv.Body,
+					CommitSHA:      rv.CommitSHA,
+					Dismissed:      rv.Dismissed,
+					Imported:       true,
+					ImportedAuthor: rv.Author.Login,
+					SubmittedAt:    &at,
+					CreatedAt:      at,
 				}
 				if err := m.store.CreateGitReview(ctx, review); err != nil {
 					return err
 				}
+				if rv.ID != "" {
+					reviewIDs[rv.ID] = review.ID
+				}
+				// The timeline card reads the same payload a local review writes
+				event := &db.GitComment{
+					IssueID:   row.ID,
+					Type:      commentKindReviewed,
+					Payload:   importMarkerWith(st.Forge, rv.Author, "", map[string]any{"review_id": review.ID, "state": state, "body": rv.Body, "commit_sha": rv.CommitSHA}),
+					ReviewID:  &review.ID,
+					CreatedAt: at,
+					UpdatedAt: at,
+				}
+				if err := m.store.CreateGitComment(ctx, event); err != nil {
+					return err
+				}
 				st.Counts["reviews"]++
+			}
+			if err := m.writeReviewComments(ctx, st, row, pr.Number, headSHA, reviewIDs, inline); err != nil {
+				return err
 			}
 			switch {
 			case pr.Merged:
@@ -1180,7 +1395,11 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 				if pr.MergedAt != nil {
 					at = *pr.MergedAt
 				}
-				_ = m.addImportEvent(ctx, row, commentKindMerged, importMarker(st.Forge, forgeUser{}, ""), at)
+				merged := map[string]any{"base": pr.BaseBranch}
+				if pr.MergeSHA != "" {
+					merged["sha"] = pr.MergeSHA
+				}
+				_ = m.addImportEvent(ctx, row, commentKindMerged, importMarkerWith(st.Forge, forgeUser{}, "", merged), at)
 			case row.State == db.IssueStateClosed:
 				at := row.UpdatedAt
 				if pr.ClosedAt != nil {
@@ -1189,10 +1408,14 @@ func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *
 				_ = m.addImportEvent(ctx, row, commentKindClosed, importMarker(st.Forge, forgeUser{}, ""), at)
 			}
 			m.restoreIssueTime(ctx, row)
+			imported = append(imported, row.ID)
 			st.Counts["pulls"]++
 			if i%10 == 0 {
 				progress(fmt.Sprintf("importing pull requests (#%d)", pr.Number))
 			}
+		}
+		if m.pullStats != nil && len(imported) > 0 {
+			m.pullStats(repo, imported)
 		}
 		st.Cursor["pulls"] = page + 1
 		if !more {

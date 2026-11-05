@@ -16,6 +16,7 @@
 	import MergeBox from '$lib/components/git/merge-box.svelte';
 	import ReviewForm from '$lib/components/git/review-form.svelte';
 	import ReviewCard from './review-card.svelte';
+	import UserLink from '$lib/components/git/user-link.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
@@ -243,11 +244,7 @@
 			<div
 				class="flex flex-wrap items-center gap-2 border-b px-4 py-2 text-xs text-muted-foreground"
 			>
-				<a
-					href={resolve('/[namespace]', { namespace: issue.author?.username ?? '' })}
-					class="font-medium text-foreground hover:text-primary"
-					>{issue.author?.username ?? 'unknown'}</a
-				>
+				<UserLink user={issue.author} class="font-medium text-foreground" />
 				<span>opened {opened}</span>
 				{#if edited}
 					<span>(edited)</span>

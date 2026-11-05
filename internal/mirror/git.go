@@ -33,6 +33,11 @@ func (m *Monitor) SetGit(g *gitrepo.Manager) {
 	m.git = g
 }
 
+// Receives imported pull requests whose merge base and totals need computing
+func (m *Monitor) SetPullStats(fn func(repo *db.GitRepository, issueIDs []string)) {
+	m.pullStats = fn
+}
+
 // Git manager handle for rpc visibility checks
 func (m *Monitor) GitManager() *gitrepo.Manager {
 	return m.git

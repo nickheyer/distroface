@@ -117,13 +117,19 @@ export function headIsFork(p: PullRequest, repoFullName: string): boolean {
 	return !!p.headRepoFullName && p.headRepoFullName !== repoFullName;
 }
 
+// People from another forge carry a login and no local id
+export function isExternalUser(u: { id: string; username: string } | undefined): boolean {
+	return !!u && !u.id && !!u.username;
+}
+
 // Newest submitted review per reviewer, dismissed ones included
 export function latestReviews(reviews: Review[]): Review[] {
 	const byUser = new Map<string, Review>();
 	for (const r of reviews) {
 		if (r.state === ReviewState.PENDING || !r.reviewer) continue;
-		const prev = byUser.get(r.reviewer.id);
-		if (!prev || toMillis(r) >= toMillis(prev)) byUser.set(r.reviewer.id, r);
+		const key = r.reviewer.id || `@${r.reviewer.username}`;
+		const prev = byUser.get(key);
+		if (!prev || toMillis(r) >= toMillis(prev)) byUser.set(key, r);
 	}
 	return [...byUser.values()];
 }

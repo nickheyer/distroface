@@ -41,6 +41,11 @@ func (m *Manager) Mergeability(ctx context.Context, repo *db.GitRepository, acto
 	case issue.State != "open":
 		out.Blockers = append(out.Blockers, Blocker{"closed", "the pull request is closed"})
 	}
+	// Finished pull requests never touch the repository again
+	if pr.MergedAt != nil || issue.State != "open" {
+		out.State = MergeableBlocked
+		return out, nil
+	}
 	if pr.Draft {
 		out.Blockers = append(out.Blockers, Blocker{"draft", "the pull request is a draft"})
 	}

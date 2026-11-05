@@ -99,12 +99,28 @@ type gtPull struct {
 }
 
 type gtReview struct {
+	ID          int64      `json:"id"`
 	User        *gtUser    `json:"user"`
 	State       string     `json:"state"`
 	Body        string     `json:"body"`
 	CommitID    string     `json:"commit_id"`
 	SubmittedAt *time.Time `json:"submitted_at"`
 	Dismissed   bool       `json:"dismissed"`
+}
+
+type gtReviewComment struct {
+	ID               int64     `json:"id"`
+	ReviewID         int64     `json:"pull_request_review_id"`
+	User             *gtUser   `json:"user"`
+	Path             string    `json:"path"`
+	Position         int       `json:"position"`
+	OriginalPosition int       `json:"original_position"`
+	DiffHunk         string    `json:"diff_hunk"`
+	Body             string    `json:"body"`
+	CommitID         string    `json:"commit_id"`
+	OriginalCommitID string    `json:"original_commit_id"`
+	Resolver         *gtUser   `json:"resolver"`
+	CreatedAt        time.Time `json:"created_at"`
 }
 
 type gtReleaseMeta struct {
@@ -202,7 +218,31 @@ func (d giteaForge) reviews(ctx context.Context, f forgeCtx, number int64) ([]fo
 	}
 	out := make([]forgeReview, 0, len(batch))
 	for _, r := range batch {
-		out = append(out, forgeReview{Author: r.User.user(), State: r.State, Body: r.Body, CommitSHA: r.CommitID, SubmittedAt: r.SubmittedAt, Dismissed: r.Dismissed})
+		out = append(out, forgeReview{ID: strconv.FormatInt(r.ID, 10), Author: r.User.user(), State: r.State, Body: r.Body, CommitSHA: r.CommitID, SubmittedAt: r.SubmittedAt, Dismissed: r.Dismissed})
+	}
+	return out, nil
+}
+
+// Gitea reports diff positions only, the hunk tail gives the file line
+func (d giteaForge) reviewComments(ctx context.Context, f forgeCtx, number int64) ([]forgeReviewComment, error) {
+	var reviews []gtReview
+	if err := fetchJSON(ctx, f.client, d.repoURL(f, fmt.Sprintf("/pulls/%d/reviews", number)), d.headers(f), &reviews); err != nil {
+		return nil, err
+	}
+	var out []forgeReviewComment
+	for _, rv := range reviews {
+		var batch []gtReviewComment
+		if err := fetchJSON(ctx, f.client, d.repoURL(f, fmt.Sprintf("/pulls/%d/reviews/%d/comments", number, rv.ID)), d.headers(f), &batch); err != nil {
+			return nil, err
+		}
+		for _, c := range batch {
+			line, side := hunkAnchor(c.DiffHunk)
+			out = append(out, forgeReviewComment{
+				ID: strconv.FormatInt(c.ID, 10), ReviewID: strconv.FormatInt(rv.ID, 10), Author: c.User.user(), Path: c.Path, Line: line, Side: side,
+				Outdated: c.Position == 0 && c.OriginalPosition > 0, DiffHunk: c.DiffHunk, Body: c.Body, CommitSHA: c.OriginalCommitID,
+				Resolved: c.Resolver != nil, CreatedAt: c.CreatedAt,
+			})
+		}
 	}
 	return out, nil
 }
@@ -224,4 +264,8 @@ func (d giteaForge) releases(ctx context.Context, f forgeCtx, page int) ([]forge
 
 func (giteaForge) pullHeadRef(number int64) string {
 	return fmt.Sprintf("refs/pull/%d/head", number)
+}
+
+func (giteaForge) pullHeadPattern() string {
+	return "refs/pull/*/head"
 }

@@ -360,10 +360,14 @@
 
 {#snippet shaLink(repo: string, sha: string)}
 	{@const [ns, nm] = (repo || `${namespace}/${name}`).split('/')}
-	<a
-		href={resolve('/[namespace]/[name]/commit/[sha]', { namespace: ns, name: nm, sha })}
-		class="font-mono text-xs text-foreground hover:text-primary">{short(sha)}</a
-	>
+	{#if sha}
+		<a
+			href={resolve('/[namespace]/[name]/commit/[sha]', { namespace: ns, name: nm, sha })}
+			class="font-mono text-xs text-foreground hover:text-primary">{short(sha)}</a
+		>
+	{:else}
+		<span class="font-mono text-xs text-muted-foreground">unknown</span>
+	{/if}
 {/snippet}
 
 {#snippet event(c: Comment)}
@@ -525,13 +529,13 @@
 					>
 				{/if}
 			{:else if c.type === CommentType.FORCE_PUSHED}
-				force pushed from {@render shaLink('', str(p, 'before'))} to {@render shaLink(
-					'',
-					str(p, 'after')
-				)}
+				force pushed {#if str(p, 'before')}from {@render shaLink('', str(p, 'before'))}
+				{/if}to {@render shaLink('', str(p, 'after'))}
 			{:else if c.type === CommentType.MERGED}
-				merged commit {@render shaLink('', str(p, 'sha'))} into
-				<span class="font-mono text-xs text-foreground">{str(p, 'base')}</span>
+				merged {#if str(p, 'sha')}commit {@render shaLink('', str(p, 'sha'))}{:else}this{/if}
+				{#if str(p, 'base')}into <span class="font-mono text-xs text-foreground"
+						>{str(p, 'base')}</span
+					>{/if}
 				{#if str(p, 'method')}by {str(p, 'method').replace(/_/g, ' ')}{/if}
 			{:else if c.type === CommentType.AUTO_MERGE_ARMED}
 				enabled auto merge {#if str(p, 'method')}({str(p, 'method').replace(/_/g, ' ')}){/if}

@@ -82,9 +82,21 @@ func prMergeableProto(state string) v1.MergeableState {
 	return v1.MergeableState_MERGEABLE_STATE_UNKNOWN
 }
 
+// People from another forge keep their login and no local id
+func importedUserProto(login string) *v1.IssueUser {
+	if login == "" {
+		return nil
+	}
+	return &v1.IssueUser{Username: login, DisplayName: login}
+}
+
 func prReviewProto(ctx context.Context, users *gitUserCache, rv *storage.GitReview, counts map[string]int32) *v1.Review {
+	reviewer := issueUserProto(users.user(ctx, rv.ReviewerID))
+	if reviewer == nil {
+		reviewer = importedUserProto(rv.ImportedAuthor)
+	}
 	out := &v1.Review{
-		Id: rv.ID, Reviewer: issueUserProto(users.user(ctx, rv.ReviewerID)), State: forge.ReviewStateProto(rv.State), Body: rv.Body,
+		Id: rv.ID, Reviewer: reviewer, State: forge.ReviewStateProto(rv.State), Body: rv.Body,
 		CommitSha: rv.CommitSHA, Dismissed: rv.Dismissed, DismissedBy: users.username(ctx, rv.DismissedBy), CommentCount: counts[rv.ID],
 		CreatedAt: timestamppb.New(rv.CreatedAt),
 	}
@@ -95,8 +107,12 @@ func prReviewProto(ctx context.Context, users *gitUserCache, rv *storage.GitRevi
 }
 
 func prReviewCommentProto(ctx context.Context, users *gitUserCache, c *storage.GitReviewComment, reactions []*storage.GitReaction, viewerID string) *v1.ReviewComment {
+	author := issueUserProto(users.user(ctx, c.AuthorID))
+	if author == nil {
+		author = importedUserProto(c.ImportedAuthor)
+	}
 	out := &v1.ReviewComment{
-		Id: c.ID, Author: issueUserProto(users.user(ctx, c.AuthorID)), Path: c.Path, Line: int32(c.Line), Side: c.Side, StartLine: int32(c.StartLine),
+		Id: c.ID, Author: author, Path: c.Path, Line: int32(c.Line), Side: c.Side, StartLine: int32(c.StartLine),
 		DiffHunk: c.DiffHunk, Body: c.Body, Resolved: c.Resolved, ResolvedBy: users.username(ctx, c.ResolvedBy), Outdated: c.OutdatedSHA != "",
 		CommitSha: c.CommitSHA, ThreadId: c.ThreadID, Reactions: issueReactionGroups(ctx, users, reactions, viewerID), Pending: c.Pending,
 		CreatedAt: timestamppb.New(c.CreatedAt), UpdatedAt: timestamppb.New(c.UpdatedAt),
@@ -321,20 +337,28 @@ func (s *PullRequestService) UpdatePullRequest(ctx context.Context, req *v1.Upda
 
 // ── Diff and commits ─────────────────────────────────────────────────────
 
-// Commit range a diff request covers, the whole pull request unless a commit range is given
-func prDiffRange(pr *storage.GitPullRequest, startSha, endSha string) (plumbing.Hash, plumbing.Hash) {
-	base := plumbing.ZeroHash
-	if pr.MergeBaseSHA != "" {
-		base = plumbing.NewHash(pr.MergeBaseSHA)
-	}
-	head := plumbing.NewHash(pr.HeadSHA)
+// Commit range a diff request covers, the pull request's own span unless commits are named.
+// Named commits must exist, an unresolvable side is reported instead of diffed against nothing
+func (s *PullRequestService) diffRange(ctx context.Context, r *gitrepo.Repo, repo *storage.GitRepository, pr *storage.GitPullRequest, startSha, endSha string) (plumbing.Hash, plumbing.Hash, error) {
+	base, head, spanErr := s.forge.PullRange(ctx, repo, r, pr)
 	if startSha != "" {
-		base = plumbing.NewHash(startSha)
+		h := plumbing.NewHash(startSha)
+		if _, err := r.Commit(h); err != nil {
+			return base, head, connect.Errorf(connect.CodeInvalidArgument, "start commit %q not found", startSha)
+		}
+		base = h
 	}
 	if endSha != "" {
-		head = plumbing.NewHash(endSha)
+		h := plumbing.NewHash(endSha)
+		if _, err := r.Commit(h); err != nil {
+			return base, head, connect.Errorf(connect.CodeInvalidArgument, "end commit %q not found", endSha)
+		}
+		head = h
 	}
-	return base, head
+	if spanErr != nil && (startSha == "" || endSha == "") {
+		return base, head, mapForgeErr(spanErr)
+	}
+	return base, head, nil
 }
 
 func (s *PullRequestService) GetPullRequestDiff(ctx context.Context, req *v1.GetPullRequestDiffRequest) (*v1.GetPullRequestDiffResponse, error) {
@@ -347,8 +371,11 @@ func (s *PullRequestService) GetPullRequestDiff(ctx context.Context, req *v1.Get
 		return nil, mapGitErr(err)
 	}
 	defer r.Close()
-	base, head := prDiffRange(pr, req.StartSha, req.EndSha)
 	limit, offset := pages.Parse(req.Page)
+	base, head, err := s.diffRange(ctx, r, repo, pr, req.StartSha, req.EndSha)
+	if err != nil {
+		return nil, err
+	}
 	diff, err := r.Diff(ctx, base, head, gitrepo.DiffOptions{Limit: limit, Offset: offset, PathQuery: pages.ParseQuery(req.Page).Text})
 	if err != nil {
 		return nil, mapGitErr(err)
@@ -366,7 +393,10 @@ func (s *PullRequestService) GetPullRequestFile(ctx context.Context, req *v1.Get
 		return nil, mapGitErr(err)
 	}
 	defer r.Close()
-	base, head := prDiffRange(pr, req.StartSha, req.EndSha)
+	base, head, err := s.diffRange(ctx, r, repo, pr, req.StartSha, req.EndSha)
+	if err != nil {
+		return nil, err
+	}
 	diff, err := r.Diff(ctx, base, head, gitrepo.DiffOptions{OnlyPath: gitCleanPath(req.Path), Limit: 1})
 	if err != nil {
 		return nil, mapGitErr(err)
@@ -387,7 +417,10 @@ func (s *PullRequestService) ListPullRequestCommits(ctx context.Context, req *v1
 		return nil, mapGitErr(err)
 	}
 	defer r.Close()
-	base, head := prDiffRange(pr, "", "")
+	base, head, err := s.forge.PullRange(ctx, repo, r, pr)
+	if err != nil {
+		return nil, mapForgeErr(err)
+	}
 	hashes, err := r.CommitRange(ctx, base, head)
 	if err != nil {
 		return nil, mapGitErr(err)

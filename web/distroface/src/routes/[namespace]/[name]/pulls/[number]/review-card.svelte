@@ -26,7 +26,14 @@
 		comments: ReviewComment[];
 	} = $props();
 
-	type Payload = { state?: string; body?: string; commit_sha?: string };
+	type Payload = {
+		state?: string;
+		body?: string;
+		commit_sha?: string;
+		imported?: boolean;
+		source?: string;
+		author?: string;
+	};
 
 	const payload = $derived.by((): Payload => {
 		try {
@@ -52,6 +59,10 @@
 	const reviewId = $derived(review?.id || event.reviewId);
 	const when = $derived(event.createdAt ? relativeTime(timestampDate(event.createdAt)) : '');
 	const sha = $derived(review?.commitSha || payload.commit_sha || '');
+	const imported = $derived(!event.author && !!payload.imported);
+	const who = $derived(
+		event.author?.username || review?.reviewer?.username || payload.author || ''
+	);
 
 	function verb(s: ReviewState): string {
 		switch (s) {
@@ -110,11 +121,17 @@
 		class="flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-4 py-2 text-xs text-muted-foreground"
 	>
 		<Icon class="size-4 shrink-0 {color(state)}" />
-		<a
-			href={resolve('/[namespace]', { namespace: event.author?.username ?? '' })}
-			class="font-medium text-foreground hover:text-primary"
-			>{event.author?.username ?? 'unknown'}</a
-		>
+		{#if imported || !who}
+			<span class="font-medium text-foreground">{who || 'unknown'}</span>
+			{#if imported && payload.source}<span>via {payload.source}</span>{/if}
+		{:else}
+			<a
+				href={resolve('/[namespace]', { namespace: who })}
+				class="font-medium text-foreground hover:text-primary"
+				data-hover="user"
+				data-user={who}>{who}</a
+			>
+		{/if}
 		<span>{verb(state)}</span>
 		{#if sha}
 			<a

@@ -1,6 +1,13 @@
 <script lang="ts">
-	import { ChevronRight, ChevronLeft, Folder, FolderOpen, MessageSquare } from '$lib/icons';
-	import { Checkbox } from '$lib/components/ui/checkbox';
+	import {
+		ChevronRight,
+		ChevronLeft,
+		Folder,
+		FolderOpen,
+		MessageSquare,
+		CheckCircle,
+		Circle
+	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { DiffStatus } from '$lib/proto/distroface/v1/git_pb';
 	import type { DiffFile } from '$lib/proto/distroface/v1/git_pb';
@@ -159,12 +166,18 @@
 				></span>
 			{/if}
 			{#if viewed && onToggleViewed}
-				<Checkbox
-					checked={done}
-					onCheckedChange={() => onToggleViewed(f)}
-					class="size-3.5 shrink-0"
-					aria-label="Viewed"
-				/>
+				<button
+					type="button"
+					class="inline-flex size-4 shrink-0 items-center justify-center rounded-full transition-opacity {done
+						? 'text-success'
+						: 'text-muted-foreground opacity-0 group-hover:opacity-100 focus-visible:opacity-100'}"
+					onclick={() => onToggleViewed(f)}
+					aria-pressed={done}
+					aria-label={done ? 'Mark as not viewed' : 'Mark as viewed'}
+					title={done ? 'Viewed' : 'Mark as viewed'}
+				>
+					{#if done}<CheckCircle class="size-3.5" />{:else}<Circle class="size-3.5" />{/if}
+				</button>
 			{/if}
 			<button
 				type="button"

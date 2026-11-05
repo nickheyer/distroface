@@ -1,4 +1,4 @@
-import type { BundledLanguage, Highlighter } from 'shiki';
+import type { BundledLanguage, GrammarState, Highlighter } from 'shiki';
 import '$lib/components/git/code.css';
 
 export const THEMES = { light: 'github-light', dark: 'github-dark' } as const;
@@ -196,29 +196,47 @@ export async function highlight(code: string, lang: string): Promise<string> {
 	}
 }
 
-// Per line html so callers own numbering
+// Lines tokenized per turn of the event loop so big files never freeze the page
+const CHUNK_LINES = 400;
+
+function renderTokens(line: { htmlStyle?: Record<string, string>; content: string }[]): string {
+	let out = '';
+	for (const token of line) {
+		const style = token.htmlStyle
+			? Object.entries(token.htmlStyle)
+					.map(([k, v]) => `${k}:${v}`)
+					.join(';')
+			: '';
+		out += style
+			? `<span style="${style}">${escapeHtml(token.content)}</span>`
+			: escapeHtml(token.content);
+	}
+	return out;
+}
+
+// Per line html so callers own numbering, grammar state carries across chunks
 export async function highlightLines(code: string, lang: string): Promise<string[]> {
 	const body = code.endsWith('\n') ? code.slice(0, -1) : code;
-	const plain = body.split('\n').map(escapeHtml);
+	const lines = body.split('\n');
+	const plain = lines.map(escapeHtml);
 	const resolved = await resolveLang(lang);
 	if (!resolved || body.length > 1_000_000) return plain;
 	try {
 		const hl = await ensureLang(resolved);
-		const result = hl.codeToTokens(body, { lang: resolved, themes: THEMES, defaultColor: false });
-		const out = result.tokens.map((line) =>
-			line
-				.map((token) => {
-					const style = token.htmlStyle
-						? Object.entries(token.htmlStyle)
-								.map(([k, v]) => `${k}:${v}`)
-								.join(';')
-						: '';
-					return style
-						? `<span style="${style}">${escapeHtml(token.content)}</span>`
-						: escapeHtml(token.content);
-				})
-				.join('')
-		);
+		const out: string[] = [];
+		let grammarState: GrammarState | undefined;
+		for (let start = 0; start < lines.length; start += CHUNK_LINES) {
+			if (start > 0) await new Promise((r) => setTimeout(r, 0));
+			const slice = lines.slice(start, start + CHUNK_LINES).join('\n');
+			const result = hl.codeToTokens(slice, {
+				lang: resolved,
+				themes: THEMES,
+				defaultColor: false,
+				grammarState
+			});
+			grammarState = result.grammarState;
+			for (const line of result.tokens) out.push(renderTokens(line));
+		}
 		return out.length === plain.length ? out : plain;
 	} catch {
 		return plain;

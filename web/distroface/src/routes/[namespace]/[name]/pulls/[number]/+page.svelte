@@ -21,6 +21,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
+	import UserLink from '$lib/components/git/user-link.svelte';
 	import PullConversation from './pull-conversation.svelte';
 	import PullCommits from './pull-commits.svelte';
 	import PullFiles from './pull-files.svelte';
@@ -293,12 +294,7 @@
 					{pullStatusLabel(status)}
 				</Badge>
 				<span>
-					<a
-						href={resolve('/[namespace]', { namespace: issue.author?.username ?? '' })}
-						class="font-medium text-foreground hover:text-primary"
-						data-hover="user"
-						data-user={issue.author?.username ?? ''}>{issue.author?.username ?? 'unknown'}</a
-					>
+					<UserLink user={issue.author} class="font-medium text-foreground" />
 					{status === 'merged' ? 'merged' : 'wants to merge'}
 					<a
 						href="{resolve('/[namespace]/[name]/pulls/[number]', pullParams)}?tab=commits"

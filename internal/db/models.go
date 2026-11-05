@@ -670,25 +670,27 @@ const (
 
 // Issues and pull requests number independently inside a repository
 type GitIssue struct {
-	ID           string  `gorm:"primaryKey"`
-	RepoID       string  `gorm:"not null;uniqueIndex:idx_issue_repo_kind_number;index:idx_issue_repo_state"`
-	IsPull       bool    `gorm:"not null;uniqueIndex:idx_issue_repo_kind_number"`
-	Number       int64   `gorm:"not null;uniqueIndex:idx_issue_repo_kind_number"`
-	Title        string  `gorm:"not null"`
-	Body         string  `gorm:"type:text"`
-	State        string  `gorm:"not null;default:'open';index:idx_issue_repo_state"`
-	AuthorID     string  `gorm:"not null;index"`
-	MilestoneID  *string `gorm:"index"`
-	Locked       bool    `gorm:"not null;default:false"`
-	LockReason   string
-	Pinned       int `gorm:"not null;default:0"`
-	DueDate      *time.Time
-	ClosedAt     *time.Time
-	ClosedBy     string
-	CommentCount int            `gorm:"not null;default:0"`
-	CreatedAt    time.Time      `gorm:"autoCreateTime;index"`
-	UpdatedAt    time.Time      `gorm:"autoUpdateTime;index"`
-	Repo         *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+	ID          string  `gorm:"primaryKey"`
+	RepoID      string  `gorm:"not null;uniqueIndex:idx_issue_repo_kind_number;index:idx_issue_repo_state"`
+	IsPull      bool    `gorm:"not null;uniqueIndex:idx_issue_repo_kind_number"`
+	Number      int64   `gorm:"not null;uniqueIndex:idx_issue_repo_kind_number"`
+	Title       string  `gorm:"not null"`
+	Body        string  `gorm:"type:text"`
+	State       string  `gorm:"not null;default:'open';index:idx_issue_repo_state"`
+	AuthorID    string  `gorm:"not null;index"`
+	MilestoneID *string `gorm:"index"`
+	Locked      bool    `gorm:"not null;default:false"`
+	LockReason  string
+	// Upstream login when the issue came from another forge
+	ImportedAuthor string `gorm:"not null;default:''"`
+	Pinned         int    `gorm:"not null;default:0"`
+	DueDate        *time.Time
+	ClosedAt       *time.Time
+	ClosedBy       string
+	CommentCount   int            `gorm:"not null;default:0"`
+	CreatedAt      time.Time      `gorm:"autoCreateTime;index"`
+	UpdatedAt      time.Time      `gorm:"autoUpdateTime;index"`
+	Repo           *GitRepository `gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
 }
 
 // Display form, issues as #n and pull requests as !n
@@ -841,31 +843,35 @@ type GitReview struct {
 	Dismissed   bool   `gorm:"not null;default:false"`
 	DismissedBy string `gorm:"not null;default:''"`
 	Imported    bool   `gorm:"not null;default:false"` // Copied from another forge, never counts toward required reviews
-	SubmittedAt *time.Time
-	CreatedAt   time.Time `gorm:"autoCreateTime"`
-	Issue       *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+	// Upstream login when the review came from another forge
+	ImportedAuthor string `gorm:"not null;default:''"`
+	SubmittedAt    *time.Time
+	CreatedAt      time.Time `gorm:"autoCreateTime"`
+	Issue          *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
 }
 
 type GitReviewComment struct {
-	ID          string    `gorm:"primaryKey"`
-	ReviewID    *string   `gorm:"index"`
-	IssueID     string    `gorm:"not null;index"`
-	AuthorID    string    `gorm:"not null"`
-	Path        string    `gorm:"not null"`
-	Line        int       `gorm:"not null"`
-	Side        string    `gorm:"not null;default:'new'"`
-	StartLine   int       `gorm:"not null;default:0"`
-	DiffHunk    string    `gorm:"type:text"`
-	Body        string    `gorm:"type:text"`
-	ThreadID    string    `gorm:"not null;index"`
-	Resolved    bool      `gorm:"not null;default:false"`
-	ResolvedBy  string    `gorm:"not null;default:''"`
-	CommitSHA   string    `gorm:"not null;default:'';column:commit_sha"`
-	OutdatedSHA string    `gorm:"not null;default:'';column:outdated_sha"`
-	Pending     bool      `gorm:"not null;default:false"`
-	CreatedAt   time.Time `gorm:"autoCreateTime"`
-	UpdatedAt   time.Time `gorm:"autoUpdateTime"`
-	Issue       *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
+	ID          string  `gorm:"primaryKey"`
+	ReviewID    *string `gorm:"index"`
+	IssueID     string  `gorm:"not null;index"`
+	AuthorID    string  `gorm:"not null"`
+	Path        string  `gorm:"not null"`
+	Line        int     `gorm:"not null"`
+	Side        string  `gorm:"not null;default:'new'"`
+	StartLine   int     `gorm:"not null;default:0"`
+	DiffHunk    string  `gorm:"type:text"`
+	Body        string  `gorm:"type:text"`
+	ThreadID    string  `gorm:"not null;index"`
+	Resolved    bool    `gorm:"not null;default:false"`
+	ResolvedBy  string  `gorm:"not null;default:''"`
+	CommitSHA   string  `gorm:"not null;default:'';column:commit_sha"`
+	OutdatedSHA string  `gorm:"not null;default:'';column:outdated_sha"`
+	Pending     bool    `gorm:"not null;default:false"`
+	// Upstream login when the comment came from another forge
+	ImportedAuthor string    `gorm:"not null;default:''"`
+	CreatedAt      time.Time `gorm:"autoCreateTime"`
+	UpdatedAt      time.Time `gorm:"autoUpdateTime"`
+	Issue          *GitIssue `gorm:"foreignKey:IssueID;constraint:OnDelete:CASCADE"`
 }
 
 // ── Projects ─────────────────────────────────────────────────────────────

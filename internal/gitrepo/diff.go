@@ -3,6 +3,7 @@ package gitrepo
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -58,9 +59,84 @@ func changePath(ch *object.Change) string {
 	return ch.From.Name
 }
 
+// Tree diffs in flight across the process, late comers wait then get ErrBusy
+var diffGate = newLimiter(func() int { return max(2, runtime.GOMAXPROCS(0)/2) })
+
+const diffGateWait = 30 * time.Second
+
+// One changed path with both tree entries, json for the memo
+type changeEntry struct {
+	FromName string `json:"fn,omitempty"`
+	FromMode uint32 `json:"fm,omitempty"`
+	FromHash string `json:"fh,omitempty"`
+	ToName   string `json:"tn,omitempty"`
+	ToMode   uint32 `json:"tm,omitempty"`
+	ToHash   string `json:"th,omitempty"`
+}
+
+// Change lists per tree pair, the walk and rename pass dominate big diffs
+var treeChanges = NewMemo[[]changeEntry]("", 10*time.Minute, 16)
+
+func encodeChanges(changes object.Changes) []changeEntry {
+	out := make([]changeEntry, len(changes))
+	for i, ch := range changes {
+		e := changeEntry{FromName: ch.From.Name, ToName: ch.To.Name}
+		if ch.From.Name != "" {
+			e.FromMode, e.FromHash = uint32(ch.From.TreeEntry.Mode), ch.From.TreeEntry.Hash.String()
+		}
+		if ch.To.Name != "" {
+			e.ToMode, e.ToHash = uint32(ch.To.TreeEntry.Mode), ch.To.TreeEntry.Hash.String()
+		}
+		out[i] = e
+	}
+	return out
+}
+
+// Root trees stand in for the parents, blobs resolve through the same storer
+func decodeChanges(from, to *object.Tree, entries []changeEntry) object.Changes {
+	out := make(object.Changes, len(entries))
+	for i, e := range entries {
+		ch := &object.Change{}
+		if e.FromName != "" {
+			ch.From = object.ChangeEntry{Name: e.FromName, Tree: from, TreeEntry: object.TreeEntry{
+				Name: e.FromName[strings.LastIndex(e.FromName, "/")+1:], Mode: filemode.FileMode(e.FromMode), Hash: plumbing.NewHash(e.FromHash),
+			}}
+		}
+		if e.ToName != "" {
+			ch.To = object.ChangeEntry{Name: e.ToName, Tree: to, TreeEntry: object.TreeEntry{
+				Name: e.ToName[strings.LastIndex(e.ToName, "/")+1:], Mode: filemode.FileMode(e.ToMode), Hash: plumbing.NewHash(e.ToHash),
+			}}
+		}
+		out[i] = ch
+	}
+	return out
+}
+
+// Changed paths between two trees, computed once per pair for every concurrent caller
+func (r *Repo) treeChanges(ctx context.Context, from, to *object.Tree) (object.Changes, error) {
+	key := from.Hash.String() + ":" + to.Hash.String()
+	entries, err := treeChanges.Get(ctx, key, func() ([]changeEntry, error) {
+		// Waiters still want the answer when the first request goes away
+		changes, err := object.DiffTreeWithOptions(context.WithoutCancel(ctx), from, to, &object.DiffTreeOptions{DetectRenames: true, RenameScore: 50, RenameLimit: 1000})
+		if err != nil {
+			return nil, err
+		}
+		return encodeChanges(changes), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeChanges(from, to, entries), nil
+}
+
 // Structured diff between two trees, totals over every matching file and hunks only on the page
 func (r *Repo) DiffTrees(ctx context.Context, from, to *object.Tree, opts DiffOptions) (*v1.GitDiff, error) {
-	changes, err := object.DiffTreeWithOptions(ctx, from, to, &object.DiffTreeOptions{DetectRenames: true, RenameScore: 50, RenameLimit: 1000})
+	release, err := diffGate.Acquire(ctx, diffGateWait)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	changes, err := r.treeChanges(ctx, from, to)
 	if err != nil {
 		return nil, err
 	}

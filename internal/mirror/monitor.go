@@ -56,6 +56,7 @@ type Monitor struct {
 	artifacts    *artifacts.Manager
 	oci          *ociSyncer
 	git          *gitrepo.Manager
+	pullStats    func(repo *db.GitRepository, issueIDs []string)
 	sealer       *auth.Sealer
 	legacySealer *auth.Sealer
 	log          *logger.Logger

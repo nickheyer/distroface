@@ -1,6 +1,7 @@
 package ghapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -35,6 +36,34 @@ func (q *request) userByID(id string) obj {
 
 func (q *request) ghost() obj {
 	return obj{"login": "ghost", "id": 0, "node_id": "", "avatar_url": "", "url": "", "html_url": "", "type": "User", "site_admin": false}
+}
+
+// Someone from another forge, a login without a local account
+func (q *request) importedUserJSON(login string) obj {
+	if login == "" {
+		return q.ghost()
+	}
+	return obj{"login": login, "id": 0, "node_id": "", "avatar_url": "", "url": "", "html_url": "", "type": "User", "site_admin": false}
+}
+
+// Imported comments name their author inside the payload
+func (q *request) commentUserJSON(c *db.GitComment) obj {
+	if c.AuthorID != "" {
+		return q.userByID(c.AuthorID)
+	}
+	var p struct {
+		Author string `json:"author"`
+	}
+	_ = json.Unmarshal([]byte(c.Payload), &p)
+	return q.importedUserJSON(p.Author)
+}
+
+// Local author of an issue, or the login its import carried over
+func (q *request) issueUserJSON(v *forge.IssueView) obj {
+	if v.Author != nil {
+		return q.userJSON(v.Author)
+	}
+	return q.importedUserJSON(v.Issue.ImportedAuthor)
 }
 
 // Namespace account of a repository, an organization or a user
@@ -162,7 +191,7 @@ func (q *request) issueJSON(repo *db.GitRepository, v *forge.IssueView) obj {
 	}
 	out := obj{
 		"id": numID(is.ID), "node_id": "", "number": is.Number, "title": is.Title, "body": is.Body, "state": is.State,
-		"state_reason": nil, "locked": is.Locked, "active_lock_reason": nilIfEmpty(is.LockReason), "user": q.userJSON(v.Author),
+		"state_reason": nil, "locked": is.Locked, "active_lock_reason": nilIfEmpty(is.LockReason), "user": q.issueUserJSON(v),
 		"labels": labels, "assignee": assignee, "assignees": assignees, "milestone": q.milestoneJSON(repo, v.Milestone),
 		"comments": is.CommentCount, "created_at": ts(is.CreatedAt), "updated_at": ts(is.UpdatedAt), "closed_at": tsPtr(is.ClosedAt),
 		"closed_by": closedBy, "author_association": "NONE", "html_url": q.h.forge.IssueURL(q.ctx, repo, is), "url": api,
@@ -195,7 +224,7 @@ func (q *request) milestoneJSON(repo *db.GitRepository, ms *db.GitMilestone) any
 func (q *request) commentJSON(repo *db.GitRepository, issue *db.GitIssue, c *db.GitComment) obj {
 	api := q.repoAPI(repo) + "/issues/comments/" + fmt.Sprint(numID(c.ID))
 	return obj{
-		"id": numID(c.ID), "node_id": "", "body": c.Body, "user": q.userByID(c.AuthorID), "created_at": ts(c.CreatedAt),
+		"id": numID(c.ID), "node_id": "", "body": c.Body, "user": q.commentUserJSON(c), "created_at": ts(c.CreatedAt),
 		"updated_at": ts(c.UpdatedAt), "html_url": q.h.forge.IssueURL(q.ctx, repo, issue) + "#comment-" + c.ID, "url": api,
 		"issue_url": q.repoAPI(repo) + "/issues/" + fmt.Sprint(issue.Number), "author_association": "NONE",
 		"performed_via_github_app": nil, "reactions": obj{"total_count": 0},

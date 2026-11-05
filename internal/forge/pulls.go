@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -260,37 +261,123 @@ func (m *Manager) refreshPullStats(ctx context.Context, repo *db.GitRepository, 
 	m.computePullStats(ctx, r, pr)
 }
 
+// Reasons a pull request has no diff to show
+var (
+	ErrPullHeadMissing = errors.New("the head commit of this pull request is not in the repository")
+	ErrPullBaseMissing = errors.New("the base branch of this pull request no longer exists")
+)
+
+// Commits the base and head sides of a pull request diff resolve to
+type pullSpan struct {
+	Base, Head plumbing.Hash
+	// Head came from the merge commit because the recorded one is gone
+	HeadReplaced bool
+}
+
+// Bounded diff span of a pull request, an error names the side that is gone.
+// Merged pulls measure against the base as it stood at merge time, a stored
+// merge base is trusted when asked, an all zero one records unrelated histories
+func pullSpanOf(r *gitrepo.Repo, pr *db.GitPullRequest, trustStored bool) (pullSpan, error) {
+	var span pullSpan
+	span.Head = plumbing.NewHash(pr.HeadSHA)
+	if _, err := r.Commit(span.Head); err != nil {
+		span.Head = plumbing.ZeroHash
+	}
+	var baseTip plumbing.Hash
+	if pr.MergedAt != nil && pr.MergeCommitSHA != "" {
+		if mc, err := r.Commit(plumbing.NewHash(pr.MergeCommitSHA)); err == nil && mc.NumParents() > 0 {
+			baseTip = mc.ParentHashes[0]
+			if span.Head.IsZero() {
+				span.HeadReplaced = true
+				if mc.NumParents() > 1 {
+					span.Head = mc.ParentHashes[1]
+				} else {
+					span.Head = mc.Hash
+				}
+			}
+		}
+	}
+	if baseTip.IsZero() {
+		baseTip = r.BranchHash(pr.BaseBranch)
+	}
+	if span.Head.IsZero() {
+		return span, ErrPullHeadMissing
+	}
+	if baseTip.IsZero() {
+		return span, ErrPullBaseMissing
+	}
+	if trustStored && pr.MergeBaseSHA != "" {
+		stored := plumbing.NewHash(pr.MergeBaseSHA)
+		if stored.IsZero() {
+			return span, nil
+		}
+		if _, err := r.Commit(stored); err == nil {
+			span.Base = stored
+			return span, nil
+		}
+	}
+	base, err := r.MergeBase(baseTip, span.Head)
+	if err != nil {
+		return span, err
+	}
+	span.Base = base
+	return span, nil
+}
+
+// Column value of a merge base, all zeros marks unrelated histories as already resolved
+func storedMergeBase(h plumbing.Hash) string {
+	if h.IsZero() {
+		return strings.Repeat("0", 40)
+	}
+	return h.String()
+}
+
 // Merge base and diff totals, merge state left alone
 func (m *Manager) computePullStats(ctx context.Context, r *gitrepo.Repo, pr *db.GitPullRequest) {
-	head := plumbing.NewHash(pr.HeadSHA)
-	baseTip := r.BranchHash(pr.BaseBranch)
-	if _, err := r.Commit(head); err != nil || baseTip.IsZero() {
+	span, err := pullSpanOf(r, pr, false)
+	if err != nil {
 		return
 	}
-	mergeBase, err := r.MergeBase(baseTip, head)
-	if err != nil {
-		mergeBase = plumbing.ZeroHash
-	}
-	pr.MergeBaseSHA = mergeBase.String()
-	if mergeBase.IsZero() {
-		pr.MergeBaseSHA = ""
-	}
+	pr.MergeBaseSHA = storedMergeBase(span.Base)
 	cols := map[string]any{"merge_base_sha": pr.MergeBaseSHA}
-	commits, _ := r.CommitRange(ctx, mergeBase, head)
+	if span.HeadReplaced {
+		pr.HeadSHA = span.Head.String()
+		cols["head_sha"] = pr.HeadSHA
+	}
+	commits, _ := r.CommitRange(ctx, span.Base, span.Head)
 	pr.CommitCount = len(commits)
 	cols["commit_count"] = pr.CommitCount
-	if diff, err := r.Diff(ctx, mergeBase, head, gitrepo.DiffOptions{}); err == nil {
+	if diff, err := r.Diff(ctx, span.Base, span.Head, gitrepo.DiffOptions{}); err == nil {
 		pr.ChangedFiles, pr.Additions, pr.Deletions = int(diff.TotalFiles), int(diff.Additions), int(diff.Deletions)
 		cols["changed_files"], cols["additions"], cols["deletions"] = pr.ChangedFiles, pr.Additions, pr.Deletions
 	}
 	_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, cols)
 }
 
+// Diff span for readers, the merge base is saved on first sight and totals follow in the background
+func (m *Manager) PullRange(ctx context.Context, repo *db.GitRepository, r *gitrepo.Repo, pr *db.GitPullRequest) (base, head plumbing.Hash, err error) {
+	span, err := pullSpanOf(r, pr, true)
+	if err != nil {
+		return plumbing.ZeroHash, plumbing.ZeroHash, err
+	}
+	if pr.MergeBaseSHA == "" {
+		pr.MergeBaseSHA = storedMergeBase(span.Base)
+		cols := map[string]any{"merge_base_sha": pr.MergeBaseSHA}
+		if span.HeadReplaced {
+			pr.HeadSHA = span.Head.String()
+			cols["head_sha"] = pr.HeadSHA
+		}
+		_ = m.store.UpdateGitPullRequestColumns(ctx, pr.IssueID, cols)
+		m.QueuePullStats(repo, []string{pr.IssueID})
+	}
+	return span.Base, span.Head, nil
+}
+
 // One drain of queued refreshes gives up after this
 const pullStatsTimeout = 10 * time.Minute
 
 // Queues stat refreshes on the repository worker
-func (m *Manager) queuePullStats(repo *db.GitRepository, issueIDs []string) {
+func (m *Manager) QueuePullStats(repo *db.GitRepository, issueIDs []string) {
 	if len(issueIDs) == 0 {
 		return
 	}
@@ -333,15 +420,30 @@ func (m *Manager) drainPullStats(repo *db.GitRepository) {
 			repo = fresh
 		}
 		if r, err := m.git.Engine().OpenRepo(repo.Namespace, repo.Name, false); err == nil {
+			var left []string
 			for id := range q {
 				if ctx.Err() != nil {
-					break
+					left = append(left, id)
+					continue
 				}
-				if pr, _ := m.store.GetGitPullRequest(ctx, id); pr != nil && pr.MergedAt == nil {
+				if pr, _ := m.store.GetGitPullRequest(ctx, id); pr != nil {
 					m.computePullStats(ctx, r, pr)
 				}
 			}
 			r.Close()
+			// The next pass gets a fresh window for whatever this one did not reach
+			if len(left) > 0 {
+				m.statsMu.Lock()
+				next := m.statsPending[repo.ID]
+				if next == nil {
+					next = map[string]bool{}
+					m.statsPending[repo.ID] = next
+				}
+				for _, id := range left {
+					next[id] = true
+				}
+				m.statsMu.Unlock()
+			}
 		} else {
 			m.log.Debug("pull stats open %s/%s: %v", repo.Namespace, repo.Name, err)
 		}
@@ -719,11 +821,11 @@ func (m *Manager) PullCommits(ctx context.Context, repo *db.GitRepository, pr *d
 		return nil, err
 	}
 	defer r.Close()
-	base := plumbing.ZeroHash
-	if pr.MergeBaseSHA != "" {
-		base = plumbing.NewHash(pr.MergeBaseSHA)
+	base, head, err := m.PullRange(ctx, repo, r, pr)
+	if err != nil {
+		return nil, err
 	}
-	hashes, err := r.CommitRange(ctx, base, plumbing.NewHash(pr.HeadSHA))
+	hashes, err := r.CommitRange(ctx, base, head)
 	if err != nil {
 		return nil, err
 	}

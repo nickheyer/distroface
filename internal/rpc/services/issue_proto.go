@@ -29,7 +29,8 @@ func mapForgeErr(err error) error {
 		return connect.NewError(connect.CodePermissionDenied, err.Error()).WithCause(err)
 	case errors.Is(err, forge.ErrInvalid):
 		return connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
-	case errors.Is(err, forge.ErrLocked), errors.Is(err, forge.ErrBlocked), errors.Is(err, forge.ErrDisabled):
+	case errors.Is(err, forge.ErrLocked), errors.Is(err, forge.ErrBlocked), errors.Is(err, forge.ErrDisabled),
+		errors.Is(err, forge.ErrPullHeadMissing), errors.Is(err, forge.ErrPullBaseMissing):
 		return connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 	case errors.Is(err, forge.ErrConflict):
 		return connect.NewError(connect.CodeAlreadyExists, err.Error()).WithCause(err)
@@ -55,6 +56,14 @@ func issueStateString(state v1.IssueState) string {
 		return "closed"
 	}
 	return ""
+}
+
+// Local author, or the upstream login an import carried over
+func issueAuthorProto(v *forge.IssueView) *v1.IssueUser {
+	if u := issueUserProto(v.Author); u != nil {
+		return u
+	}
+	return importedUserProto(v.Issue.ImportedAuthor)
 }
 
 func issueUserProto(u *storage.User) *v1.IssueUser {
@@ -146,7 +155,7 @@ func issueViewProto(ctx context.Context, fm *forge.Manager, users *gitUserCache,
 		Title:          is.Title,
 		Body:           is.Body,
 		State:          issueStateProto(is.State),
-		Author:         issueUserProto(v.Author),
+		Author:         issueAuthorProto(v),
 		Milestone:      issueMilestoneProto(v.Milestone, nil),
 		Locked:         is.Locked,
 		LockReason:     is.LockReason,

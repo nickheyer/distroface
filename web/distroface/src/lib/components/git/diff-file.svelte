@@ -139,6 +139,7 @@
 		head = '',
 		onLineClick,
 		lineExtra,
+		extraAt,
 		renderAll = false
 	}: {
 		file: DiffFile;
@@ -149,6 +150,8 @@
 		head?: string;
 		onLineClick?: (path: string, side: DiffSide, line: number) => void;
 		lineExtra?: Snippet<[{ path: string; side: DiffSide; line: number }]>;
+		// Lines that get an extra row, every line when absent
+		extraAt?: (path: string, side: DiffSide, line: number) => boolean;
 		renderAll?: boolean;
 	} = $props();
 
@@ -476,6 +479,10 @@
 		if (n > 0) onLineClick?.(path, side, n);
 	}
 
+	function hasExtra(side: DiffSide, n: number): boolean {
+		return !!lineExtra && (!extraAt || extraAt(path, side, n));
+	}
+
 	function hiddenLabel(count: number): string {
 		return count < 0
 			? 'lines to the end of the file'
@@ -582,7 +589,7 @@
 							{@html lineHtml(row.line)}
 						</td>
 					</tr>
-					{#if lineExtra}
+					{#if lineExtra && hasExtra(sideOf(row.line), numberOf(row.line))}
 						<tr class="diff-extra"
 							><td colspan="4"
 								>{@render lineExtra({ path, side: sideOf(row.line), line: numberOf(row.line) })}</td
@@ -619,14 +626,14 @@
 						{/if}
 					</tr>
 					{#if lineExtra}
-						{#if row.left && row.left.kind === DiffLineKind.DELETE}
+						{#if row.left && row.left.kind === DiffLineKind.DELETE && hasExtra('old', row.left.oldNumber)}
 							<tr class="diff-extra"
 								><td colspan="4"
 									>{@render lineExtra({ path, side: 'old', line: row.left.oldNumber })}</td
 								></tr
 							>
 						{/if}
-						{#if row.right}
+						{#if row.right && hasExtra('new', row.right.newNumber)}
 							<tr class="diff-extra"
 								><td colspan="4"
 									>{@render lineExtra({ path, side: 'new', line: row.right.newNumber })}</td

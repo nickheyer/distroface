@@ -1,4 +1,5 @@
 <script lang="ts">
+	import UserLink from '$lib/components/git/user-link.svelte';
 	import { resolve } from '$app/paths';
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
@@ -401,12 +402,7 @@
 					<span>opened {relativeTime(timestampDate(i.createdAt))}</span>
 				{/if}
 				{#if i.author}
-					<span
-						>by <a
-							href={resolve('/[namespace]', { namespace: i.author.username })}
-							class="hover:text-primary">{i.author.username}</a
-						></span
-					>
+					<span>by <UserLink user={i.author} hover={false} /></span>
 				{/if}
 				{#if i.milestone}
 					<a

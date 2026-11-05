@@ -408,6 +408,7 @@ func New() (*App, error) {
 	portalService.OnChange(gitSSH.Reconcile)
 	portalService.SetSSHProbe(gitSSH.Probe)
 	mirrorMonitor.SetGit(gitManager)
+	mirrorMonitor.SetPullStats(forgeManager.QueuePullStats)
 	mirrorMonitor.Schedule(ctx)
 	gitManager.ScheduleMaintenance(ctx)
 	mailService.Start(ctx)

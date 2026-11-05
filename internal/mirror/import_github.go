@@ -106,11 +106,37 @@ type ghPull struct {
 }
 
 type ghReview struct {
+	ID          int64      `json:"id"`
 	User        *ghUser    `json:"user"`
 	State       string     `json:"state"`
 	Body        string     `json:"body"`
 	CommitID    string     `json:"commit_id"`
 	SubmittedAt *time.Time `json:"submitted_at"`
+}
+
+type ghReviewComment struct {
+	ID                int64     `json:"id"`
+	ReviewID          int64     `json:"pull_request_review_id"`
+	InReplyTo         int64     `json:"in_reply_to_id"`
+	User              *ghUser   `json:"user"`
+	Path              string    `json:"path"`
+	Line              *int      `json:"line"`
+	OriginalLine      *int      `json:"original_line"`
+	StartLine         *int      `json:"start_line"`
+	OriginalStartLine *int      `json:"original_start_line"`
+	Side              string    `json:"side"`
+	DiffHunk          string    `json:"diff_hunk"`
+	Body              string    `json:"body"`
+	CommitID          string    `json:"commit_id"`
+	OriginalCommitID  string    `json:"original_commit_id"`
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+func intOr(p *int, fallback int) int {
+	if p == nil {
+		return fallback
+	}
+	return *p
 }
 
 type ghReleaseMeta struct {
@@ -210,7 +236,45 @@ func (d githubForge) reviews(ctx context.Context, f forgeCtx, number int64) ([]f
 			return nil, err
 		}
 		for _, r := range batch {
-			out = append(out, forgeReview{Author: r.User.user(), State: r.State, Body: r.Body, CommitSHA: r.CommitID, SubmittedAt: r.SubmittedAt, Dismissed: r.State == "DISMISSED"})
+			out = append(out, forgeReview{ID: strconv.FormatInt(r.ID, 10), Author: r.User.user(), State: r.State, Body: r.Body, CommitSHA: r.CommitID, SubmittedAt: r.SubmittedAt, Dismissed: r.State == "DISMISSED"})
+		}
+		if !more {
+			break
+		}
+	}
+	return out, nil
+}
+
+// A null line means the anchor left the current head, the original line still names it
+func (d githubForge) reviewComments(ctx context.Context, f forgeCtx, number int64) ([]forgeReviewComment, error) {
+	var out []forgeReviewComment
+	for page := 1; page <= importMaxPages; page++ {
+		batch, more, err := pagedJSON[ghReviewComment](ctx, f, d.repoURL(f, fmt.Sprintf("/pulls/%d/comments?per_page=%d&page=%d", number, githubPageSize, page)), d.headers(f), githubPageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, c := range batch {
+			rc := forgeReviewComment{
+				ID: strconv.FormatInt(c.ID, 10), Author: c.User.user(), Path: c.Path, Line: intOr(c.Line, 0), StartLine: intOr(c.StartLine, 0),
+				Side: "new", DiffHunk: c.DiffHunk, Body: c.Body, CommitSHA: c.OriginalCommitID, CreatedAt: c.CreatedAt,
+			}
+			if c.ReviewID != 0 {
+				rc.ReviewID = strconv.FormatInt(c.ReviewID, 10)
+			}
+			if c.InReplyTo != 0 {
+				rc.InReplyTo = strconv.FormatInt(c.InReplyTo, 10)
+			}
+			if c.Side == "LEFT" {
+				rc.Side = "old"
+			}
+			if rc.Line <= 0 {
+				rc.Outdated = true
+				rc.Line, rc.StartLine = intOr(c.OriginalLine, 0), intOr(c.OriginalStartLine, 0)
+			}
+			if rc.Line <= 0 {
+				rc.Line, rc.Side = hunkAnchor(c.DiffHunk)
+			}
+			out = append(out, rc)
 		}
 		if !more {
 			break
@@ -236,4 +300,8 @@ func (d githubForge) releases(ctx context.Context, f forgeCtx, page int) ([]forg
 
 func (githubForge) pullHeadRef(number int64) string {
 	return fmt.Sprintf("refs/pull/%d/head", number)
+}
+
+func (githubForge) pullHeadPattern() string {
+	return "refs/pull/*/head"
 }

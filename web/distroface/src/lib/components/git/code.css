@@ -191,8 +191,9 @@
 	border-collapse: collapse;
 	width: 100%;
 	font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-	font-size: 0.8rem;
+	font-size: 0.8125rem;
 	line-height: 1.5rem;
+	color: var(--foreground);
 	tab-size: 4;
 }
 .code-table td {
@@ -205,7 +206,6 @@
 	padding: 0 0.75rem 0 0.75rem;
 	text-align: right;
 	color: var(--muted-foreground);
-	opacity: 0.6;
 	user-select: none;
 	white-space: nowrap;
 }
@@ -223,7 +223,6 @@
 }
 .code-table .line-no a:hover,
 .code-table .line-no button:hover {
-	opacity: 1;
 	color: var(--primary);
 }
 .code-table .code-line {
@@ -238,20 +237,21 @@
 	background-color: color-mix(in oklch, var(--primary) 12%, transparent);
 }
 .code-table tr.highlighted .line-no {
-	opacity: 1;
 	color: var(--primary);
 }
 .code-table tr.diff-add td {
 	background-color: color-mix(in oklch, var(--success) 14%, transparent);
 }
 .code-table tr.diff-add .line-no {
-	background-color: color-mix(in oklch, var(--success) 22%, transparent);
+	background-color: color-mix(in oklch, var(--success) 24%, transparent);
+	color: var(--foreground);
 }
 .code-table tr.diff-del td {
 	background-color: color-mix(in oklch, var(--destructive) 12%, transparent);
 }
 .code-table tr.diff-del .line-no {
-	background-color: color-mix(in oklch, var(--destructive) 20%, transparent);
+	background-color: color-mix(in oklch, var(--destructive) 22%, transparent);
+	color: var(--foreground);
 }
 .code-table tr.diff-hunk td {
 	background-color: color-mix(in oklch, var(--primary) 8%, transparent);
@@ -293,7 +293,6 @@
 .code-table.diff-table .code-line {
 	white-space: pre-wrap;
 	overflow-wrap: anywhere;
-	word-break: break-all;
 }
 .code-table.diff-table tr.diff-hunk td {
 	white-space: pre-wrap;
@@ -304,6 +303,16 @@
 }
 .code-table.diff-table td.diff-cell-del {
 	background-color: color-mix(in oklch, var(--destructive) 12%, transparent);
+}
+.code-table.diff-table td.diff-sign {
+	color: var(--foreground);
+	font-weight: 600;
+}
+.code-table.diff-table tr.diff-add td.diff-sign {
+	color: var(--success);
+}
+.code-table.diff-table tr.diff-del td.diff-sign {
+	color: var(--destructive);
 }
 .code-table.diff-table tr.diff-extra td {
 	padding: 0;
@@ -325,7 +334,6 @@
 	border-radius: 0.25rem;
 }
 .code-table.diff-table tr.diff-row:hover td.line-no.commentable button {
-	opacity: 1;
 	color: var(--primary);
 }
 .code-table.diff-table.diff-split td:nth-child(3) {

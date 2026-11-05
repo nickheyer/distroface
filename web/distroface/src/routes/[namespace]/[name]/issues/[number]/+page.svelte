@@ -1,4 +1,5 @@
 <script lang="ts">
+	import UserLink from '$lib/components/git/user-link.svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import {
@@ -369,12 +370,10 @@
 								>{(issue.author?.username ?? '?').charAt(0)}</AvatarFallback
 							>
 						</Avatar>
-						{#if issue.author}<a
-								href={resolve('/[namespace]', { namespace: issue.author.username })}
-								class="font-medium text-foreground hover:text-primary"
-								data-hover="user"
-								data-user={issue.author.username}>{issue.author.username}</a
-							>{/if}
+						{#if issue.author}<UserLink
+								user={issue.author}
+								class="font-medium text-foreground"
+							/>{/if}
 						<span>opened</span>
 						{#if issue.createdAt}<span title={timestampDate(issue.createdAt).toLocaleString()}
 								>{relativeTime(timestampDate(issue.createdAt))}</span

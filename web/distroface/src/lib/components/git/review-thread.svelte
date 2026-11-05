@@ -19,7 +19,7 @@
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import type { ReviewComment } from '$lib/proto/distroface/v1/pull_pb';
-	import { parseSuggestions, reviewAnchor } from '$lib/pulls';
+	import { parseSuggestions, reviewAnchor, isExternalUser } from '$lib/pulls';
 	import { relativeTime } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { toast } from 'svelte-sonner';
@@ -240,10 +240,16 @@
 				{#each comments as c (c.id)}
 					<div class="space-y-2 px-3 py-2.5" id={c.id === root.id ? undefined : reviewAnchor(c.id)}>
 						<div class="flex items-center gap-2">
-							<a
-								href={resolve('/[namespace]', { namespace: c.author?.username ?? '' })}
-								class="font-medium hover:underline">{c.author?.username ?? 'unknown'}</a
-							>
+							{#if isExternalUser(c.author)}
+								<span class="font-medium" title="Commented on the original forge"
+									>{c.author?.username}</span
+								>
+							{:else}
+								<a
+									href={resolve('/[namespace]', { namespace: c.author?.username ?? '' })}
+									class="font-medium hover:underline">{c.author?.username ?? 'unknown'}</a
+								>
+							{/if}
 							<span class="text-xs text-muted-foreground">{when(c)}</span>
 							{#if c.updatedAt && c.createdAt && Number(c.updatedAt.seconds) > Number(c.createdAt.seconds)}
 								<span class="text-2xs text-muted-foreground">edited</span>

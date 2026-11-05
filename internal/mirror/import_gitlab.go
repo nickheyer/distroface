@@ -86,6 +86,28 @@ type glNote struct {
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
 	System    bool      `json:"system"`
+	// Set on diff notes, which arrive as review threads instead
+	Position *glPosition `json:"position"`
+}
+
+type glPosition struct {
+	NewPath      string `json:"new_path"`
+	OldPath      string `json:"old_path"`
+	NewLine      *int   `json:"new_line"`
+	OldLine      *int   `json:"old_line"`
+	PositionType string `json:"position_type"`
+	HeadSHA      string `json:"head_sha"`
+}
+
+type glDiscussionNote struct {
+	glNote
+	ID       int64 `json:"id"`
+	Resolved bool  `json:"resolved"`
+}
+
+type glDiscussion struct {
+	ID    string             `json:"id"`
+	Notes []glDiscussionNote `json:"notes"`
 }
 
 type glMergeRequest struct {
@@ -165,13 +187,53 @@ func (d gitlabForge) notes(ctx context.Context, f forgeCtx, kind string, number 
 	}
 	out := make([]forgeComment, 0, len(batch))
 	for _, n := range batch {
-		// System notes narrate state changes recorded separately
-		if n.System {
+		// System notes narrate state changes recorded separately, diff notes come through discussions
+		if n.System || n.Position != nil {
 			continue
 		}
 		out = append(out, forgeComment{Author: n.Author.user(), Body: n.Body, CreatedAt: n.CreatedAt})
 	}
 	return out, more, nil
+}
+
+// Discussions carry the diff anchored threads, the first note roots each one
+func (d gitlabForge) reviewComments(ctx context.Context, f forgeCtx, number int64) ([]forgeReviewComment, error) {
+	var out []forgeReviewComment
+	for page := 1; page <= importMaxPages; page++ {
+		batch, more, err := pagedJSON[glDiscussion](ctx, f, d.projectURL(f, fmt.Sprintf("/merge_requests/%d/discussions?per_page=%d&page=%d", number, gitlabPageSize, page)), d.headers(f), gitlabPageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, disc := range batch {
+			root := ""
+			for _, n := range disc.Notes {
+				if n.System || n.Position == nil || n.Position.PositionType != "text" {
+					continue
+				}
+				rc := forgeReviewComment{
+					ID: strconv.FormatInt(n.ID, 10), InReplyTo: root, Author: n.Author.user(), Path: n.Position.NewPath, Side: "new",
+					Body: n.Body, CommitSHA: n.Position.HeadSHA, Resolved: n.Resolved, CreatedAt: n.CreatedAt,
+				}
+				switch {
+				case n.Position.NewLine != nil && *n.Position.NewLine > 0:
+					rc.Line = *n.Position.NewLine
+				case n.Position.OldLine != nil && *n.Position.OldLine > 0:
+					rc.Line, rc.Side, rc.Path = *n.Position.OldLine, "old", n.Position.OldPath
+				}
+				if rc.Path == "" {
+					rc.Path = n.Position.OldPath
+				}
+				if root == "" {
+					root = rc.ID
+				}
+				out = append(out, rc)
+			}
+		}
+		if !more {
+			break
+		}
+	}
+	return out, nil
 }
 
 func (d gitlabForge) comments(ctx context.Context, f forgeCtx, number int64, page int) ([]forgeComment, bool, error) {
@@ -246,4 +308,8 @@ func (d gitlabForge) releases(ctx context.Context, f forgeCtx, page int) ([]forg
 
 func (gitlabForge) pullHeadRef(number int64) string {
 	return fmt.Sprintf("refs/merge-requests/%d/head", number)
+}
+
+func (gitlabForge) pullHeadPattern() string {
+	return "refs/merge-requests/*/head"
 }

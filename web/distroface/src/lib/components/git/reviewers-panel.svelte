@@ -22,7 +22,7 @@
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { ReviewState } from '$lib/proto/distroface/v1/pull_pb';
 	import type { PullRequest, Review } from '$lib/proto/distroface/v1/pull_pb';
-	import { latestReviews, reviewStateLabel } from '$lib/pulls';
+	import { latestReviews, reviewStateLabel, isExternalUser } from '$lib/pulls';
 	import { toast } from 'svelte-sonner';
 
 	let {
@@ -274,10 +274,16 @@
 				{@const Icon = stateIcon(r)}
 				<li class="flex min-w-0 items-center gap-2 text-sm">
 					<Icon class="size-3.5 shrink-0 {stateColor(r)}" />
-					<a
-						href={resolve('/[namespace]', { namespace: r.reviewer?.username ?? '' })}
-						class="truncate hover:underline">{r.reviewer?.username ?? 'unknown'}</a
-					>
+					{#if isExternalUser(r.reviewer)}
+						<span class="truncate" title="Reviewed on the original forge"
+							>{r.reviewer?.username}</span
+						>
+					{:else}
+						<a
+							href={resolve('/[namespace]', { namespace: r.reviewer?.username ?? '' })}
+							class="truncate hover:underline">{r.reviewer?.username ?? 'unknown'}</a
+						>
+					{/if}
 					<Badge variant={stateVariant(r)} class="ml-auto shrink-0">
 						{r.dismissed ? 'Dismissed' : reviewStateLabel(r.state)}
 					</Badge>

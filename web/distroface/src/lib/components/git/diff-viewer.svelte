@@ -33,12 +33,13 @@
 		Loader,
 		FileDiff,
 		RefreshCw,
-		Eye
+		Eye,
+		CheckCircle,
+		Circle
 	} from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge, type BadgeVariant } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
-	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import FileTree from '$lib/components/git/file-tree.svelte';
@@ -48,6 +49,7 @@
 		type DiffSide
 	} from '$lib/components/git/diff-file.svelte';
 	import { Pager as PagerClass } from '$lib/pager.svelte';
+	import { errText } from '$lib/act.svelte';
 	import { QueryFilter } from '$lib/query.svelte';
 	import { DiffStatus } from '$lib/proto/distroface/v1/git_pb';
 	import { SvelteMap } from 'svelte/reactivity';
@@ -75,6 +77,7 @@
 		mode = $bindable<DiffMode>(savedMode()),
 		onLineClick,
 		lineExtra,
+		extraAt,
 		viewed,
 		onToggleViewed,
 		commentCounts,
@@ -95,6 +98,7 @@
 		mode?: DiffMode;
 		onLineClick?: (path: string, side: DiffSide, line: number) => void;
 		lineExtra?: Snippet<[{ path: string; side: DiffSide; line: number }]>;
+		extraAt?: (path: string, side: DiffSide, line: number) => boolean;
 		viewed?: Record<string, string>;
 		onToggleViewed?: (file: DiffFile) => void;
 		commentCounts?: Map<string, number>;
@@ -118,6 +122,7 @@
 	let truncated = $state(false);
 	let listing = $state(true);
 	let listFailed = $state(false);
+	let listError = $state('');
 	let selected = $state('');
 	let current = $state<DiffFile | undefined>();
 	let currentHtml = $state<string[] | null>(null);
@@ -140,6 +145,7 @@
 		const mine = ++listSeq;
 		listing = true;
 		listFailed = false;
+		listError = '';
 		try {
 			const resp = await listFiles(pager.request(filter.request()));
 			if (mine !== listSeq) return;
@@ -149,12 +155,13 @@
 			deletions = resp.deletions;
 			truncated = resp.truncated ?? false;
 			pager.apply(resp.page);
-		} catch {
+		} catch (err) {
 			if (mine !== listSeq) return;
 			files = [];
 			totalFiles = 0;
 			truncated = false;
 			listFailed = true;
+			listError = errText(err);
 			pager.apply(undefined);
 		} finally {
 			if (mine === listSeq) listing = false;
@@ -533,7 +540,8 @@
 		<section class="min-w-0 lg:min-h-96">
 			{#if listFailed}
 				<div class="space-y-2 px-4 py-12 text-center text-sm text-muted-foreground">
-					<p>The diff could not be loaded.</p>
+					<p class="font-medium text-foreground">The diff could not be loaded</p>
+					{#if listError && listError !== 'Request failed'}<p>{listError}</p>{/if}
 					<Button variant="outline" size="sm" onclick={() => loadList('first')}
 						><RefreshCw />Retry</Button
 					>
@@ -612,19 +620,18 @@
 						<span class="ml-1 text-destructive">-{f.deletions}</span>
 					</span>
 					{#if viewed && onToggleViewed}
-						<label
-							class="inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 text-xs transition-colors select-none {isViewed
-								? 'border-success/30 bg-success/10 text-success'
+						<button
+							type="button"
+							class="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border px-2 text-xs font-medium transition-colors select-none {isViewed
+								? 'border-success/40 bg-success/10 text-success'
 								: 'text-muted-foreground hover:border-border-strong hover:text-foreground'}"
+							onclick={() => onToggleViewed(f)}
+							aria-pressed={isViewed}
+							title={isViewed ? 'Mark as not viewed' : 'Mark as viewed'}
 						>
-							<Checkbox
-								checked={isViewed}
-								onCheckedChange={() => onToggleViewed(f)}
-								class="size-3.5"
-								aria-label="Viewed"
-							/>
+							{#if isViewed}<CheckCircle class="size-3.5" />{:else}<Circle class="size-3.5" />{/if}
 							<span class="hidden sm:inline">Viewed</span>
-						</label>
+						</button>
 					{/if}
 					{#if head && f.status !== DiffStatus.DELETED}
 						<Button
@@ -690,6 +697,7 @@
 							{head}
 							{onLineClick}
 							{lineExtra}
+							{extraAt}
 							{renderAll}
 						/>
 					{/if}
