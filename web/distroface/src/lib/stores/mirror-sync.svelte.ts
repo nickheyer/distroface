@@ -14,6 +14,10 @@ class MirrorSyncStore {
 	private running = false;
 	private abort: AbortController | null = null;
 
+	get live() {
+		return this.running;
+	}
+
 	// Idempotent, first caller opens the stream
 	ensure() {
 		if (this.running || typeof window === 'undefined') return;
@@ -59,6 +63,7 @@ class MirrorSyncStore {
 			}
 			this.active = {};
 			this.activeEvents = {};
+			this.messages = {};
 			if (!this.running) break;
 			await new Promise((r) => setTimeout(r, RETRY_MS));
 		}
@@ -81,3 +86,12 @@ class MirrorSyncStore {
 }
 
 export const mirrorSyncStore = new MirrorSyncStore();
+
+// Dev reloads of this module must not strand the previous stream
+if (import.meta.hot) {
+	import.meta.hot.dispose((data) => {
+		data.live = mirrorSyncStore.live;
+		mirrorSyncStore.stop();
+	});
+	if (import.meta.hot.data.live) mirrorSyncStore.ensure();
+}

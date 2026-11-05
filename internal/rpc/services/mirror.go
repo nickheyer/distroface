@@ -41,6 +41,17 @@ func (s *MirrorService) WatchSyncs(ctx context.Context, req *v1.WatchSyncsReques
 	ch, cancel := s.monitor.Subscribe()
 	defer cancel()
 
+	// Proxies must pass frames unchanged
+	if info, ok := connect.CallInfoForServerContext(ctx); ok {
+		info.ResponseHeader().Set("Cache-Control", "no-cache, no-transform")
+		info.ResponseHeader().Set("X-Accel-Buffering", "no")
+	}
+
+	// Send headers to open stream (noop)
+	if err := stream.Send(&v1.SyncEvent{}); err != nil {
+		return err
+	}
+
 	// In flight syncs replay so fresh pages see current state
 	for _, ev := range s.monitor.Active() {
 		if err := s.sendVisible(ctx, stream, ev); err != nil {
