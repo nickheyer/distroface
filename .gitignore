@@ -220,13 +220,6 @@ publish/
 # in these scripts will be unencrypted
 PublishScripts/
 
-# NuGet Packages
-*.nupkg
-# NuGet Symbol Packages
-*.snupkg
-# NuGet v3's project.json files produces more ignorable files
-*.nuget.props
-*.nuget.targets
 
 # Microsoft Azure Build Output
 csx/
@@ -236,14 +229,6 @@ csx/
 ecf/
 rcf/
 
-# Windows Store app package directories and files
-AppPackages/
-BundleArtifacts/
-Package.StoreAssociation.xml
-_pkginfo.txt
-*.appx
-*.appxbundle
-*.appxupload
 
 # Visual Studio cache files
 # files ending in .cache can be ignored
@@ -349,10 +334,6 @@ paket-files/
 **/__pycache__/
 *.pyc
 
-# Cake - Uncomment if you are using it
-#tools/**
-#!tools/packages.config
-
 # Tabs Studio
 *.tss
 
@@ -393,8 +374,6 @@ MSBuild_Logs/
 # BeatPulse healthcheck temp database
 healthchecksdb
 
-# Backup folder for Package Reference Convert tool in Visual Studio 2017
-MigrationBackup/
 
 # Ionide (cross platform F# VS Code tools) working folder
 **/.ionide/
