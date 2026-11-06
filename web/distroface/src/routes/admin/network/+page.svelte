@@ -294,7 +294,7 @@
 
 			<div class="flex items-start justify-between gap-4 rounded-lg border px-4 py-3">
 				<div class="min-w-0 space-y-1">
-					<code class="code-inline">{primaryHostname || '-'}</code>
+					<code class="code-inline block w-fit">{primaryHostname || '-'}</code>
 					{#each certStatus?.problems ?? [] as line, i (i)}
 						<p class="text-xs {i === 0 ? problemClass : 'text-muted-foreground'}">{line}</p>
 					{/each}

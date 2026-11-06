@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
-	import { Code, ConnectError } from '@connectrpc/connect';
+	import { ConnectError } from '@connectrpc/connect';
+	import { MatchKind } from '$lib/proto/distroface/v1/pagination_pb';
 	import { Input } from '$lib/components/ui/input';
 	import AsyncSelect from '$lib/components/async-select.svelte';
 	import FormField from '$lib/components/form-field.svelte';
@@ -40,19 +41,28 @@
 	let checkError = $state('');
 	let probe = 0;
 
+	// Exact name query, a miss is an empty page not an error
 	async function exists(ns: string, n: string): Promise<boolean> {
-		const req = { namespace: ns, name: n };
-		try {
-			if (family === 'artifact')
-				await rpcClient.artifact.getArtifactRepository(req, backgroundCallOptions);
-			else if (family === 'image')
-				await rpcClient.repository.getRepository(req, backgroundCallOptions);
-			else await rpcClient.git.getGitRepository(req, backgroundCallOptions);
-			return true;
-		} catch (err) {
-			if (err instanceof ConnectError && err.code === Code.NotFound) return false;
-			throw err;
-		}
+		const page = {
+			pageSize: 1,
+			query: { filters: [{ field: 'name', match: MatchKind.EQUALS, value: n }] }
+		};
+		const resp =
+			family === 'artifact'
+				? await rpcClient.artifact.listArtifactRepositories(
+						{ page, namespace: ns },
+						backgroundCallOptions
+					)
+				: family === 'image'
+					? await rpcClient.repository.listRepositories(
+							{ page, namespace: ns },
+							backgroundCallOptions
+						)
+					: await rpcClient.git.listGitRepositories(
+							{ page, namespace: ns, includeArchived: true },
+							backgroundCallOptions
+						);
+		return resp.repositories.some((r) => r.name === n);
 	}
 
 	// Debounced lookup under the chosen owner, stale answers are dropped
@@ -71,7 +81,7 @@
 				if (seq === probe)
 					checkError = `Could not check availability, ${err instanceof ConnectError ? err.rawMessage || err.message : String(err)}`;
 			}
-		}, 300);
+		}, 500);
 		return () => clearTimeout(timer);
 	});
 
