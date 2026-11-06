@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/osfs"
@@ -52,6 +53,8 @@ type Engine struct {
 	sizes    *sizeCache
 	// Repositories whose directory is moving right now
 	renaming sync.Map
+	// Bumped whenever packs or repo dirs are removed or moved
+	cacheGen atomic.Uint64
 }
 
 // Flags a repository as moving until the returned func runs
@@ -95,6 +98,34 @@ func (e *Engine) ReposDir() string { return e.repos }
 // Directory holding host and signing keys
 func (e *Engine) KeysDir() string { return e.keysDir }
 
+// Cache handle bound to the current pack generation
+func (e *Engine) objectCache() cache.Object {
+	return &genCache{inner: e.cache, gen: &e.cacheGen, born: e.cacheGen.Load()}
+}
+
+// Forgets cached pack objects once packs are deleted or moved
+func (e *Engine) DropObjectCache() {
+	e.cacheGen.Add(1)
+	e.cache.Clear()
+}
+
+// Shared object cache view that stops inserting once stale
+type genCache struct {
+	inner cache.Object
+	gen   *atomic.Uint64
+	born  uint64
+}
+
+func (c *genCache) Put(o plumbing.EncodedObject) {
+	if c.gen.Load() == c.born {
+		c.inner.Put(o)
+	}
+}
+
+func (c *genCache) Get(k plumbing.Hash) (plumbing.EncodedObject, bool) { return c.inner.Get(k) }
+
+func (c *genCache) Clear() { c.inner.Clear() }
+
 // Installs the live transfer cap supplier
 func (e *Engine) SetTransferLimit(limit func() int) {
 	e.transfer.limit = limit
@@ -134,7 +165,7 @@ func (e *Engine) Storer(namespace, name string, wiki bool) (storage.Storer, func
 	if err != nil {
 		return nil, nil, err
 	}
-	st := filesystem.NewStorageWithOptions(fs, e.cache, filesystem.Options{
+	st := filesystem.NewStorageWithOptions(fs, e.objectCache(), filesystem.Options{
 		LargeObjectThreshold: 32 << 20,
 		Pool:                 e.pool,
 	})
@@ -191,6 +222,7 @@ func (e *Engine) Delete(namespace, name string) error {
 	if !ValidName(name) || !NamePattern.MatchString(namespace) {
 		return ErrInvalidName
 	}
+	defer e.DropObjectCache()
 	for _, wiki := range []bool{false, true} {
 		e.sizes.forget(e.AbsPath(namespace, name, wiki))
 		if err := os.RemoveAll(e.AbsPath(namespace, name, wiki)); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -209,6 +241,7 @@ func (e *Engine) Rename(oldNamespace, oldName, newNamespace, newName string) err
 	if !ValidName(newName) || !NamePattern.MatchString(newNamespace) {
 		return ErrInvalidName
 	}
+	defer e.DropObjectCache()
 	if err := os.MkdirAll(filepath.Join(e.repos, newNamespace), 0o755); err != nil {
 		return err
 	}

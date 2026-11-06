@@ -79,6 +79,8 @@ func (m *Manager) repack(ctx context.Context, repo *db.GitRepository, wiki bool)
 		if err == nil {
 			if refsEqual(before, allRefs(r)) {
 				err = swapPacks(r, newPack, packed)
+				// Cached pack objects still point at the dropped packs
+				m.engine.DropObjectCache()
 			}
 			r.Close()
 		}
