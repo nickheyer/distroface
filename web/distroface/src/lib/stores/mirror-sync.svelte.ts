@@ -13,6 +13,7 @@ class MirrorSyncStore {
 	finishedSeq = $state(0);
 	private running = false;
 	private abort: AbortController | null = null;
+	private gen = 0;
 
 	get live() {
 		return this.running;
@@ -22,12 +23,19 @@ class MirrorSyncStore {
 	ensure() {
 		if (this.running || typeof window === 'undefined') return;
 		this.running = true;
-		void this.loop();
+		void this.loop(++this.gen);
 	}
 
 	stop() {
 		this.running = false;
 		this.abort?.abort();
+	}
+
+	// Reopens the stream so the server filters for the new identity
+	restart() {
+		if (!this.running) return;
+		this.stop();
+		this.ensure();
 	}
 
 	syncing(
@@ -44,13 +52,15 @@ class MirrorSyncStore {
 		return this.messages[`${kind}:${repoId}`] ?? '';
 	}
 
-	private async loop() {
-		while (this.running) {
-			this.abort = new AbortController();
+	// A superseded loop leaves the state to its replacement
+	private async loop(gen: number) {
+		while (this.running && gen === this.gen) {
+			const abort = new AbortController();
+			this.abort = abort;
 			try {
 				const stream = rpcClient.mirror.watchSyncs(
 					{},
-					{ ...silentCallOptions, signal: this.abort.signal }
+					{ ...silentCallOptions, signal: abort.signal }
 				);
 				for await (const ev of stream) {
 					this.apply(ev);
@@ -61,6 +71,7 @@ class MirrorSyncStore {
 					break;
 				}
 			}
+			if (gen !== this.gen) break;
 			this.active = {};
 			this.activeEvents = {};
 			this.messages = {};

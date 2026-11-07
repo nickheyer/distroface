@@ -1,5 +1,6 @@
 import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 import type { Permission, User } from '$lib/proto/distroface/v1/types_pb';
+import { resetSessionCaches } from './session-caches';
 
 const SESSION_KEY = 'distroface_session';
 
@@ -142,6 +143,7 @@ class AuthStore {
 		this.token = token;
 		localStorage.setItem(SESSION_KEY, token);
 		writeSessionCookie(token);
+		resetSessionCaches();
 	}
 
 	async login(identifier: string, password: string) {
@@ -186,6 +188,7 @@ class AuthStore {
 		this.permissions = permissions;
 		localStorage.setItem(SESSION_KEY, token);
 		writeSessionCookie(token);
+		resetSessionCaches();
 	}
 
 	private clearSession() {
@@ -194,6 +197,7 @@ class AuthStore {
 		this.permissions = [];
 		localStorage.removeItem(SESSION_KEY);
 		writeSessionCookie(null);
+		resetSessionCaches();
 	}
 
 	// Swaps in a freshly returned user row, settings pages call it after edits

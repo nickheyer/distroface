@@ -13,9 +13,11 @@ class GitRepoStore {
 	loadedFor = $state(''); // Wont be the same as repo after rename
 	private inflight: { key: string; promise: Promise<GitRepository | undefined> } | null = null;
 	private seq = 0;
+	private stale = false;
 
 	// Loads once per namespace and name, force refetches
 	async load(namespace: string, name: string, force = false): Promise<GitRepository | undefined> {
+		if (this.stale) this.clear();
 		if (!force && this.repo && this.repo.namespace === namespace && this.repo.name === name) {
 			return this.repo;
 		}
@@ -83,10 +85,21 @@ class GitRepoStore {
 		}
 	}
 
+	// Drops what is loaded, answers still in flight are discarded
 	clear() {
+		this.seq++;
+		this.inflight = null;
+		this.stale = false;
 		this.repo = undefined;
+		this.loading = false;
 		this.error = '';
 		this.notFound = false;
+		this.loadedFor = '';
+	}
+
+	// Viewer changed, the next load refetches instead of reusing
+	invalidate() {
+		this.stale = true;
 	}
 
 	get fullName(): string {

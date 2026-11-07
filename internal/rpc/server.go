@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"io/fs"
 	"net/http"
 	"strings"
 
@@ -333,13 +334,13 @@ func serviceNames(server *connect.Server) []string {
 
 // Git data plane paths are claimed ahead of the spa catch all
 func (s *Server) setupFrontend(mux *http.ServeMux) {
-	fs := s.getFrontendFS()
+	fsys := s.getFrontendFS()
 	var root http.Handler
-	if fs == nil {
+	if fsys == nil {
 		s.Log.Warn("No frontend found - API only mode")
 		root = http.NotFoundHandler()
 	} else {
-		root = s.createFrontendHandler(fs)
+		root = newFrontendHandler(fsys)
 	}
 	if s.GitHTTP != nil {
 		root = s.GitHTTP.Wrap(root)
@@ -347,45 +348,12 @@ func (s *Server) setupFrontend(mux *http.ServeMux) {
 	mux.Handle("/", root)
 }
 
-func (s *Server) getFrontendFS() http.FileSystem {
+func (s *Server) getFrontendFS() fs.FS {
 	if buildFS, err := web.BuildFS(); err == nil {
 		s.Log.Info("Using embedded frontend")
-		return http.FS(buildFS)
+		return buildFS
 	}
 	return nil
-}
-
-func (s *Server) createFrontendHandler(fs http.FileSystem) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		if isConnectPath(r.URL.Path) {
-			http.NotFound(w, r)
-			return
-		}
-
-		path := r.URL.Path
-		if path == "/" {
-			path = "/index.html"
-		}
-
-		file, err := fs.Open(path)
-		if err == nil {
-			defer func() { _ = file.Close() }()
-			stat, _ := file.Stat()
-			http.ServeContent(w, r, path, stat.ModTime(), file)
-			return
-		}
-
-		indexFile, err := fs.Open("/index.html")
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-		defer func() { _ = indexFile.Close() }()
-
-		stat, _ := indexFile.Stat()
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		http.ServeContent(w, r, "/index.html", stat.ModTime(), indexFile)
-	}
 }
 
 func isConnectPath(path string) bool {

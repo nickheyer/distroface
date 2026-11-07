@@ -12,7 +12,7 @@ const config = {
 		}
 		handler(warning);
 	},
-	kit: { adapter: adapter({ fallback: 'index.html' }) },
+	kit: { adapter: adapter({ fallback: 'index.html', precompress: true }) },
 	compilerOptions: {
 		// THE FACT THAT THIS TOOK SO FUCKING LONG TO FIND... I VOW TO NEVER MAKE ACCESSIBLE APPS AGAIN
 		// THIS IS WHAT YOU DID SVELTE TEAM. THIS ONE IS ENTIRELY ON YOU, STUPID IDIOTS

@@ -26,6 +26,13 @@ class NotificationStore {
 		this.abort = null;
 	}
 
+	// Drops the previous identity's count along with its stream
+	reset() {
+		this.stop();
+		this.unread = 0;
+		this.latest = null;
+	}
+
 	async refresh() {
 		try {
 			const resp = await rpcClient.notification.getUnreadCount({}, silentCallOptions);
