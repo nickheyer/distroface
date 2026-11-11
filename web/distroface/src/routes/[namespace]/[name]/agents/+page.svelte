@@ -2,7 +2,7 @@
 	import { page } from '$app/state';
 	import { replaceState } from '$app/navigation';
 	import { resolve } from '$app/paths';
-	import { onMount } from 'svelte';
+	import { onMount, type Component } from 'svelte';
 	import { Bot, Plus, AlertCircle, Plug, FileCode } from '$lib/icons';
 	import { Button } from '$lib/components/ui/button';
 	import { Badge } from '$lib/components/ui/badge';
@@ -11,6 +11,7 @@
 	import { Select, SelectContent, SelectItem, SelectTrigger } from '$lib/components/ui/select';
 	import { Input } from '$lib/components/ui/input';
 	import DataPagination from '$lib/components/data-pagination.svelte';
+	import EmptyState from '$lib/components/empty-state.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import AgentSessionList from '$lib/components/git/agent-session-list.svelte';
 	import { rpcClient, silentCallOptions, backgroundCallOptions } from '$lib/api/rpc-client';
@@ -203,51 +204,94 @@
 			? resolve(`${newHref}?agent=${encodeURIComponent(selectedAgent.slug)}` as `/${string}`)
 			: newHref
 	);
+
+	type Blocker = {
+		icon: Component<{ class?: string }>;
+		title: string;
+		description: string;
+		action?: { label: string; href: string };
+	};
+
+	// First thing keeping agents from running here
+	const blocker = $derived.by((): Blocker | undefined => {
+		if (!configStore.agentsEnabled) {
+			return {
+				icon: AlertCircle,
+				title: 'Agents are disabled on this server',
+				description:
+					'Sessions will not run until an administrator enables agents in the git settings.'
+			};
+		}
+		if (!overview || !repo) return undefined;
+		if (!overview.enabled) {
+			return {
+				icon: AlertCircle,
+				title: 'Agents are disabled for this organization',
+				description: 'An organization owner can enable them under the organization agents page.'
+			};
+		}
+		if (!unitEnabled) {
+			return {
+				icon: AlertCircle,
+				title: 'Agents are turned off for this repository',
+				description: gitRepoStore.canAdmin
+					? 'Turn the agents unit on in the repository settings.'
+					: 'A repository admin can turn the agents unit on.',
+				action: gitRepoStore.canAdmin
+					? {
+							label: 'Open settings',
+							href: resolve('/[namespace]/[name]/settings', { namespace, name })
+						}
+					: undefined
+			};
+		}
+		if (!overview.hasProvider) {
+			return {
+				icon: Plug,
+				title: 'No connector',
+				description: gitRepoStore.canAdmin
+					? 'Agents need a connector to a model provider before they can run.'
+					: 'Agents need a connector to a model provider. Ask a repository, organization, or instance admin to add one.',
+				action: gitRepoStore.canAdmin
+					? {
+							label: 'Add connector',
+							href: resolve('/[namespace]/[name]/settings/agents/connectors/new', {
+								namespace,
+								name
+							})
+						}
+					: undefined
+			};
+		}
+		return undefined;
+	});
+	// Blocker replaces the empty list before any session
+	const blockedEmpty = $derived(
+		!!blocker && !filtersActive && !sessionsLoading && sessions.length === 0
+	);
 </script>
 
+{#snippet blockerAction()}
+	{#if blocker?.action}
+		<Button variant="outline" href={blocker.action.href}>{blocker.action.label}</Button>
+	{/if}
+{/snippet}
+
 <div class="space-y-4">
-	{#if !configStore.agentsEnabled}
-		<Alert variant="warning">
-			<AlertCircle />
-			<AlertTitle>Agents are disabled on this server</AlertTitle>
-			<AlertDescription
-				>Sessions will not run until an administrator enables agents in the git settings.</AlertDescription
-			>
-		</Alert>
-	{:else if overview && !overview.enabled}
-		<Alert variant="warning">
-			<AlertCircle />
-			<AlertTitle>Agents are disabled for this organization</AlertTitle>
-			<AlertDescription
-				>An organization owner can enable them under the organization agents page.</AlertDescription
-			>
-		</Alert>
-	{:else if !unitEnabled}
-		<Alert variant="warning">
-			<AlertCircle />
-			<AlertTitle>Agents are turned off for this repository</AlertTitle>
-			{#if gitRepoStore.canAdmin}
-				<AlertDescription>
-					<a href={resolve('/[namespace]/[name]/settings', { namespace, name })} class="link"
-						>Enable the unit in settings</a
-					>
-				</AlertDescription>
+	{#if blocker && !blockedEmpty && !sessionsLoading}
+		{@const Icon = blocker.icon}
+		<Alert variant="warning" class="has-[>svg]:grid-cols-[calc(var(--spacing)*4)_1fr_auto]">
+			<Icon />
+			<AlertTitle>{blocker.title}</AlertTitle>
+			<AlertDescription>{blocker.description}</AlertDescription>
+			{#if blocker.action}
+				<Button
+					size="sm"
+					variant="outline"
+					class="col-start-3 row-span-2 row-start-1 self-center"
+					href={blocker.action.href}>{blocker.action.label}</Button
+				>
 			{/if}
-		</Alert>
-	{:else if overview && !overview.hasProvider}
-		<Alert variant="warning">
-			<Plug />
-			<AlertTitle>No inference connector</AlertTitle>
-			<AlertDescription>
-				{#if gitRepoStore.canAdmin}
-					<a
-						href={resolve('/[namespace]/[name]/settings/agents/connectors', { namespace, name })}
-						class="link">Add a connector</a
-					> here, or ask an organization or instance admin to register one.
-				{:else}
-					Ask a repository, organization, or instance admin to register a connector.
-				{/if}
-			</AlertDescription>
 		</Alert>
 	{/if}
 
@@ -439,18 +483,29 @@
 					</span>
 				</div>
 
-				<AgentSessionList
-					{namespace}
-					{name}
-					{sessions}
-					loading={sessionsLoading}
-					{canWrite}
-					emptyMessage={filtersActive ? 'No sessions match these filters' : 'No agent sessions yet'}
-					emptyDescription={filtersActive
-						? 'Try a different state, trigger, or user.'
-						: 'Start a task, assign an issue to an agent, request a review from one, or mention it in a comment.'}
-					onChanged={() => loadSessions(true)}
-				/>
+				{#if blocker && blockedEmpty}
+					<EmptyState
+						icon={blocker.icon}
+						message={blocker.title}
+						description={blocker.description}
+						actions={blocker.action ? blockerAction : undefined}
+					/>
+				{:else}
+					<AgentSessionList
+						{namespace}
+						{name}
+						{sessions}
+						loading={sessionsLoading}
+						{canWrite}
+						emptyMessage={filtersActive
+							? 'No sessions match these filters'
+							: 'No agent sessions yet'}
+						emptyDescription={filtersActive
+							? 'Try a different state, trigger, or user.'
+							: 'Start a task, assign an issue to an agent, request a review from one, or mention it in a comment.'}
+						onChanged={() => loadSessions(true)}
+					/>
+				{/if}
 				{#if sessions.length > 0}
 					<DataPagination {pager} onChange={() => loadSessions()} />
 				{/if}

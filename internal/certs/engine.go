@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nickheyer/distroface/internal/cache"
@@ -374,8 +375,19 @@ func (e *Engine) getConfigForClient(hello *tls.ClientHelloInfo) (*tls.Config, er
 	return cfg, nil
 }
 
-// Serves exactly the configured source for the hostname or nothing
+// Hosts without a certificate answer like a cleartext port
 func (e *Engine) getCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	cert, err := e.selectCertificate(hello)
+	if err != nil {
+		if c, ok := hello.Conn.(interface{ answerCleartext() }); ok {
+			c.answerCleartext()
+		}
+	}
+	return cert, err
+}
+
+// Serves exactly the configured source for the hostname or nothing
+func (e *Engine) selectCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	ctx := context.Background()
 	if c := hello.Context(); c != nil {
 		ctx = c
@@ -968,10 +980,29 @@ func (l *dualListener) Close() error {
 
 func (l *dualListener) Addr() net.Addr { return l.raw.Addr() }
 
+// What a cleartext http port says to a tls hello
+const cleartextReply = "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\nNo certificate serves this host, use http\n"
+
 // Replays the sniffed byte before the rest of the stream
 type sniffedConn struct {
 	net.Conn
 	peeked []byte
+	// Set when no certificate serves the hello
+	cleartext atomic.Bool
+	replied   atomic.Bool
+}
+
+func (c *sniffedConn) answerCleartext() { c.cleartext.Store(true) }
+
+// Clients fall back on an http answer, never an alert
+func (c *sniffedConn) Write(p []byte) (int, error) {
+	if !c.cleartext.Load() {
+		return c.Conn.Write(p)
+	}
+	if c.replied.CompareAndSwap(false, true) {
+		_, _ = c.Conn.Write([]byte(cleartextReply))
+	}
+	return len(p), nil
 }
 
 func (c *sniffedConn) Read(p []byte) (int, error) {

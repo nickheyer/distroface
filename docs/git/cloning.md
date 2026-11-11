@@ -57,6 +57,7 @@ Git over ssh is off until an admin turns it on under Admin > Git > SSH.
 | `git.ssh_enabled` | `false` | Opens the listener and shows ssh clone urls |
 | `git.ssh_port` | `22` | Listener port, system tier only, rebinds live |
 | `git.ssh_public_host` | `""` | Host or `host:port` shown in clone urls, blank uses the public hostname |
+| `git.ssh_portal_ports` | `false` | Organization admins may give a portal its own ssh port, system tier only |
 
 Saving probes the port first through `SettingsService.ProbeGitSSHPort` and the save is refused with `git ssh not saved: ...` when the port cannot be bound, either `needs elevated privileges on this host, pick a port above 1023 or grant the binary cap_net_bind_service` or `is already in use by another process on this host`. The page shows the listener state of the saved port. The container publishes 22, when it is taken on the host publish another one and tell clone urls about it:
 
@@ -66,7 +67,7 @@ docker run -p 8080:8080 -p 2222:22 \
   -v distroface:/app/data nickheyer/distroface:latest
 ```
 
-Org portals may add their own ssh ports, see [Portals](../administration/portals.md).
+With `git.ssh_portal_ports` on, org portals may add their own ssh ports, see [Portals](../administration/portals.md).
 
 ## Host keys
 

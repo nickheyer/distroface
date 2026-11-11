@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import { AlertTriangle, Key, Loader, Terminal } from '$lib/icons';
-	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
@@ -35,9 +34,19 @@
 	const dockerLoginExample = $derived(
 		`docker login ${registryHost} \\\n  -u ${authStore.user?.username} \\\n  -p ${newPlaintextToken ?? 'YOUR_TOKEN'}`
 	);
+	const gitCloneExample = $derived(
+		`git clone ${portalStore.scheme()}://${authStore.user?.username}@${registryHost}/OWNER/REPOSITORY.git`
+	);
 	const apiCurlExample = $derived(
 		`curl -X POST \\\n  ${portalStore.scheme()}://${registryHost}/distroface.v1.RepositoryService/ListRepositories \\\n  -H "authorization: Bearer ${newPlaintextToken ?? 'YOUR_TOKEN'}" \\\n  -H "content-type: application/json" \\\n  -d '{}'`
 	);
+	const examples = $derived([
+		{ title: 'Log in with docker', text: dockerLoginExample },
+		...(configStore.gitEnabled
+			? [{ title: 'Clone with git, the token is the password', text: gitCloneExample }]
+			: []),
+		{ title: 'Call the API with curl', text: apiCurlExample }
+	]);
 
 	async function createToken() {
 		if (!tokenName.trim() || creating) return;
@@ -51,7 +60,6 @@
 		creating = false;
 		if (!resp) return;
 		newPlaintextToken = resp.plaintextToken;
-		toast.success('Token created');
 	}
 </script>
 
@@ -74,7 +82,7 @@
 		level="section"
 		title={newPlaintextToken ? 'Token created' : 'Create token'}
 		description={newPlaintextToken
-			? 'Copy it now, it will not be shown again.'
+			? 'Use it wherever a password is asked for.'
 			: 'Authenticates with the API and Docker registry.'}
 		backHref={listHref}
 		backLabel="API tokens"
@@ -93,29 +101,19 @@
 					<CopyButton text={newPlaintextToken} label="Token copied" />
 				</div>
 
-				<div class="box">
-					<div class="box-header">
-						<span class="flex items-center gap-2"
-							><Terminal class="size-3.5 text-muted-foreground" />Docker registry login</span
-						>
-						<CopyButton text={dockerLoginExample} label="Command copied" />
+				{#each examples as example (example.title)}
+					<div class="box">
+						<div class="box-header">
+							<span class="flex items-center gap-2"
+								><Terminal class="size-3.5 text-muted-foreground" />{example.title}</span
+							>
+							<CopyButton text={example.text} label="Command copied" />
+						</div>
+						<div class="p-4">
+							<pre class="code-inline wrap-break-word whitespace-pre-wrap">{example.text}</pre>
+						</div>
 					</div>
-					<div class="p-4">
-						<pre class="code-inline wrap-break-word whitespace-pre-wrap">{dockerLoginExample}</pre>
-					</div>
-				</div>
-
-				<div class="box">
-					<div class="box-header">
-						<span class="flex items-center gap-2"
-							><Terminal class="size-3.5 text-muted-foreground" />API request</span
-						>
-						<CopyButton text={apiCurlExample} label="Command copied" />
-					</div>
-					<div class="p-4">
-						<pre class="code-inline wrap-break-word whitespace-pre-wrap">{apiCurlExample}</pre>
-					</div>
-				</div>
+				{/each}
 			</div>
 		{:else}
 			<FormSection title="Token" description="Name and lifetime of the token.">

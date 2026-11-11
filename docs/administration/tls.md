@@ -15,7 +15,7 @@ All settings on this page live under Admin > Network security. They can be seede
 
 ## Listener modes
 
-The listener accepts both schemes on `server.port` in every mode. The first byte of each connection decides whether it is a TLS handshake or cleartext.
+The listener accepts both schemes on `server.port` in every mode. The first byte of each connection decides whether it is a TLS handshake or cleartext. A handshake for a hostname no certificate resolves for is answered with a plain http 400 instead of a TLS alert, the same thing a cleartext only port does, so clients that retry insecure registries over http, docker included, fall back instead of failing.
 
 | Mode | Behavior |
 | --- | --- |

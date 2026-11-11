@@ -7,6 +7,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
+	import LimitInput from '$lib/components/limit-input.svelte';
 	import PemInput from '$lib/components/pem-input.svelte';
 	import * as Popover from '$lib/components/ui/popover';
 	import * as RadioGroup from '$lib/components/ui/radio-group';
@@ -21,6 +22,7 @@
 	import { certDate, certSourceLabels, certStateBadge, isIssuableHostname } from '$lib/cert-utils';
 	import { orgScope, patchSettings, portalScope } from '$lib/settings-utils';
 	import { authStore } from '$lib/stores/auth.svelte';
+	import { configStore } from '$lib/stores/config.svelte';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
 	import {
 		CertSource,
@@ -47,7 +49,9 @@
 	let name = $derived(portal?.name ?? '');
 	let hostname = $derived(portal?.hostname ?? '');
 	let portText = $derived(portal && portal.port > 0 ? String(portal.port) : '');
-	let sshPortText = $derived(portal && portal.sshPort > 0 ? String(portal.sshPort) : '');
+	let sshPort = $derived<number | undefined>(
+		portal && portal.sshPort > 0 ? portal.sshPort : undefined
+	);
 	let publicHost = $derived(portal?.publicHost ?? '');
 	let mapUnqualified = $derived(portal?.mapUnqualified ?? true);
 	let allowPush = $derived(portal?.allowPush ?? true);
@@ -274,6 +278,9 @@
 	const ruleCount = $derived(
 		rules.filter((r) => r.pattern.trim() !== '' || r.replace.trim() !== '').length
 	);
+	// Instance policy gates the port, a stored one stays clearable
+	const sshAllowed = $derived(configStore.sshPortalPorts);
+	const showSsh = $derived(!isProxy && (sshAllowed || (portal?.sshPort ?? 0) > 0));
 
 	// Issuance failures surface as the portal's live cert state
 	async function provisionCertificate(portalId: string) {
@@ -315,7 +322,7 @@
 			name: name.trim(),
 			hostname: hostname.trim().toLowerCase(),
 			port: Number(portText.trim()) || 0,
-			sshPort: Number(sshPortText.trim()) || 0,
+			sshPort: isProxy ? 0 : (sshPort ?? 0),
 			tls,
 			certSource,
 			...(isProxy
@@ -559,20 +566,6 @@
 			aria-invalid={addressError.startsWith('Port')}
 		/>
 	</FormField>
-	<FormField
-		label="Git SSH port"
-		id="portal-ssh-port"
-		help="Dedicated listener for git over ssh, unqualified names and this portal's rules apply there. Empty serves canonical paths on the primary ssh port"
-		layout="inline"
-	>
-		<Input
-			id="portal-ssh-port"
-			bind:value={sshPortText}
-			class="w-28 font-mono"
-			inputmode="numeric"
-			placeholder="none"
-		/>
-	</FormField>
 	{#if !isProxy}
 		<FormField
 			label="Public address"
@@ -632,6 +625,30 @@
 			Requests forward unchanged with standard X-Forwarded headers. HTTPS still terminates at this
 			portal with the certificate configured below.
 		</p>
+	</FormSection>
+{/if}
+
+{#if showSsh}
+	<FormSection title="Git over SSH" description="SSH clones through this portal.">
+		<FormField
+			label="Dedicated SSH port"
+			id="portal-ssh-port"
+			layout="inline"
+			help={sshAllowed
+				? "Opens a listener where this portal's names and rules apply, off keeps full paths on the primary SSH port"
+				: 'Portal SSH ports are disabled on this instance and this port is closed, switch it off to clear it'}
+		>
+			<LimitInput
+				id="portal-ssh-port"
+				label="dedicated SSH port"
+				unit="port"
+				bind:value={sshPort}
+				min={1}
+				max={65535}
+				seed={configStore.sshPort === 2222 ? 2223 : 2222}
+				inputClass="w-32"
+			/>
+		</FormField>
 	</FormSection>
 {/if}
 

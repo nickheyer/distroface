@@ -122,8 +122,10 @@
 			<Alert variant="info">
 				<ShieldCheck />
 				<AlertDescription>
-					Your account is managed by <strong>{authStore.user?.authProvider}</strong>. Password
-					changes are handled through your identity provider.
+					<span>
+						Your account is managed by <strong>{authStore.user?.authProvider}</strong>. Password
+						changes are handled through your identity provider.
+					</span>
 				</AlertDescription>
 			</Alert>
 		{:else}

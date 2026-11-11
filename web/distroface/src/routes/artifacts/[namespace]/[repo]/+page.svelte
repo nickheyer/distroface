@@ -817,7 +817,7 @@
 			<EmptyState
 				icon={Archive}
 				message="No artifacts yet"
-				description="Upload files through the UI, dfcli, or the REST API."
+				description="Upload files through the UI or the REST API."
 			>
 				{#snippet actions()}
 					<PermissionGate resource="artifacts" action="push">

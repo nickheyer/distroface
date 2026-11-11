@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"connectrpc.com/connect/v2"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/db/stores/storetest"
@@ -992,5 +993,47 @@ func TestNormalizePublicHost(t *testing.T) {
 		if _, err := normalizePublicHost(bad); err == nil {
 			t.Errorf("normalizePublicHost(%q) accepted", bad)
 		}
+	}
+}
+
+func TestValidateSSHPortPolicy(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	sr := settings.NewResolver(store, nil)
+	svc := &Service{store: store, res: sr, mainPort: 8080}
+
+	set := func(ssh, portalPorts bool) {
+		t.Helper()
+		_, err := sr.Update(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, "", &v1.Settings{
+			Git: &v1.GitSettings{SshEnabled: &ssh, SshPortalPorts: &portalPorts},
+		}, []string{"git.ssh_enabled", "git.ssh_portal_ports"})
+		if err != nil {
+			t.Fatalf("settings update: %v", err)
+		}
+	}
+
+	if err := svc.validateSSHPort(ctx, 2222, ""); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Errorf("defaults: got %v, want failed precondition", err)
+	}
+	if err := svc.validateSSHPort(ctx, 0, ""); err != nil {
+		t.Errorf("clearing the port under defaults: %v", err)
+	}
+	set(true, false)
+	if err := svc.validateSSHPort(ctx, 2222, ""); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Errorf("ssh on, portal ports off: got %v, want failed precondition", err)
+	}
+	set(false, true)
+	if err := svc.validateSSHPort(ctx, 2222, ""); connect.CodeOf(err) != connect.CodeFailedPrecondition {
+		t.Errorf("ssh off, portal ports on: got %v, want failed precondition", err)
+	}
+	set(true, true)
+	if err := svc.validateSSHPort(ctx, 2222, ""); err != nil {
+		t.Errorf("ssh and portal ports on: %v", err)
+	}
+	if err := svc.validateSSHPort(ctx, 8080, ""); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("app port: got %v, want invalid argument", err)
+	}
+	if err := svc.validateSSHPort(ctx, 22, ""); connect.CodeOf(err) != connect.CodeInvalidArgument {
+		t.Errorf("primary ssh port: got %v, want invalid argument", err)
 	}
 }

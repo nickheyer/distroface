@@ -18,6 +18,7 @@
 	} from '$lib/components/ui/dropdown-menu';
 	import UserAvatar from '$lib/components/user-avatar.svelte';
 	import ActivityFeedView from '$lib/components/activity-feed.svelte';
+	import TokenNudge from '$lib/components/token-nudge.svelte';
 	import { activityGroups } from '$lib/activity';
 	import {
 		Activity,
@@ -384,6 +385,10 @@
 				{/if}
 			</div>
 		</div>
+
+		{#if signedIn}
+			<TokenNudge />
+		{/if}
 
 		<div class="scrollbar-none flex items-center gap-1.5 overflow-x-auto">
 			<button

@@ -95,6 +95,7 @@ func Defaults() *v1.Settings {
 			SshEnabled:             proto.Bool(false),
 			SshPort:                proto.Int32(22),
 			SshPublicHost:          proto.String(""),
+			SshPortalPorts:         proto.Bool(false),
 			LfsEnabled:             proto.Bool(true),
 			MaxLfsObjectMb:         proto.Int64(2048),
 			MaxRepoSizeMb:          proto.Int64(0),

@@ -69,10 +69,17 @@ func (s *Service) validateSSHPort(ctx context.Context, port int, excludePortalID
 	if port < 1 || port > 65535 {
 		return connect.Errorf(connect.CodeInvalidArgument, "invalid ssh port")
 	}
+	git := s.res.System(ctx).GetGit()
+	if !git.GetEnabled() || !git.GetSshEnabled() {
+		return connect.Errorf(connect.CodeFailedPrecondition, "git over ssh is disabled on this instance")
+	}
+	if !git.GetSshPortalPorts() {
+		return connect.Errorf(connect.CodeFailedPrecondition, "portal ssh ports are disabled on this instance")
+	}
 	if port == s.mainPort {
 		return connect.Errorf(connect.CodeInvalidArgument, "ssh port %d is the app's own port", port)
 	}
-	if port == int(s.res.System(ctx).GetGit().GetSshPort()) {
+	if port == int(git.GetSshPort()) {
 		return connect.Errorf(connect.CodeInvalidArgument, "ssh port %d is the primary git ssh port", port)
 	}
 	portals, err := s.store.ListRegistryPortals(ctx)
@@ -230,6 +237,7 @@ func scrubProxyPortal(p *storage.RegistryPortal) {
 	p.RequireAuth = false
 	p.HidePrimaryLink = false
 	p.PublicHost = ""
+	p.SSHPort = 0
 	p.Rules = "[]"
 }
 
@@ -510,7 +518,7 @@ func (s *Service) UpdatePortal(ctx context.Context, req *v1.UpdatePortalRequest)
 	if msg.MapUnqualified != nil {
 		portal.MapUnqualified = *msg.MapUnqualified
 	}
-	if msg.SshPort != nil {
+	if msg.SshPort != nil && int(*msg.SshPort) != portal.SSHPort {
 		if err := s.validateSSHPort(ctx, int(*msg.SshPort), portal.ID); err != nil {
 			return nil, err
 		}

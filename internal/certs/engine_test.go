@@ -10,7 +10,9 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -731,5 +733,61 @@ func TestAppCASource(t *testing.T) {
 		if leaf.VerifyHostname("registry.example.com") != nil {
 			t.Errorf("sni %q served %v, want the primary identity", sni, leaf.DNSNames)
 		}
+	}
+}
+
+func TestDualListenerAnswersCleartextWithoutCertificate(t *testing.T) {
+	serve := func(e *Engine) string {
+		t.Helper()
+		raw, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.WriteString(w, "ok")
+		})}
+		go func() { _ = srv.Serve(DualSchemeListener(raw, e.TLSConfig(), time.Second)) }()
+		t.Cleanup(func() { _ = srv.Close() })
+		return raw.Addr().String()
+	}
+	dial := func(addr string) error {
+		conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 2 * time.Second}, "tcp", addr,
+			&tls.Config{InsecureSkipVerify: true, ServerName: "registry.example.com"})
+		if err == nil {
+			_ = conn.Close()
+		}
+		return err
+	}
+
+	store := newTestStore(t)
+	res := newTestResolver(t, store)
+
+	// Docker only retries over http when the hello gets an http answer
+	bare := serve(newTestEngine(t, store, res, "", ""))
+	var header tls.RecordHeaderError
+	if err := dial(bare); !errors.As(err, &header) || string(header.RecordHeader[:]) != "HTTP/" {
+		t.Fatalf("hello without a certificate: got %v, want an http answer", err)
+	}
+	resp, err := http.Get("http://" + bare + "/")
+	if err != nil {
+		t.Fatalf("cleartext request: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || string(body) != "ok" {
+		t.Errorf("cleartext request: got %d %q", resp.StatusCode, body)
+	}
+
+	dir := t.TempDir()
+	certPEM, keyPEM := pemPair(t, "registry.example.com")
+	certFile, keyFile := filepath.Join(dir, "tls.crt"), filepath.Join(dir, "tls.key")
+	if err := os.WriteFile(certFile, []byte(certPEM), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, []byte(keyPEM), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := dial(serve(newTestEngine(t, store, res, certFile, keyFile))); err != nil {
+		t.Errorf("hello with a certificate: %v", err)
 	}
 }

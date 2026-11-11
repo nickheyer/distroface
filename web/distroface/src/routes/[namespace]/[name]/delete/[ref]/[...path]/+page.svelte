@@ -160,8 +160,10 @@
 		<Alert variant="destructive">
 			<FileX />
 			<AlertDescription>
-				The commit removes <span class="font-mono">{path}</span> ({formatBytes(size)}) from
-				<span class="font-mono">{ref}</span>. History keeps every earlier version.
+				<span>
+					The commit removes <span class="font-mono">{path}</span> ({formatBytes(size)}) from
+					<span class="font-mono">{ref}</span>. History keeps every earlier version.
+				</span>
 			</AlertDescription>
 		</Alert>
 		<CommitForm

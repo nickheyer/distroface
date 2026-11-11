@@ -52,6 +52,11 @@ class ConfigStore {
 		return this.settings?.git?.sshPort ?? 22;
 	}
 
+	// Organizations may give a portal its own ssh listener
+	get sshPortalPorts(): boolean {
+		return this.sshEnabled && this.settings?.git?.sshPortalPorts === true;
+	}
+
 	get lfsEnabled(): boolean {
 		return this.settings?.git?.lfsEnabled === true;
 	}

@@ -55,7 +55,7 @@ func (m *SSHManager) desiredPorts(ctx context.Context) map[int]bool {
 	if p := int(git.GetSshPort()); p > 0 {
 		desired[p] = true
 	}
-	if m.portals != nil {
+	if m.portals != nil && git.GetSshPortalPorts() {
 		for _, p := range m.portals.SSHPorts() {
 			desired[p] = true
 		}

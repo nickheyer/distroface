@@ -243,6 +243,7 @@ message GitSettings {
   optional bool ssh_enabled = 2;
   optional int32 ssh_port = 3; // System only, default 22, listener rebinds live
   optional string ssh_public_host = 4; // Host or host:port shown in clone urls, defaults to the public hostname
+  optional bool ssh_portal_ports = 18; // System only, portals may open their own ssh listeners
   optional bool lfs_enabled = 5;
   optional int64 max_lfs_object_mb = 6;
   optional int64 max_repo_size_mb = 7; // Zero unlimited

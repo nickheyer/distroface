@@ -23,23 +23,25 @@
 		<Alert>
 			<FileCode />
 			<AlertDescription>
-				{#if overview.instructionFiles.length > 0}
-					Repository instructions read by every session:
-					{#each overview.instructionFiles as f, i (f)}
-						<a
-							href={resolve('/[namespace]/[name]/blob/[ref]/[...path]', {
-								namespace,
-								name,
-								ref: encodeURIComponent(repo.defaultBranch),
-								path: f
-							})}
-							class="link font-mono">{f}</a
-						>{i < overview.instructionFiles.length - 1 ? ', ' : ''}
-					{/each}
-				{:else}
-					An AGENTS.md at the repository root steers every session. Agent files under
-					.distroface/agents define agents with yaml front matter.
-				{/if}
+				<span>
+					{#if overview.instructionFiles.length > 0}
+						Repository instructions read by every session:
+						{#each overview.instructionFiles as f, i (f)}
+							<a
+								href={resolve('/[namespace]/[name]/blob/[ref]/[...path]', {
+									namespace,
+									name,
+									ref: encodeURIComponent(repo.defaultBranch),
+									path: f
+								})}
+								class="link font-mono">{f}</a
+							>{i < overview.instructionFiles.length - 1 ? ', ' : ''}
+						{/each}
+					{:else}
+						An AGENTS.md at the repository root steers every session. Agent files under
+						.distroface/agents define agents with yaml front matter.
+					{/if}
+				</span>
 			</AlertDescription>
 		</Alert>
 	{/if}

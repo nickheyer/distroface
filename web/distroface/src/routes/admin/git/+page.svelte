@@ -101,6 +101,14 @@
 			patch: (v) => ({ git: { sshEnabled: v } }),
 			verify: async (v) => (v ? probe(numValues.sshPort ?? 22) : '')
 		},
+		sshPortalPorts: {
+			key: 'sshPortalPorts',
+			path: 'git.ssh_portal_ports',
+			label: 'Portal SSH ports',
+			help: 'Organization admins may open a dedicated SSH port per portal',
+			get: (s) => git(s)?.sshPortalPorts ?? false,
+			patch: (v) => ({ git: { sshPortalPorts: v } })
+		},
 		lfsEnabled: {
 			key: 'lfsEnabled',
 			path: 'git.lfs_enabled',
@@ -508,6 +516,7 @@
 			{@render boolRow(bools.sshEnabled)}
 			{@render numRow(nums.sshPort)}
 			{@render textRow(texts.sshPublicHost)}
+			{@render boolRow(bools.sshPortalPorts)}
 			{#snippet footer()}
 				<div class="flex min-w-0 flex-1 items-center gap-2 text-sm">
 					{#if !boolValues.sshEnabled}

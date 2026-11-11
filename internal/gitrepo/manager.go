@@ -215,7 +215,7 @@ func (m *Manager) SSHCloneURL(ctx context.Context, repo *db.GitRepository, wiki 
 	}
 	path := repo.Namespace + "/" + repo.Name + suffix
 	if p := portal.FromContext(ctx); p != nil {
-		if p.SSHPort > 0 {
+		if p.SSHPort > 0 && git.GetSshPortalPorts() {
 			return "ssh://git@" + net.JoinHostPort(portalHost(ctx, host), strconv.Itoa(p.SSHPort)) + "/" + m.displayPath(ctx, repo) + suffix
 		}
 		if p.HidePrimaryLink {

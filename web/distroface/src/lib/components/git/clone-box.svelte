@@ -1,8 +1,10 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Terminal, Download } from '$lib/icons';
+	import { resolve } from '$app/paths';
+	import { Download } from '$lib/icons';
 	import CopyButton from '$lib/components/copy-button.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
+	import { authStore } from '$lib/stores/auth.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 
@@ -18,11 +20,6 @@
 		repo.httpCloneUrl || portalStore.httpCloneURL(repo.namespace, repo.name)
 	);
 	const sshUrl = $derived(repo.sshCloneUrl);
-	const cliRef = $derived(
-		portalStore.isPortal && portalStore.mapUnqualified && repo.namespace === portalStore.orgName
-			? repo.name
-			: `${repo.namespace}/${repo.name}`
-	);
 
 	let tab = $state<'http' | 'ssh'>('http');
 	const url = $derived(tab === 'ssh' && sshUrl ? sshUrl : httpUrl);
@@ -89,18 +86,24 @@
 			<CopyButton text={url} label="Clone URL copied" />
 		</div>
 		<p class="text-xs text-muted-foreground">
-			{tab === 'ssh'
-				? 'Authenticates with an SSH key from your settings'
-				: 'Authenticates with your username and a token or password'}
+			{#if tab === 'ssh'}
+				Authenticates with an
+				{#if authStore.isAuthenticated}
+					<a href={resolve('/settings/keys')} class="link">SSH key</a>
+				{:else}
+					SSH key
+				{/if}
+				from your settings
+			{:else}
+				Authenticates with your username and a
+				{#if authStore.isAuthenticated}
+					<a href={resolve('/settings/tokens')} class="link">token</a>
+				{:else}
+					token
+				{/if}
+				or password
+			{/if}
 		</p>
-	</div>
-
-	<div class="flex items-center gap-2 rounded-md border bg-muted py-0.5 pr-0.5 pl-3">
-		<Terminal class="size-3.5 shrink-0 text-muted-foreground" />
-		<code class="min-w-0 flex-1 truncate font-mono text-xs text-muted-foreground select-all"
-			>dfcli git clone {cliRef}</code
-		>
-		<CopyButton text="dfcli git clone {cliRef}" label="Command copied" />
 	</div>
 
 	{#if zipUrl || tarUrl}

@@ -23,7 +23,7 @@ Org admins manage portals under Org > Portals. Instance rules for hostnames live
 | --- | --- |
 | `hostname` | Lowercase DNS name the portal answers on, empty makes a catch-all for the port |
 | `port` | Dedicated listener port, 0 serves on the main port. Ports may be shared by several hostnames |
-| `sshPort` | Dedicated git ssh port, 0 serves canonical paths on the primary ssh port only |
+| `sshPort` | Dedicated git ssh port, 0 serves canonical paths on the primary ssh port only. Needs `git.ssh_enabled` and `git.ssh_portal_ports` on the instance, cleared on backend portals |
 | `publicHost` | Host with optional port written into links and mail, for portals a proxy exposes elsewhere |
 | `certSource` | `NONE`, `ACME`, `ORG_CA`, `ORG_CERT`, or `MANUAL` |
 | `tls` | Require https, cleartext requests redirect |
@@ -81,7 +81,7 @@ With `portals.isolated` on at org scope (Org > Settings > Isolate portals) the o
 - The OCI registry under `/v2/`. Names pass through the rewrite rules and `mapUnqualified`, writes need `allowPush`, and the bearer realm in `Www-Authenticate` is rewritten to the portal host so token flows complete on any hostname. See [registry](../registry/overview.md).
 - The artifact API under `/api/v1/artifacts`. Repository names map like the registry, listings are scoped to the organization, writes need `allowPush`, and anonymous requests get a 401 when the portal denies anonymous access. See [artifacts](../artifacts/repositories.md).
 - Git smart http, LFS, and browse paths. Repository names map like the registry, see [cloning](../git/cloning.md).
-- With `sshPort` set, git over ssh on that port maps names through the same rules, refuses repositories outside the portal's scope, and rejects pushes unless `allowPush` is on.
+- With `sshPort` set, git over ssh on that port maps names through the same rules, refuses repositories outside the portal's scope, and rejects pushes unless `allowPush` is on. The port only listens while `git.ssh_portal_ports` is on, an instance admin switches it under Admin > Git > SSH and it is off by default. Turning it off closes portal ssh listeners and keeps the stored ports, saves that set or change one are refused until it is back on.
 
 Anonymous access on a portal follows `auth.anonymous_access` at portal scope, then org scope, then the instance. `requireAuth` on the portal is a hard deny on top.
 

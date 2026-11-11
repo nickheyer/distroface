@@ -45,7 +45,6 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
-	import CliSetupPrompt from '$lib/components/cli-setup-prompt.svelte';
 	import NotificationBell from '$lib/components/git/notification-bell.svelte';
 	import RefHovercard from '$lib/components/git/ref-hovercard.svelte';
 	import SideNav from '$lib/components/side-nav.svelte';
@@ -307,16 +306,18 @@
 			</div>
 		</header>
 
-		<main class="flex-1">
+		<main class={page.data.fullBleed ? 'relative flex-1' : 'flex-1'}>
 			{#key page.url.pathname}
-				<div class="page-enter mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+				{#if page.data.fullBleed}
 					{@render children?.()}
-				</div>
+				{:else}
+					<div class="page-enter mx-auto max-w-7xl px-4 py-6 sm:px-6 sm:py-8">
+						{@render children?.()}
+					</div>
+				{/if}
 			{/key}
 		</main>
 	</div>
-
-	<CliSetupPrompt />
 
 	<Sheet bind:open={mobileMenuOpen}>
 		<SheetContent side="right" class="w-72">

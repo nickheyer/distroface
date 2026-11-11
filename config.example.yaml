@@ -108,6 +108,7 @@ logging:
 #     ssh_enabled: false                   # Off until an admin turns it on, the ui probes the port first
 #     ssh_port: 22                         # Listener port, needs root or cap_net_bind_service below 1024
 #     ssh_public_host: ""                  # host or host:port in clone urls, defaults to public_hostname
+#     ssh_portal_ports: false              # Org admins may open a dedicated ssh port per portal
 #     lfs_enabled: true
 #     max_lfs_object_mb: 2048
 #     max_repo_size_mb: 0                  # Zero unlimited

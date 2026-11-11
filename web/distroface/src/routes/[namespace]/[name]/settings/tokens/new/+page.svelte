@@ -2,7 +2,6 @@
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { AlertTriangle, Loader } from '$lib/icons';
-	import { toast } from 'svelte-sonner';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
@@ -43,15 +42,11 @@
 	const cloneExample = $derived(
 		`git clone ${scheme}://${username}:${plaintext ?? 'YOUR_TOKEN'}@${host}/${fullName}.git`
 	);
-	const helperExample = $derived(
-		`dfcli --server ${scheme}://${host} login --token ${plaintext ?? 'YOUR_TOKEN'}\ngit config --global credential.helper "dfcli git credential"`
-	);
 	const dockerExample = $derived(
 		`docker login ${host} -u ${username} -p ${plaintext ?? 'YOUR_TOKEN'}`
 	);
 	const examples = $derived([
 		{ title: 'Clone over https', text: cloneExample },
-		{ title: 'Log in with dfcli and the git credential helper', text: helperExample },
 		{ title: 'Push images to linked packages', text: dockerExample }
 	]);
 
@@ -71,7 +66,6 @@
 		creating = false;
 		if (!resp) return;
 		plaintext = resp.plaintextToken;
-		toast.success('Deploy token created');
 	}
 </script>
 
@@ -83,7 +77,7 @@
 	<FormPage
 		level="section"
 		title="Token created"
-		description="Copy it now, it will not be shown again."
+		description="Works for git and for packages linked to this repository."
 		backHref={listHref}
 		backLabel="Deploy tokens"
 	>
