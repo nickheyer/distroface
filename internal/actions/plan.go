@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"gitea.com/gitea/runner/act/model"
+	"gitea.dev/actionslib/pkg/model"
 	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/actions/jobparser"
 	"github.com/nickheyer/distroface/internal/audit"

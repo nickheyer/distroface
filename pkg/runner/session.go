@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"gitea.com/gitea/runner/act/model"
+	"gitea.dev/actionslib/pkg/model"
 	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/client"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"

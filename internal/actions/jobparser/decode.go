@@ -3,7 +3,7 @@ package jobparser
 import (
 	"fmt"
 
-	"gitea.com/gitea/runner/act/model"
+	"gitea.dev/actionslib/pkg/model"
 	"go.yaml.in/yaml/v4"
 )
 

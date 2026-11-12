@@ -9,8 +9,9 @@ import (
 	"regexp"
 	"strings"
 
-	"gitea.com/gitea/runner/act/exprparser"
-	"gitea.com/gitea/runner/act/model"
+	"gitea.dev/actionslib/pkg/expreval"
+	"gitea.dev/actionslib/pkg/exprparser"
+	"gitea.dev/actionslib/pkg/model"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -373,18 +374,7 @@ func EvaluateWorkflowCallOutputs(spec *WorkflowCallSpec, gitCtx *model.GithubCon
 }
 
 func evaluateWorkflowCallOutputValue(interpreter exprparser.Interpreter, value string) (string, error) {
-	if !strings.Contains(value, "${{") || !strings.Contains(value, "}}") {
-		return value, nil
-	}
-	expr, err := rewriteSubExpression(value, true)
-	if err != nil {
-		return "", err
-	}
-	evaluated, err := interpreter.Evaluate(expr, exprparser.DefaultStatusCheckNone)
-	if err != nil {
-		return "", err
-	}
-	return toString(evaluated), nil
+	return expreval.New(interpreter.Evaluate).Interpolate(value)
 }
 
 func toString(v any) string {

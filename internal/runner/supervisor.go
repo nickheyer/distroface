@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	actlog "gitea.com/gitea/runner/act/common/logging"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -49,6 +50,8 @@ func NewSupervisor(o SupervisorOptions) *Supervisor {
 
 // Follows the settings until the context ends
 func (s *Supervisor) Start(ctx context.Context) {
+	actlog.SetOutput(s.o.Log)
+	actlog.SetTextFormat(actlog.TextOptions{DisableColors: true, DisableTimestamp: true})
 	s.o.Resolver.Subscribe(func() { s.Reconcile(ctx) })
 	go s.loop(ctx)
 	s.Reconcile(ctx)
@@ -163,6 +166,9 @@ func (s *Supervisor) startRunner(ctx context.Context, cfg *v1.BuiltinRunnerSetti
 	r.DisableSignals()
 	if err := r.DockerAvailable(ctx); err != nil {
 		s.o.Log.Warn("Built in runner: docker is unreachable (%v), jobs will fail until the daemon answers", err)
+	}
+	if err := r.GitAvailable(); err != nil {
+		s.o.Log.Warn("Built in runner: %v, jobs that use actions will fail until git is installed", err)
 	}
 	s.o.Log.Info("Built in runner online with labels %s, work dir %s", strings.Join(labels, ","), rc.JobRoot())
 	return r.Run(ctx)

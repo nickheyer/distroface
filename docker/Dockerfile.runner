@@ -26,7 +26,7 @@ COPY buf.yaml buf.gen.yaml ./
 COPY proto/ ./proto/
 RUN mkdir -p web/distroface/static pkg/proto web/distroface/src/lib/proto && buf generate
 
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 ARG APP_VERSION
 ARG TARGETOS

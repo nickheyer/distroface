@@ -14,6 +14,8 @@ services:
     # volumes:
     #   - /srv/distroface:/srv/distroface
     #   - /var/run/docker.sock:/var/run/docker.sock
+    # group_add:
+    #   - "999" # Gid owning the docker socket on the host
     # depends_on:
       # cache:
       #   condition: service_healthy

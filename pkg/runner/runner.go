@@ -3,9 +3,11 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -218,6 +220,14 @@ func (r *Runner) DockerAvailable(ctx context.Context) error {
 	}
 	defer cli.Close()
 	return pingDocker(ctx, cli)
+}
+
+// Act downloads actions and reusable workflows with the git binary
+func (r *Runner) GitAvailable() error {
+	if _, err := exec.LookPath("git"); err != nil {
+		return fmt.Errorf("git is not on PATH: %w", err)
+	}
+	return nil
 }
 
 // Act spelled prefix on every container, volume, and network

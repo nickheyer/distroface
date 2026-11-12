@@ -4,8 +4,8 @@
 package jobparser
 
 import (
-	"gitea.com/gitea/runner/act/exprparser"
-	"gitea.com/gitea/runner/act/model"
+	"gitea.dev/actionslib/pkg/exprparser"
+	"gitea.dev/actionslib/pkg/model"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -23,8 +23,7 @@ func NewInterpeter(
 ) exprparser.Interpreter {
 	strategy := make(map[string]any)
 	if job.Strategy != nil {
-		strategy["fail-fast"] = job.Strategy.FailFast
-		strategy["max-parallel"] = job.Strategy.MaxParallel
+		strategy = exprparser.StrategyContext(job.Strategy, 0, 0)
 	}
 
 	run := &model.Run{

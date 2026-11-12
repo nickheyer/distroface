@@ -58,7 +58,7 @@ Labels mapped to `host` run the job on the runner machine itself, without a cont
 
 ## Job execution
 
-A job gets its own directory `job-<runner>-<id>` under the work dir with the checkout, a docker config, and session files. Remote actions are cloned once into `_actions` under the work dir and shared by every job. Before act starts, the runner pulls the job image and every service image, using the workflow's `credentials` first, the job token as user `x-access-token` for images on the instance registry, and the runner process's docker login for everything else. The `DOCKER_USERNAME` and `DOCKER_PASSWORD` secrets apply to the job image when set.
+A job gets its own directory `job-<runner>-<id>` under the work dir with the checkout, a docker config, and session files. Remote actions are cloned once into `_actions` under the work dir and shared by every job. The runner clones them with git, so git 2.34.1 or newer must be on its `PATH`. The server image and the runner image include it, and `dfcli runner status` reports whether it is found. Before act starts, the runner pulls the job image and every service image, using the workflow's `credentials` first, the job token as user `x-access-token` for images on the instance registry, and the runner process's docker login for everything else. The `DOCKER_USERNAME` and `DOCKER_PASSWORD` secrets apply to the job image when set.
 
 Every step sees `ACTIONS_CACHE_URL`, `ACTIONS_RUNTIME_URL`, `ACTIONS_RESULTS_URL`, `ACTIONS_RUNTIME_TOKEN`, `DISTROFACE_ACTIONS=true`, `DISTROFACE_ACTIONS_RUNNER_VERSION`, `DISTROFACE_REGISTRY` with the instance host, and `DOCKER_CONFIG` pointing at a config that already logs `docker` into the instance registry with the job token. `GITHUB_SERVER_URL` is the instance and `GITHUB_API_URL` is `<instance>/api/v1`.
 
@@ -92,7 +92,7 @@ The server can run jobs itself. Turn it on under Admin > Actions. A runner named
 | `git.actions.builtin_runner.concurrency` | `2` | Jobs at once. |
 | `git.actions.builtin_runner.image` | empty | Image behind every label, the stock act image when empty. |
 
-Jobs are sibling containers on the server's docker socket, and the daemon mounts job directories by host path. The process therefore needs the socket, and the data dir must be bound at the same path on the host and inside the container, the work dir is `<data dir>/runner`. The socket makes the server root on its host, keep it to development and small instances and use `dfcli runner` on a separate machine for anything shared. The compose file in the repository shows both bindings, see [Installation](../getting-started/installation.md).
+Jobs are sibling containers on the server's docker socket, and the daemon mounts job directories by host path. The process therefore needs the socket, and the data dir must be bound at the same path on the host and inside the container, the work dir is `<data dir>/runner`. The server runs as uid 1000, so it also needs the group that owns the socket, add its gid with `group_add` or `--group-add`, `stat -c %g /var/run/docker.sock` prints it. The socket makes the server root on its host, keep it to development and small instances and use `dfcli runner` on a separate machine for anything shared. The compose file in the repository shows all three, see [Installation](../getting-started/installation.md).
 
 ## Runner status
 

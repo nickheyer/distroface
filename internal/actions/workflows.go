@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"gitea.com/gitea/runner/act/model"
+	"gitea.dev/actionslib/pkg/model"
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/nickheyer/distroface/internal/actions/jobparser"
 	"github.com/nickheyer/distroface/internal/db"

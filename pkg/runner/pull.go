@@ -4,18 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"sort"
 	"strings"
 
 	"gitea.com/gitea/runner/act/common"
+	"gitea.com/gitea/runner/act/common/logging"
 	actcontainer "gitea.com/gitea/runner/act/container"
-	"gitea.com/gitea/runner/act/model"
 	actrunner "gitea.com/gitea/runner/act/runner"
+	"gitea.dev/actionslib/pkg/model"
 	"github.com/distribution/reference"
 	"github.com/moby/moby/api/pkg/authconfig"
 	"github.com/moby/moby/api/types/registry"
-	"github.com/sirupsen/logrus"
 )
 
 // Image act will start plus the workflow's credentials
@@ -35,7 +34,7 @@ func (j *job) pullImages(ctx context.Context, cfg *actrunner.Config, workflow *m
 	if len(pulls) == 0 {
 		return nil
 	}
-	cli, err := dockerClient(ctx, j.r.cfg.DockerHost)
+	cli, err := dockerClient(lctx, j.r.cfg.DockerHost)
 	if err != nil {
 		return err
 	}
@@ -87,7 +86,9 @@ func (j *job) jobImages(ctx context.Context, cfg *actrunner.Config, workflow *mo
 		ee := rc.NewExpressionEvaluator(ctx)
 		image, username, password := "", cfg.Secrets["DOCKER_USERNAME"], cfg.Secrets["DOCKER_PASSWORD"]
 		if c := job.Container(); c != nil {
-			image = ee.Interpolate(ctx, c.Image)
+			if image, err = interpolateImage(ctx, ee, c.Image); err != nil {
+				return nil, fmt.Errorf("container image: %w", err)
+			}
 			if c.Credentials != nil {
 				if username, password, err = interpolateCredentials(ctx, ee, c.Credentials); err != nil {
 					return nil, fmt.Errorf("container credentials: %w", err)
@@ -97,7 +98,9 @@ func (j *job) jobImages(ctx context.Context, cfg *actrunner.Config, workflow *mo
 		if image == "" {
 			runsOn := job.RunsOn()
 			for i, v := range runsOn {
-				runsOn[i] = ee.Interpolate(ctx, v)
+				if runsOn[i], err = ee.Interpolate(ctx, v); err != nil {
+					return nil, fmt.Errorf("runs-on: %w", err)
+				}
 			}
 			image = j.pickPlatform(runsOn)
 		}
@@ -113,23 +116,36 @@ func (j *job) jobImages(ctx context.Context, cfg *actrunner.Config, workflow *mo
 					return nil, fmt.Errorf("service %s credentials: %w", id, err)
 				}
 			}
-			pulls = append(pulls, imagePull{image: ee.Interpolate(ctx, spec.Image), username: user, password: pass})
+			serviceImage, err := interpolateImage(ctx, ee, spec.Image)
+			if err != nil {
+				return nil, fmt.Errorf("service %s image: %w", id, err)
+			}
+			// Act skips a service whose image evaluates empty
+			if serviceImage == "" {
+				continue
+			}
+			pulls = append(pulls, imagePull{image: serviceImage, username: user, password: pass})
 		}
 	}
 	return pulls, nil
 }
 
+func interpolateImage(ctx context.Context, ee *actrunner.ExpressionEvaluator, image string) (string, error) {
+	image, err := ee.Interpolate(ctx, image)
+	return strings.TrimPrefix(image, "docker://"), err
+}
+
 // Same checks act applies to a credentials block
-func interpolateCredentials(ctx context.Context, ee actrunner.ExpressionEvaluator, creds map[string]string) (string, string, error) {
+func interpolateCredentials(ctx context.Context, ee *actrunner.ExpressionEvaluator, creds map[string]string) (string, string, error) {
 	if len(creds) != 2 {
 		return "", "", errors.New("invalid property count for key 'credentials:'")
 	}
-	username := ee.Interpolate(ctx, creds["username"])
-	if username == "" {
+	username, err := ee.Interpolate(ctx, creds["username"])
+	if err != nil || username == "" {
 		return "", "", errors.New("failed to interpolate credentials.username")
 	}
-	password := ee.Interpolate(ctx, creds["password"])
-	if password == "" {
+	password, err := ee.Interpolate(ctx, creds["password"])
+	if err != nil || password == "" {
 		return "", "", errors.New("failed to interpolate credentials.password")
 	}
 	return username, password, nil
@@ -163,10 +179,6 @@ func imageDomain(image string) string {
 }
 
 // Routes act helper logs to the reporter before act runs
-func (j *job) setupLogger() *logrus.Logger {
-	l := logrus.New()
-	l.SetOutput(io.Discard)
-	l.SetLevel(logrus.InfoLevel)
-	l.AddHook(j.rep)
-	return l
+func (j *job) setupLogger() *logging.Logger {
+	return logging.New(logging.NewLevelHandler(j.rep, logging.LevelInfo))
 }

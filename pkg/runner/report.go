@@ -5,14 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"gitea.com/gitea/runner/act/model"
+	"gitea.com/gitea/runner/act/common/logging"
+	"gitea.dev/actionslib/pkg/model"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
-	"github.com/sirupsen/logrus"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -36,6 +37,9 @@ type annotation struct {
 }
 
 var commandRe = regexp.MustCompile(`^::([^ :]+)( [^:]*)?::(.*)$`)
+
+// Act folds annotation file, line, and column into the message
+var foldedLocationRe = regexp.MustCompile(`^([^\s:][^:\n]*):(\d+)(?::(\d+))?: `)
 
 // Turns act log entries into the transcript, step table, and annotations
 type reporter struct {
@@ -66,7 +70,33 @@ func newReporter(j *job) *reporter {
 	return &reporter{j: j, byKey: map[string]int{}, current: -1, outputs: map[string]string{}, wake: make(chan struct{}, 1)}
 }
 
-func (r *reporter) Levels() []logrus.Level { return logrus.AllLevels }
+func (r *reporter) Enabled(context.Context, logging.Level) bool { return true }
+
+func (r *reporter) WithAttrs(attrs []logging.Attr) logging.Handler {
+	return &attrHandler{r: r, attrs: attrs}
+}
+
+// Act calls this for add-mask, the line itself never arrives
+func (r *reporter) AddMask(v string) { r.j.log.AddMask(v) }
+
+// Carries logger attributes act attached before the call site
+type attrHandler struct {
+	r     *reporter
+	attrs []logging.Attr
+}
+
+func (h *attrHandler) Enabled(ctx context.Context, level logging.Level) bool {
+	return h.r.Enabled(ctx, level)
+}
+
+func (h *attrHandler) Handle(ctx context.Context, rec logging.Record) error {
+	rec.Attrs = slices.Concat(h.attrs, rec.Attrs)
+	return h.r.Handle(ctx, rec)
+}
+
+func (h *attrHandler) WithAttrs(attrs []logging.Attr) logging.Handler {
+	return &attrHandler{r: h.r, attrs: slices.Concat(h.attrs, attrs)}
+}
 
 func (r *reporter) setSteps(steps []*model.Step) {
 	r.mu.Lock()
@@ -139,7 +169,10 @@ func (r *reporter) errorLine(msg string) {
 }
 
 func (r *reporter) errorLocked(msg string, step int32) {
-	msg = r.j.log.Masked(strings.TrimPrefix(msg, "##[error]"))
+	if rest, ok := strings.CutPrefix(msg, "##[error]"); ok {
+		msg = unescapeData(rest)
+	}
+	msg = r.j.log.Masked(msg)
 	r.j.log.Line("##[error]%s", msg)
 	r.annotations = append(r.annotations, annotation{Level: "error", Message: msg, Step: step})
 	r.markDirty(false)
@@ -219,11 +252,11 @@ func (r *reporter) rowNameLocked(stage string, number int, stepName string) stri
 }
 
 // Main always rows, Pre and Post only when they run
-func stageRuns(stage string, level logrus.Level, raw, hasResult bool) bool {
+func stageRuns(stage string, level logging.Level, raw, hasResult bool) bool {
 	if stage != "Pre" && stage != "Post" {
 		return true
 	}
-	return raw || level <= logrus.ErrorLevel || (hasResult && level < logrus.DebugLevel)
+	return raw || level >= logging.LevelError || (hasResult && level > logging.LevelDebug)
 }
 
 func firstLine(s string) string {
@@ -240,11 +273,10 @@ func singleLine(s string) string {
 }
 
 // Composite action steps nest under their job step
-func isJobStepEntry(entry *logrus.Entry) bool {
-	if v, ok := entry.Data["stepID"].([]string); ok && len(v) > 1 {
-		return false
-	}
-	return true
+func isJobStepEntry(rec logging.Record) bool {
+	v, _ := rec.Attr("stepID")
+	ids, _ := v.([]string)
+	return len(ids) <= 1
 }
 
 func resultString(v any) string {
@@ -266,25 +298,30 @@ func conclusionOf(result string) v1.ActionsConclusion {
 	return v1.ActionsConclusion_ACTIONS_CONCLUSION_FAILURE
 }
 
-// Fire receives every act log entry of the job
-func (r *reporter) Fire(entry *logrus.Entry) error {
-	msg := strings.TrimRight(entry.Message, "\r\n")
-	raw, _ := entry.Data["raw_output"].(bool)
-	stage, _ := entry.Data["stage"].(string)
-	number, hasNumber := entry.Data["stepNumber"].(int)
-	stepName, _ := entry.Data["step"].(string)
-	result, hasResult := entry.Data["stepResult"]
+// Receives every act log record of the job
+func (r *reporter) Handle(_ context.Context, rec logging.Record) error {
+	msg := strings.TrimRight(rec.Message, "\r\n")
+	rawAttr, _ := rec.Attr("raw_output")
+	raw, _ := rawAttr.(bool)
+	stageAttr, _ := rec.Attr("stage")
+	stage, _ := stageAttr.(string)
+	numberAttr, _ := rec.Attr("stepNumber")
+	number, hasNumber := numberAttr.(int)
+	nameAttr, _ := rec.Attr("step")
+	stepName, _ := nameAttr.(string)
+	result, hasResult := rec.Attr("stepResult")
+	jobResult, hasJobResult := rec.Attr("jobResult")
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if v, ok := entry.Data["jobResult"]; ok {
-		r.jobResult = resultString(v)
+	if hasJobResult {
+		r.jobResult = resultString(jobResult)
 	}
 	step := r.currentNumber()
-	if hasNumber && isJobStepEntry(entry) {
+	if hasNumber && isJobStepEntry(rec) {
 		key := rowKey(stage, number)
 		row, open := r.byKey[key]
-		if !open && stageRuns(stage, entry.Level, raw, hasResult) {
+		if !open && stageRuns(stage, rec.Level, raw, hasResult) {
 			row, open = r.addRowLocked(key, r.rowNameLocked(stage, number, stepName)), true
 		}
 		if open {
@@ -296,17 +333,17 @@ func (r *reporter) Fire(entry *logrus.Entry) error {
 		}
 	}
 	switch {
-	case raw:
-		r.rawLocked(msg)
-	case entry.Level <= logrus.ErrorLevel:
+	case rec.Level >= logging.LevelError:
 		if msg != "" {
 			r.errorLocked(msg, step)
 		}
-	case entry.Level == logrus.WarnLevel:
+	case raw:
+		r.rawLocked(msg)
+	case rec.Level >= logging.LevelWarn:
 		r.j.log.Line("##[warning]%s", strings.TrimPrefix(msg, "##[warning]"))
-	case entry.Level == logrus.InfoLevel:
+	case rec.Level >= logging.LevelInfo:
 		// Act narrates container setup, step output speaks for itself
-		if _, result := entry.Data["jobResult"]; !hasNumber && !result {
+		if !hasNumber && !hasJobResult {
 			r.j.log.Line("%s", msg)
 		}
 	}
@@ -354,6 +391,11 @@ func (r *reporter) rawLocked(line string) {
 		a.EndLine, _ = strconv.Atoi(props["endLine"])
 		a.Col, _ = strconv.Atoi(props["col"])
 		a.EndCol, _ = strconv.Atoi(props["endColumn"])
+		if loc := foldedLocationRe.FindStringSubmatch(value); a.File == "" && loc != nil {
+			a.File, a.Message = loc[1], r.j.log.Masked(value[len(loc[0]):])
+			a.Line, _ = strconv.Atoi(loc[2])
+			a.Col, _ = strconv.Atoi(loc[3])
+		}
 		r.annotations = append(r.annotations, a)
 		r.j.log.Line("##[%s]%s", cmd, value)
 		r.markDirty(false)

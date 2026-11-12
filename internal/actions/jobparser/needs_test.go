@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"gitea.com/gitea/runner/act/exprparser"
+	"gitea.dev/actionslib/pkg/exprparser"
 )
 
 const needsFieldsSource = `on: push
@@ -61,7 +61,7 @@ func TestNeedsInContinueOnErrorAndTimeoutDefer(t *testing.T) {
 }
 
 func TestUnclosedExpressionIsAnError(t *testing.T) {
-	src := "run-name: \"${{ a }} ${{ b\"\non: push\njobs:\n  a:\n    runs-on: x\n    steps: [{run: true}]\n"
+	src := "run-name: \"${{ github.ref }} ${{ github.sha\"\non: push\njobs:\n  a:\n    runs-on: x\n    steps: [{run: true}]\n"
 	if _, err := Parse([]byte(src)); err == nil || !strings.Contains(err.Error(), "unclosed expression") {
 		t.Fatalf("err = %v", err)
 	}

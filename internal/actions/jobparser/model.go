@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 
-	"gitea.com/gitea/runner/act/model"
+	"gitea.dev/actionslib/pkg/model"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -251,8 +251,6 @@ func EvaluateConcurrency(rc *model.RawConcurrency, jobID string, job *Job, gitCt
 			MaxParallelString: job.Strategy.MaxParallelString,
 			RawMatrix:         job.Strategy.RawMatrix,
 		}
-		actJob.Strategy.FailFast = actJob.Strategy.GetFailFast()
-		actJob.Strategy.MaxParallel = actJob.Strategy.GetMaxParallel()
 	}
 
 	matrix := make(map[string]any)

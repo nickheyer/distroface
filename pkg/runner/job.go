@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"gitea.com/gitea/runner/act/common"
-	"gitea.com/gitea/runner/act/model"
+	"gitea.com/gitea/runner/act/common/logging"
 	actrunner "gitea.com/gitea/runner/act/runner"
+	"gitea.dev/actionslib/pkg/model"
 	shellquote "github.com/kballard/go-shellquote"
 	"github.com/moby/moby/api/types/container"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
-	"github.com/sirupsen/logrus"
 	"go.yaml.in/yaml/v4"
 )
 
@@ -161,7 +161,7 @@ func (j *job) execute(ctx context.Context) v1.ActionsConclusion {
 		return j.rep.failSetup(err)
 	}
 	executor := rr.NewPlanExecutor(plan)
-	actCtx := common.WithLoggerHook(ctx, j.rep)
+	actCtx := common.WithLoggerHandler(ctx, j.rep)
 	actCtx = actrunner.WithJobLoggerFactory(actCtx, discardLogger{})
 	timeout := time.Duration(j.timeoutMinutes()) * time.Minute
 	actCtx, cancelTimeout := context.WithTimeout(actCtx, timeout)
@@ -447,15 +447,14 @@ func (j *job) actConfig(env map[string]string) (*actrunner.Config, error) {
 		Workdir:               j.workdir(),
 		BindWorkdir:           false,
 		ActionCacheDir:        filepath.Join(j.r.cfg.JobRoot(), "_actions"),
-		ReuseContainers:       false,
+		ActionCloneDepth:      1,
+		SharedToolCache:       true,
 		ForcePull:             false,
-		LogOutput:             true,
 		Env:                   env,
 		Secrets:               secrets,
 		Vars:                  j.task.Variables,
 		Token:                 j.task.Token,
 		GitHubInstance:        strings.TrimRight(j.task.ServerUrl, "/"),
-		AutoRemove:            true,
 		NoSkipCheckout:        true,
 		PresetGitHubContext:   preset,
 		EventJSON:             string(eventJSON),
@@ -496,16 +495,7 @@ func (j *job) complete(ctx context.Context, conclusion v1.ActionsConclusion) {
 	}
 }
 
-// Job loggers stay quiet, the hook carries every entry to the server
+// Job loggers stay quiet, the handler carries every record to the server
 type discardLogger struct{}
 
-func (discardLogger) WithJobLogger() *logrus.Logger {
-	l := logrus.New()
-	l.SetOutput(nopWriter{})
-	l.SetLevel(logrus.TraceLevel)
-	return l
-}
-
-type nopWriter struct{}
-
-func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
+func (discardLogger) WithJobLogger() logging.Handler { return logging.DiscardHandler }

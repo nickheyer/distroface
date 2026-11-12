@@ -215,7 +215,7 @@ func newRunnerStatusCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show the runner config and check docker and the server",
+		Short: "Show the runner config and check docker, git and the server",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := runner.Load(config)
 			if err != nil {
@@ -264,6 +264,11 @@ func newRunnerStatusCmd() *cobra.Command {
 				fmt.Printf("Docker:      unavailable (%v)\n", err)
 			} else {
 				fmt.Printf("Docker:      ok\n")
+			}
+			if err := r.GitAvailable(); err != nil {
+				fmt.Printf("Git:         unavailable (%v)\n", err)
+			} else {
+				fmt.Printf("Git:         ok\n")
 			}
 			if check {
 				if err := r.Heartbeat(ctx); err != nil {

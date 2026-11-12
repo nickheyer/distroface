@@ -1,16 +1,17 @@
 package runner
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"regexp"
 	"strings"
 	"testing"
 
-	"gitea.com/gitea/runner/act/model"
+	"gitea.com/gitea/runner/act/common/logging"
+	"gitea.dev/actionslib/pkg/model"
 	shellquote "github.com/kballard/go-shellquote"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
-	"github.com/sirupsen/logrus"
 )
 
 func testReporter(steps ...*model.Step) (*reporter, *logStream) {
@@ -21,14 +22,18 @@ func testReporter(steps ...*model.Step) (*reporter, *logStream) {
 	return r, l
 }
 
-func entry(level logrus.Level, msg string, fields logrus.Fields) *logrus.Entry {
-	e := logrus.NewEntry(logrus.New())
-	e.Level, e.Message, e.Data = level, msg, fields
-	return e
+type fields map[string]any
+
+func entry(level logging.Level, msg string, f fields) logging.Record {
+	rec := logging.Record{Level: level, Message: msg}
+	for k, v := range f {
+		rec.Attrs = append(rec.Attrs, logging.Attr{Key: k, Value: v})
+	}
+	return rec
 }
 
-func stepFields(stage string, number int, name string, extra logrus.Fields) logrus.Fields {
-	f := logrus.Fields{"stage": stage, "stepNumber": number, "step": name, "stepID": []string{fmt.Sprint(number)}}
+func stepFields(stage string, number int, name string, extra fields) fields {
+	f := fields{"stage": stage, "stepNumber": number, "step": name, "stepID": []string{fmt.Sprint(number)}}
 	for k, v := range extra {
 		f[k] = v
 	}
@@ -38,19 +43,19 @@ func stepFields(stage string, number int, name string, extra logrus.Fields) logr
 func TestReporterBuildsTranscriptAndSteps(t *testing.T) {
 	r, l := testReporter(&model.Step{Uses: "actions/checkout@v4"}, &model.Step{Name: "Build", Run: "make"})
 	r.startSetup()
-	_ = r.Fire(entry(logrus.InfoLevel, "pulling image", nil))
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Main actions/checkout@v4", stepFields("Main", 0, "actions/checkout@v4", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "cloning", stepFields("Main", 0, "actions/checkout@v4", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success - Main actions/checkout@v4", stepFields("Main", 0, "actions/checkout@v4", logrus.Fields{"stepResult": "success"})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Main Build", stepFields("Main", 1, "Build", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "::group::Compiling", stepFields("Main", 1, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "::error file=main.go,line=3::boom", stepFields("Main", 1, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "::endgroup::", stepFields("Main", 1, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "::add-mask::hunter2", stepFields("Main", 1, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "password is hunter2", stepFields("Main", 1, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.ErrorLevel, "##[error]process completed with exit code 1", stepFields("Main", 1, "Build", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "Failure - Main Build", stepFields("Main", 1, "Build", logrus.Fields{"stepResult": "failure"})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Job failed", logrus.Fields{"jobResult": "failure"}))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "pulling image", nil))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Main actions/checkout@v4", stepFields("Main", 0, "actions/checkout@v4", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "cloning", stepFields("Main", 0, "actions/checkout@v4", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success - Main actions/checkout@v4", stepFields("Main", 0, "actions/checkout@v4", fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Main Build", stepFields("Main", 1, "Build", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::group::Compiling", stepFields("Main", 1, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::error file=main.go,line=3::boom", stepFields("Main", 1, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::endgroup::", stepFields("Main", 1, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::add-mask::hunter2", stepFields("Main", 1, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "password is hunter2", stepFields("Main", 1, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelError, "##[error]process completed with exit code 1", stepFields("Main", 1, "Build", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Failure - Main Build", stepFields("Main", 1, "Build", fields{"stepResult": "failure"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Job failed", fields{"jobResult": "failure"}))
 	r.finish(v1.ActionsConclusion_ACTIONS_CONCLUSION_FAILURE)
 
 	out := string(l.take(true))
@@ -85,9 +90,9 @@ func TestReporterBuildsTranscriptAndSteps(t *testing.T) {
 func TestReporterIgnoresCompositeInnerSteps(t *testing.T) {
 	r, _ := testReporter(&model.Step{Name: "composite", Uses: "./composite"})
 	r.startSetup()
-	_ = r.Fire(entry(logrus.InfoLevel, "run", stepFields("Main", 0, "composite", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "inner", logrus.Fields{"stage": "Main", "stepNumber": 0, "step": "inner step", "stepID": []string{"0", "0"}}))
-	_ = r.Fire(entry(logrus.InfoLevel, "inner done", logrus.Fields{"stage": "Main", "stepNumber": 0, "step": "inner step", "stepID": []string{"0", "0"}, "stepResult": "failure"}))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "run", stepFields("Main", 0, "composite", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "inner", fields{"stage": "Main", "stepNumber": 0, "step": "inner step", "stepID": []string{"0", "0"}}))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "inner done", fields{"stage": "Main", "stepNumber": 0, "step": "inner step", "stepID": []string{"0", "0"}, "stepResult": "failure"}))
 	steps, _, _ := r.snapshot()
 	if len(steps) != 2 || steps[1].Name != "composite" || steps[1].Status != v1.ActionsStatus_ACTIONS_STATUS_RUNNING {
 		t.Fatalf("steps = %+v", steps)
@@ -99,8 +104,8 @@ func TestReporterMasksAnnotations(t *testing.T) {
 	l.AddMask("s3cretvalue")
 	l.AddMask("jobtoken123")
 	r.startSetup()
-	_ = r.Fire(entry(logrus.InfoLevel, "::error title=token jobtoken123::secret is s3cretvalue", stepFields("Main", 0, "Leak", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.ErrorLevel, "##[error]auth with s3cretvalue failed", stepFields("Main", 0, "Leak", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::error title=token jobtoken123::secret is s3cretvalue", stepFields("Main", 0, "Leak", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelError, "##[error]auth with s3cretvalue failed", stepFields("Main", 0, "Leak", nil)))
 	r.failSetup(fmt.Errorf("setup saw jobtoken123"))
 	_, _, ann := r.snapshot()
 	if strings.Contains(ann, "s3cretvalue") || strings.Contains(ann, "jobtoken123") {
@@ -121,16 +126,16 @@ func TestReporterNamesStepsLikeGitHub(t *testing.T) {
 	named := "Line one\nLine two"
 	r, l := testReporter(&model.Step{Run: script}, &model.Step{Uses: "actions/setup-go@v5"}, &model.Step{Name: named, Run: "true"})
 	r.startSetup()
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Main "+script, stepFields("Main", 0, script, nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success", stepFields("Main", 0, script, logrus.Fields{"stepResult": "success"})))
-	_ = r.Fire(entry(logrus.InfoLevel, "out", stepFields("Pre", 1, "actions/setup-go@v5", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success", stepFields("Pre", 1, "actions/setup-go@v5", logrus.Fields{"stepResult": "success"})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Main", stepFields("Main", 1, "actions/setup-go@v5", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success", stepFields("Main", 1, "actions/setup-go@v5", logrus.Fields{"stepResult": "success"})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Main", stepFields("Main", 2, named, nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success", stepFields("Main", 2, named, logrus.Fields{"stepResult": "success"})))
-	_ = r.Fire(entry(logrus.InfoLevel, "out", stepFields("Post", 1, "actions/setup-go@v5", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success", stepFields("Post", 1, "actions/setup-go@v5", logrus.Fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Main "+script, stepFields("Main", 0, script, nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success", stepFields("Main", 0, script, fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "out", stepFields("Pre", 1, "actions/setup-go@v5", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success", stepFields("Pre", 1, "actions/setup-go@v5", fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Main", stepFields("Main", 1, "actions/setup-go@v5", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success", stepFields("Main", 1, "actions/setup-go@v5", fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Main", stepFields("Main", 2, named, nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success", stepFields("Main", 2, named, fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "out", stepFields("Post", 1, "actions/setup-go@v5", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success", stepFields("Post", 1, "actions/setup-go@v5", fields{"stepResult": "success"})))
 	steps, _, _ := r.snapshot()
 	want := []string{setupStepName, "Run echo one", "Pre Run actions/setup-go@v5", "Run actions/setup-go@v5", "Line one Line two", "Post Run actions/setup-go@v5"}
 	if len(steps) != len(want) {
@@ -161,19 +166,19 @@ func TestReporterSkipsGhostPreAndPostRows(t *testing.T) {
 	r, _ := testReporter(&model.Step{Uses: "actions/checkout@v4"}, &model.Step{Uses: "actions/cache@v4"})
 	r.startSetup()
 	// Clone progress under the Pre logger, no pre phase on this action
-	_ = r.Fire(entry(logrus.InfoLevel, "git clone 'https://github.com/actions/checkout' # ref=v4", stepFields("Pre", 0, "actions/checkout@v4", nil)))
-	_ = r.Fire(entry(logrus.DebugLevel, "  cloning https://github.com/actions/checkout to /cache", stepFields("Pre", 0, "actions/checkout@v4", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "git clone 'https://github.com/actions/cache' # ref=v4", stepFields("Pre", 1, "actions/cache@v4", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Main actions/checkout@v4", stepFields("Main", 0, "actions/checkout@v4", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success", stepFields("Main", 0, "actions/checkout@v4", logrus.Fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "git clone 'https://github.com/actions/checkout' # ref=v4", stepFields("Pre", 0, "actions/checkout@v4", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelDebug, "  cloning https://github.com/actions/checkout to /cache", stepFields("Pre", 0, "actions/checkout@v4", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "git clone 'https://github.com/actions/cache' # ref=v4", stepFields("Pre", 1, "actions/cache@v4", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Main actions/checkout@v4", stepFields("Main", 0, "actions/checkout@v4", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success", stepFields("Main", 0, "actions/checkout@v4", fields{"stepResult": "success"})))
 	// Main skipped by its if, act reports the skip at debug level
-	_ = r.Fire(entry(logrus.DebugLevel, "Skipping step 'actions/cache@v4' due to 'false'", stepFields("Main", 1, "actions/cache@v4", logrus.Fields{"stepResult": "skipped"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelDebug, "Skipping step 'actions/cache@v4' due to 'false'", stepFields("Main", 1, "actions/cache@v4", fields{"stepResult": "skipped"})))
 	// Post of the skipped main is announced skipped at debug level
-	_ = r.Fire(entry(logrus.DebugLevel, "skipping post step for 'actions/cache@v4'; main step was skipped", stepFields("Post", 1, "actions/cache@v4", logrus.Fields{"stepResult": "skipped"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelDebug, "skipping post step for 'actions/cache@v4'; main step was skipped", stepFields("Post", 1, "actions/cache@v4", fields{"stepResult": "skipped"})))
 	// Checkout really has a post, it prints and reports success
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Post actions/checkout@v4", stepFields("Post", 0, "actions/checkout@v4", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "Temporarily overriding HOME", stepFields("Post", 0, "actions/checkout@v4", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success - Post actions/checkout@v4", stepFields("Post", 0, "actions/checkout@v4", logrus.Fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Post actions/checkout@v4", stepFields("Post", 0, "actions/checkout@v4", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Temporarily overriding HOME", stepFields("Post", 0, "actions/checkout@v4", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success - Post actions/checkout@v4", stepFields("Post", 0, "actions/checkout@v4", fields{"stepResult": "success"})))
 	r.finish(v1.ActionsConclusion_ACTIONS_CONCLUSION_SUCCESS)
 	steps, _, _ := r.snapshot()
 	want := []string{setupStepName, "Run actions/checkout@v4", "Run actions/cache@v4", "Post Run actions/checkout@v4", completeStepName}
@@ -193,8 +198,8 @@ func TestReporterSkipsGhostPreAndPostRows(t *testing.T) {
 func TestReporterOpensPreRowOnFailure(t *testing.T) {
 	r, _ := testReporter(&model.Step{Uses: "org/action@v1"})
 	r.startSetup()
-	_ = r.Fire(entry(logrus.ErrorLevel, "##[error]exit status 1", stepFields("Pre", 0, "org/action@v1", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "Failure - Pre org/action@v1", stepFields("Pre", 0, "org/action@v1", logrus.Fields{"stepResult": "failure"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelError, "##[error]exit status 1", stepFields("Pre", 0, "org/action@v1", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Failure - Pre org/action@v1", stepFields("Pre", 0, "org/action@v1", fields{"stepResult": "failure"})))
 	steps, _, ann := r.snapshot()
 	if len(steps) != 2 || steps[1].Name != "Pre Run org/action@v1" || steps[1].Conclusion != v1.ActionsConclusion_ACTIONS_CONCLUSION_FAILURE {
 		t.Fatalf("steps = %+v", steps)
@@ -286,12 +291,12 @@ func TestHeadTailKeepsBothEnds(t *testing.T) {
 func TestReporterSwallowsActStepHeader(t *testing.T) {
 	r, l := testReporter(&model.Step{Uses: "actions/setup-go@v5"})
 	r.startSetup()
-	_ = r.Fire(entry(logrus.InfoLevel, "::group::Starting job container", logrus.Fields{"raw_output": true}))
-	_ = r.Fire(entry(logrus.InfoLevel, "image: ubuntu", logrus.Fields{"raw_output": true}))
-	_ = r.Fire(entry(logrus.InfoLevel, "::endgroup::", logrus.Fields{"raw_output": true}))
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Main actions/setup-go@v5", stepFields("Main", 0, "actions/setup-go@v5", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::group::Starting job container", fields{"raw_output": true}))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "image: ubuntu", fields{"raw_output": true}))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::endgroup::", fields{"raw_output": true}))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Main actions/setup-go@v5", stepFields("Main", 0, "actions/setup-go@v5", nil)))
 	raw := func(s string) {
-		_ = r.Fire(entry(logrus.InfoLevel, s, stepFields("Main", 0, "actions/setup-go@v5", logrus.Fields{"raw_output": true})))
+		_ = r.Handle(context.Background(), entry(logging.LevelInfo, s, stepFields("Main", 0, "actions/setup-go@v5", fields{"raw_output": true})))
 	}
 	raw("::group::Run actions/setup-go@v5")
 	raw("with:")
@@ -301,8 +306,8 @@ func TestReporterSwallowsActStepHeader(t *testing.T) {
 	raw("::endgroup::")
 	raw("::error::Unable to find Go version '1.20'")
 	raw("::endgroup::")
-	_ = r.Fire(entry(logrus.InfoLevel, "Failure - Main actions/setup-go@v5", stepFields("Main", 0, "actions/setup-go@v5", logrus.Fields{"stepResult": "failure"})))
-	_ = r.Fire(entry(logrus.ErrorLevel, "##[error]exit with `FAILURE`: 1", stepFields("Main", 0, "actions/setup-go@v5", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Failure - Main actions/setup-go@v5", stepFields("Main", 0, "actions/setup-go@v5", fields{"stepResult": "failure"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelError, "##[error]exit with `FAILURE`: 1", stepFields("Main", 0, "actions/setup-go@v5", nil)))
 	r.finish(v1.ActionsConclusion_ACTIONS_CONCLUSION_FAILURE)
 	out := string(l.take(true))
 	want := strings.Join([]string{
@@ -337,18 +342,18 @@ func TestReporterSwallowsActStepHeader(t *testing.T) {
 func TestReporterClosesStrayRawGroups(t *testing.T) {
 	r, l := testReporter(&model.Step{Name: "Build", Run: "make"}, &model.Step{Uses: "actions/checkout@v4"})
 	r.startSetup()
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Main Build", stepFields("Main", 0, "Build", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "::group::Run make", stepFields("Main", 0, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "make", stepFields("Main", 0, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "::endgroup::", stepFields("Main", 0, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "::group::Left open", stepFields("Main", 0, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "::endgroup::", stepFields("Main", 0, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "::endgroup::", stepFields("Main", 0, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "::group::Never closed", stepFields("Main", 0, "Build", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success", stepFields("Main", 0, "Build", logrus.Fields{"stepResult": "success"})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Run Post actions/checkout@v4", stepFields("Post", 1, "actions/checkout@v4", nil)))
-	_ = r.Fire(entry(logrus.InfoLevel, "cleanup", stepFields("Post", 1, "actions/checkout@v4", logrus.Fields{"raw_output": true})))
-	_ = r.Fire(entry(logrus.InfoLevel, "Success", stepFields("Post", 1, "actions/checkout@v4", logrus.Fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Main Build", stepFields("Main", 0, "Build", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::group::Run make", stepFields("Main", 0, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "make", stepFields("Main", 0, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::endgroup::", stepFields("Main", 0, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::group::Left open", stepFields("Main", 0, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::endgroup::", stepFields("Main", 0, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::endgroup::", stepFields("Main", 0, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "::group::Never closed", stepFields("Main", 0, "Build", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success", stepFields("Main", 0, "Build", fields{"stepResult": "success"})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Run Post actions/checkout@v4", stepFields("Post", 1, "actions/checkout@v4", nil)))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "cleanup", stepFields("Post", 1, "actions/checkout@v4", fields{"raw_output": true})))
+	_ = r.Handle(context.Background(), entry(logging.LevelInfo, "Success", stepFields("Post", 1, "actions/checkout@v4", fields{"stepResult": "success"})))
 	r.finish(v1.ActionsConclusion_ACTIONS_CONCLUSION_SUCCESS)
 	out := string(l.take(true))
 	depth := 0

@@ -191,7 +191,7 @@ func TestParseWorkflowFileRecoversDecodePanic(t *testing.T) {
 }
 
 func TestPlanJobsReportsUnclosedExpression(t *testing.T) {
-	src := "run-name: \"${{ a }} ${{ b\"\non: push\njobs:\n  a:\n    runs-on: x\n    steps: [{run: true}]\n"
+	src := "run-name: \"${{ github.ref }} ${{ github.sha\"\non: push\njobs:\n  a:\n    runs-on: x\n    steps: [{run: true}]\n"
 	rows := (&Manager{}).planJobs(testPlanInput(), []byte(src), nil)
 	if len(rows) != 1 || !strings.Contains(rows[0].Error, "unclosed expression") {
 		t.Fatalf("rows = %+v", rows)

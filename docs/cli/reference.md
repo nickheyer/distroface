@@ -243,7 +243,7 @@ dfcli runner status [--runner-config FILE] [--check]
 | `--runner-config` | Runner config path, default `DFCLI_RUNNER_CONFIG` or `~/.dfcli/runner.json` |
 | `--check` | status only, send a heartbeat to verify the token, marks the runner online |
 
-`register` writes `runner.json`, `start` polls for jobs until interrupted, `status` prints the config and checks docker. See [Runners](../actions/runners.md).
+`register` writes `runner.json`, `start` polls for jobs until interrupted, `status` prints the config and checks docker and git. See [Runners](../actions/runners.md).
 
 ## agent
 
