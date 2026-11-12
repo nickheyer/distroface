@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/rbac"
@@ -265,10 +267,9 @@ func (l *LFS) ServeObject(w http.ResponseWriter, r *http.Request, repo *db.GitRe
 	}
 	defer f.Close()
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", oid))
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, f)
+	w.Header().Set("ETag", `"`+oid+`"`)
+	http.ServeContent(w, r, "", info.ModTime(), f)
 }
 
 // Receives an object, verifying the sha256 matches the oid
@@ -279,28 +280,11 @@ func (l *LFS) upload(w http.ResponseWriter, r *http.Request, repo *db.GitReposit
 	}
 	ctx := r.Context()
 	maxBytes := l.manager.gitSettings(ctx, repo).GetMaxLfsObjectMb() * 1024 * 1024
-	blobs := l.manager.Blobs()
-	uploadID, err := blobs.InitiateUpload()
-	if err != nil {
-		lfsFail(w, http.StatusInternalServerError, "upload failed")
-		return
-	}
-	var body io.Reader = r.Body
-	if maxBytes > 0 {
-		body = io.LimitReader(r.Body, maxBytes+1)
-	}
-	n, err := blobs.AppendChunk(uploadID, body)
-	if err != nil {
-		_ = blobs.CancelUpload(uploadID)
-		lfsFail(w, http.StatusInternalServerError, "upload failed")
-		return
-	}
-	if maxBytes > 0 && n > maxBytes {
-		_ = blobs.CancelUpload(uploadID)
+	digest, size, _, err := l.manager.Blobs().Ingest(r.Body, maxBytes)
+	if errors.Is(err, artifacts.ErrBlobTooLarge) {
 		lfsFail(w, http.StatusRequestEntityTooLarge, "object exceeds the size limit")
 		return
 	}
-	digest, size, _, err := blobs.CompleteUpload(uploadID)
 	if err != nil {
 		lfsFail(w, http.StatusInternalServerError, "upload failed")
 		return
@@ -315,8 +299,6 @@ func (l *LFS) upload(w http.ResponseWriter, r *http.Request, repo *db.GitReposit
 		lfsFail(w, http.StatusInternalServerError, "could not record object")
 		return
 	}
-	total, _ := l.manager.Store().LFSRepoSize(ctx, repo.ID)
-	_ = l.manager.Store().UpdateGitRepositoryColumns(ctx, repo.ID, map[string]any{"lfs_size_bytes": total})
 	w.WriteHeader(http.StatusOK)
 }
 

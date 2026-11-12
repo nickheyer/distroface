@@ -1099,9 +1099,9 @@ type ActionsJob struct {
 	TokenID              string `gorm:"not null;default:'';index"`
 	LogChunks            int    `gorm:"not null;default:0"`
 	LogBytes             int64  `gorm:"not null;default:0"`
-	LogDigest            string `gorm:"not null;default:''"`    // Compacted log blob after completion
-	Interactive          bool   `gorm:"not null;default:false"` // Serves commands over FetchExec after its steps
-	CloseRequested       bool   `gorm:"not null;default:false"` // Owner asked the job to finish after the current command
+	LogDigest            string `gorm:"not null;default:'';index"` // Compacted log blob after completion
+	Interactive          bool   `gorm:"not null;default:false"`    // Serves commands over FetchExec after its steps
+	CloseRequested       bool   `gorm:"not null;default:false"`    // Owner asked the job to finish after the current command
 	StartedAt            *time.Time
 	FinishedAt           *time.Time
 	CreatedAt            time.Time   `gorm:"autoCreateTime"`

@@ -637,18 +637,8 @@ func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, 
 	}
 	defer body.Close()
 
-	blobs := m.artifacts.Blobs()
-	uploadID, err := blobs.InitiateUpload()
-	if err != nil {
-		return err
-	}
-	if _, err := blobs.AppendChunk(uploadID, body); err != nil {
-		_ = blobs.CancelUpload(uploadID)
-		return err
-	}
-
 	meta, _ := json.Marshal(map[string]string{"mirror_url": src})
-	_, err = m.artifacts.CompleteUpload(ctx, repo, uploadID, version, a.name, string(meta), mirrorAssetProps(repo, cfg))
+	_, err = m.artifacts.StoreStream(ctx, repo, body, version, a.name, string(meta), mirrorAssetProps(repo, cfg))
 	return err
 }
 

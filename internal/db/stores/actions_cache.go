@@ -125,9 +125,3 @@ func (s *Store) ListActionsCachesUnusedBefore(ctx context.Context, cutoff time.T
 	}
 	return out, q.Find(&out).Error
 }
-
-func (s *Store) CountActionsCachesByDigest(ctx context.Context, digest string) (int64, error) {
-	var n int64
-	err := s.db.WithContext(ctx).Model(&db.ActionsCache{}).Where("digest = ?", digest).Count(&n).Error
-	return n, err
-}

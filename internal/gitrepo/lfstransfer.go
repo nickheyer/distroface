@@ -204,21 +204,23 @@ func (l *LFS) ServeSSHTransfer(ctx context.Context, ch ssh.Channel, repo *db.Git
 				_ = status(413, tooLarge)
 				continue
 			}
-			blobs := l.manager.Blobs()
-			uploadID, err := blobs.InitiateUpload()
+			bw, err := l.manager.Blobs().NewWriter()
 			if err != nil {
+				if err := drainPktData(rd); err != nil {
+					return 1
+				}
 				_ = status(500, "upload failed")
 				continue
 			}
-			if err := readPktData(rd, uploadID, blobs.AppendChunk, maxBytes); err != nil {
-				_ = blobs.CancelUpload(uploadID)
+			if err := readPktData(rd, bw, maxBytes); err != nil {
+				bw.Abort()
 				if errors.Is(err, errLFSTooLarge) {
 					_ = status(413, tooLarge)
 					continue
 				}
 				return 1
 			}
-			digest, gotSize, _, err := blobs.CompleteUpload(uploadID)
+			digest, gotSize, _, err := bw.Commit()
 			if err != nil || digest != "sha256:"+fields[1] || (size > 0 && gotSize != size) {
 				if err == nil {
 					l.dropUnreferenced(ctx, digest)
@@ -373,14 +375,12 @@ func writePktData(w io.Writer, r io.Reader) error {
 	}
 }
 
-// Reads data pkt-lines until a flush, appending to an upload session
-// Object data passed the configured cap
 var errLFSTooLarge = errors.New("lfs object too large")
 
-// Streams data packets into the upload in one append, draining the rest once the cap is passed
-func readPktData(rd *bufio.Reader, uploadID string, appendChunk func(string, io.Reader) (int64, error), maxBytes int64) error {
+// Copies data packets up to the flush, drains past cap
+func readPktData(rd *bufio.Reader, dst io.Writer, maxBytes int64) error {
 	pr := &pktDataReader{rd: rd, max: maxBytes}
-	if _, err := appendChunk(uploadID, pr); err != nil {
+	if _, err := io.Copy(dst, pr); err != nil {
 		return err
 	}
 	if pr.err != nil {

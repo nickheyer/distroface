@@ -25,20 +25,14 @@ func pktStream(t *testing.T, chunks ...string) *bufio.Reader {
 	return bufio.NewReader(&buf)
 }
 
-func TestReadPktDataSingleAppend(t *testing.T) {
+func TestReadPktDataStreams(t *testing.T) {
 	rd := pktStream(t, "hello", " ", "world")
-	calls, got := 0, []byte(nil)
-	appendChunk := func(_ string, r io.Reader) (int64, error) {
-		calls++
-		b, err := io.ReadAll(r)
-		got = append(got, b...)
-		return int64(len(b)), err
-	}
-	if err := readPktData(rd, "u", appendChunk, 0); err != nil {
+	var got bytes.Buffer
+	if err := readPktData(rd, &got, 0); err != nil {
 		t.Fatalf("readPktData: %v", err)
 	}
-	if calls != 1 || string(got) != "hello world" {
-		t.Fatalf("calls %d data %q", calls, got)
+	if got.String() != "hello world" {
+		t.Fatalf("data %q", got.String())
 	}
 	if rest, _ := io.ReadAll(rd); string(rest) != "tail" {
 		t.Fatalf("stream position wrong, rest %q", rest)
@@ -47,18 +41,13 @@ func TestReadPktDataSingleAppend(t *testing.T) {
 
 func TestReadPktDataTooLargeDrains(t *testing.T) {
 	rd := pktStream(t, "abc", "def", "ghi")
-	var got []byte
-	appendChunk := func(_ string, r io.Reader) (int64, error) {
-		b, err := io.ReadAll(r)
-		got = b
-		return int64(len(b)), err
-	}
-	err := readPktData(rd, "u", appendChunk, 4)
+	var got bytes.Buffer
+	err := readPktData(rd, &got, 4)
 	if !errors.Is(err, errLFSTooLarge) {
 		t.Fatalf("want errLFSTooLarge, got %v", err)
 	}
-	if string(got) != "abc" {
-		t.Fatalf("bytes past the cap were appended: %q", got)
+	if got.String() != "abc" {
+		t.Fatalf("bytes past the cap were appended: %q", got.String())
 	}
 	if rest, _ := io.ReadAll(rd); string(rest) != "tail" {
 		t.Fatalf("oversized object not drained to the flush, rest %q", rest)
@@ -69,11 +58,7 @@ func TestReadPktDataTruncated(t *testing.T) {
 	var buf bytes.Buffer
 	_, _ = pktline.Write(&buf, []byte("abc"))
 	rd := bufio.NewReader(&buf)
-	appendChunk := func(_ string, r io.Reader) (int64, error) {
-		b, err := io.ReadAll(r)
-		return int64(len(b)), err
-	}
-	if err := readPktData(rd, "u", appendChunk, 0); err == nil {
+	if err := readPktData(rd, io.Discard, 0); err == nil {
 		t.Fatal("truncated stream must fail")
 	}
 }

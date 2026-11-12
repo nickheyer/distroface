@@ -31,7 +31,7 @@ The endpoint is `POST /namespace/name.git/info/lfs/objects/batch` with `applicat
 | Upload of an object already stored for a repository you can read | Linked to this repository without a transfer |
 | Upload of a new object | `upload` action at `.../info/lfs/objects/<oid>` and `verify` at `.../info/lfs/verify`, both valid 3600 seconds, your `Authorization` header echoed |
 
-Object transfer uses `PUT` and `GET` on `/namespace/name.git/info/lfs/objects/<oid>`. An upload is hashed while it streams, a body whose sha256 differs from the oid answers 400, one above the cap answers 413. `POST .../info/lfs/verify` checks that the oid exists with the given size.
+Object transfer uses `PUT` and `GET` on `/namespace/name.git/info/lfs/objects/<oid>`. An upload is hashed while it streams, a body whose sha256 differs from the oid answers 400, one above the cap answers 413. A `GET` honors `Range`, so an interrupted download resumes where it stopped. `POST .../info/lfs/verify` checks that the oid exists with the given size.
 
 ## Transfer over ssh
 

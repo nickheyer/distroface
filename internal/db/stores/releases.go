@@ -209,9 +209,3 @@ func (s *Store) IncrementGitReleaseAssetDownloads(ctx context.Context, id string
 func (s *Store) DeleteGitReleaseAsset(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Delete(&db.GitReleaseAsset{}, "id = ?", id).Error
 }
-
-func (s *Store) CountGitReleaseAssetsByDigest(ctx context.Context, digest string) (int64, error) {
-	var n int64
-	err := s.db.WithContext(ctx).Model(&db.GitReleaseAsset{}).Where("digest = ?", digest).Count(&n).Error
-	return n, err
-}

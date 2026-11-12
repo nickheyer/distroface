@@ -1,7 +1,6 @@
 package actions
 
 import (
-	"bytes"
 	"context"
 	"io"
 
@@ -17,8 +16,7 @@ const (
 
 // Streams chunks into one blob a batch at a time and drops the rows
 func (m *Manager) compactJobLogs(ctx context.Context, job *db.ActionsJob) {
-	blobs := m.artifacts.Blobs()
-	uploadID, err := blobs.InitiateUpload()
+	bw, err := m.artifacts.Blobs().NewWriter()
 	if err != nil {
 		m.log.Warn("actions: compact logs %s: %v", job.ID, err)
 		return
@@ -27,12 +25,12 @@ func (m *Manager) compactJobLogs(ctx context.Context, job *db.ActionsJob) {
 	for {
 		chunks, err := m.store.ListActionsJobLogs(ctx, job.ID, from, compactLogBatch)
 		if err != nil {
-			_ = blobs.CancelUpload(uploadID)
+			bw.Abort()
 			return
 		}
 		for _, c := range chunks {
-			if _, err := blobs.AppendChunk(uploadID, bytes.NewReader(c.Data)); err != nil {
-				_ = blobs.CancelUpload(uploadID)
+			if _, err := bw.Write(c.Data); err != nil {
+				bw.Abort()
 				m.log.Warn("actions: compact logs %s: %v", job.ID, err)
 				return
 			}
@@ -44,10 +42,10 @@ func (m *Manager) compactJobLogs(ctx context.Context, job *db.ActionsJob) {
 		}
 	}
 	if count == 0 {
-		_ = blobs.CancelUpload(uploadID)
+		bw.Abort()
 		return
 	}
-	digest, _, _, err := blobs.CompleteUpload(uploadID)
+	digest, _, _, err := bw.Commit()
 	if err != nil {
 		m.log.Warn("actions: compact logs %s: %v", job.ID, err)
 		return

@@ -3,34 +3,36 @@ package stores
 import (
 	"context"
 	"strings"
-)
 
-// CountBlobReferences sums every row that still names a blob digest
-func (s *Store) CountBlobReferences(ctx context.Context, digest string) (int64, error) {
-	if digest == "" {
-		return 0, nil
-	}
-	var total int64
-	counts := []func() (int64, error){
-		func() (int64, error) { return s.CountArtifactsByDigest(ctx, digest) },
-		func() (int64, error) { return s.CountActionsArtifactsByDigest(ctx, digest) },
-		func() (int64, error) { return s.CountActionsJobsByLogDigest(ctx, digest) },
-		func() (int64, error) { return s.CountActionsCachesByDigest(ctx, digest) },
-		func() (int64, error) { return s.CountGitReleaseAssetsByDigest(ctx, digest) },
-		func() (int64, error) { return s.CountLFSLinksByOID(ctx, strings.TrimPrefix(digest, "sha256:")) },
-	}
-	for _, count := range counts {
-		n, err := count()
-		if err != nil {
-			return 0, err
-		}
-		total += n
-	}
-	return total, nil
-}
+	"github.com/nickheyer/distroface/internal/db"
+)
 
 // BlobReferenced reports whether any table still points at a digest
 func (s *Store) BlobReferenced(ctx context.Context, digest string) (bool, error) {
-	n, err := s.CountBlobReferences(ctx, digest)
-	return n > 0, err
+	if digest == "" {
+		return false, nil
+	}
+	oid := strings.TrimPrefix(digest, "sha256:")
+	checks := []struct {
+		model any
+		where string
+		arg   string
+	}{
+		{&db.Artifact{}, "digest = ?", digest},
+		{&db.ActionsArtifact{}, "digest = ?", digest},
+		{&db.ActionsCache{}, "digest = ?", digest},
+		{&db.GitReleaseAsset{}, "digest = ?", digest},
+		{&db.GitLFSLink{}, "oid = ?", oid},
+		{&db.ActionsJob{}, "log_digest = ?", digest},
+	}
+	for _, c := range checks {
+		var hit []int
+		if err := s.db.WithContext(ctx).Model(c.model).Select("1").Where(c.where, c.arg).Limit(1).Scan(&hit).Error; err != nil {
+			return false, err
+		}
+		if len(hit) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }

@@ -781,12 +781,6 @@ func (s *Store) ListStalePendingActionsArtifacts(ctx context.Context, cutoff tim
 	return out, err
 }
 
-func (s *Store) CountActionsArtifactsByDigest(ctx context.Context, digest string) (int64, error) {
-	var n int64
-	err := s.db.WithContext(ctx).Model(&db.ActionsArtifact{}).Where("digest = ?", digest).Count(&n).Error
-	return n, err
-}
-
 func (s *Store) DeleteActionsArtifact(ctx context.Context, id string) error {
 	return s.db.WithContext(ctx).Delete(&db.ActionsArtifact{}, "id = ?", id).Error
 }
@@ -807,12 +801,6 @@ func (s *Store) ListActionsJobsByRunner(ctx context.Context, runnerID, status st
 	}
 	err := q.Find(&out).Error
 	return out, err
-}
-
-func (s *Store) CountActionsJobsByLogDigest(ctx context.Context, digest string) (int64, error) {
-	var n int64
-	err := s.db.WithContext(ctx).Model(&db.ActionsJob{}).Where("log_digest = ?", digest).Count(&n).Error
-	return n, err
 }
 
 // Jobs of finished runs older than the cutoff that still hold logs

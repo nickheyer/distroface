@@ -625,7 +625,8 @@ func (s *Store) UpsertLFSObject(ctx context.Context, repoID, oid string, size in
 		var obj db.LFSObject
 		err := tx.First(&obj, "oid = ?", oid).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			if err := tx.Create(&db.LFSObject{OID: oid, Size: size}).Error; err != nil {
+			obj = db.LFSObject{OID: oid, Size: size}
+			if err := tx.Create(&obj).Error; err != nil {
 				return err
 			}
 		} else if err != nil {
@@ -633,10 +634,14 @@ func (s *Store) UpsertLFSObject(ctx context.Context, repoID, oid string, size in
 		}
 		var link db.GitLFSLink
 		err = tx.First(&link, "repo_id = ? AND oid = ?", repoID, oid).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return tx.Create(&db.GitLFSLink{RepoID: repoID, OID: oid}).Error
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
 		}
-		return err
+		if err := tx.Create(&db.GitLFSLink{RepoID: repoID, OID: oid}).Error; err != nil {
+			return err
+		}
+		return tx.Model(&db.GitRepository{}).Where("id = ?", repoID).
+			UpdateColumn("lfs_size_bytes", gorm.Expr("lfs_size_bytes + ?", obj.Size)).Error
 	})
 }
 
@@ -688,12 +693,6 @@ func (s *Store) GitStorageTotals(ctx context.Context) (count, bytes, lfsBytes in
 	return row.Count, row.Bytes, row.LFS, err
 }
 
-func (s *Store) LFSRepoSize(ctx context.Context, repoID string) (int64, error) {
-	var total int64
-	err := s.db.WithContext(ctx).Raw(`SELECT COALESCE(SUM(o.size),0) FROM lfs_objects o JOIN git_lfs_links l ON l.oid = o.oid WHERE l.repo_id = ?`, repoID).Scan(&total).Error
-	return total, err
-}
-
 // Drops the repo's links and returns oids nothing references anymore
 func (s *Store) DeleteLFSLinks(ctx context.Context, repoID string) ([]string, error) {
 	var oids []string
@@ -721,12 +720,6 @@ func (s *Store) DeleteLFSLinks(ctx context.Context, repoID string) ([]string, er
 		return nil
 	})
 	return oids, err
-}
-
-func (s *Store) CountLFSLinksByOID(ctx context.Context, oid string) (int64, error) {
-	var n int64
-	err := s.db.WithContext(ctx).Model(&db.GitLFSLink{}).Where("oid = ?", oid).Count(&n).Error
-	return n, err
 }
 
 func (s *Store) CreateLFSLock(ctx context.Context, l *db.LFSLock) error {

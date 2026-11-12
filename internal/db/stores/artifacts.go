@@ -550,12 +550,6 @@ func (s *Store) ArtifactUniqueBlobBytes(ctx context.Context) (int64, error) {
 	return total, err
 }
 
-func (s *Store) CountArtifactsByDigest(ctx context.Context, digest string) (int64, error) {
-	var count int64
-	err := s.db.WithContext(ctx).Model(&db.Artifact{}).Where("digest = ?", digest).Count(&count).Error
-	return count, err
-}
-
 func (s *Store) ListArtifactDigestsByRepo(ctx context.Context, repoID int64) ([]string, error) {
 	var digests []string
 	err := s.db.WithContext(ctx).Model(&db.Artifact{}).

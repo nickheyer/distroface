@@ -95,3 +95,76 @@ func TestCleanStaleUploadsDropsSidecars(t *testing.T) {
 		t.Errorf("fresh session lost: %v", err)
 	}
 }
+
+func TestIngestMatchesCompleteUpload(t *testing.T) {
+	blobs, err := NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewBlobStore: %v", err)
+	}
+	payload := strings.Repeat("<html>distroface</html>", 4096)
+	id, _ := blobs.InitiateUpload()
+	if _, err := blobs.AppendChunk(id, strings.NewReader(payload)); err != nil {
+		t.Fatalf("AppendChunk: %v", err)
+	}
+	wantDigest, wantSize, wantMime, err := blobs.CompleteUpload(id)
+	if err != nil {
+		t.Fatalf("CompleteUpload: %v", err)
+	}
+	digest, size, mime, err := blobs.Ingest(strings.NewReader(payload), 0)
+	if err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if digest != wantDigest || size != wantSize || mime != wantMime {
+		t.Fatalf("Ingest %s %d %s, CompleteUpload %s %d %s", digest, size, mime, wantDigest, wantSize, wantMime)
+	}
+	f, info, err := blobs.OpenBlob(digest)
+	if err != nil {
+		t.Fatalf("OpenBlob: %v", err)
+	}
+	f.Close()
+	if info.Size() != int64(len(payload)) {
+		t.Fatalf("stored %d bytes, want %d", info.Size(), len(payload))
+	}
+	assertNoStaging(t, blobs)
+}
+
+func TestIngestEnforcesCap(t *testing.T) {
+	blobs, err := NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewBlobStore: %v", err)
+	}
+	if _, _, _, err := blobs.Ingest(strings.NewReader("12345"), 4); !errors.Is(err, ErrBlobTooLarge) {
+		t.Fatalf("over cap: got %v, want ErrBlobTooLarge", err)
+	}
+	if _, size, _, err := blobs.Ingest(strings.NewReader("1234"), 4); err != nil || size != 4 {
+		t.Fatalf("at cap: size %d err %v", size, err)
+	}
+	assertNoStaging(t, blobs)
+}
+
+func TestBlobWriterAbortLeavesNothing(t *testing.T) {
+	blobs, err := NewBlobStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewBlobStore: %v", err)
+	}
+	w, err := blobs.NewWriter()
+	if err != nil {
+		t.Fatalf("NewWriter: %v", err)
+	}
+	if _, err := w.Write([]byte("partial")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	w.Abort()
+	assertNoStaging(t, blobs)
+}
+
+func assertNoStaging(t *testing.T, blobs *BlobStore) {
+	t.Helper()
+	entries, err := os.ReadDir(filepath.Join(blobs.root, "_uploads"))
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("%d staging files left behind", len(entries))
+	}
+}

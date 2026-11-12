@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -17,6 +16,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/object"
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
@@ -777,29 +777,15 @@ func (m *Monitor) downloadLFSObject(ctx context.Context, repo *db.GitRepository,
 	if err := classifyResponse(resp, act.Href); err != nil {
 		return err
 	}
-	blobs := m.git.Blobs()
-	uploadID, err := blobs.InitiateUpload()
-	if err != nil {
-		return err
-	}
-	var body io.Reader = resp.Body
-	if maxBytes > 0 {
-		body = io.LimitReader(resp.Body, maxBytes+1)
-	}
-	n, err := blobs.AppendChunk(uploadID, body)
-	if err != nil {
-		_ = blobs.CancelUpload(uploadID)
-		return err
-	}
-	if maxBytes > 0 && n > maxBytes {
-		_ = blobs.CancelUpload(uploadID)
+	digest, size, _, err := m.git.Blobs().Ingest(resp.Body, maxBytes)
+	if errors.Is(err, artifacts.ErrBlobTooLarge) {
 		return fmt.Errorf("object %s exceeds the %d MB limit", p.OID, maxBytes/(1024*1024))
 	}
-	digest, size, _, err := blobs.CompleteUpload(uploadID)
 	if err != nil {
 		return err
 	}
 	if digest != "sha256:"+p.OID || (p.Size > 0 && size != p.Size) {
+		m.git.ReapBlob(ctx, digest)
 		return fmt.Errorf("upstream object did not match its pointer")
 	}
 	return m.store.UpsertLFSObject(ctx, repo.ID, p.OID, size)

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/settings"
@@ -107,21 +109,34 @@ func SanitizePath(name string) string {
 	return s
 }
 
-// Finalizes upload, replaces existing same version path properties
-func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata string, properties map[string]string) (*storage.Artifact, error) {
+// Checks shared by every upload route
+func normalizeUpload(repo *storage.ArtifactRepository, version, artifactPath, metadata string) (string, string, error) {
 	if err := ValidateVersion(version); err != nil {
-		return nil, err
+		return "", "", err
 	}
 	if artifactPath == "" {
 		artifactPath = SanitizePath(repo.Name)
 	}
 	if err := ValidatePath(artifactPath); err != nil {
-		return nil, err
+		return "", "", err
 	}
 	if metadata == "" {
 		metadata = "{}"
 	} else if !json.Valid([]byte(metadata)) {
-		return nil, fmt.Errorf("%w: metadata must be valid JSON", ErrInvalid)
+		return "", "", fmt.Errorf("%w: metadata must be valid JSON", ErrInvalid)
+	}
+	return artifactPath, metadata, nil
+}
+
+func tooLarge(maxBytes int64) error {
+	return fmt.Errorf("%w: artifact exceeds maximum size of %dMB", ErrInvalid, maxBytes/(1024*1024))
+}
+
+// Finalizes upload, replaces existing same version path properties
+func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata string, properties map[string]string) (*storage.Artifact, error) {
+	artifactPath, metadata, err := normalizeUpload(repo, version, artifactPath, metadata)
+	if err != nil {
+		return nil, err
 	}
 
 	if maxBytes := m.EffectiveMaxFileSizeBytes(ctx, repo.Namespace); maxBytes > 0 {
@@ -131,7 +146,7 @@ func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepo
 		}
 		if size > maxBytes {
 			_ = m.blobs.CancelUpload(uploadID)
-			return nil, fmt.Errorf("%w: artifact exceeds maximum size of %dMB", ErrInvalid, maxBytes/(1024*1024))
+			return nil, tooLarge(maxBytes)
 		}
 	}
 
@@ -142,7 +157,27 @@ func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepo
 		}
 		return nil, err
 	}
+	return m.recordArtifact(ctx, repo, uploadID, version, artifactPath, metadata, digest, size, mimeType, properties)
+}
 
+// Stores a stream as an artifact in one pass
+func (m *Manager) StoreStream(ctx context.Context, repo *storage.ArtifactRepository, body io.Reader, version, artifactPath, metadata string, properties map[string]string) (*storage.Artifact, error) {
+	artifactPath, metadata, err := normalizeUpload(repo, version, artifactPath, metadata)
+	if err != nil {
+		return nil, err
+	}
+	maxBytes := m.EffectiveMaxFileSizeBytes(ctx, repo.Namespace)
+	digest, size, mimeType, err := m.blobs.Ingest(body, maxBytes)
+	if errors.Is(err, ErrBlobTooLarge) {
+		return nil, tooLarge(maxBytes)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return m.recordArtifact(ctx, repo, uuid.New().String(), version, artifactPath, metadata, digest, size, mimeType, properties)
+}
+
+func (m *Manager) recordArtifact(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata, digest string, size int64, mimeType string, properties map[string]string) (*storage.Artifact, error) {
 	artifact := &storage.Artifact{
 		RepoID:   repo.ID,
 		Name:     path.Base(artifactPath),

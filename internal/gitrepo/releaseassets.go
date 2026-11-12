@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/db"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/utils"
@@ -69,26 +70,11 @@ func (m *Manager) StoreReleaseAsset(ctx context.Context, repo *db.GitRepository,
 	if existing != nil && !in.Replace {
 		return nil, fmt.Errorf("%w: an asset named %s already exists on release %s", ErrInvalid, in.Name, rel.Tag)
 	}
-	blobs := m.blobs
-	uploadID, err := blobs.InitiateUpload()
-	if err != nil {
-		return nil, err
-	}
-	body := in.Body
 	maxBytes := m.MaxReleaseAssetBytes(ctx, repo)
-	if maxBytes > 0 {
-		body = io.LimitReader(in.Body, maxBytes+1)
-	}
-	n, err := blobs.AppendChunk(uploadID, body)
-	if err != nil {
-		_ = blobs.CancelUpload(uploadID)
-		return nil, err
-	}
-	if maxBytes > 0 && n > maxBytes {
-		_ = blobs.CancelUpload(uploadID)
+	digest, size, sniffed, err := m.blobs.Ingest(in.Body, maxBytes)
+	if errors.Is(err, artifacts.ErrBlobTooLarge) {
 		return nil, fmt.Errorf("%w: the limit is %d MB", ErrAssetTooLarge, maxBytes/(1024*1024))
 	}
-	digest, size, sniffed, err := blobs.CompleteUpload(uploadID)
 	if err != nil {
 		return nil, err
 	}

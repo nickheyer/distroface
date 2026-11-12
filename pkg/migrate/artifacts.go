@@ -265,7 +265,7 @@ func importArtifacts(ctx context.Context, cfg *config.MigrateConfig, v2 *V2, blo
 	// GC only after every copy has settled so a shared digest cannot vanish
 	// under an artifact that still needs it.
 	for _, digest := range <-inserterDone {
-		if n, err := v2.Store.CountArtifactsByDigest(ctx, digest); err == nil && n == 0 {
+		if used, err := v2.Store.BlobReferenced(ctx, digest); err == nil && !used {
 			_ = blobs.DeleteBlob(digest)
 		}
 	}
@@ -292,20 +292,9 @@ func stageArtifact(ctx context.Context, v2 *V2, blobs *artifacts.BlobStore, v1s 
 	if err != nil {
 		return none, ArtFailed, fmt.Errorf("v1 file missing: %w", err)
 	}
-	uploadID, err := blobs.InitiateUpload()
-	if err != nil {
-		src.Close()
-		return none, ArtFailed, err
-	}
-	_, err = blobs.AppendChunk(uploadID, src)
+	digest, size, detectedMime, err := blobs.Ingest(src, 0)
 	src.Close()
 	if err != nil {
-		_ = blobs.CancelUpload(uploadID)
-		return none, ArtFailed, err
-	}
-	digest, size, detectedMime, err := blobs.CompleteUpload(uploadID)
-	if err != nil {
-		_ = blobs.CancelUpload(uploadID)
 		return none, ArtFailed, err
 	}
 	if size != a.Size {

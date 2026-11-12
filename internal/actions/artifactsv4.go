@@ -381,35 +381,32 @@ func (m *Manager) resultsFinalize(w http.ResponseWriter, r *http.Request) {
 		twirpError(w, "failed_precondition", err.Error())
 		return
 	}
-	blobs := m.artifacts.Blobs()
-	uploadID, err := blobs.InitiateUpload()
+	bw, err := m.artifacts.Blobs().NewWriter()
 	if err != nil {
 		twirpError(w, "internal", err.Error())
 		return
 	}
-	var total int64
 	for _, p := range blocks {
 		f, err := os.Open(p)
 		if err != nil {
-			_ = blobs.CancelUpload(uploadID)
+			bw.Abort()
 			twirpError(w, "internal", err.Error())
 			return
 		}
-		n, err := blobs.AppendChunk(uploadID, f)
+		_, err = io.Copy(bw, f)
 		f.Close()
 		if err != nil {
-			_ = blobs.CancelUpload(uploadID)
+			bw.Abort()
 			twirpError(w, "internal", err.Error())
 			return
 		}
-		total += n
 	}
-	if req.GetSize() != total {
-		_ = blobs.CancelUpload(uploadID)
+	if total := bw.Size(); req.GetSize() != total {
+		bw.Abort()
 		twirpError(w, "failed_precondition", fmt.Sprintf("uploaded %d bytes, the action announced %d", total, req.GetSize()))
 		return
 	}
-	digest, size, _, err := blobs.CompleteUpload(uploadID)
+	digest, size, _, err := bw.Commit()
 	if err != nil {
 		twirpError(w, "internal", err.Error())
 		return
@@ -421,6 +418,7 @@ func (m *Manager) resultsFinalize(w http.ResponseWriter, r *http.Request) {
 	}
 	cols := map[string]any{"digest": digest, "size": size, "status": ArtifactConfirmed}
 	if err := m.store.UpdateActionsArtifactColumns(ctx, a.ID, cols); err != nil {
+		m.gcArtifactBlob(ctx, digest)
 		twirpError(w, "internal", err.Error())
 		return
 	}

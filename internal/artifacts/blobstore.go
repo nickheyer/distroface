@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"os"
@@ -18,6 +19,9 @@ import (
 
 // Session belongs to another principal
 var ErrUploadDenied = errors.New("upload session belongs to another principal")
+
+// Stream passed the byte cap given to Ingest
+var ErrBlobTooLarge = errors.New("blob exceeds the size limit")
 
 // Sidecar naming the principal allowed to touch a client facing session
 const uploadOwnerSuffix = ".owner"
@@ -157,18 +161,92 @@ func (b *BlobStore) CompleteUpload(uploadID string) (digest string, size int64, 
 	hexDigest := hex.EncodeToString(hasher.Sum(nil))
 	digest = "sha256:" + hexDigest
 
-	dest := b.blobPathHex(hexDigest)
-	if _, statErr := os.Stat(dest); statErr == nil {
-		// Identical blob already stored
-		return digest, size, mimeType, os.Remove(src)
-	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return "", 0, "", err
-	}
-	if err := os.Rename(src, dest); err != nil {
+	if err := b.promote(src, hexDigest); err != nil {
 		return "", 0, "", err
 	}
 	return digest, size, mimeType, nil
+}
+
+// Moves staged file to its digest path, dropping duplicates
+func (b *BlobStore) promote(src, hexDigest string) error {
+	dest := b.blobPathHex(hexDigest)
+	if _, err := os.Stat(dest); err == nil {
+		return os.Remove(src)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return err
+	}
+	return os.Rename(src, dest)
+}
+
+// Staged blob hashed while it is written
+type BlobWriter struct {
+	store *BlobStore
+	f     *os.File
+	hash  hash.Hash
+	head  []byte
+	size  int64
+}
+
+// Caller must finish with Commit or Abort
+func (b *BlobStore) NewWriter() (*BlobWriter, error) {
+	f, err := os.OpenFile(b.uploadPath(uuid.New().String()), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return nil, err
+	}
+	return &BlobWriter{store: b, f: f, hash: sha256.New()}, nil
+}
+
+func (w *BlobWriter) Write(p []byte) (int, error) {
+	n, err := w.f.Write(p)
+	w.hash.Write(p[:n])
+	if room := 512 - len(w.head); room > 0 {
+		w.head = append(w.head, p[:min(n, room)]...)
+	}
+	w.size += int64(n)
+	return n, err
+}
+
+func (w *BlobWriter) Size() int64 { return w.size }
+
+// Stores the staged bytes under their digest with dedup
+func (w *BlobWriter) Commit() (digest string, size int64, mimeType string, err error) {
+	src := w.f.Name()
+	if err := w.f.Close(); err != nil {
+		_ = os.Remove(src)
+		return "", 0, "", err
+	}
+	hexDigest := hex.EncodeToString(w.hash.Sum(nil))
+	if err := w.store.promote(src, hexDigest); err != nil {
+		_ = os.Remove(src)
+		return "", 0, "", err
+	}
+	return "sha256:" + hexDigest, w.size, http.DetectContentType(w.head), nil
+}
+
+func (w *BlobWriter) Abort() {
+	_ = w.f.Close()
+	_ = os.Remove(w.f.Name())
+}
+
+// Single pass store, zero maxBytes means unlimited
+func (b *BlobStore) Ingest(r io.Reader, maxBytes int64) (digest string, size int64, mimeType string, err error) {
+	w, err := b.NewWriter()
+	if err != nil {
+		return "", 0, "", err
+	}
+	if maxBytes > 0 {
+		r = io.LimitReader(r, maxBytes+1)
+	}
+	if _, err := io.Copy(w, r); err != nil {
+		w.Abort()
+		return "", 0, "", err
+	}
+	if maxBytes > 0 && w.size > maxBytes {
+		w.Abort()
+		return "", 0, "", ErrBlobTooLarge
+	}
+	return w.Commit()
 }
 
 func (b *BlobStore) CancelUpload(uploadID string) error {
