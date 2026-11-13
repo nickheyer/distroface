@@ -5,6 +5,8 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import ActivityItem from '$lib/components/activity-item.svelte';
+	import ActivityUploadGroup from '$lib/components/activity-upload-group.svelte';
+	import { groupActivity } from '$lib/activity';
 	import { Activity, Loader, RefreshCw } from '$lib/icons';
 	import { ActivityFeed, type ActivityEvent } from '$lib/proto/distroface/v1/activity_pb';
 
@@ -91,6 +93,7 @@
 	}
 
 	const hasMore = $derived(events.length < total);
+	const rows = $derived(groupActivity(events));
 
 	// Inputs change, the list starts over
 	$effect(() => {
@@ -132,8 +135,12 @@
 		{/if}
 	{:else}
 		<div class={compact ? 'divide-y' : 'box divide-y'}>
-			{#each events as ev (ev.id)}
-				<ActivityItem event={ev} {compact} />
+			{#each rows as row (row.key)}
+				{#if row.type === 'uploads'}
+					<ActivityUploadGroup events={row.events} {compact} />
+				{:else}
+					<ActivityItem event={row.event} {compact} />
+				{/if}
 			{/each}
 		</div>
 		{#if hasMore}

@@ -101,3 +101,35 @@ export function kindNoun(ev: ActivityEvent): string {
 			return 'repository';
 	}
 }
+
+export type ActivityRow =
+	| { type: 'event'; key: string; event: ActivityEvent }
+	| { type: 'uploads'; key: string; events: ActivityEvent[] };
+
+const burstGapSeconds = 30 * 60;
+const burstMinimum = 3;
+
+function sameBurst(a: ActivityEvent, b: ActivityEvent): boolean {
+	if (a.kind !== 'artifact_upload' || b.kind !== 'artifact_upload') return false;
+	if (a.actor !== b.actor || a.namespace !== b.namespace || a.name !== b.name) return false;
+	const gap = Number(a.createdAt?.seconds ?? 0n) - Number(b.createdAt?.seconds ?? 0n);
+	return Math.abs(gap) <= burstGapSeconds;
+}
+
+// Folds runs of uploads by one actor into one row
+export function groupActivity(events: ActivityEvent[]): ActivityRow[] {
+	const rows: ActivityRow[] = [];
+	let i = 0;
+	while (i < events.length) {
+		let j = i + 1;
+		while (j < events.length && sameBurst(events[j - 1], events[j])) j++;
+		const run = events.slice(i, j);
+		if (run.length >= burstMinimum) {
+			rows.push({ type: 'uploads', key: `uploads-${run[run.length - 1].id}`, events: run });
+		} else {
+			for (const event of run) rows.push({ type: 'event', key: String(event.id), event });
+		}
+		i = j;
+	}
+	return rows;
+}
