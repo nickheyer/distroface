@@ -155,10 +155,15 @@ func (s *Supervisor) startRunner(ctx context.Context, cfg *v1.BuiltinRunnerSetti
 		images[l] = image
 	}
 	rc := &runnerapp.Config{
-		Server: "http://" + Host, Token: token, RunnerID: row.ID, Name: row.Name, Scope: "system",
+		Server: "http://" + Host, ConnectURL: cfg.GetConnectUrl(), Token: token, RunnerID: row.ID, Name: row.Name, Scope: "system",
 		Labels: labels, Images: images, Concurrency: max(int(cfg.GetConcurrency()), 1), WorkDir: s.o.WorkDir,
+		InsecureSkipTLS: cfg.GetInsecureSkipTls(),
 	}
-	client := &http.Client{Transport: &Transport{Host: Host, Handler: s.o.Handler}}
+	transport := &Transport{Host: Host, Handler: s.o.Handler}
+	if rc.InsecureSkipTLS {
+		transport.Next = runnerapp.InsecureTransport(http.DefaultTransport.(*http.Transport))
+	}
+	client := &http.Client{Transport: transport}
 	r, err := runnerapp.New(rc, s.o.Version, client)
 	if err != nil {
 		return err

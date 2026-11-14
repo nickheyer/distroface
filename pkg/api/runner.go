@@ -44,8 +44,11 @@ Every option lives in runner.json and can be set at registration:
                       creates a private network per job
   docker_host         daemon address such as unix:///run/docker.sock or
                       ssh://user@host, exported as DOCKER_HOST so act uses it too
-  insecure_skip_tls   skip certificate checks when cloning actions and workflows
-                      from the instance
+  connect_url         server URL jobs use instead of the one the server derives,
+                      it must be reachable from this machine and from job containers
+  insecure_skip_tls   skip certificate checks against the server, for runner
+                      calls, for clones, and for git in job steps, node in job
+                      steps then skips them for every host
 
 The runner pulls the job image and every service image before a job starts,
 using the job token for images on this instance's registry and the docker
@@ -66,7 +69,10 @@ func runnerVersion() string {
 }
 
 // Long jobs must not trip the cli request timeout
-func runnerHTTPClient() *http.Client {
+func runnerHTTPClient(insecureSkipTLS bool) *http.Client {
+	if insecureSkipTLS {
+		return &http.Client{Transport: runner.InsecureTransport(newTransport())}
+	}
 	return &http.Client{Transport: client.HTTPClient.Transport}
 }
 
@@ -85,7 +91,7 @@ func addRunnerConfigFlag(cmd *cobra.Command, dest *string) {
 }
 
 func newRunnerRegisterCmd() *cobra.Command {
-	var scope, token, name, labels, config, workDir, containerOptions, validVolumes, dockerHost, containerNetwork string
+	var scope, token, name, labels, config, workDir, containerOptions, validVolumes, dockerHost, containerNetwork, connectURL string
 	var concurrency int
 	var host, privileged, insecureSkipTLS bool
 
@@ -110,10 +116,15 @@ func newRunnerRegisterCmd() *cobra.Command {
 			if len(labelList) == 0 {
 				labelList = []string{runner.DefaultLabel}
 			}
+			// A bad flag must not burn the one time token
+			connect, err := runner.ParseConnectURL(connectURL)
+			if err != nil {
+				return err
+			}
 			fmt.Printf("Registering with %s\n", client.BaseURL)
 			ctx, cancel := context.WithTimeout(cmd.Context(), time.Minute)
 			defer cancel()
-			rc := runner.NewClient(client.BaseURL, "", runnerHTTPClient())
+			rc := runner.NewClient(client.BaseURL, "", runnerHTTPClient(insecureSkipTLS))
 			info, runnerToken, err := rc.Register(ctx, strings.TrimSpace(token), name, labelList, runnerVersion())
 			if err != nil {
 				return fmt.Errorf("registration with %s failed: %w", client.BaseURL, rpcErr(err))
@@ -128,7 +139,7 @@ func newRunnerRegisterCmd() *cobra.Command {
 				Server: client.BaseURL, Token: runnerToken, RunnerID: info.GetId(), Name: info.GetName(), Scope: runnerScopeString(info.GetScope()),
 				Labels: info.GetLabels(), Images: images, Concurrency: concurrency, HostEnabled: host, PrivilegedJobs: privileged, WorkDir: workDir,
 				DockerHost: strings.TrimSpace(dockerHost), ContainerOptions: strings.TrimSpace(containerOptions), ValidVolumes: splitList(validVolumes),
-				ContainerNetwork: strings.TrimSpace(containerNetwork), InsecureSkipTLS: insecureSkipTLS,
+				ContainerNetwork: strings.TrimSpace(containerNetwork), ConnectURL: connect, InsecureSkipTLS: insecureSkipTLS,
 			}
 			if err := cfg.Save(config); err != nil {
 				return fmt.Errorf("save runner config: %w", err)
@@ -159,7 +170,8 @@ func newRunnerRegisterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&containerOptions, "container-options", "", "Extra docker run flags for every job container, shell quoted")
 	cmd.Flags().StringVar(&validVolumes, "valid-volumes", "", "Comma separated host paths and named volumes jobs may mount, glob syntax")
 	cmd.Flags().StringVar(&containerNetwork, "container-network", "", "Docker network job containers join (default a private network per job)")
-	cmd.Flags().BoolVar(&insecureSkipTLS, "insecure-skip-tls", false, "Skip certificate checks when cloning actions and workflows")
+	cmd.Flags().StringVar(&connectURL, "connect-url", "", "Server URL jobs use, such as https://df.example.com (default the one the server derives)")
+	cmd.Flags().BoolVar(&insecureSkipTLS, "insecure-skip-tls", false, "Skip certificate checks against the server")
 	_ = cmd.MarkFlagRequired("token")
 	return cmd
 }
@@ -197,7 +209,7 @@ func newRunnerStartCmd() *cobra.Command {
 			if err := exportDockerHost(cfg); err != nil {
 				return err
 			}
-			r, err := runner.New(cfg, runnerVersion(), runnerHTTPClient())
+			r, err := runner.New(cfg, runnerVersion(), runnerHTTPClient(cfg.InsecureSkipTLS))
 			if err != nil {
 				return err
 			}
@@ -223,6 +235,9 @@ func newRunnerStatusCmd() *cobra.Command {
 			}
 			fmt.Printf("Runner:      %s (%s)\n", cfg.Name, cfg.RunnerID)
 			fmt.Printf("Server:      %s\n", cfg.Server)
+			if cfg.ConnectURL != "" {
+				fmt.Printf("Connect URL: %s\n", cfg.ConnectURL)
+			}
 			if cfg.Scope != "" {
 				fmt.Printf("Scope:       %s\n", cfg.Scope)
 			}
@@ -243,7 +258,7 @@ func newRunnerStatusCmd() *cobra.Command {
 				fmt.Printf("Docker host: %s\n", cfg.DockerHost)
 			}
 			if cfg.InsecureSkipTLS {
-				fmt.Printf("TLS checks:  skipped for clones\n")
+				fmt.Printf("TLS checks:  skipped\n")
 			}
 			fmt.Printf("Images:\n")
 			keys := make([]string, 0, len(cfg.Images))
@@ -254,7 +269,7 @@ func newRunnerStatusCmd() *cobra.Command {
 			for _, k := range keys {
 				fmt.Printf("  %-20s %s\n", k, cfg.Images[k])
 			}
-			r, err := runner.New(cfg, runnerVersion(), runnerHTTPClient())
+			r, err := runner.New(cfg, runnerVersion(), runnerHTTPClient(cfg.InsecureSkipTLS))
 			if err != nil {
 				return err
 			}

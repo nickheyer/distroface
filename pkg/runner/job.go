@@ -324,6 +324,14 @@ func conclusionString(c v1.ActionsConclusion) string {
 	return "failure"
 }
 
+// Instance address for the job, the runner override wins
+func (j *job) serverURL() string {
+	if j.r.cfg.ConnectURL != "" {
+		return j.r.cfg.ConnectURL
+	}
+	return strings.TrimRight(j.task.ServerUrl, "/")
+}
+
 // Registry host of the instance, where the job token logs in
 func registryHost(serverURL string) string {
 	u, err := url.Parse(serverURL)
@@ -335,7 +343,7 @@ func registryHost(serverURL string) string {
 
 // Environment every step sees, docker config and session paths included
 func (j *job) prepareEnv() (map[string]string, error) {
-	server := strings.TrimRight(j.task.ServerUrl, "/")
+	server := j.serverURL()
 	env := map[string]string{
 		"ACTIONS_CACHE_URL":                 server + "/api/actions/cache/",
 		"ACTIONS_RUNTIME_URL":               server + "/api/actions_pipeline/",
@@ -348,7 +356,7 @@ func (j *job) prepareEnv() (map[string]string, error) {
 	if j.task.RuntimeToken != "" {
 		env["ACTIONS_RUNTIME_TOKEN"] = j.task.RuntimeToken
 	}
-	host := registryHost(j.task.ServerUrl)
+	host := registryHost(server)
 	if host != "" {
 		env["DISTROFACE_REGISTRY"] = host
 	}
@@ -375,7 +383,18 @@ func (j *job) prepareEnv() (map[string]string, error) {
 	if j.session != nil {
 		env["DISTROFACE_SESSION_DIR"] = j.session.stepDir()
 	}
+	if j.r.cfg.InsecureSkipTLS && strings.HasPrefix(server, "https://") {
+		skipServerTLS(env, server)
+	}
 	return env, nil
+}
+
+// Git trusts this server blindly, node trusts every host
+func skipServerTLS(env map[string]string, server string) {
+	env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+	env["GIT_CONFIG_COUNT"] = "1"
+	env["GIT_CONFIG_KEY_0"] = "http." + server + "/.sslVerify"
+	env["GIT_CONFIG_VALUE_0"] = "false"
 }
 
 // Whether the labels map to the host executor
@@ -454,7 +473,7 @@ func (j *job) actConfig(env map[string]string) (*actrunner.Config, error) {
 		Secrets:               secrets,
 		Vars:                  j.task.Variables,
 		Token:                 j.task.Token,
-		GitHubInstance:        strings.TrimRight(j.task.ServerUrl, "/"),
+		GitHubInstance:        j.serverURL(),
 		NoSkipCheckout:        true,
 		PresetGitHubContext:   preset,
 		EventJSON:             string(eventJSON),
@@ -469,6 +488,9 @@ func (j *job) actConfig(env map[string]string) (*actrunner.Config, error) {
 		PlatformPicker:        j.pickPlatform,
 		ValidVolumes:          validVolumes,
 		InsecureSkipTLS:       j.r.cfg.InsecureSkipTLS,
+	}
+	if j.r.http != nil {
+		cfg.InstanceTransport = j.r.http.Transport
 	}
 	return cfg, nil
 }

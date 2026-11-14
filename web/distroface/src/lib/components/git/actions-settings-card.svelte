@@ -50,6 +50,8 @@
 		builtinLabels: 'git.actions.builtin_runner.labels',
 		builtinConcurrency: 'git.actions.builtin_runner.concurrency',
 		builtinImage: 'git.actions.builtin_runner.image',
+		builtinConnectUrl: 'git.actions.builtin_runner.connect_url',
+		builtinSkipTls: 'git.actions.builtin_runner.insecure_skip_tls',
 		actionsUrl: 'git.actions.default_actions_url',
 		startersUrl: 'git.actions.starter_workflows_url'
 	} as const;
@@ -70,7 +72,9 @@
 		P.builtinEnabled,
 		P.builtinLabels,
 		P.builtinConcurrency,
-		P.builtinImage
+		P.builtinImage,
+		P.builtinConnectUrl,
+		P.builtinSkipTls
 	];
 	// Where actions and starter workflows come from is instance wide
 	const sourcePaths: Path[] = [P.actionsUrl, P.startersUrl];
@@ -96,6 +100,8 @@
 	let builtinLabels = $state('ubuntu-latest');
 	let builtinConcurrency = $state(2);
 	let builtinImage = $state('');
+	let builtinConnectUrl = $state('');
+	let builtinSkipTls = $state(false);
 	let actionsUrl = $state('https://github.com');
 	let startersUrl = $state('https://github.com/actions/starter-workflows');
 
@@ -133,6 +139,8 @@
 		builtinLabels = b?.labels || 'ubuntu-latest';
 		builtinConcurrency = b?.concurrency || 2;
 		builtinImage = b?.image ?? '';
+		builtinConnectUrl = b?.connectUrl ?? '';
+		builtinSkipTls = b?.insecureSkipTls ?? false;
 		actionsUrl = a?.defaultActionsUrl || 'https://github.com';
 		startersUrl = a?.starterWorkflowsUrl || 'https://github.com/actions/starter-workflows';
 	}
@@ -149,6 +157,8 @@
 			[P.builtinLabels]: a?.builtinRunner?.labels ?? 'ubuntu-latest',
 			[P.builtinConcurrency]: a?.builtinRunner?.concurrency ?? 2,
 			[P.builtinImage]: a?.builtinRunner?.image ?? '',
+			[P.builtinConnectUrl]: a?.builtinRunner?.connectUrl ?? '',
+			[P.builtinSkipTls]: a?.builtinRunner?.insecureSkipTls ?? false,
 			[P.actionsUrl]: a?.defaultActionsUrl ?? '',
 			[P.startersUrl]: a?.starterWorkflowsUrl ?? ''
 		};
@@ -168,6 +178,8 @@
 				Math.min(64, Math.round(Number(builtinConcurrency) || 2))
 			),
 			[P.builtinImage]: builtinImage.trim(),
+			[P.builtinConnectUrl]: builtinConnectUrl.trim().replace(/\/+$/, ''),
+			[P.builtinSkipTls]: builtinSkipTls,
 			[P.actionsUrl]: actionsUrl.trim().replace(/\/+$/, '') || 'https://github.com',
 			[P.startersUrl]:
 				startersUrl.trim().replace(/\/+$/, '') || 'https://github.com/actions/starter-workflows'
@@ -194,7 +206,13 @@
 									...(has(P.builtinConcurrency)
 										? { concurrency: f[P.builtinConcurrency] as number }
 										: {}),
-									...(has(P.builtinImage) ? { image: f[P.builtinImage] as string } : {})
+									...(has(P.builtinImage) ? { image: f[P.builtinImage] as string } : {}),
+									...(has(P.builtinConnectUrl)
+										? { connectUrl: f[P.builtinConnectUrl] as string }
+										: {}),
+									...(has(P.builtinSkipTls)
+										? { insecureSkipTls: f[P.builtinSkipTls] as boolean }
+										: {})
 								}
 							}
 						: {})
@@ -432,6 +450,30 @@
 					class="font-mono"
 					disabled={!canEdit || locked(P.builtinImage)}
 				/>
+			</FormField>
+			<FormField
+				label="Connect URL"
+				id="builtin-connect-url"
+				help={locked(P.builtinConnectUrl)
+					? 'Pinned by the config file'
+					: 'Server URL jobs use, it must be reachable from the server and from job containers. Derived from the public hostname and TLS mode when blank'}
+			>
+				<Input
+					id="builtin-connect-url"
+					bind:value={builtinConnectUrl}
+					placeholder="https://df.example.com"
+					class="font-mono"
+					disabled={!canEdit || locked(P.builtinConnectUrl)}
+				/>
+			</FormField>
+			<FormField
+				label="Skip TLS checks"
+				layout="toggle"
+				help={locked(P.builtinSkipTls)
+					? 'Pinned by the config file'
+					: 'The runner and git in jobs accept any certificate from this server, node in jobs accepts any certificate from any host'}
+			>
+				<Switch bind:checked={builtinSkipTls} disabled={!canEdit || locked(P.builtinSkipTls)} />
 			</FormField>
 			<FormField
 				label="Concurrency"

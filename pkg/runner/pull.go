@@ -156,7 +156,7 @@ func (j *job) registryAuth(ctx context.Context, p imagePull) (string, error) {
 	if p.username != "" && p.password != "" {
 		return authconfig.Encode(registry.AuthConfig{Username: p.username, Password: p.password})
 	}
-	if host := registryHost(j.task.ServerUrl); host != "" && j.task.Token != "" && imageDomain(p.image) == host {
+	if host := registryHost(j.serverURL()); host != "" && j.task.Token != "" && imageDomain(p.image) == host {
 		return authconfig.Encode(registry.AuthConfig{Username: jobTokenUser, Password: j.task.Token})
 	}
 	ac, err := actcontainer.LoadDockerAuthConfig(ctx, p.image)

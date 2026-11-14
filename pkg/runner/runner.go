@@ -61,6 +61,7 @@ func (r *Runner) DisableSignals() { r.noSignals = true }
 
 // The http client carries the instance trust settings
 func New(cfg *Config, version string, httpClient *http.Client) (*Runner, error) {
+	cfg.normalize()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -69,9 +70,6 @@ func New(cfg *Config, version string, httpClient *http.Client) (*Runner, error) 
 	}
 	if version == "" {
 		version = "dev"
-	}
-	if cfg.Concurrency <= 0 {
-		cfg.Concurrency = 1
 	}
 	installDecodeHook()
 	return &Runner{

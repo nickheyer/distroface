@@ -2,8 +2,11 @@
 package runner
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +25,9 @@ const (
 
 // On disk runner identity and executor setup
 type Config struct {
-	Server      string            `json:"server"`
+	Server string `json:"server"`
+	// Server url jobs use, the server derived one when empty
+	ConnectURL  string            `json:"connect_url,omitempty"`
 	Token       string            `json:"token"`
 	RunnerID    string            `json:"runner_id"`
 	Name        string            `json:"name"`
@@ -42,7 +47,7 @@ type Config struct {
 	ContainerOptions string `json:"container_options,omitempty"`
 	// Host paths and named volumes jobs may mount, glob syntax
 	ValidVolumes []string `json:"valid_volumes,omitempty"`
-	// Skip certificate checks when cloning actions and workflows
+	// Skip certificate checks against the server
 	InsecureSkipTLS bool `json:"insecure_skip_tls,omitempty"`
 }
 
@@ -105,6 +110,31 @@ func (c *Config) normalize() {
 		c.Labels = []string{}
 	}
 	c.Server = strings.TrimRight(c.Server, "/")
+	c.ConnectURL = strings.TrimRight(strings.TrimSpace(c.ConnectURL), "/")
+}
+
+// Bare scheme and host that jobs can reach, or empty
+func ParseConnectURL(raw string) (string, error) {
+	raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" ||
+		u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
+		return "", fmt.Errorf("connect url %q must look like https://host or http://host:port", raw)
+	}
+	return raw, nil
+}
+
+// Copy that accepts any certificate, for self signed servers
+func InsecureTransport(base *http.Transport) *http.Transport {
+	t := base.Clone()
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	t.TLSClientConfig.InsecureSkipVerify = true
+	return t
 }
 
 // Rejects configs that cannot start
@@ -114,6 +144,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Token == "" {
 		return fmt.Errorf("runner config has no token, run 'dfcli runner register'")
+	}
+	if _, err := ParseConnectURL(c.ConnectURL); err != nil {
+		return err
 	}
 	return nil
 }

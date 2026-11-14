@@ -288,6 +288,8 @@ message BuiltinRunnerSettings {
   optional string labels = 2; // Comma separated runs-on labels it serves
   optional int32 concurrency = 3; // Jobs at once
   optional string image = 4; // Image behind every label, the stock act image when empty
+  optional string connect_url = 5; // Server url its jobs use, derived when empty
+  optional bool insecure_skip_tls = 6; // Skip certificate checks against this server
 }
 
 // Agent execution policy, org scope overrides most fields, repo scope tightens limits

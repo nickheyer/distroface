@@ -27,7 +27,8 @@ Registration exchanges the token for a long lived runner token starting with `df
 | `--container-options` | Extra `docker run` flags for every job container, shell quoted. |
 | `--valid-volumes` | Comma separated host paths and named volumes jobs may mount, glob syntax. |
 | `--container-network` | Docker network job containers join, default a private network per job. |
-| `--insecure-skip-tls` | Skip certificate checks when cloning actions and workflows. |
+| `--connect-url` | Server URL jobs use instead of the one the server derives, see `connect_url` below. |
+| `--insecure-skip-tls` | Skip certificate checks against the server, for every runner call, for clones, and for git in job steps. Node in job steps then skips them for every host. |
 
 `dfcli runner start --runner-config <path>` polls until interrupted. The first `SIGINT` or `SIGTERM` stops polling and lets running jobs finish, a second one cancels them. `dfcli runner status` prints the config and checks the docker daemon, `--check` also sends a heartbeat, which marks the runner online.
 
@@ -36,6 +37,7 @@ Registration exchanges the token for a long lived runner token starting with `df
 | Field | Description |
 | --- | --- |
 | `server` | Instance URL. |
+| `connect_url` | Server URL jobs use, a bare scheme and host such as `https://df.example.com`. It must be reachable from the runner machine and from job containers. Empty uses the URL the server derives. |
 | `token` | Runner token. |
 | `runner_id`, `name`, `scope` | Identity the server assigned. `scope` is `system`, `org:<name>` or `repo:<namespace/name>`. |
 | `labels` | Labels at registration. Matching uses the labels stored on the server, change them under the runner's scope page or with `ActionsService.UpdateRunner`. |
@@ -48,7 +50,7 @@ Registration exchanges the token for a long lived runner token starting with `df
 | `container_network` | Network job and service containers join. |
 | `container_options` | Extra `docker run` flags. |
 | `valid_volumes` | Mount allow list for container options and workflow volumes. |
-| `insecure_skip_tls` | Skip certificate checks for clones from the instance. |
+| `insecure_skip_tls` | Skip certificate checks against the server, for every runner call, for clones, and for git in job steps. Node in job steps then skips them for every host. |
 
 ### Labels and images
 
@@ -91,6 +93,8 @@ The server can run jobs itself. Turn it on under Admin > Actions. A runner named
 | `git.actions.builtin_runner.labels` | `ubuntu-latest` | Comma separated labels it serves. |
 | `git.actions.builtin_runner.concurrency` | `2` | Jobs at once. |
 | `git.actions.builtin_runner.image` | empty | Image behind every label, the stock act image when empty. |
+| `git.actions.builtin_runner.connect_url` | empty | Server URL its jobs use, a bare scheme and host such as `https://df.example.com`. It must be reachable from the server process and from job containers. Empty uses the public hostname with the scheme the TLS mode implies. |
+| `git.actions.builtin_runner.insecure_skip_tls` | `false` | Skip certificate checks against the server, for clones and for git in job steps. Node in job steps then skips them for every host. |
 
 Jobs are sibling containers on the server's docker socket, and the daemon mounts job directories by host path. The process therefore needs the socket, and the data dir must be bound at the same path on the host and inside the container, the work dir is `<data dir>/runner`. The server runs as uid 1000, so it also needs the group that owns the socket, add its gid with `group_add` or `--group-add`, `stat -c %g /var/run/docker.sock` prints it. The socket makes the server root on its host, keep it to development and small instances and use `dfcli runner` on a separate machine for anything shared. The compose file in the repository shows all three, see [Installation](../getting-started/installation.md).
 

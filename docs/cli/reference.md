@@ -221,7 +221,7 @@ Teams are matched by name or id. `view` prints the team with its members and rep
 ## runner
 
 ```
-dfcli runner register --token dfr_... [--name N] [--labels a,b] [--concurrency N] [--host] [--work-dir D] [--privileged-jobs] [--docker-host URL] [--container-options "..."] [--valid-volumes a,b] [--container-network NET] [--insecure-skip-tls] [--runner-config FILE]
+dfcli runner register --token dfr_... [--name N] [--labels a,b] [--concurrency N] [--host] [--work-dir D] [--privileged-jobs] [--docker-host URL] [--container-options "..."] [--valid-volumes a,b] [--container-network NET] [--connect-url URL] [--insecure-skip-tls] [--runner-config FILE]
 dfcli runner start [--runner-config FILE]
 dfcli runner status [--runner-config FILE] [--check]
 ```
@@ -239,7 +239,8 @@ dfcli runner status [--runner-config FILE] [--check]
 | `--container-options` | Extra `docker run` flags for every job container, shell quoted |
 | `--valid-volumes` | Host paths and named volumes jobs may mount, glob syntax |
 | `--container-network` | Network job containers join, default a private network per job |
-| `--insecure-skip-tls` | Skip certificate checks when cloning actions and workflows |
+| `--connect-url` | Server URL jobs use, a bare scheme and host, default the one the server derives |
+| `--insecure-skip-tls` | Skip certificate checks against the server, for every runner call, for clones, and for git in job steps, node in job steps then skips them for every host |
 | `--runner-config` | Runner config path, default `DFCLI_RUNNER_CONFIG` or `~/.dfcli/runner.json` |
 | `--check` | status only, send a heartbeat to verify the token, marks the runner online |
 

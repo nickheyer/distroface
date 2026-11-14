@@ -19,6 +19,7 @@ import (
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
 	"github.com/nickheyer/distroface/pkg/proto/distroface/v1/distrofacev1connect"
+	runnerapp "github.com/nickheyer/distroface/pkg/runner"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -418,6 +419,11 @@ func validateSettingsPatch(patch *v1.Settings) error {
 		if b := g.GetActions().GetBuiltinRunner(); b != nil {
 			if b.Concurrency != nil && (*b.Concurrency < 1 || *b.Concurrency > 64) {
 				return fmt.Errorf("built in runner concurrency must be between 1 and 64")
+			}
+			if b.ConnectUrl != nil {
+				if _, err := runnerapp.ParseConnectURL(*b.ConnectUrl); err != nil {
+					return fmt.Errorf("built in runner %w", err)
+				}
 			}
 		}
 		if g.SshPublicHost != nil && *g.SshPublicHost != "" {
