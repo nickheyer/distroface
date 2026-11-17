@@ -33,7 +33,13 @@ type OrganizationService struct {
 	res      *settings.Resolver
 	git      *gitrepo.Manager
 	activity *activity.Recorder
+	orgKey   func(ctx context.Context, org *storage.Organization) string
 	log      *logger.Logger
+}
+
+// Source of the public half of org ssh identities
+func (s *OrganizationService) SetOrgKeys(fn func(ctx context.Context, org *storage.Organization) string) {
+	s.orgKey = fn
 }
 
 // Installs the activity recorder, nil keeps the feed quiet
@@ -589,6 +595,9 @@ func orgToProto(o *storage.Organization, memberCount int32, currentRole string) 
 func (s *OrganizationService) withTeamsCount(ctx context.Context, p *v1.Organization) *v1.Organization {
 	if n, err := s.store.CountOrgTeams(ctx, p.Id); err == nil {
 		p.TeamsCount = int32(n)
+	}
+	if s.orgKey != nil {
+		p.SshPublicKey = s.orgKey(ctx, &storage.Organization{ID: p.Id, Name: p.Name})
 	}
 	return p
 }

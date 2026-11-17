@@ -2,9 +2,6 @@ package mirror
 
 import (
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"strings"
@@ -15,7 +12,6 @@ import (
 	"github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/gitrepo"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
-	"golang.org/x/crypto/ssh"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -134,49 +130,6 @@ func (m *Monitor) SyncPushMirrorNow(repo *db.GitRepository, pm *db.GitPushMirror
 		m.execPushSync(m.baseCtx, repo, pm)
 	}()
 	return nil
-}
-
-// Mints the repo ssh key, returns the public line
-func (m *Monitor) GenerateGitMirrorKey(ctx context.Context, repo *db.GitRepository) (string, error) {
-	if m.git == nil {
-		return "", ErrGitUnavailable
-	}
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		return "", err
-	}
-	comment := fmt.Sprintf("distroface-mirror-%s-%s", repo.Namespace, repo.Name)
-	block, err := ssh.MarshalPrivateKey(priv, comment)
-	if err != nil {
-		return "", err
-	}
-	sshPub, err := ssh.NewPublicKey(pub)
-	if err != nil {
-		return "", err
-	}
-	line := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub))) + " " + comment
-	sealed, err := m.sealer.Seal(string(pem.EncodeToMemory(block)))
-	if err != nil {
-		return "", err
-	}
-	state := parseGitMirrorState(repo.MirrorState)
-	state.SSHPrivateKey = sealed
-	state.SSHPublicKey = line
-	state.HostKey = ""
-	encoded := state.Encode()
-	if err := m.store.UpdateGitRepositoryColumns(ctx, repo.ID, map[string]any{"mirror_state": encoded}); err != nil {
-		return "", err
-	}
-	repo.MirrorState = encoded
-	return line, nil
-}
-
-// Public half of the repo ssh key, empty when absent
-func (m *Monitor) GitMirrorPublicKey(repo *db.GitRepository) string {
-	if repo == nil {
-		return ""
-	}
-	return parseGitMirrorState(repo.MirrorState).SSHPublicKey
 }
 
 // What a one time import copies besides branches and tags

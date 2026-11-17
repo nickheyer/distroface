@@ -238,18 +238,15 @@ func (m *Monitor) gitHTTPAuth(up gitUpstream, cfg *v1.MirrorConfig) gitrepo.Remo
 }
 
 // Transport credentials, ssh pins the host key and never falls back to an agent
-func (m *Monitor) gitAuth(up gitUpstream, cfg *v1.MirrorConfig, state *GitMirrorState) (gitrepo.RemoteAuth, error) {
+func (m *Monitor) gitAuth(ctx context.Context, repo *db.GitRepository, up gitUpstream, cfg *v1.MirrorConfig, state *GitMirrorState) (gitrepo.RemoteAuth, error) {
 	if !up.SSH {
 		return m.gitHTTPAuth(up, cfg), nil
 	}
-	if state.SSHPrivateKey == "" {
-		return gitrepo.RemoteAuth{}, fmt.Errorf("%w: upstream uses ssh, generate the repository ssh key and install it upstream first", ErrInvalid)
+	keys := m.outboundKeys(ctx, repo, state.SSHPrivateKey)
+	if len(keys) == 0 {
+		return gitrepo.RemoteAuth{}, fmt.Errorf("%w: upstream uses ssh and no ssh key could be loaded", ErrInvalid)
 	}
-	pem, err := m.openMirrorKey(state.SSHPrivateKey)
-	if err != nil {
-		return gitrepo.RemoteAuth{}, fmt.Errorf("%w: the stored ssh key cannot be decrypted, generate it again", ErrInvalid)
-	}
-	a := gitrepo.RemoteAuth{HostKey: state.HostKey, Dialer: m.dial, SSHKeyPEM: pem}
+	a := gitrepo.RemoteAuth{HostKey: state.HostKey, Dialer: m.dial, SSHKeys: keys}
 	a.OnHostKey = func(fp string) { state.HostKey = fp }
 	return a, nil
 }
@@ -480,7 +477,7 @@ func (m *Monitor) syncGitRepo(ctx context.Context, repo *db.GitRepository, cfg *
 	if _, err := gitrepo.ValidateUpstreamURL(up.URL); err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	auth, err := m.gitAuth(up, cfg, state)
+	auth, err := m.gitAuth(ctx, repo, up, cfg, state)
 	if err != nil {
 		return err
 	}

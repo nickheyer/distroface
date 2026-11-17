@@ -30,6 +30,30 @@ func (s *Store) SetSystemSetting(ctx context.Context, key, value string) error {
 	return s.db.WithContext(ctx).Save(&setting).Error
 }
 
+// Outbound ssh identities
+
+func (s *Store) GetOutboundSSHKey(ctx context.Context, scope, scopeID string) (*db.OutboundSSHKey, error) {
+	var key db.OutboundSSHKey
+	err := s.db.WithContext(ctx).First(&key, "scope = ? AND scope_id = ?", scope, scopeID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &key, nil
+}
+
+// First writer wins so racing nodes agree on one key
+func (s *Store) CreateOutboundSSHKeyIfAbsent(ctx context.Context, key *db.OutboundSSHKey) error {
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(key).Error
+}
+
+// Upsert because an empty scope id defeats gorm save
+func (s *Store) SaveOutboundSSHKey(ctx context.Context, key *db.OutboundSSHKey) error {
+	return s.db.WithContext(ctx).Clauses(clause.OnConflict{UpdateAll: true}).Create(key).Error
+}
+
 // ── Scoped settings documents ────────────────────────────────────────────
 
 func (s *Store) GetSettingsValue(ctx context.Context, scope v1.SettingsScopeType, scopeID string) (string, bool, error) {

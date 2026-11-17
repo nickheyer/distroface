@@ -168,7 +168,8 @@ func (s *Server) setupHandler() {
 	healthService := services.NewHealthService(s.Log)
 	healthService.SetChecks(s.RegistryHealth)
 	distrofacev1connect.RegisterHealthServiceHandler(rpcServer, healthService)
-	distrofacev1connect.RegisterAuthServiceHandler(rpcServer, services.NewAuthService(s.Store, s.AuthManager, s.Enforcer, s.OIDCHandler, s.MailService, s.Log))
+	authService := services.NewAuthService(s.Store, s.AuthManager, s.Enforcer, s.OIDCHandler, s.MailService, s.Log)
+	distrofacev1connect.RegisterAuthServiceHandler(rpcServer, authService)
 	distrofacev1connect.RegisterUserServiceHandler(rpcServer, services.NewUserService(s.Store, s.AuthManager, s.Enforcer, s.GitManager, s.Log))
 	repoService := services.NewRepositoryService(s.Store, s.RegistryAccess, s.Enforcer, s.MirrorMonitor, s.GitManager, s.Log)
 	repoService.SetActivity(s.Activity)
@@ -178,6 +179,10 @@ func (s *Server) setupHandler() {
 	distrofacev1connect.RegisterTokenServiceHandler(rpcServer, services.NewTokenService(s.AuthManager, s.Enforcer, s.GitManager, s.Log))
 	orgService := services.NewOrganizationService(s.Store, s.RegistryAccess, s.Enforcer, s.Resolver, s.GitManager, s.Log)
 	orgService.SetActivity(s.Activity)
+	if s.MirrorMonitor != nil {
+		authService.SetInstanceKey(s.MirrorMonitor.InstancePublicKey)
+		orgService.SetOrgKeys(s.MirrorMonitor.OrgPublicKey)
+	}
 	distrofacev1connect.RegisterOrganizationServiceHandler(rpcServer, orgService)
 	distrofacev1connect.RegisterWebhookServiceHandler(rpcServer, services.NewWebhookService(s.Store, s.Enforcer, s.WebhookDispatcher, s.GitManager, s.Log))
 	distrofacev1connect.RegisterActivityServiceHandler(rpcServer, services.NewActivityService(s.Store, s.GitManager, s.Enforcer, s.Log))

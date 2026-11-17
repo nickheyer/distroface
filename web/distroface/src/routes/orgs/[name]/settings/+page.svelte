@@ -12,6 +12,7 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import OrgSettingsManager from '$lib/components/org-settings-manager.svelte';
+	import OutboundSshKeys from '$lib/components/git/outbound-ssh-keys.svelte';
 	import { Save, Trash, ArrowLeftRight, Loader, LogOut } from '$lib/icons';
 	import { rpcClient } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -122,6 +123,18 @@
 					{/if}
 				</Button>
 			{/snippet}
+		</FormSection>
+
+		<FormSection
+			title="SSH key"
+			description="Identity presented to ssh remotes by mirrors, imports, and push mirrors under {orgName}."
+		>
+			<OutboundSshKeys
+				organization={ctx.org?.sshPublicKey}
+				namespace={orgName}
+				regenerate={['organization']}
+				idPrefix="org-key"
+			/>
 		</FormSection>
 
 		<OrgSettingsManager {orgId} />

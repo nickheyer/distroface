@@ -57,7 +57,7 @@ service GitService {
   rpc StopGitRepositorySync(StopGitRepositorySyncRequest) returns (StopGitRepositorySyncResponse) {}
   // DismissGitImport stops a running import and forgets its record
   rpc DismissGitImport(DismissGitImportRequest) returns (DismissGitImportResponse) {}
-  // GenerateMirrorKey creates the ssh key pair used for ssh upstreams.
+  // GenerateMirrorKey replaces an outbound ssh key, the repository, organization, or instance one.
   rpc GenerateMirrorKey(GenerateMirrorKeyRequest) returns (GenerateMirrorKeyResponse) {}
   // DetachMirror stops following the upstream and makes the repository standard
   rpc DetachMirror(DetachMirrorRequest) returns (DetachMirrorResponse) {}
@@ -366,6 +366,10 @@ message GitRepository {
   GitViewerAccess viewer = 43;
   google.protobuf.Timestamp created_at = 44;
   google.protobuf.Timestamp updated_at = 45;
+  // Outbound ssh identity of the owning organization, empty for personal namespaces
+  string org_ssh_public_key = 48;
+  // Outbound ssh identity shared by the whole instance
+  string instance_ssh_public_key = 49;
   // Set while an import runs, failed, or left notes
   GitImportStatus import_status = 46;
 }
@@ -1020,9 +1024,11 @@ message DismissGitImportRequest {
 // DismissGitImportResponse is empty
 message DismissGitImportResponse {}
 
-// GenerateMirrorKeyRequest identifies a repository.
+// GenerateMirrorKeyRequest picks the key to replace.
 message GenerateMirrorKeyRequest {
+  // Empty together with name targets the instance key
   string namespace = 1;
+  // Empty targets the organization key of the namespace
   string name = 2;
 }
 

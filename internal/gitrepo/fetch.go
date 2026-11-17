@@ -14,7 +14,6 @@ import (
 	"github.com/go-git/go-git/v6/plumbing/client"
 	gittransport "github.com/go-git/go-git/v6/plumbing/transport"
 	githttp "github.com/go-git/go-git/v6/plumbing/transport/http"
-	gitssh "github.com/go-git/go-git/v6/plumbing/transport/ssh"
 	"github.com/nickheyer/distroface/internal/db"
 	"golang.org/x/crypto/ssh"
 )
@@ -27,9 +26,10 @@ type RemoteAuth struct {
 	HTTPClient *http.Client
 	Username   string
 	Password   string
-	SSHKeyPEM  []byte
-	HostKey    string
-	OnHostKey  func(fingerprint string)
+	// Private keys offered in order, most specific first
+	SSHKeys   [][]byte
+	HostKey   string
+	OnHostKey func(fingerprint string)
 	// Vetted dialer for ssh and git transports, nil dials directly
 	Dialer gittransport.DialContextFunc
 }
@@ -50,14 +50,39 @@ func (a RemoteAuth) Options(e *Engine) []client.Option {
 		}
 		opts = append(opts, client.WithHTTPAuth(&githttp.BasicAuth{Username: user, Password: a.Password}))
 	}
-	if len(a.SSHKeyPEM) > 0 {
-		keys, err := gitssh.NewPublicKeys("git", a.SSHKeyPEM, "")
-		if err == nil {
-			keys.HostKeyCallback = a.hostKeyCallback()
-			opts = append(opts, client.WithSSHAuth(keys))
-		}
+	if signers := a.signers(); len(signers) > 0 {
+		opts = append(opts, client.WithSSHAuth(sshKeyAuth{signers: signers, hostKey: a.hostKeyCallback()}))
 	}
 	return opts
+}
+
+func (a RemoteAuth) signers() []ssh.Signer {
+	out := make([]ssh.Signer, 0, len(a.SSHKeys))
+	for _, pem := range a.SSHKeys {
+		if signer, err := ssh.ParsePrivateKey(pem); err == nil {
+			out = append(out, signer)
+		}
+	}
+	return out
+}
+
+type sshKeyAuth struct {
+	signers []ssh.Signer
+	hostKey ssh.HostKeyCallback
+}
+
+// Explicit algorithms keep go-git from demanding a known_hosts file
+func (k sshKeyAuth) ClientConfig(_ context.Context, req *gittransport.Request) (*ssh.ClientConfig, error) {
+	user := "git"
+	if req != nil && req.URL != nil && req.URL.User != nil && req.URL.User.Username() != "" {
+		user = req.URL.User.Username()
+	}
+	return &ssh.ClientConfig{
+		User:              user,
+		Auth:              []ssh.AuthMethod{ssh.PublicKeys(k.signers...)},
+		HostKeyCallback:   k.hostKey,
+		HostKeyAlgorithms: ssh.SupportedAlgorithms().HostKeys,
+	}, nil
 }
 
 // Pins the host key on first contact and refuses changes afterwards

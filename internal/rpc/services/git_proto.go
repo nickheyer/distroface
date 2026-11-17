@@ -251,10 +251,17 @@ func (s *GitService) gitRepoToProto(ctx context.Context, user *auth.Authenticate
 		}
 	}
 	if detail {
-		if s.mirrors != nil {
-			out.MirrorSshPublicKey = s.mirrors.GitMirrorPublicKey(repo)
-		}
 		out.Viewer = s.manager.Access().Levels(ctx, user, repo).Proto()
+		if s.mirrors != nil {
+			// First admin view mints the repo key
+			if out.Viewer.CanAdmin {
+				out.MirrorSshPublicKey = s.mirrors.EnsureGitMirrorKey(ctx, repo)
+			} else {
+				out.MirrorSshPublicKey = s.mirrors.GitMirrorPublicKey(repo)
+			}
+			out.OrgSshPublicKey = s.mirrors.RepoOrgPublicKey(ctx, repo)
+			out.InstanceSshPublicKey = s.mirrors.InstancePublicKey(ctx)
+		}
 		if user != nil && !user.IsAnonymous() {
 			mode, _ := s.store.GetGitWatch(ctx, user.ID, repo.ID)
 			out.WatchMode = gitWatchModeProto(mode)

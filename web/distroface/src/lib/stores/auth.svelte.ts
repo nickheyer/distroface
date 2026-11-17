@@ -45,6 +45,7 @@ class AuthStore {
 	passwordResetEnabled = $state(false);
 	anonymousAccessEnabled = $state(false);
 	authStatusLoaded = $state(false);
+	instanceSshPublicKey = $state('');
 
 	isAuthenticated = $derived(this.user !== null);
 	isAdmin = $derived(
@@ -110,6 +111,7 @@ class AuthStore {
 			this.allowRegistration = resp.registrationEnabled;
 			this.passwordResetEnabled = resp.passwordResetEnabled;
 			this.anonymousAccessEnabled = resp.anonymousAccess;
+			this.instanceSshPublicKey = resp.instanceSshPublicKey;
 			this.authStatusLoaded = true;
 		} catch {
 			this.authStatusLoaded = true;

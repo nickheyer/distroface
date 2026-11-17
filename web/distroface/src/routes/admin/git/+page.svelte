@@ -12,6 +12,7 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
+	import OutboundSshKeys from '$lib/components/git/outbound-ssh-keys.svelte';
 	import { Loader, RadioTower } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -567,6 +568,18 @@
 			{@render numRow(nums.maxLfsObjectMb)}
 			{@render numRow(nums.maxReleaseAssetMb)}
 			{@render numRow(nums.maxConcurrentTransfers)}
+		</FormSection>
+
+		<FormSection
+			title="Outbound SSH key"
+			description="Identity presented to ssh remotes by every mirror, import, and push mirror. Visible to all users."
+		>
+			<OutboundSshKeys
+				instance={authStore.instanceSshPublicKey}
+				regenerate={['instance']}
+				idPrefix="instance-key"
+				onRegenerated={(_, key) => (authStore.instanceSshPublicKey = key)}
+			/>
 		</FormSection>
 
 		<FormSection title="Instance" description="What clients see and where repositories live.">

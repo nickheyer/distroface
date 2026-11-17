@@ -55,6 +55,19 @@ type SystemSetting struct { // Internal state like the jwt secret, never user co
 	Value string `gorm:"not null"`
 }
 
+const (
+	OutboundKeyScopeInstance = "instance"
+	OutboundKeyScopeOrg      = "org"
+)
+
+type OutboundSSHKey struct { // Identity presented to remotes, private half sealed
+	Scope      string    `gorm:"primaryKey"`
+	ScopeID    string    `gorm:"primaryKey;default:'';column:scope_id"`
+	PrivateKey string    `gorm:"type:text;not null"`
+	PublicKey  string    `gorm:"type:text;not null"`
+	UpdatedAt  time.Time `gorm:"autoUpdateTime"`
+}
+
 type SettingsRow struct { // One protojson settings document per scope tier
 	ScopeType int32     `gorm:"primaryKey;column:scope_type"`
 	ScopeID   string    `gorm:"primaryKey;default:'';column:scope_id"`

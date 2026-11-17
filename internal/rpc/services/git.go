@@ -962,16 +962,59 @@ func (s *GitService) StopGitRepositorySync(ctx context.Context, req *v1.StopGitR
 	return &v1.StopGitRepositorySyncResponse{}, nil
 }
 
+// Empty name means org key, both empty means instance
 func (s *GitService) GenerateMirrorKey(ctx context.Context, req *v1.GenerateMirrorKeyRequest) (*v1.GenerateMirrorKeyResponse, error) {
-	repo, err := s.mirrorRepo(ctx, req.Namespace, req.Name)
-	if err != nil {
-		return nil, err
+	if s.mirrors == nil {
+		return nil, connect.Errorf(connect.CodeUnavailable, "mirroring is unavailable")
 	}
-	pub, err := s.mirrors.GenerateGitMirrorKey(ctx, repo)
+	var pub string
+	var err error
+	switch {
+	case req.Namespace == "" && req.Name == "":
+		user := auth.UserFromContext(ctx)
+		if user == nil || user.IsAnonymous() {
+			return nil, connect.NewError(connect.CodeUnauthenticated, "")
+		}
+		if ok, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceSettings, rbac.ActionManage, "*"); !ok {
+			return nil, connect.Errorf(connect.CodePermissionDenied, "system admin required")
+		}
+		pub, err = s.mirrors.RegenerateInstanceKey(ctx)
+	case req.Name == "":
+		org, oerr := s.orgForKeyAdmin(ctx, req.Namespace)
+		if oerr != nil {
+			return nil, oerr
+		}
+		pub, err = s.mirrors.RegenerateOrgKey(ctx, org)
+	default:
+		repo, rerr := s.mirrorRepo(ctx, req.Namespace, req.Name)
+		if rerr != nil {
+			return nil, rerr
+		}
+		pub, err = s.mirrors.GenerateGitMirrorKey(ctx, repo)
+	}
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
 	return &v1.GenerateMirrorKeyResponse{PublicKey: pub}, nil
+}
+
+func (s *GitService) orgForKeyAdmin(ctx context.Context, name string) (*storage.Organization, error) {
+	user := auth.UserFromContext(ctx)
+	if user == nil || user.IsAnonymous() {
+		return nil, connect.NewError(connect.CodeUnauthenticated, "")
+	}
+	org, err := s.store.GetOrganization(ctx, name)
+	if err != nil || org == nil {
+		return nil, connect.Errorf(connect.CodeNotFound, "organization not found")
+	}
+	if ok, _ := s.enforcer.Enforce(user.Roles, rbac.ResourceOrganizations, rbac.ActionManage, org.ID); ok {
+		return org, nil
+	}
+	member, _ := s.store.GetOrgMember(ctx, org.ID, user.ID)
+	if member == nil || (member.Role != storage.OrgRoleOwner && member.Role != storage.OrgRoleAdmin) {
+		return nil, connect.Errorf(connect.CodePermissionDenied, "organization admin required")
+	}
+	return org, nil
 }
 
 // Works without the monitor so a mirror never gets stuck when mirroring is off
@@ -1026,9 +1069,6 @@ func (s *GitService) CreatePushMirror(ctx context.Context, req *v1.CreatePushMir
 	if _, err := gitrepo.ValidateUpstreamURL(req.RemoteUrl); err != nil {
 		return nil, mapGitErr(err)
 	}
-	if req.UseSshKey && s.mirrors != nil && s.mirrors.GitMirrorPublicKey(repo) == "" {
-		return nil, connect.Errorf(connect.CodeFailedPrecondition, "generate the repository ssh key first")
-	}
 	pm := &storage.GitPushMirror{
 		RepoID:          repo.ID,
 		RemoteURL:       strings.TrimSpace(req.RemoteUrl),
@@ -1064,7 +1104,7 @@ func (s *GitService) pushMirror(ctx context.Context, namespace, name, id string)
 }
 
 func (s *GitService) UpdatePushMirror(ctx context.Context, req *v1.UpdatePushMirrorRequest) (*v1.UpdatePushMirrorResponse, error) {
-	repo, pm, err := s.pushMirror(ctx, req.Namespace, req.Name, req.Id)
+	_, pm, err := s.pushMirror(ctx, req.Namespace, req.Name, req.Id)
 	if err != nil {
 		return nil, err
 	}
@@ -1086,9 +1126,6 @@ func (s *GitService) UpdatePushMirror(ctx context.Context, req *v1.UpdatePushMir
 		pm.Username = *req.Username
 	}
 	if req.UseSshKey != nil {
-		if *req.UseSshKey && s.mirrors != nil && s.mirrors.GitMirrorPublicKey(repo) == "" {
-			return nil, connect.Errorf(connect.CodeFailedPrecondition, "generate the repository ssh key first")
-		}
 		pm.UseSSHKey = *req.UseSshKey
 	}
 	if req.IntervalMinutes != nil {

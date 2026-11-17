@@ -4,7 +4,7 @@
 	import { resolve } from '$app/paths';
 	import { Eye, GitBranch, Loader, Lock } from '$lib/icons';
 	import { toast } from 'svelte-sonner';
-	import { rpcClient } from '$lib/api/rpc-client';
+	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
@@ -26,6 +26,7 @@
 	import { GitRepoType, Visibility } from '$lib/proto/distroface/v1/types_pb';
 	import type { GitRepository } from '$lib/proto/distroface/v1/git_pb';
 	import { upstreamRepoName } from '$lib/repo-names';
+	import OutboundSshKeys from '$lib/components/git/outbound-ssh-keys.svelte';
 
 	type CreateKind = 'standard' | 'mirror' | 'import' | 'template';
 	const createKinds: { value: CreateKind; label: string; description: string }[] = [
@@ -119,6 +120,23 @@
 	const ownNamespace = $derived(authStore.user?.username ?? '');
 	const usesMirror = $derived(createKind === 'mirror');
 	const usesImport = $derived(createKind === 'import');
+	const sshUpstream = $derived(
+		/^(ssh:\/\/|[\w.-]+@[\w.-]+:)/.test(
+			(usesMirror ? newMirror.upstream : usesImport ? newImport.upstream : '').trim()
+		)
+	);
+	let orgKey = $state('');
+	$effect(() => {
+		const ns = newNamespace;
+		orgKey = '';
+		if (!sshUpstream || !ns || ns === ownNamespace) return;
+		rpcClient.organization.getOrganization({ name: ns }, silentCallOptions).then(
+			(resp) => {
+				if (newNamespace === ns) orgKey = resp.organization?.sshPublicKey ?? '';
+			},
+			() => {}
+		);
+	});
 	const derivedName = $derived(
 		usesMirror
 			? upstreamRepoName(newMirror.upstream, 'git')
@@ -350,6 +368,19 @@
 						}}
 					/>
 				</FormField>
+			{/if}
+
+			{#if sshUpstream}
+				<p class="text-sm text-muted-foreground">
+					SSH upstreams authenticate with these keys. Install either one upstream before creating.
+					The repository also gets its own key afterwards.
+				</p>
+				<OutboundSshKeys
+					instance={authStore.instanceSshPublicKey}
+					organization={orgKey}
+					namespace={newNamespace}
+					idPrefix="git-repo-key"
+				/>
 			{/if}
 
 			<RepoNameFields

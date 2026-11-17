@@ -44,7 +44,7 @@ curl -X POST https://distroface.example.com/distroface.v1.ArtifactService/Create
 
 ## Creating a git mirror
 
-In the UI open Git > New repository and pick Mirror. Afterwards Repo > Settings > Mirror shows the upstream, the SSH key, and Detach upstream.
+In the UI open Git > New repository and pick Mirror. Afterwards Repo > Settings > Mirror shows the upstream, the SSH keys, and Detach upstream.
 
 ```bash
 curl -X POST https://distroface.example.com/distroface.v1.GitService/CreateGitRepository \
@@ -61,7 +61,7 @@ dfcli repo create infra/distroface --mirror https://github.com/nickheyer/distrof
   --mirror-username x-access-token --mirror-token ghp_x
 ```
 
-`upstream` accepts https, `ssh://`, scp style `git@host:owner/repo.git`, `host/owner/repo`, or `owner/repo` (github.com). For https the token is sent as basic auth, the username defaults to `x-access-token` on GitHub, `oauth2` on GitLab, and `token` elsewhere. An ssh upstream needs a repository key: call `GitService.GenerateMirrorKey` (or Generate under SSH key in the UI), install the returned ed25519 public key upstream, then sync. The remote host key is pinned on first contact. `pattern` matches branch and tag names, refs that stop matching are deleted locally except the default branch. `sync_depth` is ignored for git mirrors.
+`upstream` accepts https, `ssh://`, scp style `git@host:owner/repo.git`, `host/owner/repo`, or `owner/repo` (github.com). For https the token is sent as basic auth, the username defaults to `x-access-token` on GitHub, `oauth2` on GitLab, and `token` elsewhere. An ssh upstream authenticates with generated ed25519 keys at three scopes: one for the instance, one per organization, one per repository. All are created automatically and their public halves are shown wherever an ssh remote is entered, plus Admin > Git, the organization settings, and Repo > Settings > Mirror. Install any one upstream, the repository key is offered first, then the organization key, then the instance key. `GitService.GenerateMirrorKey` replaces a key: a namespace and name target the repository key, a namespace alone the organization key, an empty request the instance key. The remote host key is pinned on first contact. `pattern` matches branch and tag names, refs that stop matching are deleted locally except the default branch. `sync_depth` is ignored for git mirrors.
 
 `mirror_releases` copies upstream release entries and their asset files on every sync and removes releases the upstream dropped, see [releases](git/releases.md). `mirror_images` creates linked image mirrors on the forge registry named after the repository. An entry is the upstream `owner/repo` path itself, a path below it such as `cli` (becomes `owner/repo/cli`, local name `<repo>/cli`), or a full reference with a registry host. Tags and digests are stripped. The first sync starts right after creation. `GitService.SyncGitRepository` and `GitService.StopGitRepositorySync` run or cancel a sync, `GitService.DetachMirror` turns the repository into a standard one and drops the upstream. Archived mirrors are not synced.
 
@@ -76,7 +76,7 @@ curl -X POST https://distroface.example.com/distroface.v1.GitService/CreatePushM
        "username":"oauth2","authToken":"glpat-x","syncOnPush":true,"intervalMinutes":60}'
 ```
 
-A push mirror force pushes every branch and tag. `sync_on_push` pushes 30 seconds after the last client push, `interval_minutes` schedules pushes like a pull mirror (zero uses the system default). An ssh remote requires `use_ssh_key` and the repository key from `GitService.GenerateMirrorKey`. `GitService.SyncPushMirror` pushes now, `GitService.UpdatePushMirror` and `GitService.DeletePushMirror` manage it. A stored token is dropped when the remote moves to another host.
+A push mirror force pushes every branch and tag. `sync_on_push` pushes 30 seconds after the last client push, `interval_minutes` schedules pushes like a pull mirror (zero uses the system default). An ssh remote authenticates with the same instance, organization, and repository keys as an ssh upstream. `GitService.SyncPushMirror` pushes now, `GitService.UpdatePushMirror` and `GitService.DeletePushMirror` manage it. A stored token is dropped when the remote moves to another host.
 
 ## Importing from GitHub, Gitea, or GitLab
 

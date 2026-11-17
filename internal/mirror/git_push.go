@@ -145,20 +145,13 @@ func (m *Monitor) pushToMirror(ctx context.Context, repo *db.GitRepository, pm *
 	}
 	auth := gitrepo.RemoteAuth{HTTPClient: m.client, Dialer: m.dial}
 	switch {
-	case pm.UseSSHKey:
-		keys := parseGitMirrorState(repo.MirrorState)
-		if keys.SSHPrivateKey == "" {
-			return fmt.Errorf("%w: generate the repository ssh key first", ErrInvalid)
+	case u.Scheme == "ssh":
+		auth.SSHKeys = m.outboundKeys(ctx, repo, parseGitMirrorState(repo.MirrorState).SSHPrivateKey)
+		if len(auth.SSHKeys) == 0 {
+			return fmt.Errorf("%w: ssh remote and no ssh key could be loaded", ErrInvalid)
 		}
-		pem, err := m.openMirrorKey(keys.SSHPrivateKey)
-		if err != nil {
-			return fmt.Errorf("%w: stored ssh key unreadable, generate it again", ErrInvalid)
-		}
-		auth.SSHKeyPEM = pem
 		auth.HostKey = state.HostKey
 		auth.OnHostKey = func(fp string) { state.HostKey = fp }
-	case u.Scheme == "ssh":
-		return fmt.Errorf("%w: ssh remotes need the repository ssh key", ErrInvalid)
 	case pm.AuthToken != "":
 		auth.Username, auth.Password = gitBasicAuth(forgeForHost(u.Hostname()), pm.Username, m.openToken(pm.AuthToken))
 	}

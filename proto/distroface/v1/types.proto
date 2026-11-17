@@ -84,6 +84,7 @@ message Organization {
   google.protobuf.Timestamp updated_at = 7;
   OrgRole current_user_role = 8;
   int32 teams_count = 9;
+  string ssh_public_key = 10;
 }
 
 // OrgMember represents a user's membership in an organization.

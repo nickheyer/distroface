@@ -8,16 +8,15 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Alert, AlertDescription } from '$lib/components/ui/alert';
 	import FormPage from '$lib/components/form-page.svelte';
-	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
-	import CopyButton from '$lib/components/copy-button.svelte';
+	import OutboundSshKeys from '$lib/components/git/outbound-ssh-keys.svelte';
 	import ConfirmDialog from '$lib/components/confirm-dialog.svelte';
 	import MirrorConfigFields, {
 		mirrorFormFrom,
 		mirrorInit,
 		type MirrorForm
 	} from '$lib/components/mirror-config-fields.svelte';
-	import { Save, RefreshCw, Square, Key, Info, Loader, Unlink } from '$lib/icons';
+	import { Save, RefreshCw, Square, Info, Loader, Unlink } from '$lib/icons';
 	import { GitRepoType } from '$lib/proto/distroface/v1/types_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');
@@ -33,8 +32,6 @@
 	let saving = $state(false);
 	let triggering = $state(false);
 	let stopping = $state(false);
-	let generating = $state(false);
-	let publicKey = $state('');
 	let detachOpen = $state(false);
 	let detaching = $state(false);
 
@@ -42,7 +39,6 @@
 		if (repo && repo.fullName !== seededFor) {
 			seededFor = repo.fullName;
 			form = mirrorFormFrom(repo.mirror);
-			publicKey = repo.mirrorSshPublicKey;
 		}
 	});
 
@@ -107,20 +103,6 @@
 			// Error interceptor already toasted
 		} finally {
 			detaching = false;
-		}
-	}
-
-	async function generateKey() {
-		generating = true;
-		try {
-			const resp = await rpcClient.git.generateMirrorKey({ namespace, name });
-			publicKey = resp.publicKey;
-			toast.success('SSH key generated');
-			await gitRepoStore.reload();
-		} catch {
-			// Error interceptor already toasted
-		} finally {
-			generating = false;
 		}
 	}
 </script>
@@ -191,33 +173,19 @@
 		</FormSection>
 
 		<FormSection
-			title="SSH key"
-			description="For ssh upstreams, install the public key as a read only deploy key upstream."
+			title="SSH keys"
+			description="For ssh upstreams, install any one of these public keys upstream. The most specific installed key wins."
 		>
-			{#if publicKey}
-				<FormField
-					label="Public key"
-					id="mirror-public-key"
-					help="Generating a new key replaces this one"
-				>
-					<div class="flex items-start gap-2">
-						<pre
-							id="mirror-public-key"
-							class="code-inline min-w-0 flex-1 whitespace-pre-wrap">{publicKey}</pre>
-						<CopyButton text={publicKey} label="Public key copied" />
-					</div>
-				</FormField>
-			{:else}
-				<p class="text-sm text-muted-foreground">
-					No key yet. Generate one and add it to the upstream repository.
-				</p>
-			{/if}
-			{#snippet footer()}
-				<Button variant="outline" onclick={generateKey} disabled={generating}>
-					{#if generating}<Loader class="animate-spin" />{:else}<Key />{/if}
-					{generating ? 'Generating' : publicKey ? 'Regenerate key' : 'Generate key'}
-				</Button>
-			{/snippet}
+			<OutboundSshKeys
+				instance={repo.instanceSshPublicKey}
+				organization={repo.orgSshPublicKey}
+				repository={repo.mirrorSshPublicKey}
+				{namespace}
+				{name}
+				regenerate={['repository']}
+				idPrefix="mirror-key"
+				onRegenerated={() => void gitRepoStore.reload()}
+			/>
 		</FormSection>
 
 		<FormSection

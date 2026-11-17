@@ -100,6 +100,9 @@ func (s *Store) DeleteOrganization(ctx context.Context, id, orgName string) ([]d
 		if err := tx.Where("org_id = ?", id).Delete(&db.OrgMember{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("scope = ? AND scope_id = ?", db.OutboundKeyScopeOrg, id).Delete(&db.OutboundSSHKey{}).Error; err != nil {
+			return err
+		}
 		return tx.Delete(&db.Organization{}, "id = ?", id).Error
 	})
 	if err == nil {

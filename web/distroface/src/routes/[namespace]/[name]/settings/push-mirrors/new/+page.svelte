@@ -8,6 +8,8 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
+	import OutboundSshKeys from '$lib/components/git/outbound-ssh-keys.svelte';
+	import { gitRepoStore } from '$lib/stores/git-repo.svelte';
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
@@ -16,6 +18,7 @@
 
 	const namespace = $derived(page.params.namespace ?? '');
 	const name = $derived(page.params.name ?? '');
+	const repo = $derived(gitRepoStore.repo);
 	const listHref = $derived(
 		resolve('/[namespace]/[name]/settings/push-mirrors', { namespace, name })
 	);
@@ -23,7 +26,6 @@
 	let remoteUrl = $state('');
 	let username = $state('');
 	let authToken = $state('');
-	let useSshKey = $state(false);
 	let intervalMinutes = $state<number | undefined>(60);
 	let syncOnPush = $state(true);
 	let creating = $state(false);
@@ -40,7 +42,7 @@
 				remoteUrl: remoteUrl.trim(),
 				username: username.trim(),
 				authToken,
-				useSshKey,
+				useSshKey: isSsh,
 				intervalMinutes: Math.max(0, Math.trunc(Number(intervalMinutes) || 0)),
 				syncOnPush
 			})
@@ -82,13 +84,18 @@
 			/>
 		</FormField>
 		{#if isSsh}
-			<FormField
-				label="Use repository SSH key"
-				layout="toggle"
-				help="Generate it on the Mirror page and install it on the remote"
-			>
-				<Switch bind:checked={useSshKey} />
-			</FormField>
+			<p class="text-sm text-muted-foreground">
+				SSH remotes authenticate with these keys. Install any one of them on the remote with write
+				access.
+			</p>
+			<OutboundSshKeys
+				instance={repo?.instanceSshPublicKey}
+				organization={repo?.orgSshPublicKey}
+				repository={repo?.mirrorSshPublicKey}
+				{namespace}
+				{name}
+				idPrefix="pm-key"
+			/>
 		{:else}
 			<FormField
 				label="Username"

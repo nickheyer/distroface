@@ -246,7 +246,7 @@ Manages git repositories, their settings, links, stars, and collaborators. Clone
 | SyncGitRepository | Starts an immediate mirror sync in the background |
 | StopGitRepositorySync | Cancels a running mirror sync or import |
 | DismissGitImport | Stops a running import and forgets its record |
-| GenerateMirrorKey | Creates the ssh key pair used for ssh upstreams |
+| GenerateMirrorKey | Replaces the repository, organization, or instance ssh key used for ssh remotes |
 | DetachMirror | Stops following the upstream and makes the repository standard |
 | ListPushMirrors | Returns the push mirrors of a repository |
 | CreatePushMirror | Adds a remote the repository pushes to |

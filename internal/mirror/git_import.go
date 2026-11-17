@@ -588,7 +588,7 @@ func (m *Monitor) importFetch(ctx context.Context, repo *db.GitRepository, cfg *
 
 func (m *Monitor) importWiki(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, st *importState) error {
 	state := parseGitMirrorState(repo.MirrorState)
-	auth, err := m.gitAuth(up, cfg, &state)
+	auth, err := m.gitAuth(ctx, repo, up, cfg, &state)
 	if err != nil {
 		return err
 	}
@@ -1245,7 +1245,7 @@ func normalizeReviewState(s string) (string, bool) {
 
 func (m *Monitor) importPulls(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, drv forgeDriver, f forgeCtx, st *importState, progress func(string)) error {
 	keys := parseGitMirrorState(repo.MirrorState)
-	auth, err := m.gitAuth(up, cfg, &keys)
+	auth, err := m.gitAuth(ctx, repo, up, cfg, &keys)
 	if err != nil {
 		return err
 	}

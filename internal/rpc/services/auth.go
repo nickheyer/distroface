@@ -35,8 +35,12 @@ type AuthService struct {
 	oidcHandler *auth.OIDCHandler
 	mail        *mailer.Service
 	// Password reset requests per client ip and per identifier
-	resets *admin.Limiter
+	resets      *admin.Limiter
+	instanceKey func(ctx context.Context) string
 }
+
+// Source of the public half of the instance ssh identity
+func (s *AuthService) SetInstanceKey(fn func(ctx context.Context) string) { s.instanceKey = fn }
 
 // Reset mails allowed per hour from one address or for one identifier
 const passwordResetsPerHour = 5
@@ -280,7 +284,12 @@ func (s *AuthService) GetAuthStatus(ctx context.Context, req *v1.GetAuthStatusRe
 	count, _ := s.store.CountUsers(ctx)
 	authCfg := s.authManager.Settings().System(ctx).GetAuth()
 
+	var instanceKey string
+	if s.instanceKey != nil && count > 0 {
+		instanceKey = s.instanceKey(ctx)
+	}
 	return &v1.GetAuthStatusResponse{
+		InstanceSshPublicKey: instanceKey,
 		LocalEnabled:         authCfg.GetLocalEnabled(),
 		OidcEnabled:          authCfg.GetOidc().GetEnabled(),
 		RegistrationEnabled:  authCfg.GetLocalEnabled() && authCfg.GetLocalAllowRegistration(),

@@ -140,8 +140,8 @@ message GetAuthStatusResponse {
   bool registration_enabled = 3;
   bool anonymous_access = 4;
   bool first_user_setup = 5;
-  // Password reset links can be mailed
   bool password_reset_enabled = 6;
+  string instance_ssh_public_key = 7;
 }
 
 // GetOIDCLoginURLRequest is empty.

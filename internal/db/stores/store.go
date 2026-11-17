@@ -178,6 +178,7 @@ var schemaModels = []any{
 	&db.UserAvatar{},
 	&db.ActivityEvent{},
 	&db.SystemSetting{},
+	&db.OutboundSSHKey{},
 	&db.SettingsRow{},
 	&db.RegistrationInvite{},
 	&db.Webhook{},
