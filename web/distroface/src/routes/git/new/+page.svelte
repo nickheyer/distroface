@@ -99,7 +99,6 @@
 	let newGitignore = $state('');
 	let newLicense = $state('');
 	let newMirror = $state(emptyMirrorForm());
-	let newMirrorReleases = $state(false);
 	let newMirrorPackages = $state(false);
 	let newMirrorImages = $state('');
 	let newImport = $state({
@@ -220,7 +219,6 @@
 					autoInit: createKind === 'standard' && newAutoInit,
 					gitignoreTemplate: createKind === 'standard' && newAutoInit ? newGitignore : '',
 					license: createKind === 'standard' && newAutoInit ? newLicense : '',
-					mirrorReleases: usesMirror && newMirrorReleases,
 					mirrorImages:
 						usesMirror && newMirrorPackages
 							? newMirrorImages
@@ -504,13 +502,6 @@
 		{#if usesMirror}
 			<FormSection title="Sync" description="What to pull from the upstream and how often.">
 				<MirrorConfigFields form={newMirror} kind="git" part="sync" idPrefix="git-repo-mirror" />
-				<FormField
-					label="Also mirror releases"
-					layout="toggle"
-					help="Copies upstream releases and their asset files onto this repository on every sync"
-				>
-					<Switch bind:checked={newMirrorReleases} />
-				</FormField>
 				<FormField
 					label="Also mirror packages"
 					layout="toggle"

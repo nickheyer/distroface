@@ -143,6 +143,12 @@ func (m *Monitor) syncReleaseAssets(ctx context.Context, repo *db.GitRepository,
 	return copied, nil
 }
 
+func (m *Monitor) skipGitReleases(repo *db.GitRepository, up gitUpstream, progress func(string)) error {
+	m.log.Info("mirror skipped releases for git repo %s/%s, %s has no supported release api", repo.Namespace, repo.Name, up.Host)
+	progress("skipping releases, " + up.Host + " has no supported release api")
+	return nil
+}
+
 // Mirrors upstream releases and their files onto a git mirror repository
 func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, cfg *v1.MirrorConfig, up gitUpstream, state *GitMirrorState, progress func(string)) error {
 	// A remembered forge beats host name guessing
@@ -150,15 +156,16 @@ func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, c
 		up.Forge = state.Forge
 	}
 	if up.Forge == "" {
+		// Plain git hosts have no releases to copy
 		forge, err := m.detectForge(ctx, up)
 		if err != nil {
-			return fmt.Errorf("releases: cannot tell which forge hosts %s: %w", up.Host, err)
+			return m.skipGitReleases(repo, up, progress)
 		}
 		up.Forge = forge
 	}
 	drv := forgeDriverFor(up.Forge)
 	if drv == nil {
-		return fmt.Errorf("releases: %s has no release api", up.Host)
+		return m.skipGitReleases(repo, up, progress)
 	}
 	state.Forge = up.Forge
 	progress("listing upstream releases")

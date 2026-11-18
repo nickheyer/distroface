@@ -356,7 +356,7 @@
 			<FormField
 				label="Mirror releases"
 				layout="toggle"
-				help="Copies upstream releases and their asset files on every sync"
+				help="Copies upstream releases and their asset files on every sync. Needs a GitHub, GitLab, or Gitea upstream, other hosts sync git only"
 			>
 				<Switch bind:checked={form.mirrorReleases} />
 			</FormField>
