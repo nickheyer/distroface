@@ -24,14 +24,15 @@
 		Square,
 		GitBranch,
 		Rocket,
-		Loader
+		Loader,
+		Webhook
 	} from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
-	import { formatBytes, truncateDigest, relativeTime } from '$lib/utils';
+	import { cn, formatBytes, truncateDigest, relativeTime } from '$lib/utils';
 	import { Pager } from '$lib/pager.svelte';
 	import { toast } from 'svelte-sonner';
 	import { Badge } from '$lib/components/ui/badge';
@@ -86,6 +87,7 @@
 	const imageHref = $derived(
 		resolve('/images/[namespace]/[...name]', { namespace: namespace ?? '', name: name ?? '' })
 	);
+	const webhooksHref = $derived(`${imageHref}?tab=webhooks`);
 	const webhookParam = $derived(page.url.searchParams.get('webhook'));
 
 	let editWebhook = $state<WebhookType | null>(null);
@@ -110,9 +112,8 @@
 	});
 
 	function leaveWebhookForm() {
-		goto(
-			resolve('/images/[namespace]/[...name]', { namespace: namespace ?? '', name: name ?? '' })
-		);
+		// eslint-disable-next-line svelte/no-navigation-without-resolve
+		goto(webhooksHref);
 	}
 
 	let repo = $state<Repository | undefined>(undefined);
@@ -244,6 +245,17 @@
 	);
 
 	const canManage = $derived(canUpdateRepo || canDeleteRepo);
+
+	type Tab = 'tags' | 'webhooks';
+	const tab = $derived<Tab>(
+		canUpdateRepo && (page.url.searchParams.get('tab') === 'webhooks' || webhookParam !== null)
+			? 'webhooks'
+			: 'tags'
+	);
+	const tabs = $derived([
+		{ key: 'tags' as Tab, label: 'Tags', icon: Tags, href: imageHref },
+		{ key: 'webhooks' as Tab, label: 'Webhooks', icon: Webhook, href: webhooksHref }
+	]);
 	const pullCommand = $derived(
 		`${registryHost}/${portalStore.imageRef(namespace ?? '', name ?? '')}`
 	);
@@ -665,208 +677,235 @@
 			</div>
 		</div>
 
-		<div class="space-y-4">
-			<div class="section-header">
-				<h2 class="section-title">Tags</h2>
-				{#if tagsPager.totalCount > 0}
-					<span class="text-xs text-muted-foreground tabular-nums">
-						{tagsPager.totalCount} tag{tagsPager.totalCount !== 1 ? 's' : ''}
-					</span>
+		{#if canUpdateRepo}
+			<nav
+				class="scrollbar-none flex items-center gap-0.5 overflow-x-auto border-b"
+				aria-label="Image sections"
+			>
+				{#each tabs as t (t.key)}
+					{@const Icon = t.icon}
+					<!-- eslint-disable svelte/no-navigation-without-resolve -->
+					<a
+						href={t.href}
+						aria-current={tab === t.key ? 'page' : undefined}
+						class={cn(
+							'-mb-px flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium whitespace-nowrap transition-colors',
+							tab === t.key
+								? 'border-primary text-foreground'
+								: 'border-transparent text-muted-foreground hover:text-foreground'
+						)}
+					>
+						<Icon class="size-4 opacity-80" />
+						{t.label}
+					</a>
+					<!-- eslint-enable svelte/no-navigation-without-resolve -->
+				{/each}
+			</nav>
+		{/if}
+
+		{#if tab === 'tags'}
+			<div class="space-y-4">
+				<div class="section-header">
+					<h2 class="section-title">Tags</h2>
+					{#if tagsPager.totalCount > 0}
+						<span class="text-xs text-muted-foreground tabular-nums">
+							{tagsPager.totalCount} tag{tagsPager.totalCount !== 1 ? 's' : ''}
+						</span>
+					{/if}
+				</div>
+
+				{#if tagsLoading}
+					<div class="box divide-y">
+						{#each { length: 3 }, i (i)}
+							<div class="flex items-center gap-3 px-4 py-3">
+								<Skeleton class="h-5 w-24" />
+								<Skeleton class="h-3.5 w-40" />
+								<Skeleton class="ml-auto h-3.5 w-12" />
+							</div>
+						{/each}
+					</div>
+				{:else if tags.length === 0}
+					<EmptyState
+						icon={Package}
+						message="No tags yet"
+						description="Push an image to create your first tag."
+					>
+						{#snippet actions()}
+							<code class="code-inline">docker push {pullCommand}:latest</code>
+						{/snippet}
+					</EmptyState>
+				{:else}
+					<div class="data-table">
+						<Table class="table-fixed">
+							<TableHeader>
+								<TableRow>
+									<TableHead>{@render tagSortHeader('Tag', 'version')}</TableHead>
+									<TableHead class="hidden w-56 sm:table-cell">Digest</TableHead>
+									<TableHead class="hidden w-40 md:table-cell">Platform</TableHead>
+									<TableHead class="w-24 text-right">
+										<div class="flex justify-end">{@render tagSortHeader('Size', 'size')}</div>
+									</TableHead>
+								</TableRow>
+							</TableHeader>
+							<TableBody>
+								{#each tags as tag (tag.name)}
+									<TableRow class="cursor-pointer" onclick={() => openTagDetail(tag.name)}>
+										<TableCell>
+											<div class="flex min-w-0 items-center gap-1">
+												<Badge variant="secondary" class="min-w-0 shrink font-mono">
+													<span class="truncate">{tag.name}</span>
+												</Badge>
+												{#if tag.hasRelease && repo.sourceRepository}
+													<Badge
+														href={resolve('/[namespace]/[name]/releases/[tag]', {
+															...sourceRepo,
+															tag: tag.name
+														})}
+														class="shrink-0"
+														onclick={(e: MouseEvent) => e.stopPropagation()}
+													>
+														<Rocket />Release
+													</Badge>
+												{/if}
+												<CopyButton
+													text="docker pull {pullCommand}:{tag.name}"
+													label="Pull command copied"
+												/>
+											</div>
+										</TableCell>
+										<TableCell class="hidden sm:table-cell">
+											<span class="block truncate font-mono text-xs text-muted-foreground">
+												{truncateDigest(tag.digest)}
+											</span>
+										</TableCell>
+										<TableCell class="hidden md:table-cell">
+											{#if tag.platforms.length > 0}
+												<div class="flex flex-wrap gap-1">
+													{#each tag.platforms as p, pi (pi)}
+														<Badge variant="outline" class="font-mono">
+															{p.os ?? ''}{#if p.os && p.architecture}/{/if}{p.architecture ??
+																''}{#if p.variant}/{p.variant}{/if}
+														</Badge>
+													{/each}
+												</div>
+											{/if}
+										</TableCell>
+										<TableCell class="text-right text-muted-foreground tabular-nums">
+											{formatBytes(Number(tag.sizeBytes))}
+										</TableCell>
+									</TableRow>
+								{/each}
+							</TableBody>
+						</Table>
+						<DataPagination attached pager={tagsPager} onChange={loadTags} />
+					</div>
 				{/if}
 			</div>
 
-			{#if tagsLoading}
-				<div class="box divide-y">
-					{#each { length: 3 }, i (i)}
-						<div class="flex items-center gap-3 px-4 py-3">
-							<Skeleton class="h-5 w-24" />
-							<Skeleton class="h-3.5 w-40" />
-							<Skeleton class="ml-auto h-3.5 w-12" />
+			{#if repoIsMirror}
+				<PermissionGate allowed={canUpdateRepo}>
+					<div class="box">
+						<div class="box-header">
+							<span class="flex items-center gap-2">
+								<HardDriveDownload class="size-4 text-muted-foreground" />
+								Mirror
+							</span>
+							{#if mirrorSyncActive}
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={stopMirrorSync}
+									disabled={stoppingMirror}
+								>
+									<Square />Stop sync
+								</Button>
+							{:else}
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={syncMirrorNow}
+									disabled={syncingMirror}
+								>
+									<RefreshCw class={syncingMirror ? 'animate-spin' : ''} />Sync now
+								</Button>
+							{/if}
 						</div>
-					{/each}
-				</div>
-			{:else if tags.length === 0}
-				<EmptyState
-					icon={Package}
-					message="No tags yet"
-					description="Push an image to create your first tag."
-				>
-					{#snippet actions()}
-						<code class="code-inline">docker push {pullCommand}:latest</code>
-					{/snippet}
-				</EmptyState>
-			{:else}
-				<div class="data-table">
-					<Table class="table-fixed">
-						<TableHeader>
-							<TableRow>
-								<TableHead>{@render tagSortHeader('Tag', 'version')}</TableHead>
-								<TableHead class="hidden w-56 sm:table-cell">Digest</TableHead>
-								<TableHead class="hidden w-40 md:table-cell">Platform</TableHead>
-								<TableHead class="w-24 text-right">
-									<div class="flex justify-end">{@render tagSortHeader('Size', 'size')}</div>
-								</TableHead>
-							</TableRow>
-						</TableHeader>
-						<TableBody>
-							{#each tags as tag (tag.name)}
-								<TableRow class="cursor-pointer" onclick={() => openTagDetail(tag.name)}>
-									<TableCell>
-										<div class="flex min-w-0 items-center gap-1">
-											<Badge variant="secondary" class="min-w-0 shrink font-mono">
-												<span class="truncate">{tag.name}</span>
-											</Badge>
-											{#if tag.hasRelease && repo.sourceRepository}
-												<Badge
-													href={resolve('/[namespace]/[name]/releases/[tag]', {
-														...sourceRepo,
-														tag: tag.name
-													})}
-													class="shrink-0"
-													onclick={(e: MouseEvent) => e.stopPropagation()}
-												>
-													<Rocket />Release
-												</Badge>
-											{/if}
-											<CopyButton
-												text="docker pull {pullCommand}:{tag.name}"
-												label="Pull command copied"
-											/>
-										</div>
-									</TableCell>
-									<TableCell class="hidden sm:table-cell">
-										<span class="block truncate font-mono text-xs text-muted-foreground">
-											{truncateDigest(tag.digest)}
-										</span>
-									</TableCell>
-									<TableCell class="hidden md:table-cell">
-										{#if tag.platforms.length > 0}
-											<div class="flex flex-wrap gap-1">
-												{#each tag.platforms as p, pi (pi)}
-													<Badge variant="outline" class="font-mono">
-														{p.os ?? ''}{#if p.os && p.architecture}/{/if}{p.architecture ??
-															''}{#if p.variant}/{p.variant}{/if}
-													</Badge>
-												{/each}
-											</div>
-										{/if}
-									</TableCell>
-									<TableCell class="text-right text-muted-foreground tabular-nums">
-										{formatBytes(Number(tag.sizeBytes))}
-									</TableCell>
-								</TableRow>
-							{/each}
-						</TableBody>
-					</Table>
-					<DataPagination attached pager={tagsPager} onChange={loadTags} />
-				</div>
-			{/if}
-		</div>
-
-		{#if repoIsMirror}
-			<PermissionGate allowed={canUpdateRepo}>
-				<div class="box">
-					<div class="box-header">
-						<span class="flex items-center gap-2">
-							<HardDriveDownload class="size-4 text-muted-foreground" />
-							Mirror
-						</span>
-						{#if mirrorSyncActive}
-							<Button
-								variant="outline"
-								size="sm"
-								onclick={stopMirrorSync}
-								disabled={stoppingMirror}
-							>
-								<Square />Stop sync
-							</Button>
-						{:else}
-							<Button variant="outline" size="sm" onclick={syncMirrorNow} disabled={syncingMirror}>
-								<RefreshCw class={syncingMirror ? 'animate-spin' : ''} />Sync now
-							</Button>
-						{/if}
-					</div>
-					<div class="p-4">
-						<MirrorConfigFields
-							form={mirrorForm}
-							kind="oci"
-							tokenSet={repo.mirror?.authTokenSet ?? false}
-							lastSync={repo.mirrorLastSync}
-							lastError={repo.mirrorLastError}
-							nextAttempt={repo.mirrorNextAttempt}
-							idPrefix="image-mirror"
-						/>
-					</div>
-					<div class="flex items-center justify-end gap-2 border-t px-4 py-3">
-						<Button
-							onclick={saveMirrorSettings}
-							disabled={savingMirror || !mirrorForm.upstream.trim()}
-						>
-							{#if savingMirror}<Loader class="animate-spin" />{/if}
-							{savingMirror ? 'Validating' : 'Save changes'}
-						</Button>
-					</div>
-				</div>
-			</PermissionGate>
-		{/if}
-
-		{#if repo && canUpdateRepo}
-			<PermissionGate allowed={canUpdateRepo}>
-				{#if webhookParam === 'new'}
-					<FormPage
-						level="section"
-						title="New webhook"
-						description="Receive HTTP POST notifications for repository events."
-						backHref={imageHref}
-						backLabel="Webhooks"
-					>
-						<WebhookForm
-							scope={WebhookScope.REPOSITORY}
-							scopeId={repo.id}
-							onSaved={leaveWebhookForm}
-							cancelHref={imageHref}
-						/>
-					</FormPage>
-				{:else if webhookParam}
-					{#if editWebhookLoadedFor !== `${repo.id}:${webhookParam}`}
-						<Skeleton class="h-48 w-full rounded-lg" />
-					{:else if editWebhook}
-						<FormPage
-							level="section"
-							title="Edit webhook"
-							description="Change where and when this repository posts events."
-							backHref={imageHref}
-							backLabel="Webhooks"
-						>
-							<WebhookForm
-								scope={WebhookScope.REPOSITORY}
-								scopeId={repo.id}
-								webhook={editWebhook}
-								onSaved={leaveWebhookForm}
-								cancelHref={imageHref}
+						<div class="p-4">
+							<MirrorConfigFields
+								form={mirrorForm}
+								kind="oci"
+								tokenSet={repo.mirror?.authTokenSet ?? false}
+								lastSync={repo.mirrorLastSync}
+								lastError={repo.mirrorLastError}
+								nextAttempt={repo.mirrorNextAttempt}
+								idPrefix="image-mirror"
 							/>
-						</FormPage>
-					{:else}
-						<EmptyState
-							icon={Package}
-							message="Webhook not found"
-							description="It may have been deleted or belongs to another repository."
-						>
-							{#snippet actions()}
-								<Button variant="outline" href={imageHref}>Back to webhooks</Button>
-							{/snippet}
-						</EmptyState>
-					{/if}
-				{:else}
-					<WebhookManager
+						</div>
+						<div class="flex items-center justify-end gap-2 border-t px-4 py-3">
+							<Button
+								onclick={saveMirrorSettings}
+								disabled={savingMirror || !mirrorForm.upstream.trim()}
+							>
+								{#if savingMirror}<Loader class="animate-spin" />{/if}
+								{savingMirror ? 'Validating' : 'Save changes'}
+							</Button>
+						</div>
+					</div>
+				</PermissionGate>
+			{/if}
+		{:else if webhookParam === 'new'}
+			<FormPage
+				level="section"
+				title="New webhook"
+				description="Receive HTTP POST notifications for repository events."
+				backHref={webhooksHref}
+				backLabel="Webhooks"
+			>
+				<WebhookForm
+					scope={WebhookScope.REPOSITORY}
+					scopeId={repo.id}
+					onSaved={leaveWebhookForm}
+					cancelHref={webhooksHref}
+				/>
+			</FormPage>
+		{:else if webhookParam}
+			{#if editWebhookLoadedFor !== `${repo.id}:${webhookParam}`}
+				<Skeleton class="h-48 w-full rounded-lg" />
+			{:else if editWebhook}
+				<FormPage
+					level="section"
+					title="Edit webhook"
+					description="Change where and when this repository posts events."
+					backHref={webhooksHref}
+					backLabel="Webhooks"
+				>
+					<WebhookForm
 						scope={WebhookScope.REPOSITORY}
 						scopeId={repo.id}
-						newHref="{imageHref}?webhook=new"
-						editHref={(id) => `${imageHref}?webhook=${id}`}
-						createDescription="Receive HTTP POST notifications for repository events."
+						webhook={editWebhook}
+						onSaved={leaveWebhookForm}
+						cancelHref={webhooksHref}
 					/>
-				{/if}
-			</PermissionGate>
+				</FormPage>
+			{:else}
+				<EmptyState
+					icon={Webhook}
+					message="Webhook not found"
+					description="It may have been deleted or belongs to another repository."
+				>
+					{#snippet actions()}
+						<Button variant="outline" href={webhooksHref}>Back to webhooks</Button>
+					{/snippet}
+				</EmptyState>
+			{/if}
+		{:else}
+			<WebhookManager
+				scope={WebhookScope.REPOSITORY}
+				scopeId={repo.id}
+				newHref="{webhooksHref}&webhook=new"
+				editHref={(id) => `${webhooksHref}&webhook=${id}`}
+				createDescription="Receive HTTP POST notifications for repository events."
+			/>
 		{/if}
 	{:else}
 		<EmptyState
