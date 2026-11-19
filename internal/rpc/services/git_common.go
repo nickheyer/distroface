@@ -32,6 +32,8 @@ func mapGitErr(err error) error {
 		return connect.NewError(connect.CodeFailedPrecondition, err.Error()).WithCause(err)
 	case errors.Is(err, gitrepo.ErrRepoNotFound):
 		return connect.NewError(connect.CodeNotFound, err.Error()).WithCause(err)
+	case errors.Is(err, gitrepo.ErrRepoBusy):
+		return connect.NewError(connect.CodeUnavailable, err.Error()).WithCause(err)
 	case errors.Is(err, gitrepo.ErrTooLarge), errors.Is(err, gitrepo.ErrBusy):
 		return connect.NewError(connect.CodeResourceExhausted, err.Error()).WithCause(err)
 	}

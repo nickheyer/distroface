@@ -44,6 +44,12 @@ var ErrMirror = errors.New("repository is a mirror")
 // Writes wait while an import still fills the repository
 var ErrImporting = errors.New("repository import is in progress")
 
+// Returned when another writer holds the repository too long
+var ErrRepoBusy = errors.New("repository is busy with another operation, try again shortly")
+
+// How long a delete waits for running writers to let go
+const deleteLockWait = 30 * time.Second
+
 // Deletes and moves packages linked to a source repository
 type PackageManager interface {
 	CanManageImageRepo(ctx context.Context, user *auth.AuthenticatedUser, repo *db.Repository) bool
@@ -68,6 +74,8 @@ type Manager struct {
 	packages   PackageManager
 	// Run before a repository's rows go, owners of data no cascade reaches
 	cleaners []RepoCleaner
+	// Run before the delete locks, cancel work holding the repository
+	stoppers []func(repo *db.GitRepository)
 
 	subsMu sync.RWMutex
 	subs   []RefSubscriber
@@ -105,6 +113,11 @@ type RepoCleaner func(ctx context.Context, repo *db.GitRepository) error
 
 // OnDelete registers a cleaner that runs before the repository rows are deleted
 func (m *Manager) OnDelete(fn RepoCleaner) { m.cleaners = append(m.cleaners, fn) }
+
+// Registers a canceller for background work that holds the repository lock
+func (m *Manager) BeforeDelete(fn func(repo *db.GitRepository)) {
+	m.stoppers = append(m.stoppers, fn)
+}
 
 // Registers post receive subscribers
 func (m *Manager) Subscribe(fns ...RefSubscriber) {
@@ -508,7 +521,13 @@ func (m *Manager) Delete(ctx context.Context, user *auth.AuthenticatedUser, repo
 	if !deleteLinked && (len(images) > 0 || len(arts) > 0) {
 		return fmt.Errorf("%w: repository still has %d linked packages, pass delete_linked or unlink them first", ErrInvalid, len(images)+len(arts))
 	}
-	lock := m.engine.LockRepo(repo.ID)
+	for _, stop := range m.stoppers {
+		stop(repo)
+	}
+	lock, err := m.engine.LockRepoWait(ctx, repo.ID, deleteLockWait)
+	if err != nil {
+		return err
+	}
 	defer lock.Unlock()
 	if deleteLinked && m.packages != nil {
 		for _, img := range images {

@@ -27,6 +27,13 @@ func (m *Monitor) SetSealer(current, legacy *auth.Sealer) {
 
 func (m *Monitor) SetGit(g *gitrepo.Manager) {
 	m.git = g
+	g.BeforeDelete(m.stopGitWork)
+}
+
+// Cancels the fetch or import that would block a delete
+func (m *Monitor) stopGitWork(repo *db.GitRepository) {
+	_ = m.stopSync(gitKey(repo.ID))
+	_ = m.stopSync(importKey(repo.ID))
 }
 
 // Receives imported pull requests whose merge base and totals need computing

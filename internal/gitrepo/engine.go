@@ -1,6 +1,7 @@
 package gitrepo
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-git/go-billy/v6"
 	"github.com/go-git/go-billy/v6/osfs"
@@ -276,9 +278,25 @@ type lockTable struct {
 
 // Push serializes writes with fan out, store guards disk
 type repoLock struct {
-	push  sync.Mutex
-	store sync.Mutex
+	push  ctxMutex
+	store ctxMutex
 	refs  int
+}
+
+// Mutex whose wait can be abandoned
+type ctxMutex chan struct{}
+
+func (c ctxMutex) Lock() { c <- struct{}{} }
+
+func (c ctxMutex) Unlock() { <-c }
+
+func (c ctxMutex) LockContext(ctx context.Context) error {
+	select {
+	case c <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func newLockTable() *lockTable {
@@ -290,7 +308,7 @@ func (t *lockTable) acquire(id string) *repoLock {
 	defer t.mu.Unlock()
 	l, ok := t.locks[id]
 	if !ok {
-		l = &repoLock{}
+		l = &repoLock{push: make(ctxMutex, 1), store: make(ctxMutex, 1)}
 		t.locks[id] = l
 	}
 	l.refs++
@@ -321,6 +339,30 @@ func (e *Engine) LockRepo(id string) *RepoLock {
 	l.push.Lock()
 	l.store.Lock()
 	return &RepoLock{table: e.locks, id: id, l: l, holdsStore: true, holdsPush: true}
+}
+
+// Same locks, gives up with ErrRepoBusy after the wait
+func (e *Engine) LockRepoWait(ctx context.Context, id string, wait time.Duration) (*RepoLock, error) {
+	waitCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	l := e.locks.acquire(id)
+	if err := l.push.LockContext(waitCtx); err != nil {
+		e.locks.release(id, l)
+		return nil, busyErr(ctx, err)
+	}
+	if err := l.store.LockContext(waitCtx); err != nil {
+		l.push.Unlock()
+		e.locks.release(id, l)
+		return nil, busyErr(ctx, err)
+	}
+	return &RepoLock{table: e.locks, id: id, l: l, holdsStore: true, holdsPush: true}, nil
+}
+
+func busyErr(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return fmt.Errorf("%w: %w", ErrRepoBusy, err)
 }
 
 // Store lock only, safe inside a post receive fan out
