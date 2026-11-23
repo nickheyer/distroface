@@ -116,11 +116,23 @@ func (r *Repo) peelToCommit(h plumbing.Hash) (plumbing.Hash, error) {
 	return plumbing.ZeroHash, ErrNotFound
 }
 
+// Only a genuinely absent object or path reads as not found
+func missing(err error) error {
+	for _, absent := range []error{
+		plumbing.ErrObjectNotFound, object.ErrEntryNotFound, object.ErrDirectoryNotFound, object.ErrFileNotFound,
+	} {
+		if errors.Is(err, absent) {
+			return ErrNotFound
+		}
+	}
+	return err
+}
+
 // Commit for a hash
 func (r *Repo) Commit(h plumbing.Hash) (*object.Commit, error) {
 	c, err := r.Repo.CommitObject(h)
 	if err != nil {
-		return nil, ErrNotFound
+		return nil, missing(err)
 	}
 	return c, nil
 }
@@ -397,7 +409,7 @@ func (r *Repo) Tree(ctx context.Context, commit plumbing.Hash, dir string, recur
 	if dir != "" {
 		tree, err = tree.Tree(dir)
 		if err != nil {
-			return nil, false, ErrNotFound
+			return nil, false, missing(err)
 		}
 	}
 	var out []Entry
@@ -477,14 +489,14 @@ func (r *Repo) Blob(commit plumbing.Hash, p string, maxBytes int64) (*Blob, erro
 	p = strings.Trim(p, "/")
 	entry, err := tree.FindEntry(p)
 	if err != nil {
-		return nil, ErrNotFound
+		return nil, missing(err)
 	}
 	if !entry.Mode.IsFile() && entry.Mode != filemode.Symlink {
 		return nil, fmt.Errorf("%w: %s is not a file", ErrNotFound, p)
 	}
 	blob, err := r.Repo.BlobObject(entry.Hash)
 	if err != nil {
-		return nil, ErrNotFound
+		return nil, missing(err)
 	}
 	out := &Blob{Entry: Entry{Name: path.Base(p), Path: p, Mode: entry.Mode, Hash: entry.Hash, Size: blob.Size}}
 	rd, err := blob.Reader()
@@ -523,7 +535,7 @@ func (r *Repo) OpenBlob(commit plumbing.Hash, p string) (*object.File, io.ReadCl
 	}
 	f, err := tree.File(strings.Trim(p, "/"))
 	if err != nil {
-		return nil, nil, ErrNotFound
+		return nil, nil, missing(err)
 	}
 	rd, err := f.Reader()
 	if err != nil {
@@ -728,7 +740,7 @@ func (r *Repo) Blame(ctx context.Context, commit plumbing.Hash, p string) ([]Bla
 		return nil, fmt.Errorf("%w: blame took longer than %s", ErrTooLarge, blameTimeout)
 	case o := <-done:
 		if o.err != nil {
-			return nil, ErrNotFound
+			return nil, missing(o.err)
 		}
 		res = o.res
 	}

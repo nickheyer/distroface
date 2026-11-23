@@ -156,13 +156,51 @@ message TLSSettings {
   optional MTLSMode mtls_mode = 3; // Client certificate policy for the tier
 }
 
-// Acme certs from external ca, org and portal scopes override email and directory
+// Validation method by its protocol name
+enum ACMEChallengeType {
+  ACME_CHALLENGE_TYPE_UNSPECIFIED = 0; // Http-01 or tls-alpn-01, whichever the ca picks
+  ACME_CHALLENGE_TYPE_HTTP_01 = 1; // Cleartext token on the challenge port
+  ACME_CHALLENGE_TYPE_TLS_ALPN_01 = 2; // Validation handshake on port 443
+  ACME_CHALLENGE_TYPE_DNS_01 = 3; // Txt record through the dns provider, needed for wildcards
+}
+
+// Dns api that publishes dns-01 records
+enum DNSProvider {
+  DNS_PROVIDER_UNSPECIFIED = 0;
+  DNS_PROVIDER_RFC2136 = 1; // Dynamic updates signed with a tsig key
+  DNS_PROVIDER_CLOUDFLARE = 2; // Cloudflare api token
+}
+
+// Acme certs from external ca, org and portal scopes override
 message ACMESettings {
   optional bool enabled = 1;
   optional string email = 2;
   optional string directory_url = 3; // Empty means lets encrypt production
   optional string challenge_port = 4; // System only, empty disables http-01
   optional bool redirect_http = 5; // System only, challenge listener redirects to https
+  optional ACMEChallengeType challenge = 6; // Unset pins nothing, the ca picks a listener type
+  ACMEDNSSettings dns = 7;
+  optional string account_key = 8; // Existing account key, pem or base64 der, write only
+  bool account_key_set = 9; // Output only
+  optional string eab_key_id = 10; // External account binding key id issued by the ca
+  optional string eab_hmac_key = 11; // Write only, reads redact
+  bool eab_hmac_key_set = 12; // Output only
+  optional string ca_bundle = 13; // Pem roots trusted for the directory, empty uses system roots
+  optional int32 renew_interval_minutes = 14; // System only, gap between renewal sweeps
+}
+
+// Dns-01 publishing, the tier setting provider owns the block
+message ACMEDNSSettings {
+  optional DNSProvider provider = 1;
+  optional string server = 2; // Rfc2136 nameserver as host or host:port
+  optional string tsig_key_name = 3;
+  optional string tsig_algorithm = 4; // Empty means hmac-sha256
+  optional string tsig_secret = 5; // Write only, reads redact
+  bool tsig_secret_set = 6; // Output only
+  optional string api_token = 7; // Write only, reads redact
+  bool api_token_set = 8; // Output only
+  repeated string resolvers = 9; // Nameservers that confirm the record, empty uses system dns
+  optional int32 propagation_timeout_seconds = 10; // Zero skips the wait
 }
 
 // Instance certificate authority exposure, system only

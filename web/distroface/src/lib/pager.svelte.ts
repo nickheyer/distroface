@@ -36,6 +36,11 @@ export class Pager {
 		this.#nextToken = info?.nextPageToken ?? '';
 	}
 
+	// Server cursor for lists that append instead of paging
+	get nextToken(): string {
+		return this.#nextToken;
+	}
+
 	get hasNext(): boolean {
 		return this.#nextToken !== '';
 	}

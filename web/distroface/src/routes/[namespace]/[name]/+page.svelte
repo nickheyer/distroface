@@ -59,7 +59,12 @@
 	const ref = $derived(repo.defaultBranch);
 	const canWrite = $derived(gitRepoStore.canWrite(GitUnit.CODE) && !gitRepoStore.readOnly);
 	const params = $derived({ namespace, name });
-	const refParams = $derived({ namespace, name, ref: ref || 'main', path: '' });
+	const refParams = $derived({
+		namespace,
+		name,
+		ref: encodeURIComponent(ref || 'main'),
+		path: ''
+	});
 
 	let entries = $state<GitTreeEntry[]>([]);
 	let lastCommit = $state<GitCommit | undefined>();
@@ -139,7 +144,12 @@
 
 	function onRef(next: string) {
 		goto(
-			resolve('/[namespace]/[name]/tree/[ref]/[...path]', { namespace, name, ref: next, path: '' })
+			resolve('/[namespace]/[name]/tree/[ref]/[...path]', {
+				namespace,
+				name,
+				ref: encodeURIComponent(next),
+				path: ''
+			})
 		);
 	}
 
@@ -354,7 +364,7 @@ git push -u origin {ref || 'main'}</pre>
 							href={resolve('/[namespace]/[name]/blob/[ref]/[...path]', {
 								namespace,
 								name,
-								ref,
+								ref: encodedRef,
 								path: readme.path
 							})}
 							class="flex min-w-0 items-center gap-2 hover:text-primary"

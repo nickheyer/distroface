@@ -324,7 +324,7 @@ func (r *Resolver) mergeWith(ctx context.Context, scope v1.SettingsScopeType, sc
 	for _, t := range chain {
 		overlay(eff.ProtoReflect(), t.row.ProtoReflect(), "", t.tier, prov)
 	}
-	sealMail(eff, chain, prov)
+	sealGroups(eff, chain, prov)
 	if r.overrides != nil {
 		overlay(eff.ProtoReflect(), r.overrides.ProtoReflect(), "", v1.SettingsTier_SETTINGS_TIER_FILE, prov)
 	}

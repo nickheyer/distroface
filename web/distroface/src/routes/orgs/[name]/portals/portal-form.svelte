@@ -21,6 +21,7 @@
 	import { effectiveAddress, placementError, portalScheme } from '$lib/portal-address';
 	import { certDate, certSourceLabels, certStateBadge, isIssuableHostname } from '$lib/cert-utils';
 	import { orgScope, patchSettings, portalScope } from '$lib/settings-utils';
+	import AcmeSettings from '$lib/components/acme-settings.svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { configStore } from '$lib/stores/config.svelte';
 	import type { RegistryPortal } from '$lib/proto/distroface/v1/portal_pb';
@@ -72,18 +73,12 @@
 	let anonymousMode = $state<AnonymousMode>('inherit');
 	let savedAnonymousMode = $state<AnonymousMode>('inherit');
 	let orgAnonymous = $state(false);
-	let acmeEmail = $state('');
-	let acmeDirectory = $state('');
-	let savedAcmeEmail = $state('');
-	let savedAcmeDir = $state('');
 	let provisionCert = $state(true);
 	let certPem = $state('');
 	let keyPem = $state('');
 	let orgCA = $state<TLSMaterialInfo | null>(null);
 	let orgCert = $state<TLSMaterialInfo | null>(null);
 	let portalCert = $state<TLSMaterialInfo | null>(null);
-	let acmeDirInherited = $state('');
-	let acmeEmailInherited = $state('');
 	let mtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_UNSPECIFIED);
 	let savedMtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_UNSPECIFIED);
 	const submitAct = new Act();
@@ -147,10 +142,6 @@
 					{ scope: portalScope(portal.id) },
 					silentCallOptions
 				);
-				acmeEmail = stored.settings?.acme?.email ?? '';
-				acmeDirectory = stored.settings?.acme?.directoryUrl ?? '';
-				savedAcmeEmail = acmeEmail;
-				savedAcmeDir = acmeDirectory;
 				mtlsMode = stored.settings?.tls?.mtlsMode ?? MTLSMode.MTLS_MODE_UNSPECIFIED;
 				savedMtlsMode = mtlsMode;
 				const anon = stored.settings?.auth?.anonymousAccess;
@@ -161,29 +152,13 @@
 				{ scope: orgScope(orgId) },
 				silentCallOptions
 			);
-			acmeDirInherited = eff.settings?.acme?.directoryUrl ?? '';
-			acmeEmailInherited = eff.settings?.acme?.email ?? '';
 			orgAnonymous = eff.settings?.auth?.anonymousAccess ?? false;
 		} catch {
 			// Placeholders stay generic
 		}
 	}
 
-	// Portal overrides live at the portal settings scope
-	async function saveAcme(portalId: string) {
-		const email = acmeEmail.trim();
-		const dir = acmeDirectory.trim();
-		if (email === savedAcmeEmail && dir === savedAcmeDir) return;
-		await patchSettings(
-			portalScope(portalId),
-			{
-				acme: { ...(email ? { email } : {}), ...(dir ? { directoryUrl: dir } : {}) }
-			},
-			['acme.email', 'acme.directory_url']
-		);
-		savedAcmeEmail = email;
-		savedAcmeDir = dir;
-	}
+	let acmeSettings = $state<AcmeSettings>();
 
 	// Portal anonymous override, inherit falls back to the org
 	async function saveAnonymous(portalId: string) {
@@ -354,7 +329,7 @@
 					{ ...common, id: portal.id, setRules: true },
 					silentCallOptions
 				);
-				await saveAcme(portal.id);
+				await acmeSettings?.commit(portalScope(portal.id));
 				await saveMtls(portal.id);
 				await saveAnonymous(portal.id);
 				if (certSource === CertSource.MANUAL && pemsFilled) {
@@ -365,7 +340,7 @@
 			const resp = await rpcClient.portal.createPortal(common, silentCallOptions);
 			const created = resp.portal;
 			if (!created) return;
-			await saveAcme(created.id);
+			await acmeSettings?.commit(portalScope(created.id));
 			await saveMtls(created.id);
 			await saveAnonymous(created.id);
 			if (certSource === CertSource.MANUAL && pemsFilled) {
@@ -711,36 +686,9 @@
 				<Switch bind:checked={provisionCert} />
 			</FormField>
 		{/if}
-		<FormField
-			label="Directory URL"
-			id="portal-acme-dir"
-			help="Empty inherits the org value"
-			span="half"
-		>
-			<Input
-				id="portal-acme-dir"
-				bind:value={acmeDirectory}
-				class="font-mono"
-				placeholder={acmeDirInherited || 'inherited'}
-				autocomplete="off"
-			/>
-		</FormField>
-		<FormField
-			label="Account email"
-			id="portal-acme-email"
-			help="Empty inherits the org value"
-			span="half"
-		>
-			<Input
-				id="portal-acme-email"
-				bind:value={acmeEmail}
-				placeholder={acmeEmailInherited || 'inherited'}
-				autocomplete="off"
-			/>
-		</FormField>
 		<p class="text-sm text-muted-foreground">
-			Issuance needs the hostname reachable by the CA. For certificates issued by this instance's
-			own CA, use the Organization CA source instead.
+			The ACME account and validation below inherit from the organization. For certificates issued
+			by this instance's own CA, use the Organization CA source instead.
 		</p>
 	{:else if certSource === CertSource.ORG_CA}
 		{#if orgCA}
@@ -804,6 +752,15 @@
 		{/if}
 	{/if}
 </FormSection>
+
+{#if certSource === CertSource.ACME}
+	<AcmeSettings
+		bind:this={acmeSettings}
+		scope={portal ? portalScope(portal.id) : undefined}
+		parentScope={orgScope(orgId)}
+		deferred
+	/>
+{/if}
 
 {#if !isProxy}
 	<FormSection title="Access" description="What clients on this address can do.">

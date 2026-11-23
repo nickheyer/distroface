@@ -23,10 +23,10 @@
 	import FormPage from '$lib/components/form-page.svelte';
 	import FormField from '$lib/components/form-field.svelte';
 	import FormSection from '$lib/components/form-section.svelte';
+	import AcmeSettings from '$lib/components/acme-settings.svelte';
 	import CertMaterialRow from '$lib/components/cert-material-row.svelte';
 	import CertUploadPanel from '$lib/components/cert-upload-panel.svelte';
 	import DurationInput from '$lib/components/duration-input.svelte';
-	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import PemInput from '$lib/components/pem-input.svelte';
 	import { Lock, RefreshCw, Loader, Globe, Pencil } from '$lib/icons';
@@ -37,7 +37,7 @@
 	import { QueryFilter } from '$lib/query.svelte';
 	import { downloadBlob } from '$lib/download';
 	import CopyButton from '$lib/components/copy-button.svelte';
-	import { orgScope, patchSettings, systemScope } from '$lib/settings-utils';
+	import { orgScope, systemScope } from '$lib/settings-utils';
 	import {
 		CertSource,
 		CertState,
@@ -59,8 +59,6 @@
 
 	const caAct = new Act();
 	const certAct = new Act();
-	const dirAct = new Act();
-	const emailAct = new Act();
 	const renewAct = new Act();
 	const signAct = new Act();
 
@@ -73,14 +71,6 @@
 	let uploadScope = $state<TLSScope>(TLSScope.TLS_SCOPE_ORG);
 
 	let removeCAOpen = $state(false);
-
-	let orgAcmeEmail = $state('');
-	let orgAcmeDir = $state('');
-	let savedAcmeEmail = $state('');
-	let savedAcmeDir = $state('');
-	let acmeEmailInherited = $state('');
-	let acmeDirInherited = $state('');
-	let sysAcmeEnabled = $state(true);
 
 	let portals = $state<RegistryPortal[]>([]);
 	let loading = $state(true);
@@ -104,29 +94,10 @@
 		}
 	}
 
-	async function loadOrgSettings() {
-		try {
-			const [stored, sys] = await Promise.all([
-				rpcClient.settings.getSettings({ scope: orgScope(orgId) }, silentCallOptions),
-				rpcClient.settings.getEffectiveSettings({ scope: systemScope }, silentCallOptions)
-			]);
-			orgAcmeEmail = stored.settings?.acme?.email ?? '';
-			orgAcmeDir = stored.settings?.acme?.directoryUrl ?? '';
-			savedAcmeEmail = orgAcmeEmail;
-			savedAcmeDir = orgAcmeDir;
-			acmeEmailInherited = sys.settings?.acme?.email ?? '';
-			acmeDirInherited = sys.settings?.acme?.directoryUrl ?? '';
-			sysAcmeEnabled = sys.settings?.acme?.enabled ?? false;
-		} catch {
-			// Fields keep their placeholders
-		}
-	}
-
 	$effect(() => {
 		if (orgId && ctx.canAdmin && !materialLoaded) {
 			materialLoaded = true;
 			loadMaterial();
-			loadOrgSettings();
 		}
 	});
 
@@ -135,41 +106,6 @@
 			goto(resolve('/orgs/[name]', { name: orgName }));
 		}
 	});
-
-	// Overrides apply on blur, empty resets to the inherited value
-	function commitOrgSetting(
-		act: Act,
-		path: string,
-		field: 'email' | 'directoryUrl',
-		value: string,
-		saved: string,
-		onDone: (v: string) => void
-	) {
-		if (value === saved) return;
-		act.run(async () => {
-			await patchSettings(orgScope(orgId), value ? { acme: { [field]: value } } : {}, [path]);
-			onDone(value);
-		});
-	}
-
-	const commitAcmeDir = () =>
-		commitOrgSetting(
-			dirAct,
-			'acme.directory_url',
-			'directoryUrl',
-			orgAcmeDir.trim(),
-			savedAcmeDir,
-			(v) => (savedAcmeDir = v)
-		);
-	const commitAcmeEmail = () =>
-		commitOrgSetting(
-			emailAct,
-			'acme.email',
-			'email',
-			orgAcmeEmail.trim(),
-			savedAcmeEmail,
-			(v) => (savedAcmeEmail = v)
-		);
 
 	// Org gets a leaf signed without its private key leaving the client
 	function signCsr() {
@@ -398,52 +334,9 @@
 		{/snippet}
 	</FormSection>
 
-	<FormSection
-		title="ACME defaults"
-		description={sysAcmeEnabled
-			? "Overrides for this org's ACME portals, applied on blur."
-			: 'ACME is turned off at the instance level, these values apply once an admin enables it.'}
-	>
-		<FormField
-			label="Directory URL"
-			id="org-acme-dir"
-			help="Empty inherits the instance value"
-			tag={dirAct.tag}
-			error={dirAct.error}
-			span="half"
-		>
-			<Input
-				id="org-acme-dir"
-				bind:value={orgAcmeDir}
-				class="font-mono"
-				placeholder={acmeDirInherited || 'inherited'}
-				disabled={dirAct.busy}
-				onblur={commitAcmeDir}
-				onkeydown={(e) => {
-					if (e.key === 'Enter') commitAcmeDir();
-				}}
-			/>
-		</FormField>
-		<FormField
-			label="Account email"
-			id="org-acme-email"
-			help="Empty inherits the instance value"
-			tag={emailAct.tag}
-			error={emailAct.error}
-			span="half"
-		>
-			<Input
-				id="org-acme-email"
-				bind:value={orgAcmeEmail}
-				placeholder={acmeEmailInherited || 'inherited'}
-				disabled={emailAct.busy}
-				onblur={commitAcmeEmail}
-				onkeydown={(e) => {
-					if (e.key === 'Enter') commitAcmeEmail();
-				}}
-			/>
-		</FormField>
-	</FormSection>
+	{#if orgId}
+		<AcmeSettings scope={orgScope(orgId)} parentScope={systemScope} />
+	{/if}
 
 	<div class="space-y-4">
 		<div class="section-header">

@@ -11,7 +11,7 @@ Org admins manage portals under Org > Portals. Instance rules for hostnames live
 | `portals.require_hostname_approval` | `false` | New org claimed hostnames wait for a system admin before certificates issue. System scope only |
 | `portals.hostname_blacklist` | empty | Patterns organizations may not claim, exact names or `*.suffix`. System scope only |
 | `portals.isolated` | `false` | Set at org scope. Portals of the organization refuse content outside its namespace |
-| `acme.email`, `acme.directory_url` | inherited | Org and portal scope overrides for the ACME account, see [ACME](acme.md) |
+| `acme.email`, `acme.directory_url`, `acme.challenge`, `acme.dns.*` | inherited | Org and portal scope overrides for the ACME account and validation, see [ACME](acme.md) |
 | `tls.mtls_mode` | inherited | Portal scope override of the client certificate policy, see [TLS](tls.md) |
 | `auth.anonymous_access` | inherited | Org and portal scope override for signed out visitors |
 

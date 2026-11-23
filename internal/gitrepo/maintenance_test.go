@@ -2,6 +2,9 @@ package gitrepo
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -107,7 +110,7 @@ func agePacks(t *testing.T, e *Engine, namespace, name string) {
 	}
 }
 
-// Caches lazily backed pack objects the way request reads do
+// Fills the shared cache through a normal read
 func warmCache(t *testing.T, e *Engine, namespace, name string, commit plumbing.Hash) {
 	t.Helper()
 	e.cache.Clear()
@@ -187,5 +190,54 @@ func TestDeleteDropsCachedObjectsSharedWithForks(t *testing.T) {
 	}
 	if got, err := readFile(e, "ns", "fork", first); err != nil || got != "one" {
 		t.Fatalf("fork after delete: %q %v", got, err)
+	}
+}
+
+func TestReadSurvivesAnotherHandleClosing(t *testing.T) {
+	e := newTestEngine(t)
+	if err := e.Init("ns", "repo", false, "main", ""); err != nil {
+		t.Fatal(err)
+	}
+	// Incompressible so the read outlives the first buffer
+	raw := make([]byte, 1<<20)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatal(err)
+	}
+	content := hex.EncodeToString(raw)
+	commit := commitFile(t, e, "ns", "repo", content)
+	m := &Manager{engine: e}
+	if err := m.repack(context.Background(), &db.GitRepository{ID: "repo", Namespace: "ns", Name: "repo"}, false); err != nil {
+		t.Fatal(err)
+	}
+	e.cache.Clear()
+
+	first, err := e.OpenRepo("ns", "repo", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Blob(commit, "file.txt", 0); err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	second, err := e.OpenRepo("ns", "repo", false)
+	if err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	defer second.Close()
+	_, rd, err := second.OpenBlob(commit, "file.txt")
+	if err != nil {
+		first.Close()
+		t.Fatal(err)
+	}
+	defer rd.Close()
+
+	first.Close()
+	got, err := io.ReadAll(rd)
+	if err != nil {
+		t.Fatalf("read after the other handle closed: %v", err)
+	}
+	if string(got) != content {
+		t.Fatalf("read %d bytes, want %d", len(got), len(content))
 	}
 }

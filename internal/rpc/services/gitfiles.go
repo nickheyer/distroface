@@ -119,7 +119,10 @@ func (s *GitFileService) GetTree(ctx context.Context, req *v1.GetTreeRequest) (*
 	dir := gitCleanPath(req.Path)
 	entries, truncated, err := r.Tree(ctx, commit, dir, req.Recursive)
 	if err != nil {
-		return nil, connect.Errorf(connect.CodeNotFound, "path %q not found", dir)
+		if errors.Is(err, gitrepo.ErrNotFound) {
+			return nil, connect.Errorf(connect.CodeNotFound, "path %q not found", dir)
+		}
+		return nil, mapGitErr(err)
 	}
 	out := &v1.GetTreeResponse{Sha: commit.String(), Path: dir, Truncated: truncated}
 	enrich := newGitCommitEnricher(ctx, s.store, s.manager, repo, r)
@@ -180,7 +183,10 @@ func (s *GitFileService) GetBlob(ctx context.Context, req *v1.GetBlobRequest) (*
 	}
 	b, err := r.Blob(commit, p, gitrepo.MaxInlineBlob)
 	if err != nil {
-		return nil, connect.Errorf(connect.CodeNotFound, "file %q not found", p)
+		if errors.Is(err, gitrepo.ErrNotFound) {
+			return nil, connect.Errorf(connect.CodeNotFound, "file %q not found", p)
+		}
+		return nil, mapGitErr(err)
 	}
 	ref := req.Ref
 	if ref == "" {
@@ -285,7 +291,10 @@ func (s *GitFileService) GetCommit(ctx context.Context, req *v1.GetCommitRequest
 	}
 	c, err := r.Commit(h)
 	if err != nil {
-		return nil, connect.Errorf(connect.CodeNotFound, "commit %q not found", req.Sha)
+		if errors.Is(err, gitrepo.ErrNotFound) {
+			return nil, connect.Errorf(connect.CodeNotFound, "commit %q not found", req.Sha)
+		}
+		return nil, mapGitErr(err)
 	}
 	enrich := newGitCommitEnricher(ctx, s.store, s.manager, repo, r)
 	enrich.loadStatuses([]*object.Commit{c})
@@ -312,7 +321,10 @@ func (s *GitFileService) GetCommitDiff(ctx context.Context, req *v1.GetCommitDif
 	}
 	c, err := r.Commit(h)
 	if err != nil {
-		return nil, connect.Errorf(connect.CodeNotFound, "commit %q not found", req.Sha)
+		if errors.Is(err, gitrepo.ErrNotFound) {
+			return nil, connect.Errorf(connect.CodeNotFound, "commit %q not found", req.Sha)
+		}
+		return nil, mapGitErr(err)
 	}
 	parent := int(max(req.Parent, 0))
 	limit, offset := pages.Parse(req.Page)
@@ -683,7 +695,10 @@ func (s *GitFileService) replay(ctx context.Context, namespace, name, sha, branc
 	c, err := r.Commit(h)
 	r.Close()
 	if err != nil {
-		return nil, "", connect.Errorf(connect.CodeNotFound, "commit %q not found", sha)
+		if errors.Is(err, gitrepo.ErrNotFound) {
+			return nil, "", connect.Errorf(connect.CodeNotFound, "commit %q not found", sha)
+		}
+		return nil, "", mapGitErr(err)
 	}
 	if c.NumParents() > 1 {
 		return nil, "", connect.Errorf(connect.CodeInvalidArgument, "merge commits cannot be replayed, pick one side")

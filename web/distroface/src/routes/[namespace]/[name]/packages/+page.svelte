@@ -43,7 +43,10 @@
 
 	async function load() {
 		try {
-			const resp = await rpcClient.git.listLinkedRepositories({ namespace, name }, silentCallOptions);
+			const resp = await rpcClient.git.listLinkedRepositories(
+				{ namespace, name },
+				silentCallOptions
+			);
 			linked = resp.repositories;
 		} catch {
 			linked = [];
@@ -61,7 +64,12 @@
 		if (!unlinkTarget) return;
 		unlinking = true;
 		try {
-			await rpcClient.git.unlinkRepository({ namespace, name, kind: unlinkTarget.kind, packageName: unlinkTarget.name });
+			await rpcClient.git.unlinkRepository({
+				namespace,
+				name,
+				kind: unlinkTarget.kind,
+				packageName: unlinkTarget.name
+			});
 			toast.success('Package unlinked');
 			unlinkOpen = false;
 			await load();
@@ -71,7 +79,6 @@
 			unlinking = false;
 		}
 	}
-
 </script>
 
 <svelte:head>
@@ -79,36 +86,54 @@
 </svelte:head>
 
 {#snippet rows(list: LinkedRepository[], kind: LinkedRepositoryKind)}
-	<div class="rounded-xl border border-border/60 divide-y divide-border/40 overflow-hidden">
+	<div class="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/60">
 		{#each list as l (l.fullName)}
 			<div class="flex items-center gap-4 px-5 py-3.5">
 				{#if kind === LinkedRepositoryKind.IMAGE}
-					<Package class="h-4 w-4 text-primary shrink-0" />
+					<Package class="h-4 w-4 shrink-0 text-primary" />
 				{:else}
-					<Archive class="h-4 w-4 text-primary shrink-0" />
+					<Archive class="h-4 w-4 shrink-0 text-primary" />
 				{/if}
-				<div class="flex-1 min-w-0">
-					<div class="flex items-center gap-2 min-w-0">
+				<div class="min-w-0 flex-1">
+					<div class="flex min-w-0 items-center gap-2">
 						{#if kind === LinkedRepositoryKind.IMAGE}
-							<a href={resolve('/images/[namespace]/[...name]', { namespace: l.namespace, name: l.name })} class="text-sm font-medium truncate hover:text-primary transition-colors">{l.fullName}</a>
+							<a
+								href={resolve('/images/[namespace]/[...name]', {
+									namespace: l.namespace,
+									name: l.name
+								})}
+								class="truncate text-sm font-medium transition-colors hover:text-primary"
+								>{l.fullName}</a
+							>
 						{:else}
-							<a href={resolve('/artifacts/[namespace]/[repo]', { namespace: l.namespace, repo: l.name })} class="text-sm font-medium truncate hover:text-primary transition-colors">{l.fullName}</a>
+							<a
+								href={resolve('/artifacts/[namespace]/[repo]', {
+									namespace: l.namespace,
+									repo: l.name
+								})}
+								class="truncate text-sm font-medium transition-colors hover:text-primary"
+								>{l.fullName}</a
+							>
 						{/if}
 						{#if l.isPrivate}
-							<Lock class="h-3 w-3 text-muted-foreground shrink-0" />
+							<Lock class="h-3 w-3 shrink-0 text-muted-foreground" />
 						{/if}
 						{#if l.linkedByName}
-							<Badge variant="outline" class="text-[10px] font-normal shrink-0">By name</Badge>
+							<Badge variant="outline" class="shrink-0 text-[10px] font-normal">By name</Badge>
 						{/if}
 					</div>
-					<div class="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
+					<div class="mt-0.5 flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
 						{#if l.latest}
-							<span class="font-mono">{kind === LinkedRepositoryKind.IMAGE ? 'latest tag' : 'latest'} {l.latest}</span>
+							<span class="font-mono"
+								>{kind === LinkedRepositoryKind.IMAGE ? 'latest tag' : 'latest'} {l.latest}</span
+							>
 						{:else}
 							<span>Nothing published yet</span>
 						{/if}
 						{#if kind === LinkedRepositoryKind.IMAGE}
-							<span class="flex items-center gap-1 tabular-nums"><Download class="h-3 w-3" />{Number(l.pullCount).toLocaleString()}</span>
+							<span class="flex items-center gap-1 tabular-nums"
+								><Download class="h-3 w-3" />{Number(l.pullCount).toLocaleString()}</span
+							>
 						{/if}
 						{#if l.updatedAt}
 							<span>updated {relativeTime(timestampDate(l.updatedAt))}</span>
@@ -116,7 +141,16 @@
 					</div>
 				</div>
 				<PermissionGate allowed={gitRepoStore.canAdmin}>
-					<Button variant="ghost" size="icon" class="h-7 w-7 text-muted-foreground hover:text-destructive" aria-label="Unlink {l.fullName}" onclick={() => { unlinkTarget = l; unlinkOpen = true; }}>
+					<Button
+						variant="ghost"
+						size="icon"
+						class="h-7 w-7 text-muted-foreground hover:text-destructive"
+						aria-label="Unlink {l.fullName}"
+						onclick={() => {
+							unlinkTarget = l;
+							unlinkOpen = true;
+						}}
+					>
 						<Unlink class="h-3.5 w-3.5" />
 					</Button>
 				</PermissionGate>
@@ -137,8 +171,12 @@
 			{#snippet actions()}
 				<PermissionGate allowed={gitRepoStore.canAdmin}>
 					<div class="flex gap-2">
-						<Button variant="outline" size="sm" href={linkHref(LinkedRepositoryKind.IMAGE)}><Link2 class="h-4 w-4 mr-1.5" />Link Image</Button>
-						<Button variant="outline" size="sm" href={linkHref(LinkedRepositoryKind.ARTIFACT)}><Link2 class="h-4 w-4 mr-1.5" />Link Artifact</Button>
+						<Button variant="outline" size="sm" href={linkHref(LinkedRepositoryKind.IMAGE)}
+							><Link2 class="mr-1.5 h-4 w-4" />Link Image</Button
+						>
+						<Button variant="outline" size="sm" href={linkHref(LinkedRepositoryKind.ARTIFACT)}
+							><Link2 class="mr-1.5 h-4 w-4" />Link Artifact</Button
+						>
 					</div>
 				</PermissionGate>
 			{/snippet}
@@ -148,10 +186,14 @@
 			<div class="section-header">
 				<div>
 					<h2 class="section-title">Images</h2>
-					<p class="section-subtitle">{images.length} container image repositor{images.length === 1 ? 'y' : 'ies'}</p>
+					<p class="section-subtitle">
+						{images.length} container image repositor{images.length === 1 ? 'y' : 'ies'}
+					</p>
 				</div>
 				<PermissionGate allowed={gitRepoStore.canAdmin}>
-					<Button variant="outline" size="sm" href={linkHref(LinkedRepositoryKind.IMAGE)}><Link2 class="h-4 w-4 mr-1.5" />Link Image</Button>
+					<Button variant="outline" size="sm" href={linkHref(LinkedRepositoryKind.IMAGE)}
+						><Link2 class="mr-1.5 h-4 w-4" />Link Image</Button
+					>
 				</PermissionGate>
 			</div>
 			{#if images.length > 0}
@@ -165,10 +207,14 @@
 			<div class="section-header">
 				<div>
 					<h2 class="section-title">Artifacts</h2>
-					<p class="section-subtitle">{artifacts.length} artifact repositor{artifacts.length === 1 ? 'y' : 'ies'}</p>
+					<p class="section-subtitle">
+						{artifacts.length} artifact repositor{artifacts.length === 1 ? 'y' : 'ies'}
+					</p>
 				</div>
 				<PermissionGate allowed={gitRepoStore.canAdmin}>
-					<Button variant="outline" size="sm" href={linkHref(LinkedRepositoryKind.ARTIFACT)}><Link2 class="h-4 w-4 mr-1.5" />Link Artifact</Button>
+					<Button variant="outline" size="sm" href={linkHref(LinkedRepositoryKind.ARTIFACT)}
+						><Link2 class="mr-1.5 h-4 w-4" />Link Artifact</Button
+					>
 				</PermissionGate>
 			</div>
 			{#if artifacts.length > 0}
@@ -180,8 +226,16 @@
 	{/if}
 </div>
 
-<ConfirmDialog bind:open={unlinkOpen} title="Unlink package" confirmLabel="Unlink" onConfirm={unlink} loading={unlinking} icon={Unlink}>
+<ConfirmDialog
+	bind:open={unlinkOpen}
+	title="Unlink package"
+	confirmLabel="Unlink"
+	onConfirm={unlink}
+	loading={unlinking}
+	icon={Unlink}
+>
 	{#snippet description()}
-		<strong>{unlinkTarget?.fullName}</strong> keeps its contents but stops sharing access and releases with this repository.
+		<strong>{unlinkTarget?.fullName}</strong> keeps its contents but stops sharing access and releases
+		with this repository.
 	{/snippet}
 </ConfirmDialog>

@@ -42,7 +42,7 @@ export type CertHealth = {
 	tone: 'ok' | 'warn' | 'danger' | 'none';
 };
 
-// Autocert renews inside thirty days, warn when overdue
+// Renewal opens in the last third, warn when overdue
 export function certHealth(cert?: CertificateInfo): CertHealth {
 	if (!cert?.issued || !cert.notAfter) {
 		return { issued: false, expired: false, daysLeft: 0, label: 'Not issued', tone: 'none' };
@@ -53,8 +53,14 @@ export function certHealth(cert?: CertificateInfo): CertHealth {
 		return { issued: true, expired: true, daysLeft, label: 'Expired', tone: 'danger' };
 	}
 	const label = daysLeft === 0 ? 'Expires today' : `Expires in ${daysLeft}d`;
-	if (daysLeft < 7) return { issued: true, expired: false, daysLeft, label, tone: 'danger' };
-	if (daysLeft < 21) return { issued: true, expired: false, daysLeft, label, tone: 'warn' };
+	// Short lived certs scale the thresholds down with their lifetime
+	const lifetime = cert.notBefore
+		? timestampDate(cert.notAfter).getTime() - timestampDate(cert.notBefore).getTime()
+		: Infinity;
+	const dangerAt = Math.min(7 * 86_400_000, lifetime / 12);
+	const warnAt = Math.min(21 * 86_400_000, lifetime / 4);
+	if (msLeft < dangerAt) return { issued: true, expired: false, daysLeft, label, tone: 'danger' };
+	if (msLeft < warnAt) return { issued: true, expired: false, daysLeft, label, tone: 'warn' };
 	return { issued: true, expired: false, daysLeft, label, tone: 'ok' };
 }
 

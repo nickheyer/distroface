@@ -28,8 +28,8 @@ System scope accepts every field. Lower scopes accept only these paths:
 
 | Scope | Paths |
 | --- | --- |
-| Organization | `acme.email`, `acme.directory_url`, `artifacts.max_file_size_mb`, `artifacts.stale_upload_cleanup_hours`, `artifacts.private_by_default`, `artifacts.retention.*`, `portals.isolated`, `auth.anonymous_access`, `git.lfs_enabled`, `git.private_by_default`, `git.default_branch`, `git.max_repo_size_mb`, `git.max_release_asset_mb`, `git.actions.enabled`, `git.agents.enabled`, `git.agents.allow_repo_providers`, `git.agents.allow_repo_agents`, plus the mail, actions and agents paths below |
-| Portal | `acme.email`, `acme.directory_url`, `tls.mtls_mode`, `auth.anonymous_access` |
+| Organization | `acme.email`, `acme.directory_url`, `acme.challenge`, `acme.dns.*`, `acme.account_key`, `acme.eab_key_id`, `acme.eab_hmac_key`, `acme.ca_bundle`, `artifacts.max_file_size_mb`, `artifacts.stale_upload_cleanup_hours`, `artifacts.private_by_default`, `artifacts.retention.*`, `portals.isolated`, `auth.anonymous_access`, `git.lfs_enabled`, `git.private_by_default`, `git.default_branch`, `git.max_repo_size_mb`, `git.max_release_asset_mb`, `git.actions.enabled`, `git.agents.enabled`, `git.agents.allow_repo_providers`, `git.agents.allow_repo_agents`, plus the mail, actions and agents paths below |
+| Portal | `acme.email`, `acme.directory_url`, `acme.challenge`, `acme.dns.*`, `acme.account_key`, `acme.eab_key_id`, `acme.eab_hmac_key`, `acme.ca_bundle`, `tls.mtls_mode`, `auth.anonymous_access` |
 | Repository | The mail, actions and agents paths below |
 
 Mail paths an org or repository may store: `mail.enabled`, `smtp_host`, `smtp_port`, `security`, `username`, `password`, `from_address`, `from_name`, `reply_to`, `skip_tls_verify`. Throttle, private network and inbound settings stay at system scope.
@@ -54,7 +54,7 @@ curl -X POST http://localhost:8080/distroface.v1.SettingsService/UpdateSettings 
   }'
 ```
 
-The response carries the stored rows and the new effective settings. Secrets such as `auth.oidc.client_secret` and `mail.password` are write only, reads return `client_secret_set` and `password_set` instead.
+The response carries the stored rows and the new effective settings. Secrets such as `auth.oidc.client_secret`, `mail.password` and `acme.account_key` are write only, reads return `client_secret_set`, `password_set` and `account_key_set` instead.
 
 ## Validation
 

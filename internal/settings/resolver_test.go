@@ -199,6 +199,141 @@ func TestRedact(t *testing.T) {
 	}
 }
 
+func TestRedactACME(t *testing.T) {
+	s := &v1.Settings{Acme: &v1.ACMESettings{
+		AccountKey: proto.String("key"),
+		EabHmacKey: proto.String("mac"),
+		Dns:        &v1.ACMEDNSSettings{TsigSecret: proto.String("tsig"), ApiToken: proto.String("token")},
+	}}
+	Redact(s)
+	acme := s.GetAcme()
+	if acme.GetAccountKey() != "" || acme.GetEabHmacKey() != "" || acme.GetDns().GetTsigSecret() != "" || acme.GetDns().GetApiToken() != "" {
+		t.Fatalf("acme secret not stripped: %v", acme)
+	}
+	if !acme.GetAccountKeySet() || !acme.GetEabHmacKeySet() || !acme.GetDns().GetTsigSecretSet() || !acme.GetDns().GetApiTokenSet() {
+		t.Fatalf("acme set flags missing: %v", acme)
+	}
+}
+
+// Credentials follow the directory and dns provider
+func TestACMESealing(t *testing.T) {
+	ctx := t.Context()
+	store := newMemStore()
+	store.portalOrg["p1"] = "o1"
+	r := NewResolver(store, nil)
+	sys, org := v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG
+	if _, err := r.Update(ctx, sys, "", &v1.Settings{Acme: &v1.ACMESettings{
+		Email:      proto.String("sys@example.com"),
+		AccountKey: proto.String("sys-key"),
+		EabKeyId:   proto.String("sys-kid"),
+		EabHmacKey: proto.String("sys-mac"),
+		Challenge:  v1.ACMEChallengeType_ACME_CHALLENGE_TYPE_DNS_01.Enum(),
+		Dns: &v1.ACMEDNSSettings{
+			Provider:    v1.DNSProvider_DNS_PROVIDER_RFC2136.Enum(),
+			Server:      proto.String("ns.sys.example"),
+			TsigKeyName: proto.String("sys"),
+			TsigSecret:  proto.String("sys-tsig"),
+		},
+	}}, []string{"acme.email", "acme.account_key", "acme.eab_key_id", "acme.eab_hmac_key", "acme.challenge",
+		"acme.dns.provider", "acme.dns.server", "acme.dns.tsig_key_name", "acme.dns.tsig_secret"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An org email alone keeps the instance account
+	if _, err := r.Update(ctx, org, "o1", &v1.Settings{Acme: &v1.ACMESettings{Email: proto.String("org@example.com")}}, []string{"acme.email"}); err != nil {
+		t.Fatal(err)
+	}
+	eff, _, err := r.Effective(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := eff.GetAcme(); a.GetAccountKey() != "sys-key" || a.GetDns().GetTsigSecret() != "sys-tsig" || a.GetEmail() != "org@example.com" {
+		t.Fatalf("org email alone must inherit the rest: %v", a)
+	}
+
+	// Another directory or provider never reuses the instance credentials
+	if _, err := r.Update(ctx, org, "o1", &v1.Settings{Acme: &v1.ACMESettings{
+		DirectoryUrl: proto.String("https://ca.org.example/directory"),
+		Dns: &v1.ACMEDNSSettings{
+			Provider: v1.DNSProvider_DNS_PROVIDER_CLOUDFLARE.Enum(),
+			ApiToken: proto.String("org-token"),
+		},
+	}}, []string{"acme.directory_url", "acme.dns.provider", "acme.dns.api_token"}); err != nil {
+		t.Fatal(err)
+	}
+	eff, prov, err := r.Effective(ctx, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := eff.GetAcme()
+	if a.GetAccountKey() != "" || a.GetEabKeyId() != "" || a.GetEabHmacKey() != "" {
+		t.Fatalf("instance account credentials leaked to another directory: %v", a)
+	}
+	if d := a.GetDns(); d.GetTsigSecret() != "" || d.GetServer() != "" || d.GetApiToken() != "org-token" {
+		t.Fatalf("instance dns credentials leaked to another provider: %v", d)
+	}
+	if a.GetDns().GetPropagationTimeoutSeconds() == 0 {
+		t.Fatal("an owned dns block lost the default propagation timeout")
+	}
+	if got := provFor(prov, "acme.dns.api_token"); got != v1.SettingsTier_SETTINGS_TIER_ORG {
+		t.Fatalf("dns token provenance %v", got)
+	}
+	if got := provFor(prov, "acme.account_key"); got != v1.SettingsTier_SETTINGS_TIER_DEFAULT {
+		t.Fatalf("dropped account key still credited to %v", got)
+	}
+}
+
+// A relay and its sender belong to one tier
+func TestMailSealing(t *testing.T) {
+	ctx := t.Context()
+	r := NewResolver(newMemStore(), nil)
+	sys, org := v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_SYSTEM, v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG
+	if _, err := r.Update(ctx, sys, "", &v1.Settings{Mail: &v1.MailSettings{
+		SmtpHost: proto.String("smtp.sys.example"),
+		SmtpPort: proto.Int32(2525),
+		Username: proto.String("sys-user"),
+		Password: proto.String("sys-pass"),
+	}}, []string{"mail.smtp_host", "mail.smtp_port", "mail.username", "mail.password"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// A sender without a relay cannot ride the instance relay
+	if _, err := r.Update(ctx, org, "o1", &v1.Settings{Mail: &v1.MailSettings{FromName: proto.String("Org")}}, []string{"mail.from_name"}); err != nil {
+		t.Fatal(err)
+	}
+	eff, prov, err := r.Effective(ctx, org, "o1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := eff.GetMail(); m.GetFromName() != "Distroface" || m.GetSmtpHost() != "smtp.sys.example" || m.GetPassword() != "sys-pass" {
+		t.Fatalf("org sender applied without its own relay: %v", m)
+	}
+	if got := provFor(prov, "mail.from_name"); got != v1.SettingsTier_SETTINGS_TIER_DEFAULT {
+		t.Fatalf("ignored sender credited to %v", got)
+	}
+
+	if _, err := r.Update(ctx, org, "o1", &v1.Settings{Mail: &v1.MailSettings{SmtpHost: proto.String("smtp.org.example")}}, []string{"mail.smtp_host"}); err != nil {
+		t.Fatal(err)
+	}
+	eff, prov, err = r.Effective(ctx, org, "o1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := eff.GetMail()
+	if m.GetSmtpHost() != "smtp.org.example" || m.GetFromName() != "Org" {
+		t.Fatalf("org relay lost its own values: %v", m)
+	}
+	if m.GetUsername() != "" || m.GetPassword() != "" || m.GetSmtpPort() != 587 {
+		t.Fatalf("instance relay credentials leaked to the org relay: %v", m)
+	}
+	if got := provFor(prov, "mail.smtp_port"); got != v1.SettingsTier_SETTINGS_TIER_DEFAULT {
+		t.Fatalf("reset port credited to %v", got)
+	}
+	if got := provFor(prov, "mail.from_name"); got != v1.SettingsTier_SETTINGS_TIER_ORG {
+		t.Fatalf("org sender credited to %v", got)
+	}
+}
+
 func TestSeedSystemOnce(t *testing.T) {
 	store := newMemStore()
 	r := NewResolver(store, nil)

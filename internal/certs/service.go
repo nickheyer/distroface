@@ -27,7 +27,7 @@ import (
 var _ distrofacev1connect.CertificateServiceHandler = (*Service)(nil)
 
 // Lowercase host, no port
-var domainRegex = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
+var domainRegex = regexp.MustCompile(`^(\*\.)?[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
 
 // Engine is always constructed, cert material is runtime managed
 type Service struct {

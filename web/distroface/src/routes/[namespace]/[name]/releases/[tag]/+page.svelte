@@ -343,22 +343,24 @@
 					{#if zipUrl || tarUrl}
 						<div class="flex flex-wrap items-center gap-3 border-t border-border/40 pt-2">
 							{#if zipUrl}
-								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+								<!-- eslint-disable svelte/no-navigation-without-resolve -->
 								<a
 									href={zipUrl}
 									class="inline-flex items-center gap-1 text-[12.5px] font-medium text-primary hover:underline"
 								>
 									<Download class="h-3.5 w-3.5" />Source code (zip)
 								</a>
+								<!-- eslint-enable svelte/no-navigation-without-resolve -->
 							{/if}
 							{#if tarUrl}
-								<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+								<!-- eslint-disable svelte/no-navigation-without-resolve -->
 								<a
 									href={tarUrl}
 									class="inline-flex items-center gap-1 text-[12.5px] font-medium text-primary hover:underline"
 								>
 									<Download class="h-3.5 w-3.5" />Source code (tar.gz)
 								</a>
+								<!-- eslint-enable svelte/no-navigation-without-resolve -->
 							{/if}
 						</div>
 					{/if}
@@ -381,7 +383,7 @@
 						{#each release.assets as a (a.id)}
 							<li class="min-w-0 px-4 py-2.5 text-[13px]">
 								<div class="flex min-w-0 items-center gap-2">
-									<!-- eslint-disable-next-line svelte/no-navigation-without-resolve -->
+									<!-- eslint-disable svelte/no-navigation-without-resolve -->
 									<a
 										href={a.downloadUrl}
 										download={a.name}
@@ -390,6 +392,7 @@
 									>
 										<Download class="h-3.5 w-3.5 shrink-0" />{a.label || a.name}
 									</a>
+									<!-- eslint-enable svelte/no-navigation-without-resolve -->
 									<span class="shrink-0 text-[12px] text-muted-foreground tabular-nums"
 										>{formatBytes(Number(a.size))}</span
 									>

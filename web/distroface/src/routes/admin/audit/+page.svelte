@@ -30,6 +30,8 @@
 	let loadingMore = $state(false);
 	let sortDesc = $state(true);
 	let tableWrap = $state<HTMLDivElement | null>(null);
+	// Bumped per reload so stale responses are dropped
+	let generation = 0;
 	const pager = new Pager(50);
 	const filter = new QueryFilter([
 		{ key: 'action', label: 'Action' },
@@ -44,31 +46,38 @@
 	}
 
 	async function loadEvents() {
+		const mine = ++generation;
 		loading = true;
 		pager.reset();
 		try {
 			const resp = await rpcClient.audit.listAuditEvents({ page: pageRequest() });
+			if (mine !== generation) return;
 			events = resp.events;
 			pager.apply(resp.page);
 			tableWrap?.querySelector('[data-slot=table-container]')?.scrollTo({ top: 0 });
 		} catch {
 			// error interceptor
 		} finally {
-			loading = false;
-			loaded = true;
+			if (mine === generation) {
+				loading = false;
+				loaded = true;
+			}
 		}
 	}
 
 	async function loadMore() {
-		if (loading || loadingMore || !pager.next()) return;
+		if (loading || loadingMore || !pager.hasNext) return;
+		const mine = generation;
 		loadingMore = true;
 		try {
-			const resp = await rpcClient.audit.listAuditEvents({ page: pageRequest() });
+			const resp = await rpcClient.audit.listAuditEvents({
+				page: { ...pageRequest(), pageToken: pager.nextToken }
+			});
+			if (mine !== generation) return;
 			events = [...events, ...resp.events];
 			pager.apply(resp.page);
 		} catch {
-			// Error interceptor, back a page so scrolling retries
-			pager.prev();
+			// Error interceptor, cursor is kept so scrolling retries
 		} finally {
 			loadingMore = false;
 		}

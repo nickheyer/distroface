@@ -20,6 +20,7 @@ import (
 	"github.com/go-git/go-git/v6/plumbing"
 	"github.com/go-git/go-git/v6/plumbing/cache"
 	formatcfg "github.com/go-git/go-git/v6/plumbing/format/config"
+	"github.com/go-git/go-git/v6/plumbing/format/packfile"
 	"github.com/go-git/go-git/v6/storage"
 	"github.com/go-git/go-git/v6/storage/filesystem"
 	"github.com/go-git/go-git/v6/x/fdpool"
@@ -119,6 +120,10 @@ type genCache struct {
 }
 
 func (c *genCache) Put(o plumbing.EncodedObject) {
+	// Pack backed objects die with the handle that made them
+	if _, lazy := o.(*packfile.FSObject); lazy {
+		return
+	}
 	if c.gen.Load() == c.born {
 		c.inner.Put(o)
 	}

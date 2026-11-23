@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"io/fs"
 	"math/big"
 	"net"
 	"net/http"
@@ -20,13 +21,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/caddyserver/certmagic"
+	"github.com/nickheyer/distroface/internal/cache"
 	storage "github.com/nickheyer/distroface/internal/db"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/db/stores/storetest"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
-	"golang.org/x/crypto/acme/autocert"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -73,10 +75,25 @@ func newTestEngine(t *testing.T, store *stores.Store, res *settings.Resolver, ce
 	if err != nil {
 		t.Fatalf("NewEngine: %v", err)
 	}
+	t.Cleanup(e.Close)
 	return e
 }
 
-// Self signed leaf plus key in autocert's cache pem layout
+// Stores pem where the acme client keeps certs
+func putIssuedCert(t *testing.T, e *Engine, domain string, data []byte) {
+	t.Helper()
+	ctx := context.Background()
+	m := e.managerForHost(ctx, domain)
+	if m == nil {
+		t.Fatalf("no acme manager for %s", domain)
+	}
+	key := certmagic.StorageKeys.SiteCert(m.issuer.IssuerKey(), e.certSubject(ctx, m, domain))
+	if err := e.store.PutACMECacheEntry(ctx, key, data); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Self signed leaf with its key in one pem bundle
 func selfSignedPEM(t *testing.T, domain string, notAfter time.Time) []byte {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -228,30 +245,68 @@ func TestHostPolicySkipsUnissuablePrimary(t *testing.T) {
 	}
 }
 
-func TestDBCacheRoundTrip(t *testing.T) {
+func TestCertStorageRoundTrip(t *testing.T) {
 	store := newTestStore(t)
-	cache := dbCache{store: store}
+	st := newCertStorage(store, func() *cache.Client { return nil })
 	ctx := context.Background()
 
-	if _, err := cache.Get(ctx, "missing"); !errors.Is(err, autocert.ErrCacheMiss) {
-		t.Fatalf("Get(missing) = %v, want ErrCacheMiss", err)
+	if _, err := st.Load(ctx, "missing"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("Load(missing) = %v, want ErrNotExist", err)
 	}
-	if err := cache.Put(ctx, "k", []byte("v1")); err != nil {
-		t.Fatal(err)
+	for _, k := range []string{"certificates/ca/a.example.com/a.example.com.crt", "certificates/ca/a.example.com/a.example.com.key", "certificates/ca/b_example.com/b.crt"} {
+		if err := st.Store(ctx, k, []byte("v1")); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := cache.Put(ctx, "k", []byte("v2")); err != nil {
+	if err := st.Store(ctx, "certificates/ca/b_example.com/b.crt", []byte("v2")); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	data, err := cache.Get(ctx, "k")
-	if err != nil || string(data) != "v2" {
-		t.Fatalf("Get(k) = %q, %v", data, err)
+	if data, err := st.Load(ctx, "certificates/ca/b_example.com/b.crt"); err != nil || string(data) != "v2" {
+		t.Fatalf("Load = %q, %v", data, err)
 	}
-	if err := cache.Delete(ctx, "k"); err != nil {
+	sites, err := st.List(ctx, "certificates/ca", false)
+	if err != nil || len(sites) != 2 || sites[0] != "certificates/ca/a.example.com" {
+		t.Fatalf("List = %v, %v", sites, err)
+	}
+	if all, err := st.List(ctx, "certificates", true); err != nil || len(all) != 3 {
+		t.Fatalf("recursive List = %v, %v", all, err)
+	}
+	// An underscore in a prefix is literal, never a wildcard
+	if got, _ := st.List(ctx, "certificates/ca/b.example.com", true); len(got) != 0 {
+		t.Fatalf("List matched through a wildcard: %v", got)
+	}
+	if info, err := st.Stat(ctx, "certificates/ca/a.example.com"); err != nil || info.IsTerminal {
+		t.Fatalf("Stat(dir) = %+v, %v", info, err)
+	}
+	if info, err := st.Stat(ctx, "certificates/ca/b_example.com/b.crt"); err != nil || !info.IsTerminal || info.Size != 2 {
+		t.Fatalf("Stat(key) = %+v, %v", info, err)
+	}
+	if err := st.Delete(ctx, "certificates/ca/a.example.com"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := cache.Get(ctx, "k"); !errors.Is(err, autocert.ErrCacheMiss) {
-		t.Fatalf("Get after delete = %v, want ErrCacheMiss", err)
+	if st.Exists(ctx, "certificates/ca/a.example.com/a.example.com.crt") || !st.Exists(ctx, "certificates/ca/b_example.com/b.crt") {
+		t.Fatal("Delete must remove exactly the nested keys")
 	}
+}
+
+func TestCertStorageLockExcludes(t *testing.T) {
+	st := newCertStorage(newTestStore(t), func() *cache.Client { return nil })
+	ctx := context.Background()
+	if err := st.Lock(ctx, "issue"); err != nil {
+		t.Fatal(err)
+	}
+	waiting, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	if err := st.Lock(waiting, "issue"); err == nil {
+		t.Fatal("second Lock acquired a held name")
+	}
+	if err := st.Unlock(ctx, "issue"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Lock(ctx, "issue"); err != nil {
+		t.Fatalf("Lock after Unlock: %v", err)
+	}
+	_ = st.Unlock(ctx, "issue")
 }
 
 func TestCertificateInfo(t *testing.T) {
@@ -260,9 +315,7 @@ func TestCertificateInfo(t *testing.T) {
 	ctx := context.Background()
 
 	expiry := time.Now().Add(60 * 24 * time.Hour).Truncate(time.Second)
-	if err := store.PutACMECacheEntry(ctx, "portal.example.com", selfSignedPEM(t, "portal.example.com", expiry)); err != nil {
-		t.Fatal(err)
-	}
+	putIssuedCert(t, e, "portal.example.com", selfSignedPEM(t, "portal.example.com", expiry))
 
 	info, err := e.CertificateInfo(ctx, "portal.example.com")
 	if err != nil {
@@ -617,11 +670,11 @@ func TestManagerForHostTierResolution(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	dir := func(m *autocert.Manager) string {
-		if m == nil || m.Client == nil {
+	dir := func(m *acmeManager) string {
+		if m == nil {
 			return ""
 		}
-		return m.Client.DirectoryURL
+		return m.issuer.CA
 	}
 	if got := dir(e.managerForHost(ctx, "portal.acme.io")); got != "https://portal.example.com/dir" {
 		t.Errorf("portal host resolved directory %q", got)

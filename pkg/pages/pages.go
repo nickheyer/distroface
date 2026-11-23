@@ -38,6 +38,29 @@ func Parse(p *v1.PageRequest) (limit, offset int) {
 	return
 }
 
+const afterPrefix = "after:"
+
+// Keyset cursor resuming past the last row served
+func AfterToken(id string) string {
+	return base64.StdEncoding.EncodeToString([]byte(afterPrefix + id))
+}
+
+// Row id from a keyset cursor, empty for offset tokens
+func After(p *v1.PageRequest) string {
+	if p == nil || p.PageToken == "" {
+		return ""
+	}
+	decoded, err := base64.StdEncoding.DecodeString(p.PageToken)
+	if err != nil {
+		return ""
+	}
+	id, ok := strings.CutPrefix(string(decoded), afterPrefix)
+	if !ok {
+		return ""
+	}
+	return id
+}
+
 func splitOrderBy(p *v1.PageRequest) (col string, desc bool) {
 	if p == nil {
 		return "", false

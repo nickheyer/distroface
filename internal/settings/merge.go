@@ -15,13 +15,29 @@ var readOnlyPaths = []string{
 	"auth.oidc.client_secret_set",
 	"mail.password_set",
 	"mail.incoming.password_set",
+	"acme.account_key_set",
+	"acme.eab_hmac_key_set",
+	"acme.dns.tsig_secret_set",
+	"acme.dns.api_token_set",
+}
+
+// Acme account, challenge and dns a lower tier may store
+var scopedACMEPaths = []string{
+	"acme.email", "acme.directory_url", "acme.challenge", "acme.dns", "acme.account_key",
+	"acme.eab_key_id", "acme.eab_hmac_key", "acme.ca_bundle",
+}
+
+// Credentials bound to one directory, never inherited across directories
+var acmeAccountPaths = []string{"acme.account_key", "acme.eab_key_id", "acme.eab_hmac_key", "acme.ca_bundle"}
+
+// Relay and sender, owned together by one tier
+var mailRelayPaths = []string{
+	"mail.smtp_host", "mail.smtp_port", "mail.security", "mail.username",
+	"mail.password", "mail.from_address", "mail.from_name", "mail.reply_to", "mail.skip_tls_verify",
 }
 
 // Mail paths a lower tier may store, throttle, network and inbox stay system
-var scopedMailPaths = []string{
-	"mail.enabled", "mail.smtp_host", "mail.smtp_port", "mail.security", "mail.username",
-	"mail.password", "mail.from_address", "mail.from_name", "mail.reply_to", "mail.skip_tls_verify",
-}
+var scopedMailPaths = concat([]string{"mail.enabled"}, mailRelayPaths)
 
 // Agent limits a repository may tighten and an org may set
 var scopedAgentsPaths = []string{
@@ -63,8 +79,6 @@ func concat(lists ...[]string) []string {
 // Paths each non system scope may store, prefixes cover subtrees
 var scopeAllowed = map[v1.SettingsScopeType][]string{
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_ORG: concat([]string{
-		"acme.email",
-		"acme.directory_url",
 		"artifacts.max_file_size_mb",
 		"artifacts.stale_upload_cleanup_hours",
 		"artifacts.private_by_default",
@@ -77,69 +91,97 @@ var scopeAllowed = map[v1.SettingsScopeType][]string{
 		"git.max_repo_size_mb",
 		"git.max_release_asset_mb",
 		"git.actions.enabled",
-	}, scopedMailPaths, scopedActionsPaths, scopedAgentsPaths, orgAgentsPaths),
-	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: {
-		"acme.email",
-		"acme.directory_url",
+	}, scopedACMEPaths, scopedMailPaths, scopedActionsPaths, scopedAgentsPaths, orgAgentsPaths),
+	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_PORTAL: concat([]string{
 		"tls.mtls_mode",
 		"auth.anonymous_access",
-	},
+	}, scopedACMEPaths),
 	v1.SettingsScopeType_SETTINGS_SCOPE_TYPE_REPO: concat(scopedMailPaths, scopedActionsPaths, scopedAgentsPaths),
 }
 
-// Reports whether a mail leaf path may only come from the system tier
-func systemOnlyMail(path string) bool {
-	return path == "mail.allow_private_networks" || path == "mail.max_per_minute" || strings.HasPrefix(path, "mail.incoming.")
+// Fields one lower tier owns by setting the anchor
+type sealedGroup struct {
+	anchor  string
+	members []string
+	strict  bool // Tiers without the anchor cannot set members
 }
 
-// Relay and sender travel together below system, a tier owns both or neither
-func sealMail(eff *v1.Settings, chain []tierRow, prov map[string]v1.SettingsTier) {
-	base := &v1.MailSettings{}
-	if d := Defaults().GetMail(); d != nil {
-		base = proto.Clone(d).(*v1.MailSettings)
-	}
-	for _, t := range chain {
-		if t.tier == v1.SettingsTier_SETTINGS_TIER_SYSTEM && t.row.GetMail() != nil {
-			overlay(base.ProtoReflect(), t.row.GetMail().ProtoReflect(), "mail", t.tier, prov)
-		}
-	}
-	out := base
-	for _, t := range chain {
-		ms := t.row.GetMail()
-		if t.tier == v1.SettingsTier_SETTINGS_TIER_SYSTEM || ms == nil {
-			continue
-		}
-		for p, tier := range prov {
-			if tier == t.tier && strings.HasPrefix(p, "mail.") {
-				delete(prov, p)
+// Credentials stay with their own relay, directory or provider
+var sealedGroups = []sealedGroup{
+	{anchor: "mail.smtp_host", members: mailRelayPaths, strict: true},
+	{anchor: "acme.directory_url", members: acmeAccountPaths},
+	{anchor: "acme.dns.provider", members: []string{"acme.dns"}},
+}
+
+// Owner values win, unset members fall back to defaults
+func sealGroups(eff *v1.Settings, chain []tierRow, prov map[string]v1.SettingsTier) {
+	defaults, root := Defaults().ProtoReflect(), eff.ProtoReflect()
+	for _, g := range sealedGroups {
+		walkLeaves(root.Descriptor(), "", func(path string) {
+			if !within(path, g.members) {
+				return
 			}
-		}
-		if ms.Enabled != nil {
-			out.Enabled = ms.Enabled
-			prov["mail.enabled"] = t.tier
-		}
-		if ms.SmtpHost == nil {
-			continue
-		}
-		enabledTier, hadEnabled := prov["mail.enabled"]
-		for p := range prov {
-			if strings.HasPrefix(p, "mail.") && !systemOnlyMail(p) {
-				delete(prov, p)
+			val, ok := leafValue(defaults, path)
+			tier := v1.SettingsTier_SETTINGS_TIER_DEFAULT
+			for _, t := range chain {
+				row := t.row.ProtoReflect()
+				own, set := leafValue(row, path)
+				lower := t.tier != v1.SettingsTier_SETTINGS_TIER_SYSTEM
+				_, owner := leafValue(row, g.anchor)
+				switch {
+				case set && (!lower || owner || !g.strict):
+					val, ok, tier = own, true, t.tier
+				case lower && owner:
+					val, ok = leafValue(defaults, path)
+					tier = v1.SettingsTier_SETTINGS_TIER_DEFAULT
+				}
 			}
-		}
-		if hadEnabled {
-			prov["mail.enabled"] = enabledTier
-		}
-		own := proto.Clone(ms).(*v1.MailSettings)
-		own.Enabled, own.AllowPrivateNetworks, own.MaxPerMinute, own.Incoming = out.Enabled, base.AllowPrivateNetworks, base.MaxPerMinute, base.Incoming
-		for _, p := range setLeafPaths(ms) {
-			if !systemOnlyMail("mail." + p) {
-				prov["mail."+p] = t.tier
+			fds, _ := descend(root.Descriptor(), path)
+			parent, leaf := root, fds[len(fds)-1]
+			for _, fd := range fds[:len(fds)-1] {
+				parent = parent.Mutable(fd).Message()
 			}
-		}
-		out = own
+			if ok {
+				parent.Set(leaf, val)
+			} else {
+				parent.Clear(leaf)
+			}
+			if tier == v1.SettingsTier_SETTINGS_TIER_DEFAULT {
+				delete(prov, path)
+			} else {
+				prov[path] = tier
+			}
+		})
 	}
-	eff.Mail = out
+}
+
+// Populated value at a dotted path, false when unset
+func leafValue(m protoreflect.Message, path string) (protoreflect.Value, bool) {
+	fds, err := descend(m.Descriptor(), path)
+	if err != nil {
+		return protoreflect.Value{}, false
+	}
+	for _, fd := range fds[:len(fds)-1] {
+		if !m.Has(fd) {
+			return protoreflect.Value{}, false
+		}
+		m = m.Get(fd).Message()
+	}
+	leaf := fds[len(fds)-1]
+	if !m.Has(leaf) {
+		return protoreflect.Value{}, false
+	}
+	return m.Get(leaf), true
+}
+
+// Path equals a root or sits under one
+func within(path string, roots []string) bool {
+	for _, r := range roots {
+		if path == r || strings.HasPrefix(path, r+".") {
+			return true
+		}
+	}
+	return false
 }
 
 func pathCovered(path string, allowed []string) bool {
@@ -287,6 +329,18 @@ func Redact(s *v1.Settings) {
 	if oidc := s.GetAuth().GetOidc(); oidc != nil {
 		oidc.ClientSecretSet = oidc.ClientSecret != nil && *oidc.ClientSecret != ""
 		oidc.ClientSecret = nil
+	}
+	if acme := s.GetAcme(); acme != nil {
+		acme.AccountKeySet = acme.AccountKey != nil && *acme.AccountKey != ""
+		acme.AccountKey = nil
+		acme.EabHmacKeySet = acme.EabHmacKey != nil && *acme.EabHmacKey != ""
+		acme.EabHmacKey = nil
+		if dns := acme.GetDns(); dns != nil {
+			dns.TsigSecretSet = dns.TsigSecret != nil && *dns.TsigSecret != ""
+			dns.TsigSecret = nil
+			dns.ApiTokenSet = dns.ApiToken != nil && *dns.ApiToken != ""
+			dns.ApiToken = nil
+		}
 	}
 	if mail := s.GetMail(); mail != nil {
 		mail.PasswordSet = mail.Password != nil && *mail.Password != ""

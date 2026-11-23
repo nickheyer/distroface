@@ -324,7 +324,7 @@ type CertificateDomain struct { // Allowlist and approval entry for a portal hos
 	Org        *Organization             `json:"-" gorm:"foreignKey:OrgID;constraint:OnDelete:CASCADE"`
 }
 
-type ACMECacheEntry struct { // Autocert cache row holding certs and account state
+type ACMECacheEntry struct { // Acme client storage row holding certs and account state
 	Key       string    `gorm:"primaryKey"`
 	Data      []byte    `gorm:"not null"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime"`

@@ -20,13 +20,14 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/caddyserver/certmagic"
+	"github.com/mholt/acmez/v3"
 	"github.com/nickheyer/distroface/internal/cache"
 	"github.com/nickheyer/distroface/internal/db/stores"
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
-	"golang.org/x/crypto/acme"
-	"golang.org/x/crypto/acme/autocert"
+	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -52,21 +53,27 @@ type Engine struct {
 	log        *logger.Logger
 	policy     *HostnamePolicy
 	bindHost   string
-	listenPort string // Main listener port, only used for status hints
+	listenPort string // Main listener port, also answers tls-alpn-01
 
 	configCert *tls.Certificate // From cert_file/key_file at startup
 
-	mu           sync.Mutex
-	managers     map[string]*autocert.Manager // Keyed directory plus email
-	certCache    map[string]*cachedKeyPair    // Parsed uploads keyed by scope target
-	leaves       map[string]*tls.Certificate  // Org ca minted leaves keyed org plus host
-	issueErrs    map[string]issueFailure      // Last failed acme order per configured host
-	challenge    *http.Server
-	challengeErr string // Why the http-01 listener is not running
-	ready        readyCache
-	acmeIssuerMu sync.Mutex // Serializes lazy acme ca minting
-	broadcast    func()     // Tells other instances about local material changes
-	shared       *cache.Client
+	mu             sync.Mutex
+	managers       map[string]*acmeManager // Keyed by effective acme settings
+	magic          *certmagic.Cache        // Issued certs in memory
+	storage        *certStorage
+	stopMagic      sync.Once
+	legacyImported atomic.Bool
+	acmeLog        *zap.Logger
+	renewWake      chan struct{}               // Settings changed, sweep again
+	certCache      map[string]*cachedKeyPair   // Parsed uploads keyed by scope target
+	leaves         map[string]*tls.Certificate // Org ca minted leaves keyed org plus host
+	issueErrs      map[string]issueFailure     // Last failed acme order per configured host
+	challenge      *http.Server
+	challengeErr   string // Why the http-01 listener is not running
+	ready          readyCache
+	acmeIssuerMu   sync.Mutex // Serializes lazy acme ca minting
+	broadcast      func()     // Tells other instances about local material changes
+	shared         *cache.Client
 }
 
 // Installs the shared cache behind renewal leases and acme state
@@ -110,11 +117,18 @@ func NewEngine(store *stores.Store, res *settings.Resolver, portals PortalLookup
 		log:       log,
 		policy:    NewHostnamePolicy(store, res),
 		bindHost:  bindHost,
-		managers:  map[string]*autocert.Manager{},
+		managers:  map[string]*acmeManager{},
 		certCache: map[string]*cachedKeyPair{},
 		leaves:    map[string]*tls.Certificate{},
 		issueErrs: map[string]issueFailure{},
 	}
+	e.acmeLog = acmeLogger(log)
+	e.renewWake = make(chan struct{}, 1)
+	e.storage = newCertStorage(store, e.sharedCache)
+	e.magic = certmagic.NewCache(certmagic.CacheOptions{
+		GetConfigForCert: e.configForCert,
+		Logger:           e.acmeLog,
+	})
 	if certFile != "" || keyFile != "" {
 		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
 		if err != nil {
@@ -123,6 +137,16 @@ func NewEngine(store *stores.Store, res *settings.Resolver, portals PortalLookup
 		e.configCert = &cert
 	}
 	return e, nil
+}
+
+// Renewal resolves the account that owns the cert's first name
+func (e *Engine) configForCert(cert certmagic.Certificate) (*certmagic.Config, error) {
+	if len(cert.Names) > 0 {
+		if m := e.managerForHost(context.Background(), cert.Names[0]); m != nil {
+			return m.cfg, nil
+		}
+	}
+	return nil, fmt.Errorf("acme is disabled, no account manages %v", cert.Names)
 }
 
 func (e *Engine) Policy() *HostnamePolicy {
@@ -159,9 +183,14 @@ func (e *Engine) InvalidateLocal() {
 	e.mu.Lock()
 	e.certCache = map[string]*cachedKeyPair{}
 	e.leaves = map[string]*tls.Certificate{}
+	e.managers = map[string]*acmeManager{}
 	e.mu.Unlock()
 	e.ready.clear()
 	e.ReconcileChallengeServer()
+	select {
+	case e.renewWake <- struct{}{}:
+	default:
+	}
 }
 
 func (e *Engine) ACMEEnabled(ctx context.Context) bool {
@@ -209,56 +238,6 @@ func (e *Engine) hostPolicy(ctx context.Context, host string) error {
 		return e.policy.Allowed(ctx, host, orgID)
 	}
 	return fmt.Errorf("host %q is not configured for acme issuance", host)
-}
-
-// One acme client per directory and account email
-func (e *Engine) managerFor(directory, email string) *autocert.Manager {
-	key := directory + "|" + email
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if m, ok := e.managers[key]; ok {
-		return m
-	}
-	m := &autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		Email:      email,
-		Cache:      dbCache{store: e.store},
-		HostPolicy: e.hostPolicy,
-	}
-	if directory != "" {
-		m.Client = &acme.Client{DirectoryURL: directory}
-	}
-	// Without this autocert never offers http-01
-	if e.challengeConfigured() {
-		m.HTTPHandler(nil)
-	}
-	e.managers[key] = m
-	return m
-}
-
-// Whether settings ask for the cleartext http-01 listener
-func (e *Engine) challengeConfigured() bool {
-	acmeEff := e.res.System(context.Background()).GetAcme()
-	return acmeEff.GetEnabled() && strings.TrimSpace(acmeEff.GetChallengePort()) != ""
-}
-
-// Autocert issuance with the outcome remembered per host
-func (e *Engine) acmeCertificate(ctx context.Context, m *autocert.Manager, hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	cert, err := m.GetCertificate(hello)
-	// Challenge hellos are not an order outcome
-	if len(hello.SupportedProtos) == 1 && hello.SupportedProtos[0] == acme.ALPNProto {
-		return cert, err
-	}
-	host := bareHost(hello.ServerName)
-	if err == nil {
-		e.clearIssueFailure(host)
-		return cert, nil
-	}
-	// Only policy approved hosts are remembered
-	if host != "" && e.hostPolicy(ctx, host) == nil {
-		e.recordIssueFailure(host, err)
-	}
-	return nil, err
 }
 
 func (e *Engine) recordIssueFailure(host string, err error) {
@@ -310,55 +289,12 @@ func (e *Engine) selfDirectory(ctx context.Context, directory string) bool {
 	return strings.EqualFold(u.Hostname(), e.primaryHost(ctx))
 }
 
-// Client for the system tier account, nil when acme is off
-func (e *Engine) defaultManager(ctx context.Context) *autocert.Manager {
-	eff := e.res.System(ctx).GetAcme()
-	if !eff.GetEnabled() || e.selfDirectory(ctx, eff.GetDirectoryUrl()) {
-		return nil
-	}
-	return e.managerFor(eff.GetDirectoryUrl(), eff.GetEmail())
-}
-
-// Account resolution rides the settings tier chain, enabled stays
-// a system only kill switch
-func (e *Engine) portalManager(ctx context.Context, portalID string) *autocert.Manager {
-	eff := e.res.Portal(ctx, portalID).GetAcme()
-	if !eff.GetEnabled() || e.selfDirectory(ctx, eff.GetDirectoryUrl()) {
-		return nil
-	}
-	return e.managerFor(eff.GetDirectoryUrl(), eff.GetEmail())
-}
-
-// Client for an org tier account, nil when acme is off
-func (e *Engine) orgManager(ctx context.Context, orgID string) *autocert.Manager {
-	eff := e.res.Org(ctx, orgID).GetAcme()
-	if !eff.GetEnabled() || e.selfDirectory(ctx, eff.GetDirectoryUrl()) {
-		return nil
-	}
-	return e.managerFor(eff.GetDirectoryUrl(), eff.GetEmail())
-}
-
-// Account for the tier owning host, portal over org domain over system
-func (e *Engine) managerForHost(ctx context.Context, host string) *autocert.Manager {
-	if portals, err := e.store.ListPortalsByHostname(ctx, host); err == nil {
-		for _, p := range portals {
-			if p.CertSource == v1.CertSource_CERT_SOURCE_ACME {
-				return e.portalManager(ctx, p.ID)
-			}
-		}
-	}
-	if d, err := e.store.GetCertificateDomainByName(ctx, host); err == nil && d != nil && d.OrgID != nil && *d.OrgID != "" {
-		return e.orgManager(ctx, *d.OrgID)
-	}
-	return e.defaultManager(ctx)
-}
-
 // Shared server config, sni picks the right cert per hostname and
 // GetConfigForClient layers on any per host client certificate policy
 func (e *Engine) TLSConfig() *tls.Config {
 	return &tls.Config{
 		MinVersion:         tls.VersionTLS12,
-		NextProtos:         []string{"h2", "http/1.1", acme.ALPNProto},
+		NextProtos:         []string{"h2", "http/1.1", acmez.ACMETLS1Protocol},
 		GetCertificate:     e.getCertificate,
 		GetConfigForClient: e.getConfigForClient,
 	}
@@ -669,14 +605,8 @@ func (e *Engine) HTTPChallengeHandler() http.Handler {
 		sys := e.res.System(ctx)
 		redirect := sys.GetAcme().GetRedirectHttp() &&
 			sys.GetTls().GetMode() == v1.TLSMode_TLS_MODE_HTTPS_ONLY
-		var fallback http.Handler
-		if !redirect {
-			fallback = forbid
-		}
-		// Challenges route to the account that initiated them, the shared
-		// db cache still answers tokens minted by a sibling manager
-		if m := e.managerForHost(ctx, bareHost(r.Host)); m != nil {
-			m.HTTPHandler(fallback).ServeHTTP(w, r)
+		// Tokens minted by a sibling instance are answered from storage
+		if m := e.managerForHost(ctx, bareHost(r.Host)); m != nil && m.issuer.HandleHTTPChallenge(w, r) {
 			return
 		}
 		if redirect {
@@ -727,15 +657,7 @@ func (e *Engine) ReconcileChallengeServer() {
 		e.mu.Lock()
 		e.challenge = srv
 		e.challengeErr = ""
-		managers := make([]*autocert.Manager, 0, len(e.managers))
-		for _, m := range e.managers {
-			managers = append(managers, m)
-		}
 		e.mu.Unlock()
-		// Managers built before the listener existed may now offer http-01
-		for _, m := range managers {
-			m.HTTPHandler(nil)
-		}
 		go func() {
 			e.log.Info("ACME challenge listener on %s", srv.Addr)
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
@@ -756,66 +678,16 @@ func (e *Engine) ReconcileChallengeServer() {
 	}
 }
 
-// Stops the challenge listener
+// Stops the challenge listener and certificate maintenance
 func (e *Engine) Close() {
 	e.mu.Lock()
 	srv := e.challenge
 	e.challenge = nil
 	e.mu.Unlock()
+	e.stopMagic.Do(e.magic.Stop)
 	if srv != nil {
 		_ = srv.Close()
 	}
-}
-
-// Modern ecdsa capable hello so the cache key matches real clients
-func syntheticHello(domain string) *tls.ClientHelloInfo {
-	return &tls.ClientHelloInfo{
-		ServerName:        domain,
-		SupportedProtos:   []string{"h2", "http/1.1"},
-		SupportedVersions: []uint16{tls.VersionTLS13, tls.VersionTLS12},
-		CipherSuites:      []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
-		SupportedCurves:   []tls.CurveID{tls.CurveP256},
-		SignatureSchemes:  []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256},
-	}
-}
-
-// Blocks until issued or failed, autocert caps this at five minutes
-func (e *Engine) EnsureCertificate(ctx context.Context, domain string) (*v1.CertificateInfo, error) {
-	domain = bareHost(domain)
-	if !issuableHost(domain) {
-		return nil, fmt.Errorf("domain %q is not a publicly issuable hostname", domain)
-	}
-	manager := e.managerForHost(ctx, domain)
-	if manager == nil {
-		return nil, fmt.Errorf("acme is disabled or the directory url points back at this instance")
-	}
-	if _, err := e.acmeCertificate(ctx, manager, syntheticHello(domain)); err != nil {
-		return nil, err
-	}
-	return e.CertificateInfo(ctx, domain)
-}
-
-// Reads the cached chain without triggering issuance
-func (e *Engine) CertificateInfo(ctx context.Context, domain string) (*v1.CertificateInfo, error) {
-	domain = bareHost(domain)
-	info := &v1.CertificateInfo{}
-	if e.store == nil {
-		return info, nil
-	}
-	data, err := e.store.GetACMECacheEntry(ctx, domain)
-	if err != nil {
-		return nil, err
-	}
-	if data == nil {
-		if data, err = e.store.GetACMECacheEntry(ctx, domain+"+rsa"); err != nil || data == nil {
-			return info, err
-		}
-	}
-	leaf := firstCertificate(data)
-	if leaf == nil {
-		return info, nil
-	}
-	return certInfoFromLeaf(leaf), nil
 }
 
 // Issued details from a parsed leaf
@@ -835,6 +707,11 @@ func (e *Engine) ServingCertInfo(ctx context.Context, host string) *v1.Certifica
 	host = bareHost(host)
 	if host == "" || e.store == nil {
 		return nil
+	}
+	// A wildcard registration serves nothing itself, report its own cert
+	if strings.HasPrefix(host, "*.") {
+		info, _ := e.CertificateInfo(ctx, host)
+		return info
 	}
 	var st *v1.GetCertStatusResponse
 	if portals, err := e.store.ListPortalsByHostname(ctx, host); err == nil {
@@ -881,7 +758,7 @@ func (e *Engine) statusCertInfo(st *v1.GetCertStatusResponse) *v1.CertificateInf
 	return nil
 }
 
-// Leaf cert from autocert's key then chain pem layout
+// First certificate in a pem bundle, keys skipped
 func firstCertificate(data []byte) *x509.Certificate {
 	for len(data) > 0 {
 		block, rest := pem.Decode(data)

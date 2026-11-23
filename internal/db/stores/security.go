@@ -3,6 +3,7 @@ package stores
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -202,6 +203,33 @@ func (s *Store) DeleteACMECacheEntry(ctx context.Context, key string) error {
 	return s.db.WithContext(ctx).Delete(&db.ACMECacheEntry{}, "key = ?", key).Error
 }
 
+// Size and write time without loading data
+func (s *Store) StatACMECacheEntry(ctx context.Context, key string) (size int64, modified time.Time, found bool, err error) {
+	var row struct {
+		Size      int64
+		UpdatedAt time.Time
+	}
+	res := s.db.WithContext(ctx).Model(&db.ACMECacheEntry{}).
+		Select("length(data) AS size", "updated_at").Where("key = ?", key).Limit(1).Scan(&row)
+	if res.Error != nil || res.RowsAffected == 0 {
+		return 0, time.Time{}, false, res.Error
+	}
+	return row.Size, row.UpdatedAt, true, nil
+}
+
+func (s *Store) ListACMECacheKeys(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	err := s.db.WithContext(ctx).Model(&db.ACMECacheEntry{}).
+		Where("key "+pages.LikeOp(s.db)+" ? ESCAPE '\\'", pages.LikePrefix(prefix)).
+		Order("key").Pluck("key", &keys).Error
+	return keys, err
+}
+
+func (s *Store) DeleteACMECachePrefix(ctx context.Context, prefix string) error {
+	return s.db.WithContext(ctx).
+		Delete(&db.ACMECacheEntry{}, "key "+pages.LikeOp(s.db)+" ? ESCAPE '\\'", pages.LikePrefix(prefix)).Error
+}
+
 // ── Audit event operations ───────────────────────────────────────────────
 
 func (s *Store) CreateAuditEvent(ctx context.Context, ev *db.AuditEvent) error {
@@ -225,15 +253,30 @@ var AuditQuery = pages.Spec{
 
 var AuditSortColumns = map[string]bool{"created_at": true}
 
-func (s *Store) ListAuditEvents(ctx context.Context, q pages.Query, orderBy string, limit, offset int) ([]*db.AuditEvent, int64, error) {
+// Keyset paged past the after row, offset applies only without it
+func (s *Store) ListAuditEvents(ctx context.Context, q pages.Query, orderBy string, limit, offset int, after string) ([]*db.AuditEvent, int64, bool, error) {
 	tx := s.db.WithContext(ctx).Model(&db.AuditEvent{}).Scopes(AuditQuery.Scope(q))
 	var total int64
 	if err := tx.Count(&total).Error; err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
+	}
+	dir, cmp := "ASC", ">"
+	if strings.HasSuffix(orderBy, " DESC") {
+		dir, cmp = "DESC", "<"
+	}
+	if after != "" {
+		anchor := s.db.Model(&db.AuditEvent{}).Select("created_at").Where("id = ?", after)
+		tx = tx.Where("(created_at "+cmp+" (?) OR (created_at = (?) AND id "+cmp+" ?))", anchor, anchor, after)
+		offset = 0
 	}
 	var events []*db.AuditEvent
-	err := tx.Order(orderBy).Limit(limit).Offset(offset).Find(&events).Error
-	return events, total, err
+	// One extra row tells whether another page exists
+	err := tx.Order(orderBy + ", id " + dir).Limit(limit + 1).Offset(offset).Find(&events).Error
+	more := len(events) > limit
+	if more {
+		events = events[:limit]
+	}
+	return events, total, more, err
 }
 
 func (s *Store) DeleteAuditEventsBefore(ctx context.Context, cutoff time.Time) (int64, error) {

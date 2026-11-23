@@ -13,6 +13,7 @@
 	import FormSection from '$lib/components/form-section.svelte';
 	import CertMaterialRow from '$lib/components/cert-material-row.svelte';
 	import CertUploadPanel from '$lib/components/cert-upload-panel.svelte';
+	import AcmeSettings from '$lib/components/acme-settings.svelte';
 	import { Loader } from '$lib/icons';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
 	import { authStore } from '$lib/stores/auth.svelte';
@@ -26,6 +27,7 @@
 	} from '$lib/cert-utils';
 	import { isLocked, patchSettings, systemScope, type SettingsPatch } from '$lib/settings-utils';
 	import {
+		ACMEChallengeType,
 		MTLSMode,
 		TLSMode,
 		type FieldProvenance,
@@ -51,18 +53,16 @@
 	let mtlsMode = $state<MTLSMode>(MTLSMode.MTLS_MODE_OFF);
 	let primarySource = $state<CertSource>(CertSource.CONFIG);
 	let acmeEnabled = $state(false);
-	let acmeEmail = $state('');
-	let acmeDirectory = $state('');
 	let challengePort = $state('');
+	let renewMinutes = $state(10);
 
 	const hostAct = new Act();
 	const modeAct = new Act();
 	const mtlsAct = new Act();
 	const primaryAct = new Act();
 	const acmeSwitchAct = new Act();
-	const acmeDirAct = new Act();
-	const acmeEmailAct = new Act();
 	const acmePortAct = new Act();
+	const acmeRenewAct = new Act();
 	const appCertAct = new Act();
 	const issueAppAct = new Act();
 
@@ -103,11 +103,16 @@
 	const primaryHealth = $derived(certHealth(certStatus?.acmeCert));
 	const primaryBadge = $derived(certStateBadge(certStatus?.state));
 
-	const acmeSwitchHelp = $derived(
-		challengePort
-			? `http-01 answers on port ${challengePort}, the CA connects to port 80`
-			: 'tls-alpn-01 only, port 443 must reach the main listener'
-	);
+	const acmeSwitchHelp = $derived.by(() => {
+		const challenge = eff?.acme?.challenge;
+		if (challenge === ACMEChallengeType.ACME_CHALLENGE_TYPE_DNS_01) {
+			return 'dns-01 through the DNS provider, no inbound port is needed';
+		}
+		if (challengePort && challenge !== ACMEChallengeType.ACME_CHALLENGE_TYPE_TLS_ALPN_01) {
+			return `http-01 answers on port ${challengePort}, the CA connects to port 80`;
+		}
+		return 'tls-alpn-01 only, port 443 must reach the main listener';
+	});
 	// First line carries the state, the rest next steps
 	const problemClass = $derived(
 		certStatus?.state === CertState.ERROR
@@ -128,9 +133,8 @@
 		mtlsMode = s.tls?.mtlsMode ?? MTLSMode.MTLS_MODE_OFF;
 		primarySource = s.tls?.primarySource || CertSource.CONFIG;
 		acmeEnabled = s.acme?.enabled ?? false;
-		acmeEmail = s.acme?.email ?? '';
-		acmeDirectory = s.acme?.directoryUrl ?? '';
 		challengePort = s.acme?.challengePort ?? '';
+		renewMinutes = s.acme?.renewIntervalMinutes ?? 10;
 	}
 
 	async function loadStatus() {
@@ -139,6 +143,21 @@
 		} catch {
 			// Badge hides without status
 		}
+	}
+
+	// Picks up what the acme sections saved without a reload flash
+	async function refresh() {
+		try {
+			const resp = await rpcClient.settings.getEffectiveSettings(
+				{ scope: systemScope },
+				silentCallOptions
+			);
+			eff = resp.settings ?? null;
+			prov = resp.provenance;
+		} catch {
+			// Stale hints until the next load
+		}
+		await loadStatus();
 	}
 
 	async function load() {
@@ -202,19 +221,17 @@
 		apply(acmeSwitchAct, { acme: { enabled: v } }, ['acme.enabled']);
 	}
 
-	function commitAcmeDirectory() {
-		if (acmeDirectory.trim() === (eff?.acme?.directoryUrl ?? '')) return;
-		apply(acmeDirAct, { acme: { directoryUrl: acmeDirectory.trim() } }, ['acme.directory_url']);
-	}
-
-	function commitAcmeEmail() {
-		if (acmeEmail.trim() === (eff?.acme?.email ?? '')) return;
-		apply(acmeEmailAct, { acme: { email: acmeEmail.trim() } }, ['acme.email']);
-	}
-
 	function commitChallengePort() {
 		if (challengePort.trim() === (eff?.acme?.challengePort ?? '')) return;
 		apply(acmePortAct, { acme: { challengePort: challengePort.trim() } }, ['acme.challenge_port']);
+	}
+
+	function commitRenewMinutes() {
+		const minutes = Math.round(Number(renewMinutes) || 0);
+		if (minutes === (eff?.acme?.renewIntervalMinutes ?? 10)) return;
+		apply(acmeRenewAct, { acme: { renewIntervalMinutes: minutes } }, [
+			'acme.renew_interval_minutes'
+		]);
 	}
 
 	function issueApp() {
@@ -438,7 +455,7 @@
 
 		<FormSection
 			title="ACME client"
-			description="Automatic certificates from an external CA. The CA reaches the public hostname on port 80 or 443 only."
+			description="Automatic certificates from an external CA. HTTP-01 and TLS-ALPN-01 need the CA to reach the public hostname on port 80 or 443, DNS-01 needs neither."
 		>
 			<FormField
 				label="Automatic issuance"
@@ -454,45 +471,6 @@
 				/>
 			</FormField>
 			<div class="form-subfields">
-				<FormField
-					label="Account email"
-					id="acme-email"
-					span="half"
-					help={lockHint('acme.email', 'Receives expiry notices from the CA')}
-					tag={acmeEmailAct.tag}
-					error={acmeEmailAct.error}
-				>
-					<Input
-						id="acme-email"
-						bind:value={acmeEmail}
-						placeholder="admin@example.com"
-						disabled={acmeEmailAct.busy || locked('acme.email')}
-						onblur={commitAcmeEmail}
-						onkeydown={(e) => {
-							if (e.key === 'Enter') commitAcmeEmail();
-						}}
-					/>
-				</FormField>
-				<FormField
-					label="Directory URL"
-					id="acme-dir"
-					span="half"
-					help={lockHint('acme.directory_url', 'Empty uses Lets Encrypt production')}
-					tag={acmeDirAct.tag}
-					error={acmeDirAct.error}
-				>
-					<Input
-						id="acme-dir"
-						bind:value={acmeDirectory}
-						class="font-mono"
-						placeholder="https://acme-v02.api.letsencrypt.org/directory"
-						disabled={acmeDirAct.busy || locked('acme.directory_url')}
-						onblur={commitAcmeDirectory}
-						onkeydown={(e) => {
-							if (e.key === 'Enter') commitAcmeDirectory();
-						}}
-					/>
-				</FormField>
 				<FormField
 					label="Challenge port"
 					id="acme-port"
@@ -513,8 +491,34 @@
 						}}
 					/>
 				</FormField>
+				<FormField
+					label="Renewal check"
+					id="acme-renew"
+					layout="inline"
+					help={lockHint(
+						'acme.renew_interval_minutes',
+						'Minutes between sweeps that order missing certificates and renew due ones'
+					)}
+					tag={acmeRenewAct.tag}
+					error={acmeRenewAct.error}
+				>
+					<Input
+						id="acme-renew"
+						type="number"
+						min={1}
+						bind:value={renewMinutes}
+						class="w-28 font-mono"
+						disabled={acmeRenewAct.busy || locked('acme.renew_interval_minutes')}
+						onblur={commitRenewMinutes}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') commitRenewMinutes();
+						}}
+					/>
+				</FormField>
 			</div>
 		</FormSection>
+
+		<AcmeSettings scope={systemScope} onsaved={refresh} />
 
 		<FormSection
 			title="Mutual TLS"

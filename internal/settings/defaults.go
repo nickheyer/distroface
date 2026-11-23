@@ -34,11 +34,15 @@ func Defaults() *v1.Settings {
 			MtlsMode:      v1.MTLSMode_MTLS_MODE_OFF.Enum(),
 		},
 		Acme: &v1.ACMESettings{
-			Enabled:       new(false),
-			Email:         new(""),
-			DirectoryUrl:  new(""),
-			ChallengePort: new("80"),
-			RedirectHttp:  new(true),
+			Enabled:              new(false),
+			Email:                new(""),
+			DirectoryUrl:         new(""),
+			ChallengePort:        new("80"),
+			RedirectHttp:         new(true),
+			RenewIntervalMinutes: proto.Int32(10),
+			Dns: &v1.ACMEDNSSettings{
+				PropagationTimeoutSeconds: proto.Int32(120),
+			},
 		},
 		Ca: &v1.CASettings{
 			AcmeEnabled: new(false),

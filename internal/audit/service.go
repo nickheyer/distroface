@@ -30,11 +30,14 @@ func (s *Service) ListAuditEvents(ctx context.Context, req *v1.ListAuditEventsRe
 		return nil, connect.NewError(connect.CodeInvalidArgument, err.Error()).WithCause(err)
 	}
 	orderBy := pages.OrderBy(req.Page, stores.AuditSortColumns, "created_at DESC")
-	events, total, err := s.store.ListAuditEvents(ctx, q, orderBy, limit, offset)
+	events, total, more, err := s.store.ListAuditEvents(ctx, q, orderBy, limit, offset, pages.After(req.Page))
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
-	resp := &v1.ListAuditEventsResponse{Page: pages.Info(offset, limit, total)}
+	resp := &v1.ListAuditEventsResponse{Page: &v1.PageInfo{TotalCount: total}}
+	if more {
+		resp.Page.NextPageToken = pages.AfterToken(events[len(events)-1].ID)
+	}
 	for _, ev := range events {
 		resp.Events = append(resp.Events, &v1.AuditEvent{
 			Id:        ev.ID,

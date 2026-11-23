@@ -103,9 +103,14 @@ func (e *Engine) checkACME(ctx context.Context, st *v1.GetCertStatusResponse, ho
 			"hostname %q cannot receive a public certificate, use a dns name that is not localhost or an ip", host)
 		return
 	}
-	if e.managerForHost(ctx, host) == nil {
+	m := e.managerForHost(ctx, host)
+	if m == nil {
 		problem(st, v1.CertState_CERT_STATE_ERROR,
 			"the acme directory url points at this instance, which cannot enroll with its own ca, use the instance ca or org ca source instead")
+		return
+	}
+	if m.err != nil {
+		problem(st, v1.CertState_CERT_STATE_ERROR, "the acme settings for this hostname cannot issue: %s", m.err.Error())
 		return
 	}
 	if err := e.policy.Allowed(ctx, host, orgID); err != nil {
@@ -134,20 +139,33 @@ func (e *Engine) checkACME(ctx context.Context, st *v1.GetCertStatusResponse, ho
 			problem(st, v1.CertState_CERT_STATE_PENDING,
 				"not issued yet, use Issue certificate or open https://%s once dns points here", host)
 		}
-		e.reachabilityHints(ctx, st, host)
+		e.challengeHints(ctx, st, m, host)
 		return
 	}
 	if time.Now().After(info.NotAfter.AsTime()) {
 		if f, ok := e.lastIssueFailure(host); ok {
 			problem(st, v1.CertState_CERT_STATE_ERROR, "certificate expired and renewal failed %s ago: %s",
 				time.Since(f.at).Round(time.Second), f.err)
-			e.reachabilityHints(ctx, st, host)
+			e.challengeHints(ctx, st, m, host)
 			return
 		}
 		problem(st, v1.CertState_CERT_STATE_PENDING, "certificate expired, renewal happens on the next handshake")
 		return
 	}
 	st.State = v1.CertState_CERT_STATE_READY
+}
+
+// Next steps matched to how this account proves control
+func (e *Engine) challengeHints(ctx context.Context, st *v1.GetCertStatusResponse, m *acmeManager, host string) {
+	if !m.dns01() {
+		e.reachabilityHints(ctx, st, host)
+		return
+	}
+	if subject := e.certSubject(ctx, m, host); subject != host {
+		hint(st, "served by the wildcard certificate %s, validated through the dns provider", subject)
+		return
+	}
+	hint(st, "validation publishes a txt record at _acme-challenge.%s through the dns provider, no inbound port is needed", host)
 }
 
 // Ports are the usual reason a ca cannot validate
