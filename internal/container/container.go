@@ -358,7 +358,7 @@ func New() (*App, error) {
 		return fail("initializing git storage", err)
 	}
 	gitAccess := gitrepo.NewAccess(store, enforcer)
-	gitManager := gitrepo.NewManager(store, gitEngine, blobStore, resolver, gitAccess, dispatcher, auditRecorder, log)
+	gitManager := gitrepo.NewManager(store, gitEngine, artifactManager, resolver, gitAccess, dispatcher, auditRecorder, log)
 	gitManager.SetPackageManager(&packageManager{
 		store: store, registry: registryAccess, artifacts: artifactManager,
 		images: auth.NewRepoAccess(store, enforcer), artAccess: artifacts.NewAccess(store, enforcer),

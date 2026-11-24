@@ -21,17 +21,22 @@ func TestBlobReferencedCoversEveryTable(t *testing.T) {
 
 	job := &db.ActionsJob{ID: uuid.New().String(), RunID: run.ID, Name: "build", Status: "success", LogDigest: digest("a")}
 	rel := &db.GitRelease{ID: uuid.New().String(), RepoID: repo.ID, Tag: "v1", AuthorID: "u"}
+	pkg := &db.ArtifactRepository{Namespace: "acme", Name: "assets"}
 	rows := []any{
 		job,
 		&db.ActionsArtifact{ID: uuid.New().String(), RunID: run.ID, Name: "dist", Digest: digest("b"), Status: "confirmed"},
 		&db.ActionsCache{RepoID: repo.ID, Key: "k", Digest: digest("c"), State: "complete"},
 		rel,
-		&db.GitReleaseAsset{ID: uuid.New().String(), ReleaseID: rel.ID, Name: "a.bin", Digest: digest("d")},
+		pkg,
 	}
 	for _, row := range rows {
 		if err := store.DB().Create(row).Error; err != nil {
 			t.Fatalf("create %T: %v", row, err)
 		}
+	}
+	asset := &db.Artifact{RepoID: pkg.ID, Name: "a.bin", Path: "a.bin", Version: rel.Tag, Digest: digest("d")}
+	if _, err := store.CreateArtifact(ctx, asset, map[string]string{"release": "true"}); err != nil {
+		t.Fatalf("CreateArtifact: %v", err)
 	}
 	if err := store.UpsertLFSObject(ctx, repo.ID, strings.Repeat("e", 64), 7); err != nil {
 		t.Fatalf("UpsertLFSObject: %v", err)

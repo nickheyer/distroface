@@ -25,6 +25,7 @@
 	let uploadFile = $state<File | null>(null);
 	let uploadVersion = $state('');
 	let uploadPath = $state('');
+	let uploadLabel = $state('');
 	let uploadProps = $state<{ key: string; value: string }[]>([]);
 	let uploading = $state(false);
 	let uploadStage = $state('');
@@ -65,6 +66,7 @@
 				uploadId: init.uploadId,
 				version: uploadVersion.trim(),
 				path: uploadPath.trim(),
+				label: uploadLabel.trim(),
 				properties
 			});
 			toast.success('Artifact uploaded');
@@ -154,6 +156,18 @@
 					bind:value={uploadPath}
 					placeholder="dist/app.zip"
 					class="font-mono"
+				/>
+			</FormField>
+			<FormField
+				label="Label"
+				id="upload-label"
+				help="Optional display name shown next to the path"
+			>
+				<Input
+					id="upload-label"
+					bind:value={uploadLabel}
+					placeholder="Linux x86_64 build"
+					maxlength={255}
 				/>
 			</FormField>
 		</FormSection>

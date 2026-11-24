@@ -26,6 +26,7 @@
 	import EmptyState from '$lib/components/empty-state.svelte';
 	import PermissionGate from '$lib/components/permission-gate.svelte';
 	import CopyButton from '$lib/components/copy-button.svelte';
+	import DownloadCommands from '$lib/components/download-commands.svelte';
 	import DataPagination from '$lib/components/data-pagination.svelte';
 	import QueryFilterBar from '$lib/components/query-filter.svelte';
 	import {
@@ -61,7 +62,7 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { toast } from 'svelte-sonner';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
-	import { relativeTime, formatBytes, truncateDigest } from '$lib/utils';
+	import { relativeTime, formatBytes, truncateDigest, shellQuote } from '$lib/utils';
 	import { Pager } from '$lib/pager.svelte';
 	import { QueryFilter } from '$lib/query.svelte';
 	import { ArtifactRepoType } from '$lib/proto/distroface/v1/types_pb';
@@ -118,6 +119,7 @@
 	let renameTarget = $state<Artifact | null>(null);
 	let renamePath = $state('');
 	let renameVersion = $state('');
+	let renameLabel = $state('');
 	let renaming = $state(false);
 
 	// Delete
@@ -175,6 +177,8 @@
 			switch (col) {
 				case 'size':
 					return mul * (Number(a.size) - Number(b.size));
+				case 'download_count':
+					return mul * (Number(a.downloadCount) - Number(b.downloadCount));
 				case 'created_at': {
 					const at = a.createdAt ? timestampDate(a.createdAt).getTime() : 0;
 					const bt = b.createdAt ? timestampDate(b.createdAt).getTime() : 0;
@@ -228,9 +232,17 @@
 	// ── Download ─────────────────────────────────────────────────────────
 
 	// Browser streams the file itself, a scoped cookie carries auth
-	function downloadArtifact(artifact: Artifact) {
+	function artifactUrl(artifact: Artifact): string {
 		const prefix = `/api/v1/artifacts/_ns/${encodeURIComponent(namespace)}/${encodeURIComponent(repoName)}`;
-		const url = `${prefix}/${encodeURIComponent(artifact.version)}/${artifact.path.split('/').map(encodeURIComponent).join('/')}`;
+		return `${prefix}/${encodeURIComponent(artifact.version)}/${artifact.path.split('/').map(encodeURIComponent).join('/')}`;
+	}
+
+	function dfcliLine(artifact: Artifact): string {
+		return `dfcli artifact download ${shellQuote(`${namespace}/${repoName}`)} -v ${shellQuote(artifact.version)} -p ${shellQuote(artifact.path)}`;
+	}
+
+	function downloadArtifact(artifact: Artifact) {
+		const url = artifactUrl(artifact);
 		const token = localStorage.getItem(SESSION_KEY);
 		if (token) {
 			const secure = location.protocol === 'https:' ? '; Secure' : '';
@@ -287,6 +299,7 @@
 		renameTarget = artifact;
 		renamePath = artifact.path;
 		renameVersion = artifact.version;
+		renameLabel = artifact.label;
 	}
 
 	async function saveRename() {
@@ -298,7 +311,8 @@
 				namespace,
 				id: renameTarget.id,
 				path: renamePath.trim(),
-				version: renameVersion.trim() || undefined
+				version: renameVersion.trim() || undefined,
+				label: renameLabel.trim()
 			});
 			toast.success('Artifact updated');
 			closeEdit();
@@ -496,6 +510,19 @@
 				<TableHead>Digest</TableHead>
 				<TableHead>
 					{#if sortable}{@render sortHeader(
+							'Downloads',
+							'download_count',
+							searchSort,
+							toggleSearchSort
+						)}{:else}{@render sortHeader(
+							'Downloads',
+							'download_count',
+							fileSort,
+							toggleFileSort
+						)}{/if}
+				</TableHead>
+				<TableHead>
+					{#if sortable}{@render sortHeader(
 							'Uploaded',
 							'created_at',
 							searchSort,
@@ -509,7 +536,7 @@
 			{#each artifacts as artifact (artifact.id)}
 				{#if propsTarget?.id === artifact.id}
 					<TableRow class="bg-muted/30 hover:[&>td]:bg-transparent">
-						<TableCell colspan={sortable ? 7 : 6} class="px-4 py-4 whitespace-normal">
+						<TableCell colspan={sortable ? 8 : 7} class="px-4 py-4 whitespace-normal">
 							<div class="form-fields">
 								<FormField
 									label="Properties of {artifact.path}"
@@ -531,13 +558,20 @@
 					</TableRow>
 				{:else if renameTarget?.id === artifact.id}
 					<TableRow class="bg-muted/30 hover:[&>td]:bg-transparent">
-						<TableCell colspan={sortable ? 7 : 6} class="px-4 py-4 whitespace-normal">
+						<TableCell colspan={sortable ? 8 : 7} class="px-4 py-4 whitespace-normal">
 							<div class="form-fields">
 								<FormField label="Path" id="rename-path" required span="half">
 									<Input id="rename-path" bind:value={renamePath} class="font-mono" />
 								</FormField>
 								<FormField label="Version" id="rename-version" span="half">
 									<Input id="rename-version" bind:value={renameVersion} class="font-mono" />
+								</FormField>
+								<FormField
+									label="Label"
+									id="rename-label"
+									help="Display name shown next to the path, empty clears it"
+								>
+									<Input id="rename-label" bind:value={renameLabel} maxlength={255} />
 								</FormField>
 								<div class="flex flex-wrap items-center gap-2">
 									<Button onclick={saveRename} disabled={renaming || !renamePath.trim()}>
@@ -554,7 +588,12 @@
 				{:else}
 					<TableRow>
 						<TableCell>
-							<span class="font-mono text-sm font-medium">{artifact.path}</span>
+							{#if artifact.label}
+								<div class="text-sm font-medium">{artifact.label}</div>
+								<span class="font-mono text-xs text-muted-foreground">{artifact.path}</span>
+							{:else}
+								<span class="font-mono text-sm font-medium">{artifact.path}</span>
+							{/if}
 							{#if Object.keys(artifact.properties).length > 0}
 								<div class="mt-1 flex flex-wrap gap-1">
 									{#each Object.entries(artifact.properties) as [key, value] (key)}
@@ -580,6 +619,9 @@
 								<CopyButton text={artifact.digest} label="Digest copied" />
 							</div>
 						</TableCell>
+						<TableCell class="text-muted-foreground tabular-nums">
+							{Number(artifact.downloadCount)}
+						</TableCell>
 						<TableCell class="text-muted-foreground">
 							{artifact.createdAt ? relativeTime(timestampDate(artifact.createdAt)) : '-'}
 						</TableCell>
@@ -594,6 +636,12 @@
 								>
 									<Download />
 								</Button>
+								<DownloadCommands
+									path={artifactUrl(artifact)}
+									file={artifact.name}
+									dfcli={dfcliLine(artifact)}
+									auth={repo?.isPrivate ?? false}
+								/>
 								{#if canMutate}
 									<Button
 										variant="ghost-muted"
@@ -607,8 +655,8 @@
 									<Button
 										variant="ghost-muted"
 										size="icon-sm"
-										title="Rename or move"
-										aria-label="Rename or move"
+										title="Rename, move or label"
+										aria-label="Rename, move or label"
 										onclick={() => openRename(artifact)}
 									>
 										<Pencil />

@@ -15,7 +15,7 @@ import (
 
 // Release assets as json rows
 func (q *request) assetList(repo *db.GitRepository, rel *db.GitRelease) []obj {
-	assets, err := q.h.forge.ReleaseAssets(q.ctx, rel)
+	assets, err := q.h.forge.ReleaseAssets(q.ctx, repo, rel)
 	if err != nil {
 		return []obj{}
 	}
@@ -208,10 +208,10 @@ func (q *request) listAssets() {
 	q.json(http.StatusOK, pageSlice(assets, p))
 }
 
-// Finds an asset by integer or row id across the repository's releases
-func (q *request) assetByPath(repo *db.GitRepository) (*db.GitReleaseAsset, *db.GitRelease, bool) {
+// Asset by integer or artifact id across the package
+func (q *request) assetByPath(repo *db.GitRepository) (*db.Artifact, *db.GitRelease, bool) {
 	id := q.param("id")
-	rows, err := q.h.store.ListGitReleaseAssetsByRepo(q.ctx, repo.ID)
+	rows, err := q.h.git.RepoReleaseAssets(q.ctx, repo)
 	if err != nil {
 		q.failErr(err)
 		return nil, nil, false
@@ -221,8 +221,8 @@ func (q *request) assetByPath(repo *db.GitRepository) (*db.GitReleaseAsset, *db.
 		if !idMatches(id, a.ID) {
 			continue
 		}
-		rel, _ := q.h.store.GetGitReleaseByID(q.ctx, a.ReleaseID)
-		if rel == nil || rel.RepoID != repo.ID || (rel.Draft && !canWrite) {
+		rel, _ := q.h.store.GetGitRelease(q.ctx, repo.ID, gitrepo.AssetTag(a.Version))
+		if rel == nil || (rel.Draft && !canWrite) {
 			break
 		}
 		return a, rel, true
@@ -268,7 +268,7 @@ func (q *request) uploadAsset() {
 		q.validation("ReleaseAsset", "name", "invalid", err.Error())
 		return
 	}
-	if existing, _ := q.h.store.GetGitReleaseAssetByName(q.ctx, rel.ID, name); existing != nil {
+	if existing, _ := q.h.git.ReleaseAssetByName(q.ctx, repo, rel, name); existing != nil {
 		q.validation("ReleaseAsset", "name", "already_exists", "an asset with that name already exists")
 		return
 	}

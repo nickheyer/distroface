@@ -64,7 +64,7 @@ type PackageManager interface {
 type Manager struct {
 	store      *stores.Store
 	engine     *Engine
-	blobs      *artifacts.BlobStore
+	artifacts  *artifacts.Manager
 	res        *settings.Resolver
 	dispatcher *webhook.Dispatcher
 	recorder   *audit.Recorder
@@ -83,16 +83,15 @@ type Manager struct {
 	maintenance sync.Map
 }
 
-func NewManager(store *stores.Store, engine *Engine, blobs *artifacts.BlobStore, res *settings.Resolver, access *Access, dispatcher *webhook.Dispatcher, recorder *audit.Recorder, log *logger.Logger) *Manager {
+func NewManager(store *stores.Store, engine *Engine, arts *artifacts.Manager, res *settings.Resolver, access *Access, dispatcher *webhook.Dispatcher, recorder *audit.Recorder, log *logger.Logger) *Manager {
 	m := &Manager{
-		store: store, engine: engine, blobs: blobs, res: res, access: access,
+		store: store, engine: engine, artifacts: arts, res: res, access: access,
 		dispatcher: dispatcher, recorder: recorder, log: log,
 		signing: NewSigning(store, engine.KeysDir()),
 	}
 	engine.SetTransferLimit(func() int {
 		return int(res.System(context.Background()).GetGit().GetMaxConcurrentTransfers())
 	})
-	m.OnDelete(m.deleteRepoReleaseAssets)
 	return m
 }
 
@@ -100,7 +99,7 @@ func (m *Manager) Store() *stores.Store         { return m.store }
 func (m *Manager) Engine() *Engine              { return m.engine }
 func (m *Manager) Access() *Access              { return m.access }
 func (m *Manager) Signing() *Signing            { return m.signing }
-func (m *Manager) Blobs() *artifacts.BlobStore  { return m.blobs }
+func (m *Manager) Blobs() *artifacts.BlobStore  { return m.artifacts.Blobs() }
 func (m *Manager) Log() *logger.Logger          { return m.log }
 func (m *Manager) Settings() *settings.Resolver { return m.res }
 func (m *Manager) Recorder() *audit.Recorder    { return m.recorder }

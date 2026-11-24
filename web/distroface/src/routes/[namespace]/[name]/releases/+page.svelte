@@ -12,6 +12,7 @@
 	import { Pager } from '$lib/pager.svelte';
 	import { GitUnit } from '$lib/proto/distroface/v1/git_pb';
 	import type { Release } from '$lib/proto/distroface/v1/release_pb';
+	import { Visibility } from '$lib/proto/distroface/v1/types_pb';
 
 	const namespace = $derived(page.params.namespace ?? '');
 	const name = $derived(page.params.name ?? '');
@@ -128,6 +129,7 @@
 		{namespace}
 		{name}
 		{latestTag}
+		isPrivate={repo?.visibility === Visibility.PRIVATE}
 		{loading}
 		emptyMessage={query ? 'No releases match' : 'No releases yet'}
 	/>

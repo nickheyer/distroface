@@ -41,25 +41,25 @@ func (m *Manager) Release(ctx context.Context, repo *db.GitRepository, tag strin
 }
 
 // Assets attached to a release, by name
-func (m *Manager) ReleaseAssets(ctx context.Context, rel *db.GitRelease) ([]*db.GitReleaseAsset, error) {
-	return m.store.ListGitReleaseAssets(ctx, rel.ID)
+func (m *Manager) ReleaseAssets(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease) ([]*db.Artifact, error) {
+	return m.git.ReleaseAssets(ctx, repo, rel)
 }
 
-// ReleaseAsset loads one asset of a release by row id
-func (m *Manager) ReleaseAsset(ctx context.Context, rel *db.GitRelease, id string) (*db.GitReleaseAsset, error) {
-	a, err := m.store.GetGitReleaseAsset(ctx, id)
+// One asset of a release by artifact id
+func (m *Manager) ReleaseAsset(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, id string) (*db.Artifact, error) {
+	a, err := m.git.ReleaseAsset(ctx, repo, rel, id)
 	if err != nil {
 		return nil, err
 	}
-	if a == nil || a.ReleaseID != rel.ID {
+	if a == nil {
 		return nil, fmt.Errorf("%w: asset", ErrNotFound)
 	}
 	return a, nil
 }
 
-// ReleaseAssetByName loads one asset of a release by file name
-func (m *Manager) ReleaseAssetByName(ctx context.Context, rel *db.GitRelease, name string) (*db.GitReleaseAsset, error) {
-	a, err := m.store.GetGitReleaseAssetByName(ctx, rel.ID, name)
+// One asset of a release by file name
+func (m *Manager) ReleaseAssetByName(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, name string) (*db.Artifact, error) {
+	a, err := m.git.ReleaseAssetByName(ctx, repo, rel, name)
 	if err != nil {
 		return nil, err
 	}
@@ -69,25 +69,25 @@ func (m *Manager) ReleaseAssetByName(ctx context.Context, rel *db.GitRelease, na
 	return a, nil
 }
 
-// AssetDownloadURL is the browser link of an asset, GitHub shaped
-func (m *Manager) AssetDownloadURL(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, a *db.GitReleaseAsset) string {
-	return m.git.HTMLURL(ctx, repo) + "/releases/download/" + url.PathEscape(rel.Tag) + "/" + url.PathEscape(a.Name)
+// Browser link of an asset, GitHub shaped
+func (m *Manager) AssetDownloadURL(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, a *db.Artifact) string {
+	return m.git.HTMLURL(ctx, repo) + "/releases/download/" + url.PathEscape(rel.Tag) + "/" + url.PathEscape(a.Path)
 }
 
-// AssetUploadURL is where a client streams a new asset of a release
+// Where a client streams a new asset of a release
 func (m *Manager) AssetUploadURL(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease) string {
 	return m.git.HTMLURL(ctx, repo) + "/-/releases/" + url.PathEscape(rel.Tag) + "/assets"
 }
 
-// UploadReleaseAsset streams one file onto a release
-func (m *Manager) UploadReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, name, label, contentType string, body io.Reader) (*db.GitReleaseAsset, error) {
+// Streams one file onto a release
+func (m *Manager) UploadReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, name, label, contentType string, body io.Reader) (*db.Artifact, error) {
 	if !actor.CanWrite {
 		return nil, ErrForbidden
 	}
 	if repo.IsArchived {
 		return nil, gitrepo.ErrArchived
 	}
-	a, err := m.git.StoreReleaseAsset(ctx, repo, rel, gitrepo.ReleaseAssetInput{Name: name, Label: label, ContentType: contentType, UploaderID: actor.id(), Body: body})
+	a, err := m.git.StoreReleaseAsset(ctx, repo, rel, gitrepo.ReleaseAssetInput{Name: name, Label: label, ContentType: contentType, Body: body, User: actor.User})
 	if err != nil {
 		return nil, mapAssetErr(err)
 	}
@@ -95,36 +95,34 @@ func (m *Manager) UploadReleaseAsset(ctx context.Context, repo *db.GitRepository
 	return a, nil
 }
 
-// UpdateReleaseAsset renames or relabels an asset
-func (m *Manager) UpdateReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, a *db.GitReleaseAsset, name, label *string) error {
+// Renames or relabels an asset
+func (m *Manager) UpdateReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, a *db.Artifact, name, label *string) error {
 	if !actor.CanWrite {
 		return ErrForbidden
 	}
 	if repo.IsArchived {
 		return gitrepo.ErrArchived
 	}
+	var rename *string
 	if name != nil && strings.TrimSpace(*name) != a.Name {
 		newName := strings.TrimSpace(*name)
 		if err := gitrepo.ValidateAssetName(newName); err != nil {
 			return mapAssetErr(err)
 		}
-		if other, _ := m.store.GetGitReleaseAssetByName(ctx, rel.ID, newName); other != nil {
+		if other, _ := m.git.ReleaseAssetByName(ctx, repo, rel, newName); other != nil && other.ID != a.ID {
 			return fmt.Errorf("%w: an asset named %s already exists", ErrConflict, newName)
 		}
-		a.Name = newName
+		rename = &newName
 	}
-	if label != nil {
-		a.Label = strings.TrimSpace(*label)
-	}
-	if err := m.store.UpdateGitReleaseAsset(ctx, a); err != nil {
-		return err
+	if err := m.git.UpdateReleaseAsset(ctx, a, rename, label); err != nil {
+		return mapAssetErr(err)
 	}
 	m.dispatchRelease(ctx, repo, actor, rel, "edited")
 	return nil
 }
 
-// DeleteReleaseAsset removes an asset and its file
-func (m *Manager) DeleteReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, a *db.GitReleaseAsset) error {
+// Removes an asset and its file
+func (m *Manager) DeleteReleaseAsset(ctx context.Context, repo *db.GitRepository, actor Actor, rel *db.GitRelease, a *db.Artifact) error {
 	if !actor.CanWrite {
 		return ErrForbidden
 	}
@@ -297,7 +295,7 @@ func (m *Manager) DeleteRelease(ctx context.Context, repo *db.GitRepository, act
 	if !actor.CanWrite {
 		return ErrForbidden
 	}
-	if err := m.git.DeleteReleaseAssets(ctx, rel); err != nil {
+	if err := m.git.DeleteReleaseAssets(ctx, repo, rel); err != nil {
 		return err
 	}
 	if err := m.store.DeleteGitRelease(ctx, rel.ID); err != nil {
@@ -486,9 +484,9 @@ func (m *Manager) ReleaseURL(ctx context.Context, repo *db.GitRepository, rel *d
 
 func (m *Manager) releasePayload(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease) *webhook.ReleasePayload {
 	p := &webhook.ReleasePayload{Tag: rel.Tag, Name: rel.Name, Body: rel.Body, Draft: rel.Draft, Prerelease: rel.Prerelease, URL: m.ReleaseURL(ctx, repo, rel), Assets: []string{}, Images: []string{}}
-	if assets, err := m.ReleaseAssets(ctx, rel); err == nil {
+	if assets, err := m.ReleaseAssets(ctx, repo, rel); err == nil {
 		for _, a := range assets {
-			p.Assets = append(p.Assets, a.Name)
+			p.Assets = append(p.Assets, a.Path)
 		}
 	}
 	if images, err := m.store.ListGitReleaseImages(ctx, rel.ID); err == nil {

@@ -396,6 +396,9 @@ func (s *GitService) UpdateGitRepository(ctx context.Context, req *v1.UpdateGitR
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
 	}
+	if err := s.manager.SealReleasePackage(ctx, repo); err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err.Error()).WithCause(err)
+	}
 	return &v1.UpdateGitRepositoryResponse{Repository: s.gitRepoToProto(ctx, user, repo, nil, true)}, nil
 }
 

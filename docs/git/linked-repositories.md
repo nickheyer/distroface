@@ -39,6 +39,8 @@ The linked path is one source among the package's own rules, so a user who owns 
 
 `ReleaseService.GetRelease` lists the images of a release: the ones pinned to it and, for every linked image repository, the tag equal to the release tag when the registry has it. The release editor notes that linked images tagged like the release appear automatically and lets you pin others. See [Releases](releases.md).
 
+Release asset files are artifacts of the artifact repository `namespace/name`, at the version equal to the tag and flagged with the property `release=true`. The first asset upload creates and links that package when it is missing, so a repository with release assets always has a linked package and deleting it needs `delete_linked` or an unlink first.
+
 ## Renames and transfers
 
 `GitService.MoveGitRepository` moves name linked packages first: images named `name` or `name/...` in the same namespace, and the artifact repository named `name`. They take the new namespace and name, and a failure restores whatever had already moved before the move fails. Packages linked by hand under other names keep their place and their link. Moving a linked package directly through `RepositoryService.MoveRepository` or `ArtifactService.MoveArtifactRepository` is refused with `follows its source repository, move that instead`.

@@ -1,6 +1,6 @@
 # Searching artifacts and properties
 
-Every artifact carries a version, a path, a free form metadata document and a set of key value properties. Search filters on the first two and on properties, metadata is stored and returned as is.
+Every artifact carries a version, a path, an optional display label, a download count, a free form metadata document and a set of key value properties. Search filters on version, path, label and properties, metadata is stored and returned as is.
 
 ## Properties
 
@@ -18,6 +18,12 @@ curl -X POST https://df.example.com/distroface.v1.ArtifactService/SetArtifactPro
 
 Properties can also be edited from the repository page in the UI. Both paths need `update` access on the repository.
 
+## Labels and download counts
+
+A label is a display name of up to 255 characters on one line, shown next to the path in the UI. Set it at upload with the `label` field of `CompleteArtifactUpload`, change it with the `label` field of `ArtifactService.UpdateArtifact` (an empty string clears it), from the rename form on the repository page, or with `dfcli artifact label REPO VERSION PATH LABEL`. Unlike properties, the label is not part of an artifact's identity.
+
+`download_count` goes up by one for every full `GET` of the file, through `/api/v1/artifacts/<name>/<version>/<path>` or through a release download link. `HEAD` requests, requests with a `Range` header, cache revalidations answered with `304` and archive downloads through the query route are not counted. Replacing an artifact by uploading the same version, path and property set keeps its id, its count and, unless the new upload sets one, its label.
+
 ## Metadata
 
 `metadata` is an arbitrary JSON object stored as a string. It is set at upload and replaced through the `metadata` field of `ArtifactService.UpdateArtifact`. An empty string resets it to `{}`. Metadata is not a search filter.
@@ -34,9 +40,9 @@ Properties can also be edited from the repository page in the UI. Both paths nee
 |---|---|
 | `repo_name`, `namespace` | Limit the search to one repository or one namespace |
 | `properties` | Every pair must match a stored property exactly |
-| `page.query.text` | Substring matched against name, version and path |
-| `page.query.filters` | Field predicates on `name`, `version` or `path` with match `CONTAINS` (default), `EQUALS` or `PREFIX` |
-| `page.order_by` | `<field> asc` or `<field> desc`, fields `name`, `version`, `path`, `size`, `created_at`, `updated_at`, default `created_at desc` |
+| `page.query.text` | Substring matched against name, version, path and label |
+| `page.query.filters` | Field predicates on `name`, `version`, `path` or `label` with match `CONTAINS` (default), `EQUALS` or `PREFIX` |
+| `page.order_by` | `<field> asc` or `<field> desc`, fields `name`, `version`, `path`, `size`, `download_count`, `created_at`, `updated_at`, default `created_at desc` |
 | `page.page_size` | Default 20, capped at 500 |
 | `page.page_token` | Cursor from the previous response |
 
@@ -55,7 +61,7 @@ curl -X POST https://df.example.com/distroface.v1.ArtifactService/SearchArtifact
 
 The response holds `artifacts` and `page` with `next_page_token` (empty on the last page) and `total_count`.
 
-Each artifact has `id`, `repo_id`, `name`, `path`, `version`, `size`, `mime_type`, `metadata`, `properties`, `digest` (`sha256:<hex>`), `created_at` and `updated_at`.
+Each artifact has `id`, `repo_id`, `name`, `path`, `version`, `size`, `mime_type`, `metadata`, `properties`, `digest` (`sha256:<hex>`), `label`, `download_count`, `created_at` and `updated_at`.
 
 ## Searching with dfcli
 
@@ -69,11 +75,11 @@ dfcli artifact search --namespace acme --offset 50 --num 50
 |---|---|
 | `-r`, `--repo` | One repository, optionally `namespace/name` |
 | `--namespace` | Namespace for a bare `--repo` or for a cross repository search |
-| `--name`, `-v`, `-p` | Substring filters on name, version and path |
+| `--name`, `-v`, `-p`, `--label` | Substring filters on name, version, path and label |
 | `--property k=v` | Exact property match, repeatable |
 | `--num` | Maximum results, default all |
 | `--offset` | Skip this many results |
-| `--sort`, `--order` | Sort field and `ASC` or `DESC`, default `created_at DESC` |
+| `--sort`, `--order` | Sort field and `ASC` or `DESC`, default `created_at DESC`. `download_count` ranks by downloads |
 | `-t`, `--table` | Print a table instead of JSON |
 
 dfcli pages through the RPC until `--num` results are collected. A failed search prints an empty result set. See [the CLI reference](../cli/reference.md).

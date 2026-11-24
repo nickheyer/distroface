@@ -2,11 +2,7 @@ package stores
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
-	"fmt"
-	"sort"
 	"strconv"
 	"time"
 
@@ -23,18 +19,7 @@ var ErrDuplicateIdentity = errors.New("an artifact with this version, path, and 
 
 // Canonical hash of a property set, empty keys skipped
 func PropsFingerprint(properties map[string]string) string {
-	keys := make([]string, 0, len(properties))
-	for k := range properties {
-		if k != "" {
-			keys = append(keys, k)
-		}
-	}
-	sort.Strings(keys)
-	h := sha256.New()
-	for _, k := range keys {
-		h.Write(fmt.Appendf(nil, "%d:%s%d:%s;", len(k), k, len(properties[k]), properties[k]))
-	}
-	return hex.EncodeToString(h.Sum(nil))
+	return db.PropsFingerprint(properties)
 }
 
 // ── Artifact repository operations ───────────────────────────────────────
@@ -191,9 +176,6 @@ func (s *Store) GetArtifactRepoStats(ctx context.Context, repoIDs []int64) (map[
 
 // Inserts replacing same version path properties, returns replaced digest
 func (s *Store) CreateArtifact(ctx context.Context, artifact *db.Artifact, properties map[string]string) (replacedDigest string, err error) {
-	if artifact.ID == "" {
-		artifact.ID = uuid.New().String()
-	}
 	artifact.PropsHash = PropsFingerprint(properties)
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing db.Artifact
@@ -201,11 +183,25 @@ func (s *Store) CreateArtifact(ctx context.Context, artifact *db.Artifact, prope
 			artifact.RepoID, artifact.Version, artifact.Path, artifact.PropsHash).Error
 		if findErr == nil {
 			replacedDigest = existing.Digest
+			// A replaced file keeps its id, counter and label
+			if artifact.ID == "" {
+				artifact.ID = existing.ID
+			}
+			artifact.DownloadCount = existing.DownloadCount
+			if artifact.Label == "" {
+				artifact.Label = existing.Label
+			}
+			if err := tx.Delete(&db.ArtifactProperty{}, "artifact_id = ?", existing.ID).Error; err != nil {
+				return err
+			}
 			if err := tx.Delete(&db.Artifact{}, "id = ?", existing.ID).Error; err != nil {
 				return err
 			}
 		} else if !errors.Is(findErr, gorm.ErrRecordNotFound) {
 			return findErr
+		}
+		if artifact.ID == "" {
+			artifact.ID = uuid.New().String()
 		}
 
 		if err := tx.Create(artifact).Error; err != nil {
@@ -400,14 +396,15 @@ var ArtifactsQuery = pages.Spec{
 		"name":    "name",
 		"version": "version",
 		"path":    "path",
+		"label":   "label",
 	},
-	Text: []string{"name", "version", "path"},
+	Text: []string{"name", "version", "path", "label"},
 }
 
 // ArtifactSortColumns allowlists order_by columns for artifact search
 var ArtifactSortColumns = map[string]bool{
 	"name": true, "version": true, "path": true,
-	"size": true, "created_at": true, "updated_at": true,
+	"size": true, "created_at": true, "updated_at": true, "download_count": true,
 }
 
 func (s *Store) SearchArtifacts(ctx context.Context, criteria ArtifactSearchCriteria) ([]*db.Artifact, int64, error) {
@@ -448,8 +445,31 @@ func (s *Store) SearchArtifacts(ctx context.Context, criteria ArtifactSearchCrit
 	return artifacts, total, nil
 }
 
+// Counter stays out so a stale row never rewinds it
 func (s *Store) UpdateArtifact(ctx context.Context, artifact *db.Artifact) error {
-	return s.db.WithContext(ctx).Save(artifact).Error
+	return s.db.WithContext(ctx).Omit("download_count").Save(artifact).Error
+}
+
+func (s *Store) IncrementArtifactDownloads(ctx context.Context, id string) error {
+	return s.db.WithContext(ctx).Model(&db.Artifact{}).Where("id = ?", id).
+		UpdateColumn("download_count", gorm.Expr("download_count + 1")).Error
+}
+
+// Artifacts of one version carrying an exact property, by path
+func (s *Store) ListArtifactsByProperty(ctx context.Context, repoID int64, version, key, value string) ([]*db.Artifact, error) {
+	q := s.db.WithContext(ctx).Model(&db.Artifact{}).Where("repo_id = ?", repoID).
+		Where("EXISTS (SELECT 1 FROM artifact_properties p WHERE p.artifact_id = artifacts.id AND p.key = ? AND p.value = ?)", key, value)
+	if version != "" {
+		q = q.Where("version = ?", version)
+	}
+	var artifacts []*db.Artifact
+	if err := q.Order("path ASC").Find(&artifacts).Error; err != nil {
+		return nil, err
+	}
+	if err := s.loadArtifactProperties(ctx, artifacts); err != nil {
+		return nil, err
+	}
+	return artifacts, nil
 }
 
 // Replaces the full property set, identity hash follows
@@ -621,7 +641,7 @@ func (s *Store) LatestArtifactVersions(ctx context.Context, repoIDs []int64) (ma
 		RepoID  int64
 		Version string
 	}
-	err := s.db.WithContext(ctx).Raw(`SELECT repo_id, version FROM artifacts a WHERE repo_id IN ? AND kind = '' AND created_at = (SELECT MAX(created_at) FROM artifacts b WHERE b.repo_id = a.repo_id AND b.kind = '')`, repoIDs).Scan(&rows).Error
+	err := s.db.WithContext(ctx).Raw(`SELECT repo_id, version FROM artifacts a WHERE repo_id IN ? AND created_at = (SELECT MAX(created_at) FROM artifacts b WHERE b.repo_id = a.repo_id)`, repoIDs).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}

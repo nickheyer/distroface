@@ -33,10 +33,11 @@
 	import { portalStore } from '$lib/stores/portal.svelte';
 	import { GitUnit } from '$lib/proto/distroface/v1/git_pb';
 	import type { Release, ReleaseImage } from '$lib/proto/distroface/v1/release_pb';
-	import type { Platform } from '$lib/proto/distroface/v1/types_pb';
+	import { Visibility, type Platform } from '$lib/proto/distroface/v1/types_pb';
 	import { ConnectError } from '@connectrpc/connect';
 	import { formatBytes, relativeTime, truncateDigest } from '$lib/utils';
-	import { primeDownload } from '$lib/releases';
+	import { primeDownload, assetDownloadUrl, assetDfcliLine } from '$lib/releases';
+	import DownloadCommands from '$lib/components/download-commands.svelte';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { toast } from 'svelte-sonner';
 
@@ -385,7 +386,7 @@
 								<div class="flex min-w-0 items-center gap-2">
 									<!-- eslint-disable svelte/no-navigation-without-resolve -->
 									<a
-										href={a.downloadUrl}
+										href={assetDownloadUrl(namespace, name, release.tag, a.name)}
 										download={a.name}
 										onclick={() => primeDownload(namespace, name)}
 										class="inline-flex min-w-0 flex-1 items-center gap-1.5 truncate font-medium text-primary hover:underline"
@@ -396,13 +397,19 @@
 									<span class="shrink-0 text-[12px] text-muted-foreground tabular-nums"
 										>{formatBytes(Number(a.size))}</span
 									>
+									<DownloadCommands
+										path={assetDownloadUrl(namespace, name, release.tag, a.name)}
+										file={a.name}
+										dfcli={assetDfcliLine(namespace, name, release.tag, a.name)}
+										auth={gitRepoStore.repo?.visibility === Visibility.PRIVATE}
+									/>
 								</div>
 								<p class="mt-0.5 truncate text-[11.5px] text-muted-foreground">
 									{#if a.label}<span class="mr-1 font-mono">{a.name}</span>{/if}
 									{#if a.digest}<span class="font-mono" title={a.digest}
 											>{truncateDigest(a.digest, 20)}</span
 										>{/if}
-									{#if a.contentType}<span class="mx-1">{a.contentType}</span>{/if}
+									{#if a.mimeType}<span class="mx-1">{a.mimeType}</span>{/if}
 									<span class="tabular-nums"
 										>{Number(a.downloadCount)} download{Number(a.downloadCount) === 1
 											? ''

@@ -288,7 +288,7 @@ message GitSettings {
   optional bool private_by_default = 8;
   optional string default_branch = 9;
   optional bool release_on_tag = 10; // Annotated tags create draft releases
-  optional int64 max_release_asset_mb = 17; // Per file cap on release assets, zero unlimited
+  reserved 17;
   optional int32 max_concurrent_transfers = 11; // System only
   optional bool allow_forks = 12;
   GitGCSettings gc = 13;

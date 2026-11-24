@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"mime"
 	"net/http"
 	"net/url"
 	"path"
@@ -23,7 +21,6 @@ import (
 	"github.com/nickheyer/distroface/internal/rbac"
 	"github.com/nickheyer/distroface/pkg/logger"
 	"github.com/nickheyer/distroface/pkg/pages"
-	"github.com/nickheyer/distroface/pkg/utils"
 	"gorm.io/gorm"
 )
 
@@ -521,7 +518,9 @@ func (a *V1API) handleCompleteUpload(w http.ResponseWriter, r *http.Request, use
 		a.log.Debug("v1 facade: bad properties body: %v", err)
 	}
 
-	artifact, err := a.manager.CompleteUpload(r.Context(), repo, vars["uuid"], version, artifactPath, "", properties)
+	artifact, err := a.manager.CompleteUpload(r.Context(), repo, vars["uuid"], Upload{
+		Version: version, Path: artifactPath, Label: query.Get("label"), Properties: properties,
+	})
 	if err != nil {
 		a.writeManagerErr(w, err)
 		return
@@ -557,29 +556,7 @@ func (a *V1API) handleDownload(w http.ResponseWriter, r *http.Request, user *aut
 		return
 	}
 
-	f, info, err := a.manager.Blobs().OpenBlob(artifact.Digest)
-	if err != nil {
-		a.log.Error("v1 facade: blob missing for artifact %s (%s)", artifact.ID, artifact.Digest)
-		http.Error(w, "Artifact not found", http.StatusNotFound)
-		return
-	}
-	defer f.Close()
-	ct := artifact.MimeType
-	if ct == "" {
-		ct = mime.TypeByExtension(path.Ext(artifact.Name))
-	}
-	if ct == "" {
-		head := make([]byte, 512)
-		n, _ := io.ReadFull(f, head)
-		ct = http.DetectContentType(head[:n])
-		if _, err := f.Seek(0, io.SeekStart); err != nil {
-			http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
-			return
-		}
-	}
-	utils.HardenUserContent(w.Header(), ct)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.Name))
-	http.ServeContent(w, r, artifact.Name, info.ModTime(), f)
+	a.manager.ServeArtifact(w, r, artifact)
 }
 
 // V1 name version path params as contains filters
@@ -905,9 +882,10 @@ func (a *V1API) handleRename(w http.ResponseWriter, r *http.Request, user *auth.
 	}
 
 	var req struct {
-		Name    string `json:"name"`
-		Path    string `json:"path"`
-		Version string `json:"version"`
+		Name    string  `json:"name"`
+		Path    string  `json:"path"`
+		Version string  `json:"version"`
+		Label   *string `json:"label"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "INVALID REQUEST", http.StatusBadRequest)
@@ -940,6 +918,14 @@ func (a *V1API) handleRename(w http.ResponseWriter, r *http.Request, user *auth.
 			return
 		}
 		artifact.Version = req.Version
+	}
+	if req.Label != nil {
+		label, err := NormalizeLabel(*req.Label)
+		if err != nil {
+			http.Error(w, "Invalid label", http.StatusBadRequest)
+			return
+		}
+		artifact.Label = label
 	}
 
 	if err := a.store.UpdateArtifact(r.Context(), artifact); err != nil {
@@ -1047,6 +1033,8 @@ type v1Artifact struct {
 	MimeType   string            `json:"mime_type"`
 	Metadata   string            `json:"metadata"`
 	Properties map[string]string `json:"properties"`
+	Label      string            `json:"label"`
+	Downloads  int64             `json:"download_count"`
 	CreatedAt  time.Time         `json:"created_at"`
 	UpdatedAt  time.Time         `json:"updated_at"`
 }
@@ -1067,6 +1055,8 @@ func artifactToV1(a *storage.Artifact) v1Artifact {
 		MimeType:   a.MimeType,
 		Metadata:   a.Metadata,
 		Properties: props,
+		Label:      a.Label,
+		Downloads:  a.DownloadCount,
 		CreatedAt:  a.CreatedAt,
 		UpdatedAt:  a.UpdatedAt,
 	}

@@ -17,6 +17,7 @@ import (
 	"github.com/go-git/go-git/v6"
 	"github.com/go-git/go-git/v6/plumbing/transport"
 	"github.com/nickheyer/distroface/internal/admin"
+	"github.com/nickheyer/distroface/internal/artifacts"
 	"github.com/nickheyer/distroface/internal/audit"
 	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
@@ -706,7 +707,7 @@ func (h *HTTP) serveReleaseAsset(w http.ResponseWriter, r *http.Request, req *gi
 		http.NotFound(w, r)
 		return
 	}
-	a, err := h.manager.Store().GetGitReleaseAssetByName(r.Context(), rel.ID, name)
+	a, err := h.manager.ReleaseAssetByName(r.Context(), req.repo, rel, name)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -730,12 +731,8 @@ func (h *HTTP) uploadReleaseAsset(w http.ResponseWriter, r *http.Request, req *g
 		http.Error(w, "the name query parameter is required", http.StatusBadRequest)
 		return
 	}
-	uploader := ""
-	if req.user != nil {
-		uploader = req.user.ID
-	}
 	a, err := h.manager.StoreReleaseAsset(r.Context(), req.repo, rel, ReleaseAssetInput{
-		Name: name, Label: q.Get("label"), ContentType: r.Header.Get("Content-Type"), UploaderID: uploader, Body: r.Body,
+		Name: name, Label: q.Get("label"), ContentType: r.Header.Get("Content-Type"), Body: r.Body, User: req.user,
 		Replace: q.Get("replace") == "1" || q.Get("replace") == "true",
 	})
 	h.manager.recordAssetUpload(r.Context(), req, rel, name, err)
@@ -750,7 +747,7 @@ func (h *HTTP) uploadReleaseAsset(w http.ResponseWriter, r *http.Request, req *g
 		http.Error(w, err.Error(), status)
 		return
 	}
-	body, err := protojson.Marshal(h.manager.ReleaseAssetProto(r.Context(), req.repo, rel, a))
+	body, err := protojson.Marshal(artifacts.ToProto(a))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

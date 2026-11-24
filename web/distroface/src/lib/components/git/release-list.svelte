@@ -17,7 +17,8 @@
 	import Markdown from './markdown.svelte';
 	import CommitBadge from './commit-badge.svelte';
 	import type { Release } from '$lib/proto/distroface/v1/release_pb';
-	import { pullLine, primeDownload } from '$lib/releases';
+	import { pullLine, primeDownload, assetDownloadUrl, assetDfcliLine } from '$lib/releases';
+	import DownloadCommands from '$lib/components/download-commands.svelte';
 	import { formatBytes, relativeTime } from '$lib/utils';
 	import { timestampDate } from '@bufbuild/protobuf/wkt';
 	import { SvelteSet } from 'svelte/reactivity';
@@ -27,6 +28,7 @@
 		namespace,
 		name,
 		latestTag = '',
+		isPrivate = false,
 		loading = false,
 		emptyMessage = 'No releases yet'
 	}: {
@@ -34,6 +36,7 @@
 		namespace: string;
 		name: string;
 		latestTag?: string;
+		isPrivate?: boolean;
 		loading?: boolean;
 		emptyMessage?: string;
 	} = $props();
@@ -175,7 +178,7 @@
 									<li class="flex min-w-0 items-center gap-2 py-1.5 text-sm">
 										<!-- eslint-disable svelte/no-navigation-without-resolve -->
 										<a
-											href={a.downloadUrl}
+											href={assetDownloadUrl(namespace, name, r.tag, a.name)}
 											download={a.name}
 											onclick={() => primeDownload(namespace, name)}
 											class="link inline-flex min-w-0 items-center gap-1.5 truncate font-medium"
@@ -183,9 +186,15 @@
 											<Download class="size-3.5 shrink-0" />{a.label || a.name}
 										</a>
 										<!-- eslint-enable svelte/no-navigation-without-resolve -->
-										<span class="shrink-0 text-xs text-muted-foreground tabular-nums"
+										<span class="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums"
 											>{formatBytes(Number(a.size))}</span
 										>
+										<DownloadCommands
+											path={assetDownloadUrl(namespace, name, r.tag, a.name)}
+											file={a.name}
+											dfcli={assetDfcliLine(namespace, name, r.tag, a.name)}
+											auth={isPrivate}
+										/>
 									</li>
 								{/each}
 							</ul>

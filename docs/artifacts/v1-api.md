@@ -51,14 +51,14 @@ Every route first checks the matching `artifacts` RBAC action, then the reposito
 | `DELETE /api/v1/artifacts/repos/{repo}` | | 204 |
 | `POST /api/v1/artifacts/{repo}/upload` | | 202 with `Location` and `Upload-ID` headers |
 | `PATCH /api/v1/artifacts/{repo}/upload/{uuid}` | Raw bytes body, appended | 202 |
-| `PUT /api/v1/artifacts/{repo}/upload/{uuid}` | `version` (required) and `path` query, `properties` query as JSON object, JSON object body also read as properties | 201 |
+| `PUT /api/v1/artifacts/{repo}/upload/{uuid}` | `version` (required), `path` and `label` query, `properties` query as JSON object, JSON object body also read as properties | 201 |
 | `GET /api/v1/artifacts/{repo}/{version}/{path}` | | 200 file with `Content-Disposition: attachment` |
 | `GET /api/v1/artifacts/{repo}/query` | See [query parameters](upload-and-download.md) | 200 zip or tar.gz, 404 with no match |
 | `DELETE /api/v1/artifacts/{repo}/{version}/{path}` | | 204 |
 | `GET /api/v1/artifacts/{repo}/versions` | | 200, JSON object keyed by version with artifact arrays |
 | `PUT /api/v1/artifacts/{repo}/{id}/metadata` | JSON object body | 200 |
 | `PUT /api/v1/artifacts/{repo}/{id}/properties` | JSON object body of string pairs, replaces the set | 200, 409 on identity collision |
-| `PUT /api/v1/artifacts/{repo}/{id}/rename` | JSON body `name` (required), `path`, `version` | 200, 409 on collision |
+| `PUT /api/v1/artifacts/{repo}/{id}/rename` | JSON body `name` (required), `path`, `version`, `label` | 200, 409 on collision |
 | `GET /api/v1/artifacts/search` | See below | 200 |
 
 `{id}` is the artifact id from a versions or search response. Errors use plain text bodies: 400 for invalid input, 401 `INVALID TOKEN`, 403 for RBAC or access failures, 404 for unknown repositories, artifacts or upload sessions, 405 for a known path with the wrong method.
@@ -98,7 +98,7 @@ Repository:
 Artifact:
 
 ```json
-{"id":"<uuid>","repo_id":7,"name":"app.tar.gz","path":"linux/app.tar.gz","upload_id":"<uuid>","version":"1.4.2","size":1048576,"mime_type":"application/gzip","metadata":"{}","properties":{"os":"linux"},"created_at":"...","updated_at":"..."}
+{"id":"<uuid>","repo_id":7,"name":"app.tar.gz","path":"linux/app.tar.gz","upload_id":"<uuid>","version":"1.4.2","size":1048576,"mime_type":"application/gzip","metadata":"{}","properties":{"os":"linux"},"label":"","download_count":0,"created_at":"...","updated_at":"..."}
 ```
 
 ## Example

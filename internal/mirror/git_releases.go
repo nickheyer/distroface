@@ -90,13 +90,13 @@ func (m *Monitor) upstreamReleaseAssets(ctx context.Context, up gitUpstream, tok
 
 // Copies upstream files onto a release, skipping present ones
 func (m *Monitor) syncReleaseAssets(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, items []asset, prune bool, note func(string, ...any)) (int, error) {
-	existing, err := m.store.ListGitReleaseAssets(ctx, rel.ID)
+	existing, err := m.git.ReleaseAssets(ctx, repo, rel)
 	if err != nil {
 		return 0, err
 	}
-	present := map[string]*db.GitReleaseAsset{}
+	present := map[string]*db.Artifact{}
 	for _, a := range existing {
-		present[a.Name] = a
+		present[a.Path] = a
 	}
 	maxBytes := m.git.MaxReleaseAssetBytes(ctx, repo)
 	copied := 0
@@ -212,7 +212,7 @@ func (m *Monitor) syncGitReleases(ctx context.Context, repo *db.GitRepository, c
 		if seen[row.Tag] {
 			continue
 		}
-		if err := m.git.DeleteReleaseAssets(ctx, row); err != nil {
+		if err := m.git.DeleteReleaseAssets(ctx, repo, row); err != nil {
 			return err
 		}
 		if err := m.store.DeleteGitRelease(ctx, row.ID); err != nil {

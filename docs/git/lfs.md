@@ -52,7 +52,7 @@ Creating and releasing locks needs write on the code unit. The ssh transfer prot
 
 ## Where objects live
 
-Objects are stored once per sha256 in the shared blob store under `<artifacts.storage_path>/blobs/sha256`, the same store release assets use, not under `git.storage_path`. A link row ties each oid to every repository that references it and records its size. Deleting a repository drops its links and removes blobs nothing references anymore. Repositories that reference the same oid share one copy of the bytes.
+Objects are stored once per sha256 in the shared blob store under `<artifacts.storage_path>/blobs/sha256`, the same store artifacts and release assets use, not under `git.storage_path`. A link row ties each oid to every repository that references it and records its size. Deleting a repository drops its links and removes blobs nothing references anymore. Repositories that reference the same oid share one copy of the bytes.
 
 ## Usage
 

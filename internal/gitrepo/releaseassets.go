@@ -7,23 +7,42 @@ import (
 	"io"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"strings"
 
-	"github.com/google/uuid"
 	"github.com/nickheyer/distroface/internal/artifacts"
+	"github.com/nickheyer/distroface/internal/auth"
 	"github.com/nickheyer/distroface/internal/db"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
-	"github.com/nickheyer/distroface/pkg/utils"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-// ErrAssetTooLarge is returned when an upload passes the release asset cap
+// Property flagging a package artifact as a release asset
+const ReleaseAssetProperty = "release"
+
+// Upload passed the artifact size cap
 var ErrAssetTooLarge = errors.New("release asset exceeds the size limit")
 
-// ValidateAssetName applies GitHub's rules for release asset file names
+var (
+	assetVersionEscaper   = strings.NewReplacer("%", "%25", "/", "%2F")
+	assetVersionUnescaper = strings.NewReplacer("%25", "%", "%2F", "/")
+)
+
+// Longest artifact version the artifact store accepts
+const maxAssetVersion = 128
+
+// Tag as an artifact version, slashes escaped
+func AssetVersion(tag string) string { return assetVersionEscaper.Replace(tag) }
+
+// Tag behind an artifact version
+func AssetTag(version string) string { return assetVersionUnescaper.Replace(version) }
+
+// True when the artifact carries the release flag
+func IsReleaseAsset(a *db.Artifact) bool {
+	return a != nil && a.Properties[ReleaseAssetProperty] == "true"
+}
+
+// GitHub rules for release asset file names
 func ValidateAssetName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" || name == "." || name == ".." {
@@ -38,129 +57,223 @@ func ValidateAssetName(name string) error {
 	return nil
 }
 
-// Per file cap on release assets for a repository, zero means none
+// Per file cap, the namespace artifact limit
 func (m *Manager) MaxReleaseAssetBytes(ctx context.Context, repo *db.GitRepository) int64 {
-	mb := m.GitSettings(ctx, repo).GetMaxReleaseAssetMb()
-	if mb <= 0 {
-		return 0
-	}
-	return mb * 1024 * 1024
+	return m.artifacts.EffectiveMaxFileSizeBytes(ctx, repo.Namespace)
 }
 
-// ReleaseAssetInput describes one file streamed onto a release
+// Same named artifact repository, nil when another repository owns it
+func (m *Manager) ReleasePackage(ctx context.Context, repo *db.GitRepository) (*db.ArtifactRepository, error) {
+	pkg, err := m.store.GetArtifactRepository(ctx, repo.Namespace, repo.Name)
+	if err != nil || pkg == nil {
+		return nil, err
+	}
+	if pkg.GitRepoID != nil && *pkg.GitRepoID != repo.ID {
+		return nil, nil
+	}
+	return pkg, nil
+}
+
+// Creates or links the package, linking needs a package manager
+func (m *Manager) linkReleasePackage(ctx context.Context, repo *db.GitRepository, user *auth.AuthenticatedUser) (*db.ArtifactRepository, error) {
+	pkg, err := m.store.GetArtifactRepository(ctx, repo.Namespace, repo.Name)
+	if err != nil {
+		return nil, err
+	}
+	if pkg != nil && pkg.GitRepoID != nil && *pkg.GitRepoID != repo.ID {
+		return nil, fmt.Errorf("%w: artifact repository %s/%s belongs to another source repository", ErrInvalid, pkg.Namespace, pkg.Name)
+	}
+	if pkg == nil {
+		pkg = &db.ArtifactRepository{
+			Namespace: repo.Namespace, Name: repo.Name, Description: "Release assets of " + repo.Namespace + "/" + repo.Name,
+			OwnerID: repo.OwnerID, IsPrivate: repo.IsPrivate, Type: v1.ArtifactRepoType_ARTIFACT_REPO_TYPE_FILE, GitRepoID: &repo.ID,
+		}
+		if err := m.store.CreateArtifactRepository(ctx, pkg); err != nil {
+			// A concurrent upload may have created it first
+			if raced, _ := m.store.GetArtifactRepository(ctx, repo.Namespace, repo.Name); raced != nil {
+				return m.linkReleasePackage(ctx, repo, user)
+			}
+			return nil, err
+		}
+		return pkg, nil
+	}
+	if pkg.GitRepoID == nil {
+		if !m.CanManageArtifact(ctx, user, pkg) {
+			return nil, fmt.Errorf("%w: artifact repository %s/%s is not linked to this repository, linking it takes manage access on that package", ErrInvalid, pkg.Namespace, pkg.Name)
+		}
+		if err := m.store.SetArtifactRepositoryGitRepo(ctx, pkg.ID, &repo.ID); err != nil {
+			return nil, err
+		}
+		pkg.GitRepoID = &repo.ID
+	}
+	if repo.IsPrivate && !pkg.IsPrivate {
+		pkg.IsPrivate = true
+		if err := m.store.UpdateArtifactRepository(ctx, pkg); err != nil {
+			return nil, err
+		}
+	}
+	return pkg, nil
+}
+
+// Private repository assets never sit in a public package
+func (m *Manager) SealReleasePackage(ctx context.Context, repo *db.GitRepository) error {
+	if !repo.IsPrivate {
+		return nil
+	}
+	pkg, err := m.ReleasePackage(ctx, repo)
+	if err != nil || pkg == nil || pkg.IsPrivate {
+		return err
+	}
+	pkg.IsPrivate = true
+	return m.store.UpdateArtifactRepository(ctx, pkg)
+}
+
+// Flagged artifacts at the tag version, by name
+func (m *Manager) ReleaseAssets(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease) ([]*db.Artifact, error) {
+	pkg, err := m.ReleasePackage(ctx, repo)
+	if err != nil || pkg == nil {
+		return nil, err
+	}
+	return m.store.ListArtifactsByProperty(ctx, pkg.ID, AssetVersion(rel.Tag), ReleaseAssetProperty, "true")
+}
+
+// Every flagged artifact of the package, across releases
+func (m *Manager) RepoReleaseAssets(ctx context.Context, repo *db.GitRepository) ([]*db.Artifact, error) {
+	pkg, err := m.ReleasePackage(ctx, repo)
+	if err != nil || pkg == nil {
+		return nil, err
+	}
+	return m.store.ListArtifactsByProperty(ctx, pkg.ID, "", ReleaseAssetProperty, "true")
+}
+
+// One asset by artifact id, nil when absent
+func (m *Manager) ReleaseAsset(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, id string) (*db.Artifact, error) {
+	pkg, err := m.ReleasePackage(ctx, repo)
+	if err != nil || pkg == nil {
+		return nil, err
+	}
+	a, err := m.store.GetArtifact(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if a == nil || a.RepoID != pkg.ID || a.Version != AssetVersion(rel.Tag) || !IsReleaseAsset(a) {
+		return nil, nil
+	}
+	return a, nil
+}
+
+// One asset by file name, nil when absent
+func (m *Manager) ReleaseAssetByName(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, name string) (*db.Artifact, error) {
+	assets, err := m.ReleaseAssets(ctx, repo, rel)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range assets {
+		if a.Path == name {
+			return a, nil
+		}
+	}
+	// Flagged artifacts in subdirectories answer to their base name
+	for _, a := range assets {
+		if a.Name == name {
+			return a, nil
+		}
+	}
+	return nil, nil
+}
+
+// One file streamed onto a release
 type ReleaseAssetInput struct {
 	Name        string
 	Label       string
 	ContentType string
-	UploaderID  string
 	Body        io.Reader
-	// Replace an existing asset of the same name instead of refusing
+	// Uploader, nil never links an unlinked package
+	User *auth.AuthenticatedUser
+	// Overwrites a same named asset instead of refusing
 	Replace bool
 }
 
-// Streams a file into the blob store, records the row
-func (m *Manager) StoreReleaseAsset(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, in ReleaseAssetInput) (*db.GitReleaseAsset, error) {
+// Streams a file into the package as a flagged artifact
+func (m *Manager) StoreReleaseAsset(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, in ReleaseAssetInput) (*db.Artifact, error) {
 	if err := ValidateAssetName(in.Name); err != nil {
 		return nil, err
 	}
-	existing, err := m.store.GetGitReleaseAssetByName(ctx, rel.ID, in.Name)
+	version := AssetVersion(rel.Tag)
+	if len(version) > maxAssetVersion {
+		return nil, fmt.Errorf("%w: tag %s is too long to carry assets, the limit is %d characters with each slash counting as three", ErrInvalid, rel.Tag, maxAssetVersion)
+	}
+	pkg, err := m.linkReleasePackage(ctx, repo, in.User)
+	if err != nil {
+		return nil, err
+	}
+	existing, err := m.ReleaseAssetByName(ctx, repo, rel, in.Name)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil && !in.Replace {
 		return nil, fmt.Errorf("%w: an asset named %s already exists on release %s", ErrInvalid, in.Name, rel.Tag)
 	}
-	maxBytes := m.MaxReleaseAssetBytes(ctx, repo)
-	digest, size, sniffed, err := m.blobs.Ingest(in.Body, maxBytes)
-	if errors.Is(err, artifacts.ErrBlobTooLarge) {
-		return nil, fmt.Errorf("%w: the limit is %d MB", ErrAssetTooLarge, maxBytes/(1024*1024))
-	}
-	if err != nil {
-		return nil, err
-	}
-	ct := strings.TrimSpace(in.ContentType)
-	if ct == "" || ct == "application/octet-stream" {
-		ct = assetContentType(in.Name, sniffed)
-	}
-	asset := &db.GitReleaseAsset{
-		ID: uuid.New().String(), ReleaseID: rel.ID, Name: in.Name, Label: strings.TrimSpace(in.Label),
-		Size: size, Digest: digest, ContentType: ct, UploaderID: in.UploaderID,
-	}
+	// Replace reuses path and properties to hit same identity
+	assetPath, props := in.Name, map[string]string{ReleaseAssetProperty: "true"}
 	if existing != nil {
-		asset.ID, asset.CreatedAt, asset.DownloadCount = existing.ID, existing.CreatedAt, existing.DownloadCount
-		if asset.Label == "" {
-			asset.Label = existing.Label
-		}
-		if err := m.store.UpdateGitReleaseAsset(ctx, asset); err != nil {
-			m.ReapBlob(ctx, digest)
-			return nil, err
-		}
-		if existing.Digest != digest {
-			m.ReapBlob(ctx, existing.Digest)
-		}
-		return asset, nil
+		assetPath, props = existing.Path, existing.Properties
 	}
-	if err := m.store.CreateGitReleaseAsset(ctx, asset); err != nil {
-		m.ReapBlob(ctx, digest)
+	a, err := m.artifacts.StoreStream(ctx, pkg, in.Body, artifacts.Upload{
+		Version: version, Path: assetPath, Label: in.Label, MimeType: assetContentType(in.Name, in.ContentType), Properties: props,
+	})
+	switch {
+	case errors.Is(err, artifacts.ErrTooLarge):
+		return nil, fmt.Errorf("%w: the limit is %d MB", ErrAssetTooLarge, m.MaxReleaseAssetBytes(ctx, repo)/(1024*1024))
+	case errors.Is(err, artifacts.ErrInvalid):
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(err.Error(), artifacts.ErrInvalid.Error()+": "))
+	case err != nil:
 		return nil, err
 	}
-	return asset, nil
+	return a, nil
 }
 
-// Extension wins over a generic sniff, the sniff wins over nothing
-func assetContentType(name, sniffed string) string {
-	if ct := mime.TypeByExtension(strings.ToLower(path.Ext(name))); ct != "" {
+// Specific header wins, then extension, empty keeps the sniff
+func assetContentType(name, header string) string {
+	if ct := strings.TrimSpace(header); ct != "" && ct != "application/octet-stream" {
 		return ct
 	}
-	if sniffed != "" {
-		return sniffed
-	}
-	return "application/octet-stream"
+	return mime.TypeByExtension(strings.ToLower(path.Ext(name)))
 }
 
-// OpenReleaseAsset opens the blob behind an asset
-func (m *Manager) OpenReleaseAsset(a *db.GitReleaseAsset) (*os.File, os.FileInfo, error) {
-	return m.blobs.OpenBlob(a.Digest)
+// Renames or relabels an asset
+func (m *Manager) UpdateReleaseAsset(ctx context.Context, a *db.Artifact, name, label *string) error {
+	if name != nil {
+		a.Name, a.Path = *name, path.Join(path.Dir(a.Path), *name)
+	}
+	if label != nil {
+		clean, err := artifacts.NormalizeLabel(*label)
+		if err != nil {
+			return fmt.Errorf("%w: %s", ErrInvalid, strings.TrimPrefix(err.Error(), artifacts.ErrInvalid.Error()+": "))
+		}
+		a.Label = clean
+	}
+	return m.store.UpdateArtifact(ctx, a)
 }
 
-// ServeReleaseAsset streams an asset with hardened headers and counts the download
-func (m *Manager) ServeReleaseAsset(w http.ResponseWriter, r *http.Request, a *db.GitReleaseAsset) {
-	f, info, err := m.OpenReleaseAsset(a)
-	if err != nil {
-		http.Error(w, "asset data is missing", http.StatusNotFound)
-		return
-	}
-	defer f.Close()
-	ct := a.ContentType
-	if ct == "" {
-		ct = "application/octet-stream"
-	}
-	utils.HardenUserContent(w.Header(), ct)
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", a.Name))
-	w.Header().Set("ETag", `"`+strings.TrimPrefix(a.Digest, "sha256:")+`"`)
+// Streams an asset and counts the download
+func (m *Manager) ServeReleaseAsset(w http.ResponseWriter, r *http.Request, a *db.Artifact) {
 	w.Header().Set("Cache-Control", "private, max-age=0")
-	if r.Method == http.MethodGet {
-		_ = m.store.IncrementGitReleaseAssetDownloads(r.Context(), a.ID)
-	}
-	http.ServeContent(w, r, a.Name, info.ModTime(), f)
+	m.artifacts.ServeArtifact(w, r, a)
 }
 
-// DeleteReleaseAsset removes the row and the blob when nothing else holds it
-func (m *Manager) DeleteReleaseAsset(ctx context.Context, a *db.GitReleaseAsset) error {
-	if err := m.store.DeleteGitReleaseAsset(ctx, a.ID); err != nil {
-		return err
-	}
-	m.ReapBlob(ctx, a.Digest)
-	return nil
+// Removes the artifact, and its blob once unreferenced
+func (m *Manager) DeleteReleaseAsset(ctx context.Context, a *db.Artifact) error {
+	return m.artifacts.DeleteArtifact(ctx, a)
 }
 
-// DeleteReleaseAssets removes every asset of a release
-func (m *Manager) DeleteReleaseAssets(ctx context.Context, rel *db.GitRelease) error {
-	rows, err := m.store.ListGitReleaseAssets(ctx, rel.ID)
+// Removes every asset of a release
+func (m *Manager) DeleteReleaseAssets(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease) error {
+	assets, err := m.ReleaseAssets(ctx, repo, rel)
 	if err != nil {
 		return err
 	}
-	for _, a := range rows {
+	for _, a := range assets {
 		if err := m.DeleteReleaseAsset(ctx, a); err != nil {
 			return err
 		}
@@ -168,21 +281,7 @@ func (m *Manager) DeleteReleaseAssets(ctx context.Context, rel *db.GitRelease) e
 	return nil
 }
 
-// Reclaims the asset blobs of every release before the rows cascade away
-func (m *Manager) deleteRepoReleaseAssets(ctx context.Context, repo *db.GitRepository) error {
-	rows, err := m.store.ListGitReleaseAssetsByRepo(ctx, repo.ID)
-	if err != nil {
-		return err
-	}
-	for _, a := range rows {
-		if err := m.DeleteReleaseAsset(ctx, a); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ReapBlob deletes a blob once no table references it
+// Deletes a blob once no table references it
 func (m *Manager) ReapBlob(ctx context.Context, digest string) {
 	if digest == "" {
 		return
@@ -191,28 +290,12 @@ func (m *Manager) ReapBlob(ctx context.Context, digest string) {
 	if err != nil || referenced {
 		return
 	}
-	if err := m.blobs.DeleteBlob(digest); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := m.Blobs().DeleteBlob(digest); err != nil && !errors.Is(err, os.ErrNotExist) {
 		m.log.Error("blob delete %s: %v", digest, err)
 	}
 }
 
-// ReleaseAssetProto is the wire shape of an asset with its browser link
-func (m *Manager) ReleaseAssetProto(ctx context.Context, repo *db.GitRepository, rel *db.GitRelease, a *db.GitReleaseAsset) *v1.ReleaseAsset {
-	out := &v1.ReleaseAsset{
-		Id: a.ID, Name: a.Name, Label: a.Label, Size: a.Size, Digest: a.Digest, ContentType: a.ContentType,
-		DownloadUrl:   m.HTMLURL(ctx, repo) + "/releases/download/" + url.PathEscape(rel.Tag) + "/" + url.PathEscape(a.Name),
-		DownloadCount: a.DownloadCount,
-		CreatedAt:     timestamppb.New(a.CreatedAt), UpdatedAt: timestamppb.New(a.UpdatedAt),
-	}
-	if a.UploaderID != "" {
-		if u, err := m.store.GetUserByID(ctx, a.UploaderID); err == nil && u != nil {
-			out.Uploader = u.Username
-		}
-	}
-	return out
-}
-
-// Audits an asset upload that came in over http, failures included
+// Audits an http asset upload, failures included
 func (m *Manager) recordAssetUpload(ctx context.Context, req *gitRequest, rel *db.GitRelease, name string, err error) {
 	m.audit(ctx, req.user, "Git/release_asset", req.repo.Namespace+"/"+req.repo.Name+"@"+rel.Tag+"/"+name, outcomeFor(err))
 }

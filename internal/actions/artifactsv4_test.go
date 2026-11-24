@@ -68,7 +68,7 @@ func newResultsHarness(t *testing.T) *resultsHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gitMgr := gitrepo.NewManager(store, engine, blobs, res, gitrepo.NewAccess(store, enforcer), webhook.NewDispatcher(store, log, res), audit.NewRecorder(store, res, log), log)
+	gitMgr := gitrepo.NewManager(store, engine, artifactMgr, res, gitrepo.NewAccess(store, enforcer), webhook.NewDispatcher(store, log, res), audit.NewRecorder(store, res, log), log)
 	forgeMgr := forge.NewManager(store, gitMgr, mailer.NewService(store, res, log), res, log)
 	t.Cleanup(func() { forgeMgr.Wait(context.Background()) })
 	m := NewManager(store, gitMgr, forgeMgr, artifactMgr, authMgr, res, log)

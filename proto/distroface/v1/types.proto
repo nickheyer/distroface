@@ -434,6 +434,10 @@ message Artifact {
   google.protobuf.Timestamp created_at = 12;
   google.protobuf.Timestamp updated_at = 13;
   reserved 14;
+  // Display name shown next to the file name
+  string label = 15;
+  // Times the file was downloaded
+  int64 download_count = 16;
 }
 
 // ImageConfig contains parsed metadata from an OCI/Docker image config blob.

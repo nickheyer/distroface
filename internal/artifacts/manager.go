@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
+	"net/http"
 	"os"
 	"path"
 	"sort"
@@ -18,6 +20,8 @@ import (
 	"github.com/nickheyer/distroface/internal/settings"
 	"github.com/nickheyer/distroface/pkg/logger"
 	v1 "github.com/nickheyer/distroface/pkg/proto/distroface/v1"
+	"github.com/nickheyer/distroface/pkg/utils"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Resolved retention rules for a single repo
@@ -33,6 +37,17 @@ type RetentionPolicy struct {
 var ErrInvalid = errors.New("invalid argument")
 
 var ErrUploadNotFound = errors.New("upload session not found")
+
+// Size cap breach, matches ErrInvalid too
+var ErrTooLarge = errors.New("artifact exceeds the size limit")
+
+type tooLargeError struct{ maxBytes int64 }
+
+func (e *tooLargeError) Error() string {
+	return fmt.Sprintf("%s: artifact exceeds maximum size of %dMB", ErrInvalid, e.maxBytes/(1024*1024))
+}
+
+func (e *tooLargeError) Is(target error) bool { return target == ErrInvalid || target == ErrTooLarge }
 
 // Artifact business logic shared by rpc service and v1 facade
 type Manager struct {
@@ -109,33 +124,57 @@ func SanitizePath(name string) string {
 	return s
 }
 
-// Checks shared by every upload route
-func normalizeUpload(repo *storage.ArtifactRepository, version, artifactPath, metadata string) (string, string, error) {
-	if err := ValidateVersion(version); err != nil {
-		return "", "", err
-	}
-	if artifactPath == "" {
-		artifactPath = SanitizePath(repo.Name)
-	}
-	if err := ValidatePath(artifactPath); err != nil {
-		return "", "", err
-	}
-	if metadata == "" {
-		metadata = "{}"
-	} else if !json.Valid([]byte(metadata)) {
-		return "", "", fmt.Errorf("%w: metadata must be valid JSON", ErrInvalid)
-	}
-	return artifactPath, metadata, nil
+// Fields of one artifact being stored
+type Upload struct {
+	Version    string
+	Path       string
+	Metadata   string
+	Label      string
+	MimeType   string
+	Properties map[string]string
 }
 
-func tooLarge(maxBytes int64) error {
-	return fmt.Errorf("%w: artifact exceeds maximum size of %dMB", ErrInvalid, maxBytes/(1024*1024))
+// Checks shared by every upload route
+func (in *Upload) normalize(repo *storage.ArtifactRepository) error {
+	if err := ValidateVersion(in.Version); err != nil {
+		return err
+	}
+	if in.Path == "" {
+		in.Path = SanitizePath(repo.Name)
+	}
+	if err := ValidatePath(in.Path); err != nil {
+		return err
+	}
+	if in.Metadata == "" {
+		in.Metadata = "{}"
+	} else if !json.Valid([]byte(in.Metadata)) {
+		return fmt.Errorf("%w: metadata must be valid JSON", ErrInvalid)
+	}
+	label, err := NormalizeLabel(in.Label)
+	if err != nil {
+		return err
+	}
+	in.Label = label
+	return nil
 }
+
+// Trims a display label and rejects oversized or multiline ones
+func NormalizeLabel(label string) (string, error) {
+	label = strings.TrimSpace(label)
+	if len(label) > 255 {
+		return "", fmt.Errorf("%w: label exceeds 255 characters", ErrInvalid)
+	}
+	if strings.ContainsAny(label, "\r\n\x00") {
+		return "", fmt.Errorf("%w: label must be a single line", ErrInvalid)
+	}
+	return label, nil
+}
+
+func tooLarge(maxBytes int64) error { return &tooLargeError{maxBytes: maxBytes} }
 
 // Finalizes upload, replaces existing same version path properties
-func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata string, properties map[string]string) (*storage.Artifact, error) {
-	artifactPath, metadata, err := normalizeUpload(repo, version, artifactPath, metadata)
-	if err != nil {
+func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepository, uploadID string, in Upload) (*storage.Artifact, error) {
+	if err := in.normalize(repo); err != nil {
 		return nil, err
 	}
 
@@ -157,13 +196,12 @@ func (m *Manager) CompleteUpload(ctx context.Context, repo *storage.ArtifactRepo
 		}
 		return nil, err
 	}
-	return m.recordArtifact(ctx, repo, uploadID, version, artifactPath, metadata, digest, size, mimeType, properties)
+	return m.recordArtifact(ctx, repo, uploadID, in, digest, size, mimeType)
 }
 
 // Stores a stream as an artifact in one pass
-func (m *Manager) StoreStream(ctx context.Context, repo *storage.ArtifactRepository, body io.Reader, version, artifactPath, metadata string, properties map[string]string) (*storage.Artifact, error) {
-	artifactPath, metadata, err := normalizeUpload(repo, version, artifactPath, metadata)
-	if err != nil {
+func (m *Manager) StoreStream(ctx context.Context, repo *storage.ArtifactRepository, body io.Reader, in Upload) (*storage.Artifact, error) {
+	if err := in.normalize(repo); err != nil {
 		return nil, err
 	}
 	maxBytes := m.EffectiveMaxFileSizeBytes(ctx, repo.Namespace)
@@ -174,23 +212,28 @@ func (m *Manager) StoreStream(ctx context.Context, repo *storage.ArtifactReposit
 	if err != nil {
 		return nil, err
 	}
-	return m.recordArtifact(ctx, repo, uuid.New().String(), version, artifactPath, metadata, digest, size, mimeType, properties)
+	return m.recordArtifact(ctx, repo, uuid.New().String(), in, digest, size, mimeType)
 }
 
-func (m *Manager) recordArtifact(ctx context.Context, repo *storage.ArtifactRepository, uploadID, version, artifactPath, metadata, digest string, size int64, mimeType string, properties map[string]string) (*storage.Artifact, error) {
+func (m *Manager) recordArtifact(ctx context.Context, repo *storage.ArtifactRepository, uploadID string, in Upload, digest string, size int64, sniffed string) (*storage.Artifact, error) {
+	mimeType := in.MimeType
+	if mimeType == "" {
+		mimeType = sniffed
+	}
 	artifact := &storage.Artifact{
 		RepoID:   repo.ID,
-		Name:     path.Base(artifactPath),
-		Path:     artifactPath,
+		Name:     path.Base(in.Path),
+		Path:     in.Path,
 		UploadID: uploadID,
-		Version:  version,
+		Version:  in.Version,
 		Digest:   digest,
 		Size:     size,
 		MimeType: mimeType,
-		Metadata: metadata,
+		Metadata: in.Metadata,
+		Label:    in.Label,
 	}
 
-	replacedDigest, err := m.store.CreateArtifact(ctx, artifact, properties)
+	replacedDigest, err := m.store.CreateArtifact(ctx, artifact, in.Properties)
 	if err != nil {
 		m.gcBlob(ctx, digest)
 		return nil, err
@@ -204,6 +247,77 @@ func (m *Manager) recordArtifact(ctx context.Context, repo *storage.ArtifactRepo
 	}
 
 	return artifact, nil
+}
+
+// Streams a hardened attachment and counts the download
+func (m *Manager) ServeArtifact(w http.ResponseWriter, r *http.Request, artifact *storage.Artifact) {
+	f, info, err := m.blobs.OpenBlob(artifact.Digest)
+	if err != nil {
+		m.log.Error("blob missing for artifact %s (%s)", artifact.ID, artifact.Digest)
+		http.Error(w, "Artifact not found", http.StatusNotFound)
+		return
+	}
+	defer f.Close()
+	ct := artifact.MimeType
+	if ct == "" {
+		ct = mime.TypeByExtension(path.Ext(artifact.Name))
+	}
+	if ct == "" {
+		head := make([]byte, 512)
+		n, _ := io.ReadFull(f, head)
+		ct = http.DetectContentType(head[:n])
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			http.Error(w, "SERVER ERROR", http.StatusInternalServerError)
+			return
+		}
+	}
+	utils.HardenUserContent(w.Header(), ct)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", artifact.Name))
+	etag := `"` + strings.TrimPrefix(artifact.Digest, "sha256:") + `"`
+	w.Header().Set("ETag", etag)
+	// Ranges and cache revalidations are not new downloads
+	if r.Method == http.MethodGet && r.Header.Get("Range") == "" && !revalidates(r, etag, info.ModTime()) {
+		if err := m.store.IncrementArtifactDownloads(r.Context(), artifact.ID); err != nil {
+			m.log.Error("download count for artifact %s: %v", artifact.ID, err)
+		}
+	}
+	http.ServeContent(w, r, artifact.Name, info.ModTime(), f)
+}
+
+// True when the conditional headers will answer 304
+func revalidates(r *http.Request, etag string, modTime time.Time) bool {
+	if inm := r.Header.Get("If-None-Match"); inm != "" {
+		for _, tag := range strings.Split(inm, ",") {
+			tag = strings.TrimPrefix(strings.TrimSpace(tag), "W/")
+			if tag == "*" || tag == etag {
+				return true
+			}
+		}
+		return false
+	}
+	since, err := http.ParseTime(r.Header.Get("If-Modified-Since"))
+	return err == nil && !modTime.Truncate(time.Second).After(since)
+}
+
+// Wire shape shared by the artifact and release services
+func ToProto(a *storage.Artifact) *v1.Artifact {
+	return &v1.Artifact{
+		Id:            a.ID,
+		RepoId:        a.RepoID,
+		Name:          a.Name,
+		Path:          a.Path,
+		UploadId:      a.UploadID,
+		Version:       a.Version,
+		Size:          a.Size,
+		MimeType:      a.MimeType,
+		Metadata:      a.Metadata,
+		Properties:    a.Properties,
+		Digest:        a.Digest,
+		Label:         a.Label,
+		DownloadCount: a.DownloadCount,
+		CreatedAt:     timestamppb.New(a.CreatedAt),
+		UpdatedAt:     timestamppb.New(a.UpdatedAt),
+	}
 }
 
 // Deletes row then GCs blob when unreferenced

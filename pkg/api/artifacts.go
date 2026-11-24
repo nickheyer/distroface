@@ -28,6 +28,7 @@ qualify the name when it is ambiguous.`,
 		newArtifactUploadCmd(),
 		newArtifactDownloadCmd(),
 		newArtifactDeleteCmd(),
+		newArtifactLabelCmd(),
 		newArtifactSearchCmd(),
 	)
 	return cmd
@@ -92,7 +93,7 @@ func newArtifactRepoListCmd() *cobra.Command {
 }
 
 func newArtifactUploadCmd() *cobra.Command {
-	var version, path, namespace string
+	var version, path, namespace, label string
 	var properties map[string]string
 
 	cmd := &cobra.Command{
@@ -113,7 +114,7 @@ func newArtifactUploadCmd() *cobra.Command {
 			path = sanitizeFilePath(path)
 
 			fmt.Printf("Uploading %s to %s (version: %s, path: %s)\n", file, ref, version, path)
-			if _, err := client.uploadArtifact(cmd.Context(), ref, file, version, path, properties); err != nil {
+			if _, err := client.uploadArtifact(cmd.Context(), ref, file, version, path, label, properties); err != nil {
 				return fmt.Errorf("upload failed: %w", err)
 			}
 			fmt.Println("Upload successful")
@@ -123,6 +124,7 @@ func newArtifactUploadCmd() *cobra.Command {
 
 	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version")
 	cmd.Flags().StringVarP(&path, "path", "p", "", "Artifact path in repository")
+	cmd.Flags().StringVar(&label, "label", "", "Display label shown instead of the file name")
 	cmd.Flags().StringToStringVar(&properties, "property", nil, "Properties (key=value,key=value,...)")
 	cmd.Flags().StringVar(&namespace, "namespace", "", "Repository namespace (user or organization)")
 	return cmd
@@ -218,12 +220,39 @@ func newArtifactDeleteCmd() *cobra.Command {
 	return cmd
 }
 
+func newArtifactLabelCmd() *cobra.Command {
+	var namespace string
+
+	cmd := &cobra.Command{
+		Use:   "label [repo] [version] [path] [label]",
+		Short: "Set the display label of an artifact, an empty label clears it",
+		Args:  cobra.ExactArgs(4),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ref := repoArg(args[0], namespace)
+			a, err := client.labelArtifact(cmd.Context(), ref, args[1], args[2], args[3])
+			if err != nil {
+				return fmt.Errorf("failed to label artifact: %w", err)
+			}
+			if a.GetLabel() == "" {
+				fmt.Printf("Cleared the label of %s\n", a.GetPath())
+				return nil
+			}
+			fmt.Printf("Labeled %s as %q\n", a.GetPath(), a.GetLabel())
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&namespace, "namespace", "", "Repository namespace (user or organization)")
+	return cmd
+}
+
 func newArtifactSearchCmd() *cobra.Command {
 	var (
 		repo      string
 		name      string
 		version   string
 		artPath   string
+		label     string
 		namespace string
 		props     map[string]string
 		num       int
@@ -237,13 +266,14 @@ func newArtifactSearchCmd() *cobra.Command {
 		Use:   "search",
 		Short: "Search for artifacts",
 		Long: `Search artifacts across every repository visible to you, or within
-one repository with --repo. Name, version, path, and property filters
+one repository with --repo. Name, version, path, label, and property filters
 narrow the results.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := SearchOptions{
 				Name:       name,
 				Version:    version,
 				Path:       artPath,
+				Label:      label,
 				Properties: props,
 				Num:        num,
 				Offset:     offset,
@@ -266,10 +296,10 @@ narrow the results.`,
 			if table {
 				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 				fmt.Fprintln(w, "Total Matches:", search.Total)
-				fmt.Fprintln(w, "\nREPOSITORY\tNAME\tVERSION\tSIZE\tUPDATED")
+				fmt.Fprintln(w, "\nREPOSITORY\tNAME\tLABEL\tVERSION\tSIZE\tDOWNLOADS\tUPDATED")
 				for _, a := range search.Results {
-					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n",
-						a.RepoID, a.Name, a.Version, formatSize(a.Size), a.UpdatedAt.Format(time.RFC3339))
+					fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\t%d\t%s\n",
+						a.RepoID, a.Name, a.Label, a.Version, formatSize(a.Size), a.Downloads, a.UpdatedAt.Format(time.RFC3339))
 				}
 				return w.Flush()
 			}
@@ -281,6 +311,7 @@ narrow the results.`,
 	cmd.Flags().StringVar(&name, "name", "", "Artifact name filter")
 	cmd.Flags().StringVarP(&version, "version", "v", "", "Artifact version filter")
 	cmd.Flags().StringVarP(&artPath, "path", "p", "", "Path inside artifact version")
+	cmd.Flags().StringVar(&label, "label", "", "Artifact label filter")
 	cmd.Flags().StringToStringVar(&props, "property", nil, "Properties (key=value,key=value,...)")
 	cmd.Flags().IntVar(&num, "num", 0, "Max number of matching artifacts (default all)")
 	cmd.Flags().IntVar(&offset, "offset", 0, "Result offset for pagination")

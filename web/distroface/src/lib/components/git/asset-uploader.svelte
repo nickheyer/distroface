@@ -3,7 +3,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Progress } from '$lib/components/ui/progress';
 	import { fromJson } from '@bufbuild/protobuf';
-	import { ReleaseAssetSchema, type ReleaseAsset } from '$lib/proto/distroface/v1/release_pb';
+	import { ArtifactSchema, type Artifact } from '$lib/proto/distroface/v1/types_pb';
 	import { assetUploadUrl } from '$lib/releases';
 	import { formatBytes } from '$lib/utils';
 
@@ -18,7 +18,7 @@
 		name: string;
 		tag: string;
 		disabled?: boolean;
-		onUploaded?: (asset: ReleaseAsset) => void;
+		onUploaded?: (asset: Artifact) => void;
 	} = $props();
 
 	const SESSION_KEY = 'distroface_session';
@@ -68,7 +68,7 @@
 	}
 
 	// One streamed POST per file, the response is the asset
-	function post(file: File, onProgress: (pct: number) => void): Promise<ReleaseAsset> {
+	function post(file: File, onProgress: (pct: number) => void): Promise<Artifact> {
 		return new Promise((resolve, reject) => {
 			const xhr = new XMLHttpRequest();
 			xhr.open('POST', assetUploadUrl(namespace, name, tag, file.name));
@@ -81,7 +81,7 @@
 			xhr.onload = () => {
 				if (xhr.status >= 200 && xhr.status < 300) {
 					try {
-						resolve(fromJson(ReleaseAssetSchema, JSON.parse(xhr.responseText)));
+						resolve(fromJson(ArtifactSchema, JSON.parse(xhr.responseText)));
 					} catch (err) {
 						reject(err instanceof Error ? err : new Error('Unreadable server response'));
 					}

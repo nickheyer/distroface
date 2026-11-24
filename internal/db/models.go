@@ -286,21 +286,23 @@ type ArtifactRepository struct { // Generic artifact repo, integer PK kept for v
 }
 
 type Artifact struct {
-	ID         string              `json:"id" gorm:"primaryKey"`
-	RepoID     int64               `json:"repo_id" gorm:"not null;index;uniqueIndex:idx_artifact_identity;column:repo_id"`
-	Name       string              `json:"name" gorm:"not null"`
-	Path       string              `json:"path" gorm:"not null;uniqueIndex:idx_artifact_identity"`
-	UploadID   string              `json:"upload_id" gorm:"not null;column:upload_id"`
-	Version    string              `json:"version" gorm:"not null;uniqueIndex:idx_artifact_identity"`
-	PropsHash  string              `json:"-" gorm:"not null;default:'';uniqueIndex:idx_artifact_identity;column:props_hash"` // Property set fingerprint, fourth identity component
-	Digest     string              `json:"digest" gorm:"not null;index"`                                                     // Full sha256 content address
-	Size       int64               `json:"size" gorm:"not null"`
-	MimeType   string              `json:"mime_type" gorm:"column:mime_type"`
-	Metadata   string              `json:"metadata" gorm:"type:text;not null;default:'{}'"` // Arbitrary JSON object
-	CreatedAt  time.Time           `json:"created_at" gorm:"autoCreateTime"`
-	UpdatedAt  time.Time           `json:"updated_at" gorm:"autoUpdateTime"`
-	Properties map[string]string   `json:"properties" gorm:"-"` // Loaded from artifact_properties
-	Repo       *ArtifactRepository `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
+	ID            string              `json:"id" gorm:"primaryKey"`
+	RepoID        int64               `json:"repo_id" gorm:"not null;index;uniqueIndex:idx_artifact_identity;column:repo_id"`
+	Name          string              `json:"name" gorm:"not null"`
+	Path          string              `json:"path" gorm:"not null;uniqueIndex:idx_artifact_identity"`
+	UploadID      string              `json:"upload_id" gorm:"not null;column:upload_id"`
+	Version       string              `json:"version" gorm:"not null;uniqueIndex:idx_artifact_identity"`
+	PropsHash     string              `json:"-" gorm:"not null;default:'';uniqueIndex:idx_artifact_identity;column:props_hash"` // Property set fingerprint, fourth identity component
+	Digest        string              `json:"digest" gorm:"not null;index"`                                                     // Full sha256 content address
+	Size          int64               `json:"size" gorm:"not null"`
+	MimeType      string              `json:"mime_type" gorm:"column:mime_type"`
+	Metadata      string              `json:"metadata" gorm:"type:text;not null;default:'{}'"` // Arbitrary JSON object
+	Label         string              `json:"label" gorm:"not null;default:''"`                // Display name shown instead of the file name
+	DownloadCount int64               `json:"download_count" gorm:"not null;default:0;column:download_count"`
+	CreatedAt     time.Time           `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt     time.Time           `json:"updated_at" gorm:"autoUpdateTime"`
+	Properties    map[string]string   `json:"properties" gorm:"-"` // Loaded from artifact_properties
+	Repo          *ArtifactRepository `json:"-" gorm:"foreignKey:RepoID;constraint:OnDelete:CASCADE"`
 }
 
 type ArtifactProperty struct {
@@ -629,21 +631,6 @@ type GitReleaseImage struct {
 	CreatedAt   time.Time   `gorm:"autoCreateTime"`
 	Release     *GitRelease `gorm:"foreignKey:ReleaseID;constraint:OnDelete:CASCADE"`
 	ImageRepo   *Repository `gorm:"foreignKey:ImageRepoID;constraint:OnDelete:CASCADE"`
-}
-
-type GitReleaseAsset struct {
-	ID            string      `gorm:"primaryKey"`
-	ReleaseID     string      `gorm:"not null;uniqueIndex:idx_release_asset_name;index"`
-	Name          string      `gorm:"not null;uniqueIndex:idx_release_asset_name"`
-	Label         string      `gorm:"not null;default:''"`
-	Size          int64       `gorm:"not null;default:0"`
-	Digest        string      `gorm:"not null;index"`
-	ContentType   string      `gorm:"not null;default:'application/octet-stream'"`
-	UploaderID    string      `gorm:"not null;default:''"`
-	DownloadCount int64       `gorm:"not null;default:0"`
-	CreatedAt     time.Time   `gorm:"autoCreateTime"`
-	UpdatedAt     time.Time   `gorm:"autoUpdateTime"`
-	Release       *GitRelease `gorm:"foreignKey:ReleaseID;constraint:OnDelete:CASCADE"`
 }
 
 type GitPushMirror struct {

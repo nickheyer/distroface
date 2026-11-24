@@ -34,12 +34,13 @@ curl -X POST https://df.example.com/distroface.v1.ArtifactService/CompleteArtifa
 | `path` | Relative path inside the version, at most 255 characters, no leading `/`, no `..`, no `\`. Defaults to the repository name with unsafe characters replaced by `-` |
 | `properties` | Key value strings, see [search and properties](search-and-properties.md) |
 | `metadata` | JSON object string, defaults to `{}`, rejected when not valid JSON |
+| `label` | Optional display name, see [labels and download counts](search-and-properties.md#labels-and-download-counts) |
 
 Upload sessions belong to the principal that opened them. A PATCH or complete from a different user is refused, any token of the same user may continue the session. The `upload_url` carries the `_ns/<namespace>` marker whenever the repository is outside the caller's own namespace.
 
 On complete the server detects the MIME type from the first 512 bytes, computes the sha256 digest, and moves the session into blob storage. An identical blob already on disk is reused. If the session exceeds the effective `artifacts.max_file_size_mb`, the session is cancelled and the call fails with `InvalidArgument`.
 
-An artifact is identified by repository, version, path and property set. Completing an upload with the same four values replaces the earlier artifact and releases its blob when nothing else references it. Retention rules run for the repository after every completed upload, see [retention](retention.md).
+An artifact is identified by repository, version, path and property set. Completing an upload with the same four values replaces the earlier artifact, keeping its id and download count, and releases its blob when nothing else references it. Retention rules run for the repository after every completed upload, see [retention](retention.md).
 
 With dfcli, see [the CLI reference](../cli/reference.md):
 
@@ -82,7 +83,7 @@ Without `--unpack` dfcli writes `<repo>_artifacts.<format>` into `-o` (default t
 
 ## Downloading one file
 
-`GET /api/v1/artifacts/<name>/<version>/<path>` (or the `_ns` form) returns a single artifact with `Content-Disposition: attachment`. The stored MIME type is used, falling back to the file extension and then to content sniffing. The download button on the repository page in the UI uses this route.
+`GET /api/v1/artifacts/<name>/<version>/<path>` (or the `_ns` form) returns a single artifact with `Content-Disposition: attachment` and an ETag of its digest, and adds one to its `download_count`. `HEAD`, `Range` requests and cache revalidations answered with `304` are not counted. The stored MIME type is used, falling back to the file extension and then to content sniffing. The download button on the repository page in the UI uses this route.
 
 ```bash
 curl -O -H "Authorization: Bearer $TOKEN" \

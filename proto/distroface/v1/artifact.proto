@@ -177,6 +177,8 @@ message CompleteArtifactUploadRequest {
   // metadata is an optional arbitrary JSON object string.
   string metadata = 6;
   string namespace = 7;
+  // Optional display name
+  string label = 8;
 }
 
 // CompleteArtifactUploadResponse is the response containing the stored artifact.
@@ -235,8 +237,8 @@ message ListArtifactVersionsResponse {
 
 // SearchArtifactsRequest is the request to search artifacts.
 message SearchArtifactsRequest {
-  // page.query filters on name, version, path.
-  // page.order_by accepts name, version, path, size, created_at, updated_at.
+  // page.query filters on name, version, path, label.
+  // page.order_by accepts name, version, path, size, download_count, created_at, updated_at.
   PageRequest page = 1;
   // repo_name limits the search to one repository when set.
   string repo_name = 2;
@@ -253,7 +255,7 @@ message SearchArtifactsResponse {
   PageInfo page = 2;
 }
 
-// UpdateArtifactRequest renames/moves an artifact or replaces its metadata.
+// UpdateArtifactRequest renames/moves an artifact or replaces its metadata or label.
 message UpdateArtifactRequest {
   string repo_name = 1;
   string id = 2;
@@ -263,6 +265,8 @@ message UpdateArtifactRequest {
   // metadata replaces the stored metadata JSON when present.
   optional string metadata = 6;
   string namespace = 7;
+  // Replaces the display name, empty clears it
+  optional string label = 8;
 }
 
 // UpdateArtifactResponse is the response after updating an artifact.

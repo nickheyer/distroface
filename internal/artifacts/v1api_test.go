@@ -782,3 +782,51 @@ func TestV1OrgNamespaceAccess(t *testing.T) {
 		t.Fatalf("owner repo delete: got %d body %q", rec.Code, rec.Body.String())
 	}
 }
+
+func TestV1LabelAndDownloadCount(t *testing.T) {
+	e := newTestEnv(t, nil)
+	token := e.newUser("alice", "user")
+	rec := e.doJSON(http.MethodPost, "/api/v1/artifacts/repos", token, map[string]any{"name": "myrepo"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create repo: got %d body %q", rec.Code, rec.Body.String())
+	}
+
+	rec = e.do(http.MethodPost, "/api/v1/artifacts/myrepo/upload", token, nil)
+	location := rec.Header().Get("Location")
+	if rec = e.do(http.MethodPatch, location, token, strings.NewReader("payload")); rec.Code != http.StatusAccepted {
+		t.Fatalf("chunk: got %d", rec.Code)
+	}
+	rec = e.doJSON(http.MethodPut, location+"?version=1.0.0&path=tool.bin&label=Linux+build", token, map[string]string{})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("complete: got %d body %q", rec.Code, rec.Body.String())
+	}
+	id := e.artifactID("myrepo", "1.0.0", "tool.bin")
+
+	for range 2 {
+		if rec = e.do(http.MethodGet, "/api/v1/artifacts/myrepo/1.0.0/tool.bin", token, nil); rec.Code != http.StatusOK || rec.Body.String() != "payload" {
+			t.Fatalf("download: got %d %q", rec.Code, rec.Body.String())
+		}
+	}
+	// Probes and resumed ranges are not downloads
+	e.do(http.MethodHead, "/api/v1/artifacts/myrepo/1.0.0/tool.bin", token, nil)
+	ranged := httptest.NewRequest(http.MethodGet, "/api/v1/artifacts/myrepo/1.0.0/tool.bin", nil)
+	ranged.Header.Set("Authorization", "Bearer "+token)
+	ranged.Header.Set("Range", "bytes=2-")
+	e.mux.ServeHTTP(httptest.NewRecorder(), ranged)
+
+	a, err := e.store.GetArtifact(context.Background(), id)
+	if err != nil || a.Label != "Linux build" || a.DownloadCount != 2 {
+		t.Fatalf("stored label %q downloads %d err %v", a.Label, a.DownloadCount, err)
+	}
+	if v := artifactToV1(a); v.Label != "Linux build" || v.Downloads != 2 {
+		t.Fatalf("v1 shape = %+v", v)
+	}
+
+	rec = e.doJSON(http.MethodPut, "/api/v1/artifacts/myrepo/"+id+"/rename", token, map[string]any{"name": "tool.bin", "label": ""})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("relabel: got %d body %q", rec.Code, rec.Body.String())
+	}
+	if a, _ = e.store.GetArtifact(context.Background(), id); a.Label != "" || a.DownloadCount != 2 {
+		t.Fatalf("after relabel label %q downloads %d", a.Label, a.DownloadCount)
+	}
+}

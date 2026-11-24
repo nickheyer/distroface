@@ -106,7 +106,6 @@ func Defaults() *v1.Settings {
 			PrivateByDefault:       new(false),
 			DefaultBranch:          new("main"),
 			ReleaseOnTag:           new(false),
-			MaxReleaseAssetMb:      proto.Int64(2048),
 			MaxConcurrentTransfers: proto.Int32(32),
 			AllowForks:             new(true),
 			Gc: &v1.GitGCSettings{

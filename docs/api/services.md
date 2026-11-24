@@ -97,8 +97,8 @@ Manages artifact repositories, uploads, and search. Data transfer itself is plai
 | GetArtifact | Returns a single artifact by ID |
 | ListArtifacts | Returns artifacts in a repository, newest first |
 | ListArtifactVersions | Returns artifacts grouped by version |
-| SearchArtifacts | Searches artifacts by name, version, path, or properties |
-| UpdateArtifact | Renames or moves an artifact or replaces its metadata JSON |
+| SearchArtifacts | Searches artifacts by name, version, path, label, or properties |
+| UpdateArtifact | Renames or moves an artifact or replaces its metadata JSON or label |
 | SetArtifactProperties | Replaces the full property set of an artifact |
 | DeleteArtifact | Removes an artifact and its blob when unreferenced |
 | StarArtifactRepository | Stars a repository for the current user |
@@ -459,7 +459,7 @@ Manages pull requests, reviews, and merges. Documented in [Pull requests](../git
 
 ## ReleaseService
 
-Manages releases, their assets, and their images. Asset files upload by streaming to `POST /<ns>/<name>/-/releases/<tag>/assets?name=<file>`. Documented in [Releases](../git/releases.md).
+Manages releases, their assets, and their images. Assets are `Artifact` messages from the linked artifact repository. Asset files upload by streaming to `POST /<ns>/<name>/-/releases/<tag>/assets?name=<file>`. Documented in [Releases](../git/releases.md).
 
 | Method | Description |
 | --- | --- |
@@ -470,7 +470,7 @@ Manages releases, their assets, and their images. Asset files upload by streamin
 | DeleteRelease | Removes a release and optionally its tag |
 | PublishRelease | Turns a draft into a published release |
 | UpdateReleaseAsset | Renames or relabels an asset |
-| DeleteReleaseAsset | Removes an asset and its file |
+| DeleteReleaseAsset | Removes an asset artifact and its file |
 | AttachReleaseImage | Pins an image reference to a release |
 | DetachReleaseImage | Removes a pinned image |
 | GetLatestRelease | Returns the newest published non prerelease |

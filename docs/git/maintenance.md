@@ -9,7 +9,7 @@ Repositories are repacked and pruned on a schedule, their sizes are measured aft
 | `<git.storage_path>/repos/<namespace>/<name>.git` | Bare repository |
 | `<git.storage_path>/repos/<namespace>/<name>.wiki.git` | Its wiki |
 | `<storage.data_dir>/keys/` | Ssh host keys and the instance signing key |
-| `<artifacts.storage_path>/blobs/sha256/` | LFS objects and release assets, see [LFS](lfs.md) |
+| `<artifacts.storage_path>/blobs/sha256/` | LFS objects and artifacts, release assets included, see [LFS](lfs.md) |
 
 `git.storage_path` is a config key defaulting to `<storage.data_dir>/git`, see [Configuration](../getting-started/configuration.md). Names are validated before any path is built, and an empty namespace directory is removed when its last repository goes.
 

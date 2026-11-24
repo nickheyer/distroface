@@ -32,6 +32,8 @@ type Artifact struct {
 	MimeType   string            `json:"mime_type"`
 	Metadata   string            `json:"metadata"`
 	Properties map[string]string `json:"properties"`
+	Label      string            `json:"label"`
+	Downloads  int64             `json:"download_count"`
 	CreatedAt  time.Time         `json:"created_at"`
 	UpdatedAt  time.Time         `json:"updated_at"`
 }
@@ -82,6 +84,8 @@ func artifactFromProto(a *v1.Artifact) Artifact {
 		MimeType:   a.GetMimeType(),
 		Metadata:   a.GetMetadata(),
 		Properties: props,
+		Label:      a.GetLabel(),
+		Downloads:  a.GetDownloadCount(),
 		CreatedAt:  protoTime(a.GetCreatedAt()),
 		UpdatedAt:  protoTime(a.GetUpdatedAt()),
 	}
@@ -171,7 +175,7 @@ func (c *Client) listArtifactRepos(ctx context.Context, namespace string) ([]Art
 // ── Artifacts ────────────────────────────────────────────────────────────
 
 // Rpc bookends the transfer, bytes stream over http
-func (c *Client) uploadArtifact(ctx context.Context, ref RepoRef, filePath, version, artifactPath string, properties map[string]string) (*v1.Artifact, error) {
+func (c *Client) uploadArtifact(ctx context.Context, ref RepoRef, filePath, version, artifactPath, label string, properties map[string]string) (*v1.Artifact, error) {
 	rpc := c.Artifacts()
 
 	initResp, err := rpc.InitiateArtifactUpload(ctx, &v1.InitiateArtifactUploadRequest{
@@ -205,11 +209,47 @@ func (c *Client) uploadArtifact(ctx context.Context, ref RepoRef, filePath, vers
 		Version:    version,
 		Path:       artifactPath,
 		Properties: properties,
+		Label:      label,
 	})
 	if err != nil {
 		return nil, rpcErr(err)
 	}
 	return done.GetArtifact(), nil
+}
+
+// Sets or clears the display label of one artifact
+func (c *Client) labelArtifact(ctx context.Context, ref RepoRef, version, path, label string) (*v1.Artifact, error) {
+	rpc := c.Artifacts()
+	token := ""
+	for {
+		resp, err := rpc.ListArtifacts(ctx, &v1.ListArtifactsRequest{
+			RepoName:  ref.Name,
+			Namespace: ref.Namespace,
+			Version:   version,
+			Page:      &v1.PageRequest{PageSize: maxPageSize, PageToken: token},
+		})
+		if err != nil {
+			return nil, rpcErr(err)
+		}
+		for _, a := range resp.GetArtifacts() {
+			if a.GetPath() != path {
+				continue
+			}
+			done, err := rpc.UpdateArtifact(ctx, &v1.UpdateArtifactRequest{
+				RepoName:  ref.Name,
+				Namespace: ref.Namespace,
+				Id:        a.GetId(),
+				Label:     &label,
+			})
+			if err != nil {
+				return nil, rpcErr(err)
+			}
+			return done.GetArtifact(), nil
+		}
+		if token = resp.GetPage().GetNextPageToken(); token == "" {
+			return nil, fmt.Errorf("artifact %s at version %s not found", path, version)
+		}
+	}
 }
 
 // Archive streaming has no rpc, the v1 query route is the data plane
@@ -273,7 +313,7 @@ func (c *Client) deleteArtifact(ctx context.Context, ref RepoRef, version, path 
 
 var artifactSortFields = map[string]bool{
 	"name": true, "version": true, "path": true,
-	"size": true, "created_at": true, "updated_at": true,
+	"size": true, "created_at": true, "updated_at": true, "download_count": true,
 }
 
 type SearchOptions struct {
@@ -281,6 +321,7 @@ type SearchOptions struct {
 	Name       string
 	Version    string
 	Path       string
+	Label      string
 	Properties map[string]string
 	Num        int // Zero fetches everything
 	Offset     int
@@ -291,7 +332,7 @@ type SearchOptions struct {
 func (o SearchOptions) query() *v1.Query {
 	q := &v1.Query{}
 	for _, f := range []struct{ field, value string }{
-		{"name", o.Name}, {"version", o.Version}, {"path", o.Path},
+		{"name", o.Name}, {"version", o.Version}, {"path", o.Path}, {"label", o.Label},
 	} {
 		if f.value != "" {
 			q.Filters = append(q.Filters, &v1.FieldFilter{Field: f.field, Value: f.value})

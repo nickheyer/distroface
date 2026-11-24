@@ -638,7 +638,9 @@ func (m *Monitor) ingestAsset(ctx context.Context, repo *db.ArtifactRepository, 
 	defer body.Close()
 
 	meta, _ := json.Marshal(map[string]string{"mirror_url": src})
-	_, err = m.artifacts.StoreStream(ctx, repo, body, version, a.name, string(meta), mirrorAssetProps(repo, cfg))
+	_, err = m.artifacts.StoreStream(ctx, repo, body, artifacts.Upload{
+		Version: version, Path: a.name, Metadata: string(meta), Properties: mirrorAssetProps(repo, cfg),
+	})
 	return err
 }
 

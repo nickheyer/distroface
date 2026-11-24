@@ -120,3 +120,7 @@ export function orgRoleLabel(role: number): string {
 			return 'Unknown';
 	}
 }
+
+export function shellQuote(s: string): string {
+	return /^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, `'\\''`)}'`;
+}

@@ -140,7 +140,7 @@ func newHarness(t *testing.T, turns []scriptedTurn) *harness {
 	}
 	dispatcher := webhook.NewDispatcher(store, log, res)
 	recorder := audit.NewRecorder(store, res, log)
-	gitMgr := gitrepo.NewManager(store, engine, blobs, res, gitrepo.NewAccess(store, enforcer), dispatcher, recorder, log)
+	gitMgr := gitrepo.NewManager(store, engine, artifactMgr, res, gitrepo.NewAccess(store, enforcer), dispatcher, recorder, log)
 	mail := mailer.NewService(store, res, log)
 	forgeMgr := forge.NewManager(store, gitMgr, mail, res, log)
 	t.Cleanup(func() { forgeMgr.Wait(context.Background()) })

@@ -1,6 +1,7 @@
 import type { ReleaseImage } from '$lib/proto/distroface/v1/release_pb';
 import { configStore } from '$lib/stores/config.svelte';
 import { portalStore } from '$lib/stores/portal.svelte';
+import { shellQuote } from '$lib/utils';
 
 const SESSION_KEY = 'distroface_session';
 
@@ -21,6 +22,16 @@ export function primeDownload(namespace: string, name: string) {
 	document.cookie = `${SESSION_KEY}=${token}; Path=${path}; Max-Age=60; SameSite=Strict${secure}`;
 }
 
+// Browser download of one release asset
+export function assetDownloadUrl(
+	namespace: string,
+	name: string,
+	tag: string,
+	file: string
+): string {
+	return `/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(file)}`;
+}
+
 // Where a new asset of a release streams to
 export function assetUploadUrl(
 	namespace: string,
@@ -32,4 +43,9 @@ export function assetUploadUrl(
 	const q = new URLSearchParams({ name: file });
 	if (label) q.set('label', label);
 	return `/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/-/releases/${encodeURIComponent(tag)}/assets?${q}`;
+}
+
+// CLI line fetching one asset of a release
+export function assetDfcliLine(namespace: string, name: string, tag: string, file: string): string {
+	return `dfcli release download ${shellQuote(`${namespace}/${name}`)} ${shellQuote(tag)} --asset ${shellQuote(file)}`;
 }

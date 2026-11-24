@@ -68,10 +68,6 @@ func (s *ReleaseService) release(ctx context.Context, namespace, name, tag strin
 	return repo, actor, rel, nil
 }
 
-func (s *ReleaseService) assetProto(ctx context.Context, repo *storage.GitRepository, rel *storage.GitRelease, a *storage.GitReleaseAsset) *v1.ReleaseAsset {
-	return s.manager.ReleaseAssetProto(ctx, repo, rel, a)
-}
-
 // Images of a release, tag matches on linked repos plus pinned references
 func (s *ReleaseService) images(ctx context.Context, repo *storage.GitRepository, rel *storage.GitRelease) []*v1.ReleaseImage {
 	base := s.manager.BaseURL(ctx)
@@ -137,10 +133,8 @@ func (s *ReleaseService) toProto(ctx context.Context, repo *storage.GitRepositor
 		}
 		r.Close()
 	}
-	if assets, err := s.forge.ReleaseAssets(ctx, rel); err == nil {
-		for _, a := range assets {
-			out.Assets = append(out.Assets, s.assetProto(ctx, repo, rel, a))
-		}
+	if assets, err := s.forge.ReleaseAssets(ctx, repo, rel); err == nil {
+		out.Assets = artifactsToProto(assets)
 	}
 	out.Images = s.images(ctx, repo, rel)
 	return out
@@ -231,14 +225,14 @@ func (s *ReleaseService) UpdateReleaseAsset(ctx context.Context, req *v1.UpdateR
 	if err != nil {
 		return nil, err
 	}
-	a, err := s.forge.ReleaseAsset(ctx, rel, req.AssetId)
+	a, err := s.forge.ReleaseAsset(ctx, repo, rel, req.AssetId)
 	if err != nil {
 		return nil, mapForgeErr(err)
 	}
 	if err := s.forge.UpdateReleaseAsset(ctx, repo, actor, rel, a, req.AssetName, req.Label); err != nil {
 		return nil, mapForgeErr(err)
 	}
-	return &v1.UpdateReleaseAssetResponse{Asset: s.assetProto(ctx, repo, rel, a)}, nil
+	return &v1.UpdateReleaseAssetResponse{Asset: artifactToProto(a)}, nil
 }
 
 func (s *ReleaseService) DeleteReleaseAsset(ctx context.Context, req *v1.DeleteReleaseAssetRequest) (*v1.DeleteReleaseAssetResponse, error) {
@@ -246,7 +240,7 @@ func (s *ReleaseService) DeleteReleaseAsset(ctx context.Context, req *v1.DeleteR
 	if err != nil {
 		return nil, err
 	}
-	a, err := s.forge.ReleaseAsset(ctx, rel, req.AssetId)
+	a, err := s.forge.ReleaseAsset(ctx, repo, rel, req.AssetId)
 	if err != nil {
 		return nil, mapForgeErr(err)
 	}

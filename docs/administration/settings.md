@@ -28,7 +28,7 @@ System scope accepts every field. Lower scopes accept only these paths:
 
 | Scope | Paths |
 | --- | --- |
-| Organization | `acme.email`, `acme.directory_url`, `acme.challenge`, `acme.dns.*`, `acme.account_key`, `acme.eab_key_id`, `acme.eab_hmac_key`, `acme.ca_bundle`, `artifacts.max_file_size_mb`, `artifacts.stale_upload_cleanup_hours`, `artifacts.private_by_default`, `artifacts.retention.*`, `portals.isolated`, `auth.anonymous_access`, `git.lfs_enabled`, `git.private_by_default`, `git.default_branch`, `git.max_repo_size_mb`, `git.max_release_asset_mb`, `git.actions.enabled`, `git.agents.enabled`, `git.agents.allow_repo_providers`, `git.agents.allow_repo_agents`, plus the mail, actions and agents paths below |
+| Organization | `acme.email`, `acme.directory_url`, `acme.challenge`, `acme.dns.*`, `acme.account_key`, `acme.eab_key_id`, `acme.eab_hmac_key`, `acme.ca_bundle`, `artifacts.max_file_size_mb`, `artifacts.stale_upload_cleanup_hours`, `artifacts.private_by_default`, `artifacts.retention.*`, `portals.isolated`, `auth.anonymous_access`, `git.lfs_enabled`, `git.private_by_default`, `git.default_branch`, `git.max_repo_size_mb`, `git.actions.enabled`, `git.agents.enabled`, `git.agents.allow_repo_providers`, `git.agents.allow_repo_agents`, plus the mail, actions and agents paths below |
 | Portal | `acme.email`, `acme.directory_url`, `acme.challenge`, `acme.dns.*`, `acme.account_key`, `acme.eab_key_id`, `acme.eab_hmac_key`, `acme.ca_bundle`, `tls.mtls_mode`, `auth.anonymous_access` |
 | Repository | The mail, actions and agents paths below |
 

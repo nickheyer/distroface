@@ -396,7 +396,9 @@ func (s *ArtifactService) CompleteArtifactUpload(ctx context.Context, req *v1.Co
 	if err := s.manager.Blobs().VerifyUploadOwner(msg.UploadId, auth.UploadOwners(user)...); err != nil {
 		return nil, mapArtifactErr(err)
 	}
-	artifact, err := s.manager.CompleteUpload(ctx, repo, msg.UploadId, msg.Version, msg.Path, msg.Metadata, msg.Properties)
+	artifact, err := s.manager.CompleteUpload(ctx, repo, msg.UploadId, artifacts.Upload{
+		Version: msg.Version, Path: msg.Path, Metadata: msg.Metadata, Label: msg.Label, Properties: msg.Properties,
+	})
 	if err != nil {
 		return nil, mapArtifactErr(err)
 	}
@@ -586,6 +588,13 @@ func (s *ArtifactService) UpdateArtifact(ctx context.Context, req *v1.UpdateArti
 			metadata = "{}"
 		}
 		artifact.Metadata = metadata
+	}
+	if msg.Label != nil {
+		label, err := artifacts.NormalizeLabel(*msg.Label)
+		if err != nil {
+			return nil, mapArtifactErr(err)
+		}
+		artifact.Label = label
 	}
 
 	if err := s.store.UpdateArtifact(ctx, artifact); err != nil {
@@ -875,23 +884,7 @@ func (s *ArtifactService) repoToProto(ctx context.Context, repo *storage.Artifac
 	return out
 }
 
-func artifactToProto(a *storage.Artifact) *v1.Artifact {
-	return &v1.Artifact{
-		Id:         a.ID,
-		RepoId:     a.RepoID,
-		Name:       a.Name,
-		Path:       a.Path,
-		UploadId:   a.UploadID,
-		Version:    a.Version,
-		Size:       a.Size,
-		MimeType:   a.MimeType,
-		Metadata:   a.Metadata,
-		Properties: a.Properties,
-		Digest:     a.Digest,
-		CreatedAt:  timestamppb.New(a.CreatedAt),
-		UpdatedAt:  timestamppb.New(a.UpdatedAt),
-	}
-}
+func artifactToProto(a *storage.Artifact) *v1.Artifact { return artifacts.ToProto(a) }
 
 func artifactsToProto(list []*storage.Artifact) []*v1.Artifact {
 	out := make([]*v1.Artifact, len(list))

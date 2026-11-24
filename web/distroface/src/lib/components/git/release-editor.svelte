@@ -22,7 +22,9 @@
 	import AssetUploader from './asset-uploader.svelte';
 	import ImagePicker from './image-picker.svelte';
 	import { rpcClient, silentCallOptions } from '$lib/api/rpc-client';
-	import type { Release, ReleaseAsset, ReleaseImage } from '$lib/proto/distroface/v1/release_pb';
+	import type { Release, ReleaseImage } from '$lib/proto/distroface/v1/release_pb';
+	import type { Artifact } from '$lib/proto/distroface/v1/types_pb';
+	import { assetDownloadUrl, primeDownload } from '$lib/releases';
 	import { formatBytes } from '$lib/utils';
 	import { toast } from 'svelte-sonner';
 
@@ -57,7 +59,7 @@
 	let body = $state(seed.release?.body ?? '');
 	let draft = $state(seed.release?.draft ?? true);
 	let prerelease = $state(seed.release?.prerelease ?? false);
-	let assets = $state<ReleaseAsset[]>(seed.release?.assets ?? []);
+	let assets = $state<Artifact[]>(seed.release?.assets ?? []);
 	let images = $state<ReleaseImage[]>(seed.release?.images ?? []);
 	let mode = $state<'write' | 'preview'>('write');
 	let saving = $state(false);
@@ -236,7 +238,26 @@
 		}
 	}
 
-	async function detachAsset(a: ReleaseAsset) {
+	async function relabelAsset(a: Artifact, label: string) {
+		label = label.trim();
+		if (!current || label === a.label) return;
+		try {
+			const resp = await rpcClient.release.updateReleaseAsset({
+				namespace,
+				name,
+				tag: current.tag,
+				assetId: a.id,
+				label
+			});
+			const next = resp.asset;
+			if (next) assets = assets.map((x) => (x.id === a.id ? next : x));
+			toast.success(label ? 'Label saved' : 'Label cleared');
+		} catch {
+			// Error interceptor already toasted
+		}
+	}
+
+	async function detachAsset(a: Artifact) {
 		if (!current) return;
 		detaching = a.id;
 		try {
@@ -417,10 +438,20 @@
 								<Download class="size-3.5 shrink-0 text-muted-foreground" />
 								<!-- eslint-disable svelte/no-navigation-without-resolve -->
 								<a
-									href={a.downloadUrl}
+									href={assetDownloadUrl(namespace, name, current.tag, a.name)}
+									download={a.name}
+									onclick={() => primeDownload(namespace, name)}
 									class="min-w-0 flex-1 truncate font-medium hover:text-primary">{a.name}</a
 								>
 								<!-- eslint-enable svelte/no-navigation-without-resolve -->
+								<Input
+									value={a.label}
+									placeholder="Label"
+									aria-label="Label of {a.name}"
+									maxlength={255}
+									class="h-7 w-40 shrink-0 text-xs"
+									onchange={(e) => relabelAsset(a, e.currentTarget.value)}
+								/>
 								<span class="shrink-0 text-xs text-muted-foreground tabular-nums"
 									>{formatBytes(Number(a.size))}</span
 								>

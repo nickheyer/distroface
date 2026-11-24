@@ -87,10 +87,11 @@ Bare repository names resolve on the server, your own namespace first, then the 
 ```
 dfcli artifact create REPO [-d description] [-p] [--namespace NS]
 dfcli artifact list [--namespace NS]
-dfcli artifact upload REPO FILE [-v version] [-p path] [--property k=v,...]
+dfcli artifact upload REPO FILE [-v version] [-p path] [--label L] [--property k=v,...]
 dfcli artifact download REPO [-v version] [-p path] [--property k=v] [-o out] [--num N] [--sort F] [--order ASC|DESC] [--format zip|tar.gz] [--unpack] [--flat]
 dfcli artifact delete REPO VERSION PATH
-dfcli artifact search [-r REPO] [--name N] [-v V] [-p P] [--property k=v] [--num N] [--offset N] [--sort F] [--order ASC|DESC] [-t]
+dfcli artifact label REPO VERSION PATH LABEL
+dfcli artifact search [-r REPO] [--name N] [-v V] [-p P] [--label L] [--property k=v] [--num N] [--offset N] [--sort F] [--order ASC|DESC] [-t]
 ```
 
 | Flag | Command | Description |

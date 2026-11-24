@@ -146,18 +146,14 @@ func (q *request) releaseJSON(repo *db.GitRepository, rel *db.GitRelease, assets
 	}
 }
 
-func (q *request) assetJSON(repo *db.GitRepository, rel *db.GitRelease, a *db.GitReleaseAsset) obj {
+func (q *request) assetJSON(repo *db.GitRepository, rel *db.GitRelease, a *db.Artifact) obj {
 	api := q.repoAPI(repo) + "/releases/assets/" + fmt.Sprint(numID(a.ID))
-	uploader := q.ghost()
-	if a.UploaderID != "" {
-		uploader = q.userByID(a.UploaderID)
-	}
 	return obj{
-		"id": numID(a.ID), "node_id": "", "name": a.Name, "label": a.Label, "content_type": a.ContentType, "size": a.Size,
+		"id": numID(a.ID), "node_id": "", "name": a.Path, "label": a.Label, "content_type": a.MimeType, "size": a.Size,
 		"state": "uploaded", "download_count": a.DownloadCount, "created_at": ts(a.CreatedAt), "updated_at": ts(a.UpdatedAt),
 		"browser_download_url": q.h.forge.AssetDownloadURL(q.ctx, repo, rel, a),
-		"url":                  api, "uploader": uploader,
-		"_distroface": obj{"asset_id": a.ID, "digest": a.Digest},
+		"url":                  api, "uploader": q.userByID(rel.AuthorID),
+		"_distroface": obj{"artifact_id": a.ID, "digest": a.Digest},
 	}
 }
 

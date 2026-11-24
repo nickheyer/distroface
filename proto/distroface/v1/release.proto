@@ -38,23 +38,6 @@ service ReleaseService {
   rpc GenerateReleaseNotes(GenerateReleaseNotesRequest) returns (GenerateReleaseNotesResponse) {}
 }
 
-// One file attached to a release
-message ReleaseAsset {
-  string id = 1;
-  string name = 2;
-  // Display label shown instead of the name when set
-  string label = 3;
-  int64 size = 4;
-  string digest = 5;
-  string content_type = 6;
-  // Browser download at /<ns>/<name>/releases/download/<tag>/<name>
-  string download_url = 7;
-  int64 download_count = 8;
-  string uploader = 9;
-  google.protobuf.Timestamp created_at = 10;
-  google.protobuf.Timestamp updated_at = 11;
-}
-
 // One container image belonging to a release
 message ReleaseImage {
   string namespace = 1;
@@ -82,7 +65,7 @@ message Release {
   string author = 7;
   string target_sha = 8;
   GitCommit commit = 9;
-  repeated ReleaseAsset assets = 10;
+  reserved 10;
   repeated ReleaseImage images = 11;
   string zip_url = 12;
   string tar_url = 13;
@@ -90,6 +73,8 @@ message Release {
   google.protobuf.Timestamp published_at = 15;
   google.protobuf.Timestamp created_at = 16;
   google.protobuf.Timestamp updated_at = 17;
+  // Flagged artifacts of the linked package at the tag version
+  repeated Artifact assets = 18;
 }
 
 // CreateReleaseRequest creates a release.
@@ -189,7 +174,8 @@ message UpdateReleaseAssetRequest {
 
 // UpdateReleaseAssetResponse contains the asset.
 message UpdateReleaseAssetResponse {
-  ReleaseAsset asset = 1;
+  reserved 1;
+  Artifact asset = 2;
 }
 
 // DeleteReleaseAssetRequest removes an asset.

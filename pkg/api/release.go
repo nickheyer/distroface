@@ -201,7 +201,7 @@ func newReleaseDownloadCmd() *cobra.Command {
 				}
 				dest := filepath.Join(output, filepath.Base(a.GetName()))
 				fmt.Printf("Downloading %s (%s)\n", a.GetName(), formatSize(a.GetSize()))
-				if err := client.downloadReleaseAsset(cmd.Context(), a.GetDownloadUrl(), dest); err != nil {
+				if err := client.downloadReleaseAsset(cmd.Context(), releaseAssetPath(ref, args[1], a.GetName()), dest); err != nil {
 					return fmt.Errorf("download %s failed: %w", a.GetName(), err)
 				}
 				n++
@@ -227,7 +227,7 @@ func patternNote(pattern string) string {
 }
 
 // Streams one file to the release asset endpoint
-func (c *Client) uploadReleaseAsset(ctx context.Context, ref RepoRef, tag, file, name, label string, replace bool) (*v1.ReleaseAsset, error) {
+func (c *Client) uploadReleaseAsset(ctx context.Context, ref RepoRef, tag, file, name, label string, replace bool) (*v1.Artifact, error) {
 	f, err := os.Open(file)
 	if err != nil {
 		return nil, err
@@ -250,21 +250,20 @@ func (c *Client) uploadReleaseAsset(ctx context.Context, ref RepoRef, tag, file,
 	if err != nil {
 		return nil, err
 	}
-	asset := &v1.ReleaseAsset{}
+	asset := &v1.Artifact{}
 	if err := protojson.Unmarshal(body, asset); err != nil {
 		return nil, fmt.Errorf("decode asset: %w", err)
 	}
 	return asset, nil
 }
 
-// Fetches one asset by its download url into a file
-func (c *Client) downloadReleaseAsset(ctx context.Context, downloadURL, dest string) error {
-	path := strings.TrimPrefix(downloadURL, strings.TrimRight(c.BaseURL, "/"))
-	if path == downloadURL {
-		if u, err := url.Parse(downloadURL); err == nil {
-			path = u.RequestURI()
-		}
-	}
+// Browser download path of a release asset
+func releaseAssetPath(ref RepoRef, tag, name string) string {
+	return "/" + url.PathEscape(ref.Namespace) + "/" + url.PathEscape(ref.Name) + "/releases/download/" + url.PathEscape(tag) + "/" + url.PathEscape(name)
+}
+
+// Fetches one asset by its download path into a file
+func (c *Client) downloadReleaseAsset(ctx context.Context, path, dest string) error {
 	resp, err := c.doData(ctx, http.MethodGet, path, nil)
 	if err != nil {
 		return err

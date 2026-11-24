@@ -21,7 +21,6 @@ func (s *Store) BlobReferenced(ctx context.Context, digest string) (bool, error)
 		{&db.Artifact{}, "digest = ?", digest},
 		{&db.ActionsArtifact{}, "digest = ?", digest},
 		{&db.ActionsCache{}, "digest = ?", digest},
-		{&db.GitReleaseAsset{}, "digest = ?", digest},
 		{&db.GitLFSLink{}, "oid = ?", oid},
 		{&db.ActionsJob{}, "log_digest = ?", digest},
 	}
@@ -34,5 +33,16 @@ func (s *Store) BlobReferenced(ctx context.Context, digest string) (bool, error)
 			return true, nil
 		}
 	}
-	return false, nil
+	return s.legacyAssetBlob(ctx, digest)
+}
+
+// Assets the release migration could not move keep their blobs
+func (s *Store) legacyAssetBlob(ctx context.Context, digest string) (bool, error) {
+	const table = "git_release_assets"
+	if !s.db.Migrator().HasTable(table) {
+		return false, nil
+	}
+	var hit []int
+	err := s.db.WithContext(ctx).Table(table).Select("1").Where("digest = ?", digest).Limit(1).Scan(&hit).Error
+	return len(hit) > 0, err
 }
